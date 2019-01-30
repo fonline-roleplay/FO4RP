@@ -1,0 +1,599 @@
+#include "_client_defines.fos"
+#include "_macros.fos"
+#include "_colors.fos"
+
+#define VERSION_HASH          ( 2 )
+
+#define VERSION_SAVE_NONE     ( 10000000 )
+#define VERSION_SAVE_FIRST    ( 10000001 )
+#define VERSION_SAVE_NO_ID    ( 10000002 )
+
+#define VERSION_SAVE          ( 10000002 )
+
+// #define DEBUG_POSTCLEAR
+
+// #define DEBUG_NAMES
+
+// #ifdef DEBUG_NAMES
+// #endif
+
+string console_name = "";
+
+uint getHash( uint id, uint8 version )
+{
+    if( version == 0 || id == 0 )
+        return 0;
+
+    if( version == 2 )
+    {
+        uint temp = id + 23548;
+/*
+                for(uint i=0; i<4; i++)
+                {
+                        temp = temp>>1;
+                        temp=(temp*(id+100))%0xFFFFFFFF;
+                        if(temp<0x10000000) temp+=0x10000000;
+                        if(temp==0xFFFFFFFF) temp=0x10000000;
+                }
+ */
+        temp = temp * temp * temp;
+
+        return temp;
+    }
+
+    else
+        return 0;
+}
+
+class CritterName
+{
+    uint   Id;
+    string Name;
+    uint   Hash;
+
+    CritterName()
+    {
+        Id = 0;
+        Name = "???";
+        Hash = 0;
+    }
+
+    CritterName( uint id, string & name )
+    {
+        Id = id;
+        Name = name;
+        Hash = getHash( Id, VERSION_HASH );
+    }
+
+    CritterName( string & name, uint hash )
+    {
+        Id = 0;
+        Name = name;
+        Hash = hash;
+    }
+
+    CritterName( uint id, string & name, uint hash )
+    {
+        Id = id;
+        Name = name;
+        if( hash == 0 )
+            Hash = getHash( Id, VERSION_HASH );
+        else
+            Hash = hash;
+    }
+}
+
+CritterName@[] CritterNames;
+
+void SetConsoleName( string& name )
+{
+    console_name = name;
+
+
+
+    Message( "Выберите кого назвать \"|" + COLOR_GRAY + " " + name + "|" + COLOR_TEXT + " \"." );
+}
+
+bool NameClick( CritterCl@ target, int click )
+{
+    if( target.Param[ QST_GAMEMODE ] == GAME_ARCADE )
+    {
+        Message( TEXTMSG_GAME, 102942 );
+        return true;
+    }
+    if( console_name.length() > 0 )
+    {
+        if( !(target is null) && click == MOUSE_CLICK_LEFT )
+        {
+            if( RememberName( target.Id, console_name ) )
+            {
+                // target.Name=console_name;
+                updateNick( target );
+                Message( "Вы запомнили: \"|" + COLOR_GRAY + " " + console_name + "|" + COLOR_TEXT + " \"." );
+            }
+        }
+
+        console_name = "";
+
+        return true;
+    }
+
+    return false;
+}
+
+uint Target_id = 0;
+
+bool CharClick( CritterCl@ target )
+{
+    if( GetChosen().Param[ ST_VAR5 ] > 5 )
+    {
+        Message( "Antiflood." );
+        return false;
+    }
+
+    if( target is null )
+        return false;
+
+    if( target.Param[ QST_GAMEMODE ] == GAME_ARCADE )
+    {
+        Message( TEXTMSG_GAME, 102942 );
+        return true;
+    }
+
+    RunServerScriptUnsafe( "names@unsafe_char_middle_click",  target.Id, 0, 0, null, null );
+
+    Target_id = target.Id;
+
+    return true;
+}
+
+void _rememberChar( int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+    CritterCl@ target = GetCritter( Target_id );
+    if( target is null )
+    {
+        Message( "Naming error!" );
+        return;
+    }
+
+    if( RememberName( Target_id, param3 ) )
+    {
+        // target.Name=param3;
+        updateNick( target );
+        Message( "Вы запомнили: \"|" + COLOR_GRAY + " " + param3 + "|" + COLOR_TEXT + " \"." );
+    }
+    else
+    {
+        Message( "Naming (saving) error!" );
+        return;
+    }
+
+    Target_id = 0;
+}
+
+bool RememberName( uint id, string& name )
+{
+    uint t_count = 0;
+
+    uint hash = getHash( id, VERSION_HASH );
+    #ifdef DEBUG_NAMES
+    Message( "id: " + id + " hash: " + hash + " name: " + name );
+    #endif
+    if( id == 0 && name.length() == 0 )
+        return false;
+
+    else if( id == 0 )
+    {
+
+        for( uint i = 0; i < CritterNames.length(); i++ )
+        {
+            if( !( CritterNames[ i ] is null ) && CritterNames[ i ].Name == name )
+            {
+                @CritterNames[ i ] = null;
+                t_count += 1;
+            }
+        }
+
+    }
+
+    else if( name.length() == 0 )
+    {
+
+        for( uint i = 0; i < CritterNames.length(); i++ )
+        {
+            if( !( CritterNames[ i ] is null ) && ( CritterNames[ i ].Id == id || CritterNames[ i ].Hash == hash ) )
+            {
+                @CritterNames[ i ] = null;
+                t_count += 1;
+            }
+        }
+    }
+
+    else
+    {
+
+        for( uint i = 0; i < CritterNames.length(); i++ )
+        {
+            if( !( CritterNames[ i ] is null ) && ( CritterNames[ i ].Hash == hash || CritterNames[ i ].Id == id ) )
+            {
+                CritterNames[ i ].Name = name;
+                t_count += 1;
+                break;
+            }
+
+        }
+        if( t_count < 1 )
+        {
+            uint len = CritterNames.length();
+            CritterNames.resize( len + 1 );
+            CritterName critterName( id, name );
+            @CritterNames[ len ] = critterName;
+            t_count += 1;
+        }
+    }
+
+    return ( t_count > 0 );
+
+}
+
+
+string@ GetName( uint id )
+{
+    uint    hash = getHash( id, VERSION_HASH );
+
+    string@ s_temp = null;
+    for( uint i = 0; i < CritterNames.length(); i++ )
+    {
+        // if(!(CritterNames[i] is null) && CritterNames[i].Id==id && CritterNames[i].Name.length()>0)
+        if( !( CritterNames[ i ] is null ) && ( ( id != 0 && CritterNames[ i ].Id == id ) || CritterNames[ i ].Hash == hash ) && CritterNames[ i ].Name.length() > 0 )
+        {
+            @s_temp = CritterNames[ i ].Name;
+            break;
+        }
+    }
+
+    return s_temp;
+}
+
+void SaveNames()
+{
+    uint len = CritterNames.length();
+    #ifdef DEBUG_NAMES
+    Message( "Saving..." + len );
+    #endif
+    if( len < 1 )
+    {
+        #ifdef DEBUG_NAMES
+        Message( "Нечего сохранять." );
+        #endif
+        return;
+    }
+
+    CritterName@ cn = null;
+
+    uint         t_count = 0;
+
+    for( uint i = 0; i < len; i++ )
+    {
+        @cn = CritterNames[ i ];
+
+        if( VERSION_SAVE < VERSION_SAVE_NO_ID )
+        {
+            if( (cn is null) || ( cn.Id == 0 ) || ( cn.Name.length() < 1 ) )
+                continue;
+        }
+        else
+        {
+            if( (cn is null) || ( cn.Name.length() < 1 ) )
+                continue;
+
+            if( cn.Hash == 0 )
+            {
+                if( cn.Id == 0 )
+                    continue;
+                cn.Hash = getHash( cn.Id, VERSION_HASH );
+                if( cn.Hash == 0 )
+                    continue;
+            }
+        }
+
+        t_count += 1;
+    }
+
+    if( t_count < 1 )
+    {
+        #ifdef DEBUG_NAMES
+        Message( "Нечего сохранять.2" );
+        #endif
+        return;
+    }
+
+    file f;
+
+    if( !( f.open( "CritterNames_" + GetChosen().Id + ".txt", "w" ) >= 0 ) )
+    {
+        Message( "Ошибка создания файла CritterNames" + GetChosen().Id + ".txt" );
+        return;
+    }
+
+    f.setPos( 0 );
+
+    f.writeString( VERSION_SAVE + "\n" );
+
+    f.writeString( t_count + "\n" );
+
+    @cn = null;
+
+    for( uint i = 0; i < len; i++ )
+    {
+        @cn = CritterNames[ i ];
+
+        if( VERSION_SAVE < VERSION_SAVE_NO_ID )
+        {
+            if( (cn is null) || ( cn.Id == 0 ) || ( cn.Name.length() < 1 ) )
+                continue;
+            f.writeString( cn.Id + "\n" );
+        }
+        else
+        {
+            if( (cn is null) || ( cn.Hash == 0 ) || ( cn.Name.length() < 1 ) )
+                continue;
+        }
+
+        if( VERSION_SAVE >= VERSION_SAVE_FIRST )
+            f.writeString( int(cn.Hash) + "\n" );
+        f.writeString( cn.Name + "\n" );
+    }
+
+    f.close();
+    #ifdef DEBUG_NAMES
+    Message( "Сохранено имен: " + t_count );
+    #endif
+}
+
+void delN( string& str )
+{
+    uint len = str.length();
+    if( len > 1 && str[ len - 1 ] == '\n' )
+        str.resize( len - 1 );
+}
+
+void LoadNames()
+{
+    #ifndef DEBUG_POSTCLEAR
+    CritterNames.resize( 0 );
+    #endif
+    file f;
+
+    if( !( f.open( "CritterNames_" + GetChosen().Id + ".txt", "r" ) >= 0 ) )
+    {
+//		Message("Ошибка открытия файла CritterNames"+GetChosen().Id+".txt");
+        return;
+    }
+
+    int version = 0;
+
+    int count = 0;
+
+    f.setPos( 0 );
+
+    string s_version;
+
+    string s_count;
+
+    f.readLine( s_version );
+
+    delN( s_version );
+
+    if( !StrToInt( s_version, version ) )
+    {
+        Message( "Файл с сохранением поврежден.1-1" );
+        return;
+    }
+
+    if( version <= VERSION_SAVE_NONE )
+    {
+        count = version;
+    }
+    else
+    {
+        f.readLine( s_count );
+
+        delN( s_count );
+
+        if( !StrToInt( s_count, count ) )
+        {
+            Message( "Файл с сохранением поврежден.1-2" );
+            return;
+        }
+    }
+    #ifdef DEBUG_NAMES
+    Message( "Loading... " + CritterNames.length() );
+    #endif
+
+    #ifdef DEBUG_POSTCLEAR
+    CritterNames.resize( 0 );
+    #endif
+
+    // CritterNames.resize(count);
+    #ifdef DEBUG_NAMES
+    Message( "a " + CritterNames.length() );
+    #endif
+    int    id = 0;
+    string s_id;
+
+    uint   hash = 0;
+    int    i_hash = 0;
+    string s_hash;
+
+    string s_name;
+
+    uint   t_count2 = 0;
+
+    for( uint i = 0; i < count; i++ )
+    {
+        hash = 0;
+        id = 0;
+
+        if( version < VERSION_SAVE_NO_ID )
+        {
+            f.readLine( s_id );
+            delN( s_id );
+            if( !StrToInt( s_id, id ) || id < 1 )
+            {
+                Message( "Файл с сохранением поврежден.2" );
+                return;
+            }
+        }
+        if( version >= VERSION_SAVE_FIRST )
+        {
+            f.readLine( s_hash );
+            delN( s_hash );
+            i_hash = 0;
+            if( !StrToInt( s_hash, i_hash ) || i_hash == 0 )
+            {
+                Message( "Файл с сохранением поврежден.2-2" );
+                return;
+            }
+            hash = uint( i_hash );
+        }
+        f.readLine( s_name );
+        if( s_name.length() < 2 )
+        {
+            Message( "Файл с сохранением поврежден.3" );
+            return;
+        }
+        delN( s_name );
+
+        uint t_count = 0;
+        for( uint i = 0; i < CritterNames.length(); i++ )
+        {
+            if( version < VERSION_SAVE_NO_ID )
+            {
+                if( !( CritterNames[ i ] is null ) && CritterNames[ i ].Id == id )
+                {
+                    CritterNames[ i ].Name = s_name;
+                    t_count += 1;
+                    break;
+                }
+            }
+            else
+            {
+                if( !( CritterNames[ i ] is null ) && CritterNames[ i ].Hash == hash )
+                {
+                    CritterNames[ i ].Name = s_name;
+                    t_count += 1;
+                    break;
+                }
+            }
+
+        }
+        if( t_count < 1 )
+        {
+            uint len = CritterNames.length();
+            CritterNames.resize( len + 1 );
+            CritterName critterName( id, s_name, hash );
+            @CritterNames[ len ] = critterName;
+            t_count += 1;
+        }
+
+        t_count2 += t_count;
+
+    }
+
+    f.close();
+
+    Message( "Вы вспомнили имен: " + t_count2 );
+}
+
+
+bool updateNick( CritterCl& cr )
+{
+    string@ s_temp = null;
+
+    @s_temp = GetName( cr.Id );
+
+    string color_name       = "|0xff11ffff ";
+    string color_login      = cr.IsNpc() ? "|0xff77AA99 " : "|0xff77ff22 ";
+    string s_crid           = ( ( __sinf & SINF_CRID_ON_HEAD ) != 0 ) ? " |0xffff0000 " + cr.Id : "";
+
+    cr.NameOnHead = "";
+
+    if( ( __sinf & SINF_LOGIN ) != 0 )
+    {
+        if( cr.Name == "" )
+            cr.Name = "???";
+
+        if( !(s_temp is null) )
+            cr.NameOnHead = color_login + cr.Name + s_crid + "\n" + color_name + s_temp;
+
+        else
+            cr.NameOnHead = color_login + cr.Name + s_crid;
+    }
+    else if( cr.Param[ QST_MEDIUM ] != 0 )
+    {
+        if( cr.IsPlayer() && cr.Param[ QST_MEDIUM ] == 2 )
+        {
+            cr.Name = "";
+            cr.NameOnHead = "";
+        }
+        if( cr.IsPlayer() && cr.Param[ QST_MEDIUM ] == 3 )
+        {
+            @s_temp = cr.Lexems;
+            if( !(s_temp is null) )
+            {
+                cr.Name = s_temp;
+                cr.NameOnHead = s_temp + s_crid;
+            }
+        }
+        if( cr.IsPlayer() && cr.Param[ QST_MEDIUM ] >= 4 )
+        {
+            @s_temp = GetName( cr.Param[ QST_MEDIUM ] );
+            if( !(s_temp is null) )
+            {
+                cr.Name = s_temp;
+                cr.NameOnHead = s_temp + s_crid;
+            }
+        }
+    }
+    else if( !(s_temp is null) )
+    {
+        if( cr.IsPlayer() )
+            cr.Name = s_temp;
+        cr.NameOnHead = s_temp + s_crid;
+    }
+    else if( cr.IsNpc() )
+    {
+        cr.NameOnHead = "|0x00000000 ";
+    }
+    else if( GetChosen().Id == cr.Id )
+    {
+        cr.NameOnHead = cr.Name + s_crid;
+    }
+    else
+    {
+        cr.Name = "???";
+        cr.NameOnHead = "|0x00000000 ";
+    }
+
+    return true;
+}
+
+bool updateAllNicks()
+{
+    CritterCl@[] critters;
+    uint len = GetCritters( 0, FIND_ALL, critters );
+    for( uint i = 0; i < len; i++ )
+    {
+        if( critters[ i ] is null )
+            continue;
+        updateNick( critters[ i ] );
+    }
+
+    return true;
+}
+
+void ClearNameCache()
+{
+    CritterNames.resize( 0 );
+}

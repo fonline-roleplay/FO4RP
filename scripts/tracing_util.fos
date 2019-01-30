@@ -1,0 +1,725 @@
+// Author: Atom
+#include "_defines.fos"
+#include "_macros.fos"
+
+// utilities for tracing
+// pathfinding/critter-gathering functions etc.
+
+// math
+#define PI_FLOAT         ( 3.14159265f )
+#define PIBY2_FLOAT      ( 1.5707963f )
+#define SQRT3T2_FLOAT    ( 3.4641016151f )
+#define SQRT3_FLOAT      ( 1.732050807568877f )
+#define BIAS_FLOAT       ( 0.02f )
+#define RAD2DEG          ( 57.29577951f )
+
+/**
+ * Checks few hexes, startin from target, moving towards hx,hy. Returns the 'coverage'
+ * which can be used as tohit penalty or tosneak bonus.
+ */
+#define VOLUME           # (proto)         ( proto.Volume == 0 ? 50 : proto.Volume )
+uint8 CheckOccluder( uint16 hx, uint16 hy, uint16 tx, uint16 ty, Map@ map )
+{
+    uint  dist = 2;    // 2only, no reason to be more overkill
+
+    float dir = GetDirectionF( tx, ty, hx, hy );
+    uint8 dir1, dir2;
+    if( ( 30.0f  <= dir ) && ( dir <  90.0f ) )
+    {
+        dir1 = 5;
+        dir2 = 0;
+    }
+    else if( ( 90.0f  <= dir ) && ( dir < 150.0f ) )
+    {
+        dir1 = 4;
+        dir2 = 5;
+    }
+    else if( ( 150.0f <= dir ) && ( dir < 210.0f ) )
+    {
+        dir1 = 3;
+        dir2 = 4;
+    }
+    else if( ( 210.0f <= dir ) && ( dir < 270.0f ) )
+    {
+        dir1 = 2;
+        dir2 = 3;
+    }
+    else if( ( 270.0f <= dir ) && ( dir < 330.0f ) )
+    {
+        dir1 = 1;
+        dir2 = 2;
+    }
+    else
+    {
+        dir1 = 0;
+        dir2 = 1;
+    }
+
+    uint16 cx = tx;
+    uint16 cy = ty;
+
+    uint16 t1x, t1y, t2x, t2y;
+
+    float  x1 = 3 * float(hx) + BIAS_FLOAT;
+    float  y1 = SQRT3T2_FLOAT * float(hy) - ( float(hx % 2) ) * SQRT3_FLOAT + BIAS_FLOAT;
+
+    float  x2 = 3 * float(tx) + BIAS_FLOAT;
+    float  y2 = SQRT3T2_FLOAT * float(ty) - ( float(tx % 2) ) * SQRT3_FLOAT + BIAS_FLOAT;
+
+    float  dx = x2 - x1;
+    float  dy = y2 - y1;
+
+    float  c1x, c1y, c2x, c2y; // test hex
+    float  dist1, dist2;
+
+    /*Scenery@[] scens;
+       Item@[] items;
+       // array of all protos to get the occluder
+       ProtoItem@[] protos;
+       uint c = 0;*/
+
+    for( uint i = 0; i < dist; i++ )
+    {
+        t1x = cx;
+        t2x = cx;
+        t1y = cy;
+        t2y = cy;
+        map.MoveHexByDir( t1x, t1y, dir1, 1 );
+        map.MoveHexByDir( t2x, t2y, dir2, 1 );
+        c1x = 3 * float(t1x);
+        c1y = SQRT3T2_FLOAT * float(t1y) - ( float(t1x % 2) ) * SQRT3_FLOAT;
+        c2x = 3 * float(t2x);
+        c2y = SQRT3T2_FLOAT * float(t2y) - ( float(t2x % 2) ) * SQRT3_FLOAT;
+        dist1 = dx * ( y1 - c1y ) - dy * ( x1 - c1x );
+        dist2 = dx * ( y1 - c2y ) - dy * ( x1 - c2x );
+        dist1 = ( ( dist1 > 0 ) ? dist1 : -dist1 );
+        dist2 = ( ( dist2 > 0 ) ? dist2 : -dist2 );
+        if( dist1 <= dist2 )
+        {
+            cx = t1x;
+            cy = t1y;
+        }                                       // left hand biased
+        else
+        {
+            cx = t2x;
+            cy = t2y;
+        }
+
+        // you can shoot thru
+        if( map.IsHexRaked( cx, cy ) )
+        {
+            // but not pass - that means occluder
+            if( !map.IsHexPassed( cx, cy ) )
+            {
+                #ifdef __DEBUG__
+                map.SetText( cx, cy, 0, "X" );
+                #endif
+                return 50;    // optimize it that way for now
+/*				uint snum = 0;
+                                uint inum = 0;
+
+                                snum = map.GetSceneries(cx, cy, scens); // we could try to use the assumption that only one item/scenery can be occluder (no reason to have more than one such objects in hex)
+                                inum = map.GetItems(cx, cy, items);
+                                if(snum+inum > 0)
+                                {
+   #ifdef __DEBUG__
+                                        map.SetText(cx, cy, 0, "X");
+   #endif
+                                        protos.resize(protos.length() + inum+snum);
+                                        if(snum > 0)
+                                                for(uint i = 0; i < snum; i++) @protos[c+i] = GetProtoItem(scens[i].ProtoId);
+                                        if(inum > 0)
+                                                for(uint i = 0; i < inum; i++) @protos[c+i] = GetProtoItem(items[i].GetProtoId()); // some const problems with Item::Proto
+                                        c+= snum+inum;
+                                }
+   #ifdef __DEBUG__
+                                else
+                                {
+                    map.SetText(cx, cy, 0, "?");
+                                }
+   #endif
+ */         }
+            else
+            {
+                #ifdef __DEBUG__
+                map.SetText( cx, cy, 0, "*" );
+                #endif
+                continue; // clean
+            }
+        }                 // you can't shoot through it
+        else
+        {
+            map.SetText( cx, cy, 0, "ERROR" );
+            return 100;             // shouldn't even occur (trace check first)
+        }
+    }
+    // get the one we need
+/*	uint8 vol = 0;
+        for(uint i = 0, j = protos.length(); i < j; i++)
+        {
+                // some additional flag check?
+                if(vol < VOLUME(protos[i]))
+                        vol = VOLUME(protos[i]);
+        }
+        return vol;
+ */
+    return 0;
+}
+
+/**
+ * Trace from hx, hy to tx,ty, stops on raked (not by critter) hex.
+ */
+int TraceWall( uint16 hx, uint16 hy, uint16 tx, uint16 ty, Map@ map, int dist )
+{
+    if( dist == 0 )
+        dist = GetDistantion( hx, hy, tx, ty );
+    float dir = GetDirectionF( hx, hy, tx, ty );
+    uint8 dir1, dir2;
+    if( ( 30.0f  <= dir ) && ( dir <  90.0f ) )
+    {
+        dir1 = 5;
+        dir2 = 0;
+    }
+    else if( ( 90.0f  <= dir ) && ( dir < 150.0f ) )
+    {
+        dir1 = 4;
+        dir2 = 5;
+    }
+    else if( ( 150.0f <= dir ) && ( dir < 210.0f ) )
+    {
+        dir1 = 3;
+        dir2 = 4;
+    }
+    else if( ( 210.0f <= dir ) && ( dir < 270.0f ) )
+    {
+        dir1 = 2;
+        dir2 = 3;
+    }
+    else if( ( 270.0f <= dir ) && ( dir < 330.0f ) )
+    {
+        dir1 = 1;
+        dir2 = 2;
+    }
+    else
+    {
+        dir1 = 0;
+        dir2 = 1;
+    }
+
+    uint16 cx = hx;
+    uint16 cy = hy;
+    uint16 px = hx;
+    uint16 py = hy;
+
+    uint16 t1x, t1y, t2x, t2y;
+
+    float  x1 = 3 * float(hx) + BIAS_FLOAT;
+    float  y1 = SQRT3T2_FLOAT * float(hy) - ( float(hx % 2) ) * SQRT3_FLOAT + BIAS_FLOAT;
+
+    float  x2 = 3 * float(tx) + BIAS_FLOAT;
+    float  y2 = SQRT3T2_FLOAT * float(ty) - ( float(tx % 2) ) * SQRT3_FLOAT + BIAS_FLOAT;
+
+    float  dx = x2 - x1;
+    float  dy = y2 - y1;
+
+    float  c1x, c1y, c2x, c2y; // test hex
+    float  dist1, dist2;
+
+    // STUFF STARTS HERE
+    int someval = 0;
+
+    for( int i = 0; i < dist; i++ )
+    {
+        t1x = cx;
+        t2x = cx;
+        t1y = cy;
+        t2y = cy;
+        map.MoveHexByDir( t1x, t1y, dir1, 1 );
+        map.MoveHexByDir( t2x, t2y, dir2, 1 );
+        c1x = 3 * float(t1x);
+        c1y = SQRT3T2_FLOAT * float(t1y) - ( float(t1x % 2) ) * SQRT3_FLOAT;
+        c2x = 3 * float(t2x);
+        c2y = SQRT3T2_FLOAT * float(t2y) - ( float(t2x % 2) ) * SQRT3_FLOAT;
+        dist1 = dx * ( y1 - c1y ) - dy * ( x1 - c1x );
+        dist2 = dx * ( y1 - c2y ) - dy * ( x1 - c2x );
+        dist1 = ( ( dist1 > 0 ) ? dist1 : -dist1 );
+        dist2 = ( ( dist2 > 0 ) ? dist2 : -dist2 );
+        if( dist1 <= dist2 )
+        {
+            cx = t1x;
+            cy = t1y;
+        }                                   // left hand biased
+        else
+        {
+            cx = t2x;
+            cy = t2y;
+        }
+
+        // if MoveHexByDir tried to leave the map and failed:
+        if( ( cx == px ) && ( cy == py ) )
+        {
+            return dist;
+        }
+        else
+        {
+            px = cx;
+            py = cy;
+        }
+
+        if( !map.IsHexRaked( cx, cy ) )
+        {
+            return i;
+        }
+    }
+
+    return dist;
+}
+
+Critter@ TraceFirstCritter( uint16 hx, uint16 hy, uint16 tx, uint16 ty, Map@ map, int dist, uint16 gx, uint16 gy, uint mindist )
+{
+    if( dist == 0 )
+        dist = GetDistantion( hx, hy, tx, ty );
+    float dir = GetDirectionF( hx, hy, tx, ty );
+    uint8 dir1, dir2;
+    if( ( 30.0f  <= dir ) && ( dir <  90.0f ) )
+    {
+        dir1 = 5;
+        dir2 = 0;
+    }
+    else if( ( 90.0f  <= dir ) && ( dir < 150.0f ) )
+    {
+        dir1 = 4;
+        dir2 = 5;
+    }
+    else if( ( 150.0f <= dir ) && ( dir < 210.0f ) )
+    {
+        dir1 = 3;
+        dir2 = 4;
+    }
+    else if( ( 210.0f <= dir ) && ( dir < 270.0f ) )
+    {
+        dir1 = 2;
+        dir2 = 3;
+    }
+    else if( ( 270.0f <= dir ) && ( dir < 330.0f ) )
+    {
+        dir1 = 1;
+        dir2 = 2;
+    }
+    else
+    {
+        dir1 = 0;
+        dir2 = 1;
+    }
+
+    uint16 cx = hx;
+    uint16 cy = hy;
+    uint16 px = hx;
+    uint16 py = hy;
+
+    uint16 t1x, t1y, t2x, t2y;
+
+    float  x1 = 3 * float(hx) + BIAS_FLOAT;
+    float  y1 = SQRT3T2_FLOAT * float(hy) - ( float(hx % 2) ) * SQRT3_FLOAT + BIAS_FLOAT;
+
+    float  x2 = 3 * float(tx) + BIAS_FLOAT;
+    float  y2 = SQRT3T2_FLOAT * float(ty) - ( float(tx % 2) ) * SQRT3_FLOAT + BIAS_FLOAT;
+
+    float  dx = x2 - x1;
+    float  dy = y2 - y1;
+
+    float  c1x, c1y, c2x, c2y;
+    float  dist1, dist2;
+
+    for( int i = 0; i < dist; i++ )
+    {
+        t1x = cx;
+        t2x = cx;
+        t1y = cy;
+        t2y = cy;
+        map.MoveHexByDir( t1x, t1y, dir1, 1 );
+        map.MoveHexByDir( t2x, t2y, dir2, 1 );
+        c1x = 3 * float(t1x);
+        c1y = SQRT3T2_FLOAT * float(t1y) - ( float(t1x % 2) ) * SQRT3_FLOAT;
+        c2x = 3 * float(t2x);
+        c2y = SQRT3T2_FLOAT * float(t2y) - ( float(t2x % 2) ) * SQRT3_FLOAT;
+        dist1 = dx * ( y1 - c1y ) - dy * ( x1 - c1x );
+        dist2 = dx * ( y1 - c2y ) - dy * ( x1 - c2x );
+        dist1 = ( ( dist1 > 0 ) ? dist1 : -dist1 );
+        dist2 = ( ( dist2 > 0 ) ? dist2 : -dist2 );
+        if( dist1 <= dist2 )
+        {
+            cx = t1x;
+            cy = t1y;
+        }
+        else
+        {
+            cx = t2x;
+            cy = t2y;
+        }
+
+        if( ( cx == px ) && ( cy == py ) )
+            return null;
+        else
+        {
+            px = cx;
+            py = cy;
+        }
+        if( !map.IsHexRaked( cx, cy ) )
+            return null;
+
+        Critter@ cr = map.GetCritter( cx, cy );
+        if( valid( cr ) && cr.Cond == COND_LIFE && GetDistantion( gx, gy, cr.HexX, cr.HexY ) >= mindist )
+            return cr;
+    }
+    return null;
+}
+
+
+float GetDirectionF( uint16 hx, uint16 hy, uint16 tx, uint16 ty )
+{
+    float nx = 3 * ( float(tx) - float(hx) );
+    float ny = SQRT3T2_FLOAT * ( float(ty) - float(hy) ) - ( float(tx % 2) - float(hx % 2) ) * SQRT3_FLOAT;
+    return 180.0f + RAD2DEG* atan2( ny, nx ); // in degrees, because cvet loves the degrees
+}
+
+int TraceWhatever( uint16 hx, uint16 hy, uint16 tx, uint16 ty, Map@ map, int dist )
+{
+    if( dist == 0 )
+        dist = GetDistantion( hx, hy, tx, ty );
+    float dir = GetDirectionF( hx, hy, tx, ty );
+    uint8 dir1, dir2;
+    if( ( 30.0f  <= dir ) && ( dir <  90.0f ) )
+    {
+        dir1 = 5;
+        dir2 = 0;
+    }
+    else if( ( 90.0f  <= dir ) && ( dir < 150.0f ) )
+    {
+        dir1 = 4;
+        dir2 = 5;
+    }
+    else if( ( 150.0f <= dir ) && ( dir < 210.0f ) )
+    {
+        dir1 = 3;
+        dir2 = 4;
+    }
+    else if( ( 210.0f <= dir ) && ( dir < 270.0f ) )
+    {
+        dir1 = 2;
+        dir2 = 3;
+    }
+    else if( ( 270.0f <= dir ) && ( dir < 330.0f ) )
+    {
+        dir1 = 1;
+        dir2 = 2;
+    }
+    else
+    {
+        dir1 = 0;
+        dir2 = 1;
+    }
+
+    uint16 cx = hx;
+    uint16 cy = hy;
+    uint16 px = hx;
+    uint16 py = hy;
+
+    uint16 t1x, t1y, t2x, t2y;
+
+    float  x1 = 3 * float(hx) + BIAS_FLOAT;
+    float  y1 = SQRT3T2_FLOAT * float(hy) - ( float(hx % 2) ) * SQRT3_FLOAT + BIAS_FLOAT;
+
+    float  x2 = 3 * float(tx) + BIAS_FLOAT;
+    float  y2 = SQRT3T2_FLOAT * float(ty) - ( float(tx % 2) ) * SQRT3_FLOAT + BIAS_FLOAT;
+
+    float  dx = x2 - x1;
+    float  dy = y2 - y1;
+
+    float  c1x, c1y, c2x, c2y; // test hex
+    float  dist1, dist2;
+
+    // STUFF STARTS HERE
+    int someval = 0;
+
+    for( int i = 0; i < dist; i++ )
+    {
+        t1x = cx;
+        t2x = cx;
+        t1y = cy;
+        t2y = cy;
+        map.MoveHexByDir( t1x, t1y, dir1, 1 );
+        map.MoveHexByDir( t2x, t2y, dir2, 1 );
+        c1x = 3 * float(t1x);
+        c1y = SQRT3T2_FLOAT * float(t1y) - ( float(t1x % 2) ) * SQRT3_FLOAT;
+        c2x = 3 * float(t2x);
+        c2y = SQRT3T2_FLOAT * float(t2y) - ( float(t2x % 2) ) * SQRT3_FLOAT;
+        dist1 = dx * ( y1 - c1y ) - dy * ( x1 - c1x );
+        dist2 = dx * ( y1 - c2y ) - dy * ( x1 - c2x );
+        dist1 = ( ( dist1 > 0 ) ? dist1 : -dist1 );
+        dist2 = ( ( dist2 > 0 ) ? dist2 : -dist2 );
+        if( dist1 <= dist2 )
+        {
+            cx = t1x;
+            cy = t1y;
+        }                                   // left hand biased
+        else
+        {
+            cx = t2x;
+            cy = t2y;
+        }
+
+        // if MoveHexByDir tried to leave the map and failed:
+        if( ( cx == px ) && ( cy == py ) )
+            return someval;
+        else
+        {
+            px = cx;
+            py = cy;
+        }
+
+        // CODE HERE TOO
+
+    }
+    return someval;
+}
+
+/*
+   int GetCrittersPath2(uint16 hx, uint16 hy, uint16 tx, uint16 ty, Map@ map, int dist, bool findKo, Critter@[]@+ critters)
+   {
+   bool addCrits=!(@critters==null);
+   int len=(addCrits?critters.length():0);
+   int blockers=0;
+   float dir=GetDirectionF(hx,hy,tx,ty);
+   uint8 dir1,dir2;
+   if ((30.0f  <= dir) && (dir <  90.0f)) { dir1=5; dir2=0; }
+   else
+   if ((90.0f  <= dir) && (dir < 150.0f)) { dir1=4; dir2=5; }
+   else
+   if ((150.0f <= dir) && (dir < 210.0f)) { dir1=3; dir2=4; }
+   else
+   if ((210.0f <= dir) && (dir < 270.0f)) { dir1=2; dir2=3; }
+   else
+   if ((270.0f <= dir) && (dir < 330.0f)) { dir1=1; dir2=2; }
+   else
+    { dir1=0; dir2=1; }
+
+   uint16 cx=hx;
+   uint16 cy=hy;
+   uint16 px=hx;
+   uint16 py=hy;
+
+   uint16 t1x,t1y,t2x,t2y;
+
+   float x1=3*float(hx) + BIAS_FLOAT;
+   float y1=SQRT3T2_FLOAT*float(hy) - (float(hx%2))*SQRT3_FLOAT + BIAS_FLOAT;
+
+   float x2=3*float(tx) + BIAS_FLOAT;
+   float y2=SQRT3T2_FLOAT*float(ty) - (float(tx%2))*SQRT3_FLOAT + BIAS_FLOAT;
+
+   float dx=x2-x1;
+   float dy=y2-y1;
+
+   float c1x,c1y,c2x,c2y; // test hex
+   float dist1,dist2;
+
+   for (int i=0;i<dist;i++)
+   {
+    t1x=cx; t2x=cx;
+    t1y=cy; t2y=cy;
+    MoveHexByDir(t1x,t1y,dir1,1);
+    MoveHexByDir(t2x,t2y,dir2,1);
+    c1x=3*float(t1x);
+    c1y=SQRT3T2_FLOAT*float(t1y) - (float(t1x%2))*SQRT3_FLOAT;
+    c2x=3*float(t2x);
+    c2y=SQRT3T2_FLOAT*float(t2y) - (float(t2x%2))*SQRT3_FLOAT;
+    dist1=dx*(y1-c1y) - dy*(x1-c1x);
+    dist2=dx*(y1-c2y) - dy*(x1-c2x);
+    dist1=((dist1>0)?dist1:-dist1);
+    dist2=((dist2>0)?dist2:-dist2);
+    if (dist1<=dist2) { cx=t1x; cy = t1y; } // left hand biased
+      else { cx=t2x; cy = t2y; }
+
+    // stop here
+    if (!map.IsHexRaked(cx,cy)) return blockers;
+
+    // if MoveHexByDir tried to leave the map and failed:
+    if ((cx==px) && (cy==py)) return blockers;
+    else
+    {
+      px=cx;
+      py=cy;
+    }
+
+    if (@(map.GetCritter(cx, cy)) != null)
+    {
+      blockers++;
+      if (addCrits)
+      {
+        if ((map.GetCritter(cx, cy).Cond==COND_LIFE) || ((map.GetCritter(cx, cy).Cond==COND_KNOCK_OUT) && findKo))
+        {
+          critters.resize(len+1);
+          @critters[len] = map.GetCritter(cx, cy);
+          //critters[len].Say(SAY_NORM,"i'm added");
+          len++;
+        }
+      }
+    }
+   }
+   return blockers;
+   }
+
+   int GetCrittersPath2(uint16 hx, uint16 hy, uint16 tx, uint16 ty, Map@ map, int dist, bool findKo, Critter@[]@+ critters, uint16& blockX, uint16& blockY, uint16& preblockX, uint16& preblockY)
+   {
+   bool addCrits=!(@critters==null);
+   int len=(addCrits?critters.length():0);
+   int blockers=0;
+   float dir=GetDirectionF(hx,hy,tx,ty);
+   uint8 dir1,dir2;
+   if ((30.0f  <= dir) && (dir <  90.0f)) { dir1=5; dir2=0; }
+   else
+   if ((90.0f  <= dir) && (dir < 150.0f)) { dir1=4; dir2=5; }
+   else
+   if ((150.0f <= dir) && (dir < 210.0f)) { dir1=3; dir2=4; }
+   else
+   if ((210.0f <= dir) && (dir < 270.0f)) { dir1=2; dir2=3; }
+   else
+   if ((270.0f <= dir) && (dir < 330.0f)) { dir1=1; dir2=2; }
+   else
+    { dir1=0; dir2=1; }
+
+   uint16 cx=hx;
+   uint16 cy=hy;
+   uint16 px=hx;
+   uint16 py=hy;
+
+   uint16 t1x,t1y,t2x,t2y;
+
+   float x1=3*float(hx) + BIAS_FLOAT;
+   float y1=SQRT3T2_FLOAT*float(hy) - (float(hx%2))*SQRT3_FLOAT + BIAS_FLOAT;
+
+   float x2=3*float(tx) + BIAS_FLOAT;
+   float y2=SQRT3T2_FLOAT*float(ty) - (float(tx%2))*SQRT3_FLOAT + BIAS_FLOAT;
+
+   float dx=x2-x1;
+   float dy=y2-y1;
+
+   float c1x,c1y,c2x,c2y; // test hex
+   float dist1,dist2;
+
+   for (int i=0;i<dist;i++)
+   {
+    t1x=cx; t2x=cx;
+    t1y=cy; t2y=cy;
+    MoveHexByDir(t1x,t1y,dir1,1);
+    MoveHexByDir(t2x,t2y,dir2,1);
+    c1x=3*float(t1x);
+    c1y=SQRT3T2_FLOAT*float(t1y) - (float(t1x%2))*SQRT3_FLOAT;
+    c2x=3*float(t2x);
+    c2y=SQRT3T2_FLOAT*float(t2y) - (float(t2x%2))*SQRT3_FLOAT;
+    dist1=dx*(y1-c1y) - dy*(x1-c1x);
+    dist2=dx*(y1-c2y) - dy*(x1-c2x);
+    dist1=((dist1>0)?dist1:-dist1);
+    dist2=((dist2>0)?dist2:-dist2);
+    if (dist1<=dist2) { cx=t1x; cy = t1y; } // left hand biased
+      else { cx=t2x; cy = t2y; }
+
+    // stop here
+    if (!map.IsHexRaked(cx,cy))
+    {
+      blockX=cx;
+      blockY=cy;
+      preblockX=px;
+      preblockY=py;
+      return blockers;
+    }
+
+    // if MoveHexByDir tried to leave the map and failed:
+    if ((cx==px) && (cy==py))
+    {
+      blockX=cx;
+      blockY=cy;
+      preblockX=px;
+      preblockY=py;
+      return blockers;
+    }
+    else
+    {
+      px=cx;
+      py=cy;
+    }
+
+    if (@(map.GetCritter(cx, cy)) != null)
+    {
+      blockers++;
+      if (addCrits)
+      {
+        if ((map.GetCritter(cx, cy).Cond==COND_LIFE) || ((map.GetCritter(cx, cy).Cond==COND_KNOCK_OUT) && findKo))
+        {
+          critters.resize(len+1);
+          @critters[len] = map.GetCritter(cx, cy);
+          //critters[len].Say(SAY_NORM,"i'm added");
+          len++;
+        }
+      }
+    }
+   }
+   blockX=cx;
+   blockY=cy;
+   preblockX=px;
+   preblockY=py;
+   return blockers;
+   }
+
+
+   uint8 DirF2I(float dir)
+   {
+   if ((60.0f  <= dir) && (dir < 120.0f)) return 5;
+   if ((120.0f <= dir) && (dir < 180.0f)) return 4;
+   if ((180.0f <= dir) && (dir < 240.0f)) return 3;
+   if ((240.0f <= dir) && (dir < 300.0f)) return 2;
+   if ((300.0f <= dir) && (dir < 360.0f)) return 1;
+   return 0;
+   }
+
+   int RoundF(float x)
+   {
+   if (x>=0) {
+    if (x - (float(int(x))) >= 0.5f) return ((int(x))+1);
+      else return (int(x));
+   }
+   else
+   {
+    if (-x - (float(int(-x))) >= 0.5f) return -(int(-x) + 1);
+      else return (-(int(-x)));
+   }
+   }
+
+   // |error| < 0.005
+   float Fast_atan2f(float y, float x)
+   {
+   if ( x == 0.0f )
+   {
+    if ( y > 0.0f ) return PIBY2_FLOAT;
+    if ( y == 0.0f ) return 0.0f;
+    return -PIBY2_FLOAT;
+   }
+   float atan;
+   float z = y/x;
+   if ((-1.0f < z) && (z < 1.0f))
+   {
+    atan = z/(1.0f + 0.28f*z*z);
+    if (x < 0.0f )
+    {
+      if ( y < 0.0f ) return atan - PI_FLOAT;
+      return atan + PI_FLOAT;
+    }
+   }
+   else
+   {
+    atan = PIBY2_FLOAT - z/(z*z + 0.28f);
+    if ( y < 0.0f ) return atan - PI_FLOAT;
+   }
+   return atan;
+   }
+ */

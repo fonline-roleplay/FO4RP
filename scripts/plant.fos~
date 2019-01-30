@@ -1,0 +1,682 @@
+#include "_macros.fos"
+
+import bool CheckGard( Map& map, uint16 hexX, uint16 hexY ) from "farm";
+
+#define PLANT_RADCVET     ( 0 )
+#define PLANT_CABBAGE     ( 1 )
+#define PLANT_CORN        ( 2 )
+#define PLANT_MAX         ( 3 )
+
+#define PID_SHIT_BIG      ( 1598 )
+#define PID_SHIT_SMALL    ( 1599 )
+
+#define PID_RADCVET       ( 1600 )
+#define PID_CABBAGE       ( 1610 )
+#define PID_CORN          ( 1620 )
+
+/*
+        Val0 - time event
+        Val1 - стадия роста
+        Val2 - значение селекции
+        Val3 - тип растения
+        Val4 - количество поливок
+        Val5 - количество удобрения
+        Val6 - количество плодов
+
+        Стадии роста Рад-цвета:
+        -2- сдохло(навоз)
+        -1- сдохло(засохло)
+        0 - семечко
+        1 - семечко в земле
+        2 - росток
+        3 - взрослое растение
+
+ */
+
+void _InitPlant( Item& item, bool firstTime )
+{
+    // Log("type "+item.Val3);
+    if( firstTime )
+    {
+        uint16 proto = item.GetProtoId();
+        // proto!=PID_PLANT_RADCVET
+        if( item.GetType() != ITEM_TYPE_PLANT )
+            return;
+
+        uint8 hashNum = item.Val3;
+        item.Val2 = 1;
+
+        // item.Info=item.Val1*10;
+
+        CPlant @ plant;
+
+        switch( proto )
+        {
+        case PID_RADCVET:
+            @plant = CRadCvet();
+            break;
+        case PID_CABBAGE:
+            @plant = CCabbage();
+            break;
+        case PID_CORN:
+            @plant = CCorn();
+            break;
+        default:
+            break;
+        }
+
+        if( !(plant is null) )
+        {
+            hashNum = plant.PlantType;
+        }
+
+        item.Val3 = hashNum;
+
+        item.Update();
+    }
+
+    if( item.Val1 == 0 )
+    {
+        item.SetEvent( ITEM_EVENT_DROP, "_DropPlant" );
+        if( item.Accessory == ACCESSORY_HEX && item.Val0 != 0 )
+            item.SetEvent( ITEM_EVENT_SKILL, "_SkillPlant" );
+    }
+
+    if( item.Val1 == 0 || item.Val1 == 3 )
+    {
+        SETFLAG( item.Flags, ITEM_CAN_USE );
+    }
+    else
+        UNSETFLAG( item.Flags, ITEM_CAN_USE );
+
+    item.SetEvent( ITEM_EVENT_USE, "_UsePlant" );
+}
+
+import void AffectRadiation( Critter& cr, int value ) from "radiation";
+import void AffectPoison( Critter& cr, int value ) from "poison";
+
+bool _UsePlant( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
+{
+    CPlant @ plant = GetCPlant( item.Val3 );
+    if( valid( onCritter ) || valid( onItem ) || valid( onScenery ) || plant is null )
+        return false;
+
+    if( item.Val1 == 0 )
+    {
+        AffectRadiation( cr, 1 );
+        AffectPoison( cr, 1 );
+
+        int heal = cr.Param[ ST_MAX_LIFE ] - cr.Param[ ST_CURRENT_HP ],
+            good = item.Val2;
+        if( good > heal )
+            good = heal;
+        if( good > 15 )
+            good = 15;               // ErlKing ограничение лечения радцветом
+        cr.ParamBase[ ST_CURRENT_HP ] += good;
+        DeleteItem( item );
+    }
+    else if( item.Val1 == plant.SeedCycle )
+    {
+        for( uint i = 0, len = Random( 1, 3 ); i < len; i++ )
+        {
+            Item@ pl = cr.AddItem( plant.BasePid, 1 );
+            pl.Val2 = item.Val2 + Random( 0, 1 );
+            pl.Val3 = item.Val3;
+            pl.SetScript( "plant@_InitPlant" );
+        }
+        DeleteItem( item );
+    }
+    else
+        return false;
+
+    return true;
+}
+
+void _DropPlant( Item& item, Critter& cr )
+{
+    Map@ map = cr.GetMap();
+    if( map is null )
+        return;
+
+    if( item.Val1 != 0 )
+        return;
+
+    if( map.GetItems( cr.HexX, cr.HexY, null ) > 1 )
+    {
+        if( cr.IsLife() )
+            cr.Say( SAY_NETMSG, "Это тут не прорастет." );
+        return;
+    }
+
+    item.SetEvent( ITEM_EVENT_SKILL, "_SkillPlant" );
+    item.SetEvent( ITEM_EVENT_WALK, "_WalkPlant" );
+    item.SetEvent( ITEM_EVENT_USE_ON_ME, "_OnMePlant" );
+    uint time = 0;
+    if( CheckGard( map, cr.HexX, cr.HexY ) )
+    {
+        time = GAME_MINUTE( 4 );
+        if( cr.IsLife() )
+            cr.Say( SAY_NETMSG, "Плод посажен." );
+    }
+    else
+    {
+        time = GAME_DAY( 2 );
+        if( cr.IsLife() )
+            cr.Say( SAY_NETMSG, "Здесь плод будет проростать очень долго." );
+    }
+
+    item.Val0 = CreateTimeEvent( __FullSecond + time, "e_ProcessPlant", item.Id, true );
+}
+
+bool _SkillPlant( Item& item, Critter& cr, int skill )
+{
+    if( skill == -1 )
+    {
+        if( item.Val6 > 0 )
+        {
+            CPlant @ plant = GetCPlant( item.Val3 );
+            if( plant is null )
+                return false;
+            cr.AddItem( plant.BasePid + plant.MaxCycle + 1, item.Val6 );
+            item.Val6 = 0;
+            cr.Say( SAY_NETMSG, "Вы собрали плоды" );
+            return false;
+        }
+
+        item.SetEvent( ITEM_EVENT_SKILL, null );
+        if( item.Val0 != 0 )
+        {
+            EraseTimeEvent( item.Val0 );
+            item.Val0 = 0;
+        }
+        /*if(CheckGard(map, item.HexX, item.HexY)){
+
+           }*/
+    }
+    return false;
+}
+
+void _WalkPlant( Item& item, Critter& cr, bool entered, uint8 dir )
+{
+    if( entered && item.Val1 > 1 )
+    {
+        if( Random( 1, 95 ) > 5 )
+        {
+            CPlant @ plant = GetCPlant( item.Val3 );
+            plant.Kill( item );
+        }
+    }
+    // Log("te "+item.Val1);
+}
+
+bool _OnMePlant( Item& item, Critter& cr, Item@ usedItem )
+{
+    if( usedItem is null )
+        return true;
+    if( item.Val1 == 0 )
+        return true;
+
+    uint16 pid = usedItem.GetProtoId();
+    if( pid == PID_NUKA_COLA        	||
+        pid == PID_BEER             	||
+        pid == PID_BOOZE 		||
+	pid == PID_BOTTLE_FULL)
+    {
+
+        item.Val4 += 1;
+    }
+    else if( pid == PID_SHIT_SMALL )
+    {
+        item.Val5 += 1;
+    }
+
+    return false;
+}
+
+CPlant@ GetCPlant( uint8 plantNum )
+{
+    if( plantNum < 0 || plantNum > PLANT_MAX )
+        return null;
+
+    CPlant@ tempPlant;
+
+    switch( plantNum )
+    {
+    case PLANT_RADCVET:
+        @tempPlant = CRadCvet();
+        break;
+    case PLANT_CABBAGE:
+        @tempPlant = CCabbage();
+        break;
+    case PLANT_CORN:
+        @tempPlant = CCorn();
+        break;
+    default:
+        break;
+    }
+
+    return tempPlant;
+}
+
+class CRadCvet  : CPlant
+{
+
+    CRadCvet()
+    {
+        MaxCycle = 4;
+        SeedCycle = 3;
+        BasePid = PID_RADCVET;
+        PlantType = PLANT_RADCVET;
+
+        ToWater.insertLast( 0 );
+        ToWater.insertLast( 0 );
+        ToWater.insertLast( 0 );
+
+        ToShit.insertLast( 0 );
+        ToShit.insertLast( 1 );
+        ToShit.insertLast( 1 );
+    }
+
+    uint Cycle1( Item& item )
+    {
+        SETFLAG( item.Flags, ITEM_HIDDEN );
+        item.ChangeProto( PID_RADCVET + 1 );
+        item.Update();
+        // Log("STAGE 1");
+        return GAME_HOUR( 1 );      // GAME_HOUR(12);
+    }
+
+    uint Cycle2( Item& item )
+    {
+        UNSETFLAG( item.Flags, ITEM_CAN_USE );
+        UNSETFLAG( item.Flags, ITEM_HIDDEN );
+        item.ChangeProto( PID_RADCVET + 2 );
+        item.Update();
+        // Log("STAGE 2");
+        return GAME_HOUR( 1 );      // GAME_HOUR(12);
+    }
+
+    uint Cycle3( Item& item )
+    {
+        SETFLAG( item.Flags, ITEM_CAN_USE );
+        item.ChangeProto( PID_RADCVET + 3 );
+        item.Val0 = 0;
+        item.Update();
+        // Log("STAGE 3");
+        return GAME_HOUR( 1 );
+    }
+
+    uint Cycle4( Item& item )
+    {
+        item.ChangeProto( PID_RADCVET + 4 );
+        // Log("STAGE END");
+        item.Update();
+        return GAME_HOUR( 1 );
+    }
+}
+
+class CCabbage  : CPlant
+{
+    CCabbage()
+    {
+        MaxCycle = 4;
+        SeedCycle = 2;
+        BasePid = PID_CABBAGE;
+        PlantType = PLANT_CABBAGE;
+
+        ToWater.insertLast( 0 );
+        ToWater.insertLast( 1 );
+        ToWater.insertLast( 1 );
+
+        ToShit.insertLast( 0 );
+        ToShit.insertLast( 1 );
+        ToShit.insertLast( 1 );
+    }
+
+    uint Cycle1( Item& item )
+    {
+        SETFLAG( item.Flags, ITEM_HIDDEN );
+        item.ChangeProto( PID_CABBAGE + 1 );
+        item.Update();
+        // Log("STAGE 11");
+        return GAME_HOUR( 2 );      // GAME_HOUR(12);
+    }
+
+    uint Cycle2( Item& item )
+    {
+        item.ChangeProto( PID_CABBAGE + 2 );
+        SETFLAG( item.Flags, ITEM_CAN_USE );
+        UNSETFLAG( item.Flags, ITEM_HIDDEN );
+        item.Update();
+        // Log("STAGE 22");
+        return GAME_HOUR( 4 );      // GAME_HOUR(12);
+    }
+
+    uint Cycle3( Item& item )
+    {
+        item.ChangeProto( PID_CABBAGE + 3 );
+        SETFLAG( item.Flags, ITEM_CAN_USE );
+        item.Val0 = 0;
+        item.Update();
+        // Log("STAGE 33");
+        return GAME_HOUR( 3 );
+    }
+
+    uint Cycle4( Item& item )
+    {
+        item.ChangeProto( PID_CABBAGE + 4 );
+        // Log("STAGE END");
+        item.Update();
+        return GAME_HOUR( 8 );
+    }
+}
+
+class CCorn     : CPlant
+{
+    CCorn()
+    {
+        MaxCycle = 5;
+        SeedCycle = 4;
+        BasePid = PID_CORN;
+        PlantType = PLANT_CORN;
+
+        ToWater.insertLast( 0 );
+        ToWater.insertLast( 2 );
+        ToWater.insertLast( 2 );
+        ToWater.insertLast( 2 );
+
+        ToShit.insertLast( 0 );
+        ToShit.insertLast( 1 );
+        ToShit.insertLast( 1 );
+        ToShit.insertLast( 1 );
+
+    }
+
+    uint Cycle1( Item& item )
+    {
+        SETFLAG( item.Flags, ITEM_HIDDEN );
+        item.ChangeProto( PID_CORN + 1 );
+        item.Update();
+        // Log("STAGE 111");
+        return GAME_HOUR( 4 );      // GAME_HOUR(12);
+    }
+
+    uint Cycle2( Item& item )
+    {
+        item.ChangeProto( PID_CORN + 2 );
+        UNSETFLAG( item.Flags, ITEM_CAN_USE );
+        UNSETFLAG( item.Flags, ITEM_HIDDEN );
+        item.Update();
+        // Log("STAGE 222");
+        return GAME_HOUR( 3 );      // GAME_HOUR(12);
+    }
+
+    uint Cycle3( Item& item )
+    {
+        item.ChangeProto( PID_CORN + 3 );
+        SETFLAG( item.Flags, ITEM_CAN_USE );
+        IncreaseFruits( item );
+        item.Update();
+        // Log("STAGE 333");
+        return GAME_HOUR( 4 );
+    }
+
+    uint Cycle4( Item& item )
+    {
+        item.ChangeProto( PID_CORN + 4 );
+        SETFLAG( item.Flags, ITEM_CAN_USE );
+        IncreaseFruits( item );
+        item.Val0 = 0;
+        item.Update();
+        // Log("STAGE 444");
+        return GAME_HOUR( 2 );
+    }
+
+    uint Cycle5( Item& item )
+    {
+        item.ChangeProto( PID_CORN + 5 );
+        // Log("STAGE END");
+        item.Update();
+        return GAME_HOUR( 12 );
+    }
+}
+
+class CPlant
+{
+    uint8 PlantType;
+    uint8 MaxCycle;
+    uint8 SeedCycle;
+    uint8[] ToWater;
+    uint8[] ToShit;
+    uint16 BasePid;
+    uint16 CollectPid;
+    CPlant()
+    {
+        PlantType = 0;
+        MaxCycle = 0;
+        BasePid = 0;
+    }
+
+    CPlant( uint8 maxCycle )
+    {
+        MaxCycle = maxCycle;
+    }
+
+    uint Release( Item& item )
+    {
+        uint8 hashNum = item.Val3;
+        uint  time = 0;
+
+        switch( item.Val1 )
+        {
+        case 1:
+            time = Cycle1( item );
+            break;
+        case 2:
+            time = Cycle2( item );
+            break;
+        case 3:
+            time = Cycle3( item );
+            break;
+        case 4:
+            time = Cycle4( item );
+            break;
+        case 5:
+            time = Cycle5( item );
+            break;
+        default:
+            time = 0;
+        }
+
+        return time;
+    }
+
+    bool CheckWater( Item& item )
+    {
+        int8 div = ( ToWater[ item.Val1 - 1 ] - item.Val4 );
+        div = CLAMP( div, 1, 10 );
+        if( item.Val1 >= 0 )
+        {
+            if( Random( 1, 95 ) / ( div ) < 60 )
+            {
+                Kill( item );
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool Kill( Item& item )
+    {
+        CPlant@ plant = GetCPlant( item.Val3 );
+        if( plant is null )
+            return false;
+
+        UNSETFLAG( item.Flags, ITEM_HIDDEN );
+        item.ChangeProto( plant.BasePid + plant.MaxCycle );
+        item.Update();
+        return true;
+    }
+
+    uint MakeShit( Item& item )
+    {
+        UNSETFLAG( item.Flags, ITEM_HIDDEN );
+        item.ChangeProto( PID_SHIT_SMALL );
+        item.Update();
+        return 0;
+    }
+
+    void IncreaseFruits( Item& item )
+    {
+        item.Val6 += 1;
+    }
+
+    uint CycleDead( Item& item )
+    {
+        return 0;
+    }
+
+    uint Cycle1( Item& item )
+    {
+        return 0;
+    }
+
+    uint Cycle2( Item& item )
+    {
+        return 0;
+    }
+
+    uint Cycle3( Item& item )
+    {
+        return 0;
+    }
+
+    uint Cycle4( Item& item )
+    {
+        return 0;
+    }
+
+    uint Cycle5( Item& item )
+    {
+        return 0;
+    }
+}
+
+uint e_ProcessPlant( uint[] @ values )
+{
+    if( values is null || values.length() != 1 )
+        return 0;
+
+    Item@ item = GetItem( values[ 0 ] );
+
+    if( item is null )
+        return 0;
+
+    uint16 pid = item.GetProtoId();
+    // pid!=PID_PLANT_RADCVET
+    if( item.GetType() != ITEM_TYPE_PLANT /* || item.Val0==0*/ )
+        return 0;
+
+    uint8 hashNum = item.Val3;
+    CPlant @ plant = GetCPlant( hashNum );
+
+    if( item.Val1 == 0 )
+        item.SetEvent( ITEM_EVENT_DROP, null );
+    else if( item.Val1 >= plant.MaxCycle )
+    {
+        // Log("cycle>max");
+        return plant.MakeShit( item );
+    }
+
+    if( item.Val1 > 0 )
+    {
+        if( !plant.CheckWater( item ) )
+        {
+            item.Val1 = plant.MaxCycle;
+            return GAME_HOUR( 1 );
+        }
+
+        if( plant.ToShit[ item.Val1 - 1 ] >= item.Val5 )
+        {
+            item.Val2 += 1;
+            item.Val6 += 1;
+        }
+
+        if( Random( 1, 95 ) == 5 )
+        {
+            Map @ map = GetMap( item.MapId );
+            if( !(map is null) )
+            {
+                map.AddNpc( 16, item.HexX, item.HexY, 0, null, null, "mob@_MobInit" );
+                DeleteItem( item );
+                return 0;
+            }
+
+        }
+
+        item.Val4 = 0;
+        item.Val5 = 0;
+
+    }
+
+    item.Val1 += 1;
+    uint  Val1 = item.Val1;
+
+    uint8 cyclePic = Val1;
+
+    // Log("cyclePic "+cyclePic);
+
+    // item.Info=item.Val1*10;
+
+    if( item.Val2 <= 2 )
+        item.Val2 += Random( 0, 1 );
+    else
+        item.Val2 += Random( -2, 2 );
+
+
+
+
+    uint time = plant.Release( item );
+    // Log("time "+time);
+
+    return time;
+}
+/*
+   void _InitShit(Item& item, bool firstTime){
+                item.SetEvent(ITEM_EVENT_DROP, "_DropShit");
+                //item.SetEvent(ITEM_EVENT_USE, "_UseShit");
+                //if(item.Accessory==ACCESSORY_HEX && item.Val0!=0) item.SetEvent(ITEM_EVENT_SKILL, "_SkillPlant");
+
+        //
+   }
+   /*
+   void _DropShit(Item& item, Critter& cr){
+        Map@ map = cr.GetMap();
+        if(map is null) return;
+
+        Item@[] find;
+
+        for(uint8 i = 0; i < 6; i++){
+                uint16 hexX = item.HexX, hexY = item.HexY;
+                Item@[] items;
+                map.MoveHexByDir(hexX, hexY, i, 1);
+                if(map.GetItems(hexX, hexY, items) > 0){
+                        for(uint16 ii = 0, jj = items.length(); ii < jj; ii++){
+                                find.insertLast(items[ii]);
+                        }
+                }
+        }
+        uint16 counter = 0;
+        while(find.length() > 0){
+                counter++;
+
+                if(counter >= 5){
+                        Item @ item = find[0];
+                        find.removeAt(0);
+                        item.ChangeProto(PID_SHIT_BIG);
+                        DeleteItems(find);
+
+                }
+        };
+
+   }*/

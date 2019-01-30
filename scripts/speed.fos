@@ -1,0 +1,120 @@
+// critter speed
+
+#include "_macros.fos"
+#include "_itempid.fos"
+
+#define CRITTER_BASE_RUN     ( 200 )
+#define CRITTER_BASE_WALK    ( 400 )
+
+import uint GetAllPlayers( Critter@[]& crs ) from "manager";
+
+#include "_starter.fos"
+START( "speed", "InitSpeedArray" );
+
+int[] SpeedArray( 2000, 0 );
+
+void InitSpeedArray() // Export
+{
+    file crTypes;
+    if( crTypes.open( "./data/CritterTypes.cfg", "r" ) < 0 )
+        return;
+
+//	uint counter=0;
+    while( !crTypes.isEndOfFile() )
+    {
+        string str;
+        crTypes.readLine( str );
+        if( str.length() < 10 || str[ 0 ] != '@' )
+            continue;
+
+        string@[] @ line = splitEx( str, " " );
+
+        int num = 0, walk = 0, run = 0;
+        if( !StrToInt( line[ 1 ], num ) || num < 0 || num > 999 || !StrToInt( line[ 37 ], walk ) || !StrToInt( line[ 38 ], run ) )
+            continue;
+
+        SpeedArray[ num * 2 ] = walk;
+        SpeedArray[ num * 2 + 1 ] = run;
+//		Log("w: "+walk+" r: "+run);
+//		counter++;
+    }
+//	Log("Loaded "+counter+" types.");
+    crTypes.close();
+}
+
+void reset()
+{
+    Critter@[] crs;
+    GetAllPlayers( crs );
+
+    for( uint i = 0, j = crs.length(); i < j; i++ )
+    {
+        ChangeCritterSpeed( crs[ i ] );
+    }
+}
+
+void reset( Critter& cr, int p0, int p1, int )
+{
+    reset();
+}
+
+void testISA( Critter& cr, int p0, int p1, int )
+{
+    InitSpeedArray();
+    reset();
+}
+
+
+void ChangeCritterSpeed( Critter& cr )
+{
+    uint16 run = 0, walk = 0, healthMod = 0;
+    int    curHp = cr.Stat[ ST_CURRENT_HP ], maxHp = cr.Stat[ ST_MAX_LIFE ];
+    uint   carry = cr.Stat[ ST_CARRY_WEIGHT ], weight = cr.ItemsWeight(), carryMod = 0;
+
+    Item @ armor = cr.GetItem( 0, SLOT_ARMOR );
+    bool apa = false;
+    if( @armor != null )
+    {
+        uint16 pid = armor.GetProtoId();
+
+        apa = ( pid == PID_POWERED_ARMOR ||
+                pid == PID_HARDENED_POWER_ARMOR ||
+                pid == PID_ADVANCED_POWER_ARMOR ||
+                pid == PID_ADVANCED_POWER_ARMOR_MK2 );
+    }
+
+    if( carry == 0 )
+        carry += 1;
+    uint weight_cantRun = carry * 0.5,
+         weight_limitWalk = carry * 0.75,
+         weight_cantWalk = carry;
+
+    bool CanRun = ( ( SpeedArray[ cr.CrType * 2 + 1 ] != 0 ) && ( weight < weight_cantRun ) && !apa );
+    cr.ModeBase[ MODE_NO_RUN ] = ( CanRun ? 0 : 1 );
+    // cr.ModeBase[MODE_NO_WALK] = (maxHp - curHp < maxHp * 0.1 ? 1 : 0);
+    // carry /= 100;
+    // weight /= 100;
+    if( curHp <= 0 )
+        curHp = 1;
+    healthMod = uint16( 20 * maxHp / curHp );
+
+    // if(cr.IsPlayer()) cr.Say(SAY_NETMSG, ""+healthMod);
+
+    // if(weight>weight_limitWalk && !apa) carryMod = uint(200*(weight-weight_limitWalk)/(carry-weight_limitWalk));
+    if( !apa )
+        carryMod = uint( 400 * weight / ( carry ) );
+    // if(cr.IsPlayer()) cr.Say(SAY_NETMSG, ""+carryMod);
+
+    uint8 speedMod = cr.StatBase[ ST_SPEED_MOD ];
+    speedMod = CLAMP( speedMod, 1, 1000 );
+
+    walk = uint16( SpeedArray[ cr.CrType * 2 ] + ( ( weight > weight_limitWalk ) ? carryMod : 0 ) + healthMod ) / ( speedMod * 0.01 );
+    run  = uint16( SpeedArray[ cr.CrType * 2 + 1 ]  + carryMod + healthMod ) / ( speedMod * 0.01 );
+
+
+    walk = CLAMP( walk, 400, 1000 );
+    run = CLAMP( run, 200, walk );
+
+    cr.StatBase[ ST_WALK_TIME ] = walk;
+    cr.StatBase[ ST_RUN_TIME ] = run;
+}

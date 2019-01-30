@@ -1,0 +1,512 @@
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+
+bool LocIsModoc(uint locPid)
+{
+	return(locPid<=(6));
+}
+
+bool LocIsCity(uint locPid)
+{
+	return(locPid<=(25)||locPid==(40)||locPid==(42)||locPid==26||locPid==27||locPid==29||locPid>=96);
+}
+
+bool LocIsMasked(uint locPid)
+{
+	return(locPid==(41));
+}
+
+bool LocIsHidden(uint locPid)
+{
+	return false;
+}                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      
+
+import void InjureCritter(Critter&cr,uint dmg,uint dmgType,uint8 dir,uint attackerId)from"combat";
+import void QuakeScreen(Map&map)from"effects";
+import bool IsKeyAviable(Critter&cr,uint lockerId)from"lockers";
+import void SwitchState(Item&locker)from"lockers";
+import void ExplodeEx(Map&map,uint16 hexX,uint16 hexY,uint16 effectPid,uint effectRadius,uint damage,uint damageType,uint damageRadius,uint ownerId)from"explode";
+import void AffectPoison(Critter&cr,int value)from"poison";  
+
+bool _ValidForTrap(Item&onItem)
+{
+	bool isValid=false;
+	uint8 iType=onItem.GetType();
+	isValid=(iType==(9)||iType==(8));
+	
+	return isValid;
+} 
+
+bool _IsItemTrap(Item&trap)
+{
+	
+	if(!(((trap.Flags)&((0x00000001)))!=0))
+	return false;
+	if(!(((trap.Flags)&((0x00020000)))!=0))
+	return false;
+	return(_CanItemTrap(trap));
+} 
+
+bool _CanItemTrap(Item&trap)
+{
+	return _CanItemTrap(trap.GetProtoId());
+}           
+
+bool _CanItemTrap(uint pid)
+{
+	bool isTrap=(pid==(159)||
+	pid==(25)||
+	pid==(26)||
+	pid==(27)||
+	pid==(94)||
+	pid==(385)||
+	pid==(835)||
+	pid==(925)||
+	pid==(926)||
+	pid==(927)||
+	pid==(928)||
+	pid==(932)||
+	pid==(931)||
+	pid==(929)||
+	pid==(930));
+	
+	if(isTrap)
+	return true;
+	
+	return false;
+} 
+
+bool _IsItemTrapped(Item&trappedItem)
+{
+	return((@GetTrap(trappedItem)!=null));
+} 
+
+Item@GetTrap(Item&door)
+{
+	;
+	if(!_ValidForTrap(door))
+	return null;
+	;
+	Map@map=GetMap(door.MapId);
+	if(!(@map!=null))
+	return null;
+	;
+	uint x=door.HexX;
+	uint y=door.HexY;
+	
+	Item@[]traps;
+	if(map.GetItems(x,y,traps)==0)
+	return null;  
+	
+	for(uint i=0,l=traps.length();i<l;i++)
+	{
+		;
+		Item@trap=traps[i];
+		if(!(@trap!=null))
+		continue;
+		
+		if(_IsItemTrap(trap))
+		{
+			return trap;
+		}
+	}
+	return null;
+}
+
+int GetTrapCount(Item&door)
+{
+	if(!_ValidForTrap(door))
+	return-1;
+	;
+	Map@map=GetMap(door.MapId);
+	if(!(@map!=null))
+	return-1;
+	;
+	uint x=door.HexX;
+	uint y=door.HexY;
+	
+	Item@[]traps;
+	if(map.GetItems(x,y,traps)==0)
+	return 0;
+	
+	return traps.length();
+}
+
+void RemoveItem(Item&item)
+{
+	if(item==null)
+	return;
+	if(item.GetType()==(5)||item.GetCount()<=1)
+	DeleteItem(item);
+	item.SetCount(item.GetCount()-1);
+	item.Update();
+}  
+
+bool _TrySetupTrap(Item&door,Item@trap,Critter&player)
+{
+	if(!(@trap!=null))
+	return false;
+	if(!_ValidForTrap(door))
+	return false;
+	if(!_CanItemTrap(trap))
+	return false;
+	Map@map=GetMap(door.MapId);
+	if(!(@map!=null))
+	return false;
+	if(player.Timeout[(234)]>0)
+	{
+		player.SayMsg((11),(3),(3401));
+		return false;
+	}
+	
+	uint16 pid=trap.GetProtoId();
+	if((pid==(926)&&door.GetType()!=(8))||(pid==(931)&&door.GetType()!=(9)))
+	{
+		player.Say((11),"Эту ловушку нельзя установить сюда.");
+		return false;
+	}
+	
+	uint8 trapCount=GetTrapCount(door);
+	uint16 addComplexity=0;
+	
+	if(trapCount>1)
+	addComplexity=trapCount*40;
+	
+	GameVar@complexity_trap=GetLocalVar((33),trap.Id);
+	
+	int base=player.Skill[(211)]-(complexity_trap.GetValue()/1.5)-addComplexity;
+	
+	base=(((base)>(95))?(95):(((base)<(0))?(0):(base)));
+	int chance=Random(1,100);  
+	
+	if(base>=chance)
+	{
+		
+		player.SayMsg((11),(3),(3442));  
+		
+		uint16[]trapVal={0,,,,};
+		if(trap.GetType()==(5))
+		{
+			trapVal[0]=1;
+			trapVal[1]=trap.Val3;
+			trapVal[2]=trap.Val4;
+			trapVal[3]=trap.Val5;
+			trapVal[4]=trap.Val6;
+		} 
+		
+		RemoveItem(trap);
+		
+		if(_SetDoorTrap(door,pid,trapVal))
+		{
+			uint16 tempComp=complexity_trap.GetValue()+(player.Stat[(5)]*5)+(player.Skill[(211)]/2);
+			GameVar@complexity_door=GetLocalVar((33),door.Id);
+			complexity_door=tempComp;
+			GameVar@identy=GetLocalVar((32),door.Id);
+			identy=player.Id; 
+			
+			uint16 addExp=0;
+			
+			switch(pid)
+			{
+				case(159):
+				addExp=50;
+				break;
+				case(25):
+				addExp=100;
+				break;
+				default:
+				break;
+			}  
+			
+			player.StatBase[(76)]+=complexity_door.GetValue()/2+addExp;
+		}
+	}
+	else
+	{
+		
+		player.SayMsg((11),(3),(3441));
+		if(chance<=5||base<5)
+		{
+			TrapDamagePlayer(trap,player,door);
+		}
+	} 
+	
+	return true;
+}
+
+bool _SetDoorTrap(Item&door,uint trapPid,uint16[]trapVal)
+{
+	uint16 x=0,y=0;
+	Map@map=door.GetMapPosition(x,y);
+	
+	if(!(@map!=null))
+	return false;
+	Item@trap=map.AddItem(x,y,trapPid,1); 
+	
+	if((@trap!=null))
+	{          
+		
+		if(trapVal[0]!=0)
+		{
+			trap.Val3=trapVal[1];
+			trap.Val4=trapVal[2];
+			trap.Val5=trapVal[3];
+			trap.Val6=trapVal[4];
+		}
+		
+		(trap.Flags=(trap.Flags)|((0x00020000)));
+		(trap.Flags=(trap.Flags)|((0x00000001)));
+		trap.Update();
+		return true;
+	}
+	return false;
+} 
+
+bool _TryRemoveTrap(Item&door,Critter&player)
+{
+	if(!_ValidForTrap(door))
+	return false;
+	if(!_IsItemTrapped(door))
+	return false;
+	
+	if(player.Timeout[(234)]>0)
+	{
+		player.SayMsg((11),(3),(3401));
+		return false;
+	}
+	
+	Item@trap=GetTrap(door);
+	if(!(@trap!=null))
+	return false;
+	
+	GameVar@complexity=GetLocalVar((33),trap.Id);
+	
+	int base=(player.Skill[(211)]+player.Stat[(5)]*5)-complexity.GetValue();
+	base=(((base)>(95))?(95):(((base)<(0))?(0):(base)));
+	int chance=Random(1,100);
+	if(base>=chance)
+	{
+		player.SayMsg((11),(3),(3444));
+		Item@addTrap=player.AddItem(trap.GetProtoId(),1);
+		
+		if(@addTrap!=null)
+		{
+			addTrap.Val3=trap.Val3;
+			addTrap.Val4=trap.Val4;
+			addTrap.Val5=trap.Val5;
+			addTrap.Val6=trap.Val6;
+		}
+		
+		DeleteItem(trap);
+		
+		player.StatBase[(76)]+=complexity.GetValue();
+	}
+	else
+	{
+		player.SayMsg((11),(3),(3443));
+		if(chance<=5||base<5)
+		{
+			TrapDamagePlayer(trap,player,door);
+		}
+		
+	}
+	player.TimeoutBase[(234)]=(__FullSecond+((30)*__TimeMultiplier));
+	return true;
+} 
+
+void TrapDamagePlayer(Item&trap,Critter&player,Item&trappedItem)
+{
+	if(!_IsItemTrap(trap))
+	return;
+	
+	uint damage=0,damageType=0,trapPid=trap.GetProtoId();       
+	
+	GameVar@identy=GetLocalVar((32),trappedItem.Id);
+	
+	if(trap.GetType()==(3))
+	{
+		
+		ProtoItem@weap=GetProtoItem(trapPid);
+		if(!(@weap!=null))
+		return;
+		
+		uint damage=Random(weap.Weapon_DmgMin_0,weap.Weapon_DmgMax_0);
+		uint damageType=weap.Weapon_DmgType_0;
+		Map@map=player.GetMap();
+		if((@map!=null))
+		{
+			uint tx=player.HexX;
+			uint ty=player.HexY;
+			if(trapPid==(159))
+			{
+				ExplodeEx(map,tx,ty,(4027),5,damage,damageType,5,identy.GetValue()); 
+				
+			}
+			else if(trapPid==(25)||trapPid==(421))
+			{
+				ExplodeEx(map,tx,ty,(4028),2,damage,damageType,2,identy.GetValue()); 
+				
+			}
+			else if(trapPid==(27))
+			map.RunEffect((4008),tx,ty,2);
+			else if(trapPid==(26))
+			{ 
+				
+			}
+			else if(trapPid==(385)||trapPid==(94))
+			{
+				player.ToKnockout(((Random(0,1)==0?true:false)?(82):(83)),((Random(0,1)==0?true:false)?(86):(87)),((Random(0,1)==0?true:false)?(88):(89)),Random(20,100),player.HexX,player.HexY);
+			}
+			
+		}
+		
+		InjureCritter(player,damage,damageType,GetDirection(trap.HexX,trap.HexY,player.HexX,player.HexY),0);
+		DeleteItem(trap);
+		return;
+	}
+	else
+	{
+		if(trap.GetType()==(5))
+		{
+			bool crHurt=true;
+			uint8 countUses=trap.Val6;
+			damage=Random(trap.Val3,trap.Val4);
+			damageType=trap.Val5;
+			
+			if(trapPid==(835))
+			{}
+			
+			else if(trapPid==(928))
+			{
+				AffectPoison(player,30);
+			}
+			else if(trapPid==(925))
+			{}
+			else if(trapPid==(926))
+			{
+				crHurt=false;
+				Item@[]items;
+				trappedItem.GetItems(0,items);
+				DeleteItems(items);
+			}
+			else if(trapPid==(927))
+			{}
+			else if(trapPid==(932)||trapPid==(931))
+			{
+				player.ToKnockout(((Random(0,1)==0?true:false)?(82):(83)),((Random(0,1)==0?true:false)?(86):(87)),((Random(0,1)==0?true:false)?(88):(89)),Random(20,100),player.HexX,player.HexY);
+			}
+			else if(trapPid==(929))
+			{
+				damage=damage*(100-(player.Stat[(9)]+player.Stat[(6)]*2.5+player.Stat[(5)]*2.5));      
+				
+			}
+			
+			if(crHurt)
+			{
+				InjureCritter(player,damage,damageType,GetDirection(trap.HexX,trap.HexY,player.HexX,player.HexY),0);
+			}
+			
+			if(countUses>0)
+			{
+				trap.Val6-=1;
+			}
+			else
+			{
+				DeleteItem(trap);
+			}
+			
+			return;
+		}
+	}
+}
+
+bool UseSkillOnTrappedItem(Item&trappedItem,Critter&cr,int skill)
+{
+	;
+	if(!_IsItemTrapped(trappedItem))
+	{
+		;
+		return false;
+	}
+	;
+	if(skill==(211))
+	{
+		_TryRemoveTrap(trappedItem,cr);
+		return true;
+	}
+	
+	if(skill==(209))
+	{
+		if(TrapDoorAction(cr,trappedItem))
+		{
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+	
+	if(skill==(-1))
+	{
+		;
+		
+		if(TrapDoorAction(cr,trappedItem))
+		{
+			return true;
+		}
+		else
+		{
+			return false;
+		}                   
+		
+	}
+	return false;
+}
+
+bool TrapDoorAction(Critter&cr,Item&trappedItem)
+{
+	GameVar@identy=GetLocalVar((32),trappedItem.Id);
+	GameVar@complexity=GetLocalVar((33),trappedItem.Id);
+	
+	Item@trap=GetTrap(trappedItem);
+	if(!(@trap!=null))
+	return false;
+	
+	if(IsKeyAviable(cr,trappedItem.LockerId))
+	{
+		SwitchState(trappedItem);
+		
+		return true;
+	} 
+	
+	bool isHead=false;
+	
+	if(trap.GetProtoId()==(927))
+	isHead=true;
+	
+	if(cr.StatBase[(131)]!=trappedItem.Id&&(cr.Stat[(1)]+cr.Skill[(211)]/50>complexity.GetValue()/20||(isHead&&cr.Stat[(1)]>3)))
+	{
+		if(!isHead)
+		cr.Say((11),"Вы чтото заподозрили");
+		cr.Say((11),"Вы видите страную голову. Не стоит сувать сюда руки.");
+		cr.StatBase[(131)]=trappedItem.Id;
+		return true;
+	}
+	TrapDamagePlayer(trap,cr,trappedItem);
+	
+	return true;
+}        
+
+bool SetTrapOnItem(Critter&cr,Item&trap,Item&onItem)
+{
+	if(_ValidForTrap(onItem))
+	{
+		if(_CanItemTrap(trap))
+		{
+			_TrySetupTrap(onItem,trap,cr);
+			return true;
+		}
+	}
+	return false;
+}                                                                                    
+

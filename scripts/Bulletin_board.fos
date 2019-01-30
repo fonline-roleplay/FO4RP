@@ -1,0 +1,539 @@
+#include "_macros.fos"
+
+
+#define BB_SAD_NAME                    ( "Bulletin_board_data" ) // название SetAnyData хранилищя
+
+#define FD_DO_FORCELOAD                ( 1 )                     // 1-загружать массив при каждом диалоге, 0-только один раз
+#define Unic_var                       ( 9943 )                  // id уникальной переменной
+#define FD_Bulletin_board_max_lines    ( 6 )                     // макс число строк на странице
+
+#define BB_DIALOG_VIEW_ID              ( 4 )                     // id окна диалога просмотра сообщений
+#define BB_DIALOG_MAIN_ID              ( 2 )                     // id основного окна диалога
+
+
+#define BB_DELL                        ( "Отрывает листок от доски" )
+#define BB_FINALIZE                    ( "Дописывает обьявление до конца" )
+#define BB_NO_MESS                     ( "На обьявлении ничего не написано" )
+#define BB_NEW_MESS                    ( "Приклеевает новое обьявление" )
+#define BB_NEW_MESS_LINE               ( "Что то пишет на доске" )
+#define BB_NO_NEW_MESS_LINE_SPACE      ( "Понимает что место на листе кончилось" )
+#define BB_NO_TEXT                     ( "Думает что бы написать" )                             // текст не введен тк состоял из запрешенных символов
+
+
+#define FD_ALL_OK                      ( 1 )
+#define FD_ERROR_LINE_LIMIT            ( 2 )
+#define FD_ERROR_PAGE_RANGE            ( 3 )
+#define FD_ERROR_NO_TEXT               ( 4 )
+
+
+#define BB_DATA_LINE_DIVIDER           ( '#' )                                      // разделитель строк
+#define BB_DATA_ARRAY_DIVIDER          ( '*' )                                      // разедилитель массивов
+
+
+uint8[] BB_SPEC_SIMBOL_IGNORLIST = { BB_DATA_LINE_DIVIDER, BB_DATA_ARRAY_DIVIDER }; // массив символов и исключений, разделители желательно не убирать
+
+
+string[][] Bulletin_board_data;
+int is_Bulletin_board_loaded = 0;
+
+
+
+// финализация страницы
+void s_do_Bulletin_board_finalize_page( Critter& player, Critter@ npc )
+{
+    player.Say( SAY_EMOTE_ON_HEAD, BB_FINALIZE );
+
+    GameVar@ t   = GetUnicumVar( Unic_var, player.Id, player.Id );
+    Bulletin_board_finalize_page( t.GetValue() );
+
+    Save_BB();
+}
+
+// нужна ли финализация
+bool s_is_Bulletin_board_need_finalize_page( Critter& player, Critter@ npc )
+{
+    GameVar@ index   = GetUnicumVar( Unic_var, player.Id, player.Id );
+    int      t = index.GetValue();
+    int      t_max = Bulletin_board_data.length();
+
+    bool     rez = false;
+    if( ( t > -1 ) && ( t < t_max ) )
+    {
+        rez = ( Bulletin_board_data[ t ].length() < FD_Bulletin_board_max_lines );
+    }
+
+    return ( rez );
+}
+
+// сама финализация
+void Bulletin_board_finalize_page( int index )
+{
+    int max_index = Bulletin_board_data.length();
+    if( ( index > -1 ) && ( index < max_index ) )
+    {
+        for( uint i = 0; i < FD_Bulletin_board_max_lines; i++ )
+        {
+            Bulletin_board_data_new_line( index, " " );
+
+        }
+    }
+    ;
+}
+
+
+
+
+
+// добавление новой страницы
+void Bulletin_board_data_new_page()
+{
+    Bulletin_board_data.resize( Bulletin_board_data.length() + 1 );
+    ;
+}
+// удаление страницы
+void Bulletin_board_data_del_page( int index )
+{
+    string[][] temp_Bulletin_board_data;
+
+    int i_max = Bulletin_board_data.length();
+    for( int i = 0; i < i_max; i++ )
+    {
+        if( i != index )
+        {
+            temp_Bulletin_board_data.resize( temp_Bulletin_board_data.length() + 1 );
+            temp_Bulletin_board_data[ temp_Bulletin_board_data.length() - 1 ] = Bulletin_board_data[ i ];
+            ;
+        }
+    }
+    // сбрасываем размер основного массива
+
+    for( int i = 0; i < i_max; i++ )
+    {
+        Bulletin_board_data[ i ].resize( 0 );
+    }
+    Bulletin_board_data.resize( 0 );
+    // передаем в него новый массив
+    Bulletin_board_data = temp_Bulletin_board_data;
+    ;
+}
+
+
+
+
+// входит ли символ в исключения
+bool Bulletin_board_is_specsimbol( uint8 char_ )
+{
+    bool rez = false;
+    for( uint i = 0; i < BB_SPEC_SIMBOL_IGNORLIST.length(); i++ )
+    {
+        if( char_ == BB_SPEC_SIMBOL_IGNORLIST[ i ] )
+        {
+            rez = true;
+        }
+    }
+    return rez;
+}
+// убирает из строки исключения
+void Bulletin_board_kill_spec_simbol( string& str )
+{
+    string rez;
+    rez = "";
+    for( uint i = 0; i < str.length(); i++ )
+    {
+        if( not Bulletin_board_is_specsimbol( str[ i ] ) )
+        {
+            add_char_to_str( str[ i ], rez );
+        }
+    }
+    str = rez;
+}
+
+
+// добавление записи на страницу
+int Bulletin_board_data_new_line( int index, string text )
+{
+    Bulletin_board_kill_spec_simbol( text );
+    if( text.length() == 0 )
+    {
+        return FD_ERROR_NO_TEXT;
+    }
+
+
+    int i_max = Bulletin_board_data.length();
+    if( ( index > -1 ) && ( index < i_max ) )
+    {
+        if( ( Bulletin_board_data[ index ].length() + 1 ) <= FD_Bulletin_board_max_lines )
+        {
+            Bulletin_board_data[ index ].resize( Bulletin_board_data[ index ].length() + 1 );
+            Bulletin_board_data[ index ][ Bulletin_board_data[ index ].length() - 1 ] = text;
+            return FD_ALL_OK;
+        }
+        else
+        {
+            return FD_ERROR_LINE_LIMIT;
+        }
+    }
+    else
+    {
+        return FD_ERROR_PAGE_RANGE;
+    }
+}
+
+
+// составляет страницу
+string Bulletin_board_data_get_page( int index )
+{
+    string rez = "";
+    string current_line_lex_name = "";
+
+
+    rez = rez + "$current" + ( index + 1 );
+    rez = rez + "$max" + Bulletin_board_data.length();
+
+    int i_max = Bulletin_board_data.length();
+    if( ( index > -1 ) && ( index < i_max ) )
+    {
+        for( uint i = 0; i < FD_Bulletin_board_max_lines; i++ )
+        {
+            if( i < Bulletin_board_data[ index ].length() )
+            {
+                current_line_lex_name = "$line_" + ( i + 1 );
+                rez = rez + current_line_lex_name + Bulletin_board_data[ index ][ i ];
+            }
+            else
+            {
+                // если обьявление вообще пустое
+                if( i == 0 )
+                {
+                    current_line_lex_name = "$line_" + ( i + 1 );
+                    rez = rez + current_line_lex_name + BB_NO_MESS;
+                }
+                else
+                {
+                    current_line_lex_name = "$line_" + ( i + 1 );
+                    rez = rez + current_line_lex_name + " ";
+                }
+            }
+        }
+    }
+    else
+    {
+        // ошибка индекса
+        for( uint i = 0; i < FD_Bulletin_board_max_lines; i++ )
+        {
+            current_line_lex_name = "$line_" + ( i + 1 );
+            rez = rez + current_line_lex_name + " ";
+        }
+    }
+    return rez;
+}
+
+
+
+// =====================================================
+// есть ли предыдущее обьявление
+bool s_is_prev_page( Critter& player, Critter@ npc )
+{
+    GameVar@ t   = GetUnicumVar( Unic_var, player.Id, player.Id );
+    return ( t > 0 ) && ( Bulletin_board_data.length() > 0 );
+}
+// перейти к предыдущему
+void s_prev_page( Critter& player, Critter@ npc )
+{
+    GameVar@ t   = GetUnicumVar( Unic_var, player.Id, player.Id );
+    if( t > 0 )
+    {
+        t = t - 1;
+    }
+}
+
+// =====================================================
+// есть ли следующее обьявление
+bool s_is_next_page( Critter& player, Critter@ npc )
+{
+    GameVar@ t   = GetUnicumVar( Unic_var, player.Id, player.Id );
+    return ( t < Bulletin_board_data.length() - 1 ) && ( Bulletin_board_data.length() > 0 );
+}
+// перейти к следующему
+void s_next_page( Critter& player, Critter@ npc )
+{
+    GameVar@ t   = GetUnicumVar( Unic_var, player.Id, player.Id );
+    if( t < Bulletin_board_data.length() - 1 )
+    {
+        t = t + 1;
+    }
+}
+
+
+
+// =====================================================
+// есть ли  обьявления вообще
+bool s_is_page( Critter& player, Critter@ npc )
+{
+    return ( Bulletin_board_data.length() > 0 );
+}
+bool s_not_is_page( Critter& player, Critter@ npc )
+{
+    return ( not ( Bulletin_board_data.length() > 0 ) );
+}
+
+
+
+
+// ============================================================================================
+// Удаление выбранного
+void s_Bulletin_board_data_dell( Critter& player, Critter@ npc )
+{
+    GameVar@ t   = GetUnicumVar( Unic_var, player.Id, player.Id );
+
+    if( s_is_page( player, npc ) )
+    {
+        player.Say( SAY_EMOTE_ON_HEAD, BB_DELL );
+        Bulletin_board_data_del_page( t.GetValue() );
+        Save_BB();
+    }
+
+    t = t - 1;
+    if( t < 0 )
+    {
+        t = 0;
+    }
+}
+
+
+
+// добавление на доску
+void s_Bulletin_board_data_add_new_page( Critter& player, Critter@ npc )
+{
+    Bulletin_board_data_new_page();
+    player.Say( SAY_EMOTE_ON_HEAD, BB_NEW_MESS );
+
+    GameVar@ t   = GetUnicumVar( Unic_var, player.Id, player.Id );
+    t = Bulletin_board_data.length() - 1;
+
+    Save_BB();
+    ;
+}
+
+
+
+
+// ============================================================================================
+// получить массив кодов символов строки
+void string_to_uint_array( string str, uint8[]&  rez )
+{
+    rez.resize( 0 );
+    for( uint i = 0; i < str.length(); i++ )
+    {
+        rez.resize( rez.length() + 1 );
+        rez[ rez.length() - 1 ] = str[ i ];
+    }
+}
+// ============================================================================================
+// получить массив кодов символов массива строк с разделителем
+void string_array_to_uint_array( string[] str_array, uint8[]&  rez )
+{
+    uint8[]  str_line;
+
+    rez.resize( 0 );
+    for( uint i = 0; i < str_array.length(); i++ )
+    {
+
+
+        string_to_uint_array( str_array[ i ], str_line );
+
+        for( uint t = 0; t < str_line.length(); t++ )
+        {
+            rez.resize( rez.length() + 1 );
+            rez[ rez.length() - 1 ] =   str_line[ t ];
+        }
+
+        rez.resize( rez.length() + 1 );
+        rez[ rez.length() - 1 ] = BB_DATA_LINE_DIVIDER;                         // строк
+
+
+
+    }
+}
+// ============================================================================================
+// получить массив кодов символов 2Д массива строк с разделителем
+void string_2d_array_to_uint_array( string[][] str_array, uint8[]&  rez )
+{
+    uint8[]  str_line;
+
+    rez.resize( 0 );
+    for( uint i = 0; i < str_array.length(); i++ )
+    {
+
+
+        rez.resize( rez.length() + 1 );
+        rez[ rez.length() - 1 ] = BB_DATA_ARRAY_DIVIDER;          // разделитель массивов
+
+
+
+        string_array_to_uint_array( str_array[ i ], str_line );
+
+        for( uint t = 0; t < str_line.length(); t++ )
+        {
+            rez.resize( rez.length() + 1 );
+            rez[ rez.length() - 1 ] =   str_line[ t ];
+        }
+
+    }
+}
+
+
+// очистить массив
+void Bulletin_board_data_clear()
+{
+    for( uint t = 0; t < Bulletin_board_data.length(); t++ )
+    {
+        Bulletin_board_data[ t ].resize( 0 );
+    }
+    Bulletin_board_data.resize( 0 );
+    ;
+}
+
+// записать в строку символ
+void add_char_to_str( uint8 char_, string& str )
+{
+    str.resize( str.length() + 1 );
+    str[ str.length() - 1 ] =   char_;
+    ;
+}
+
+
+// ============================================================================================
+// сохранить массив
+void Save_BB()
+{
+    uint8[] DATA;
+    string_2d_array_to_uint_array( Bulletin_board_data, DATA );
+
+    EraseAnyData( BB_SAD_NAME );
+    SetAnyData( BB_SAD_NAME, DATA );
+}
+
+// ============================================================================================
+// загрузить массив
+void Load_BB()
+{
+    if( ( is_Bulletin_board_loaded == 0 ) or ( FD_DO_FORCELOAD == 1 ) )
+    {
+        if( IsAnyData( BB_SAD_NAME ) )
+        {
+            uint8[] DATA;
+            GetAnyData( BB_SAD_NAME, DATA );
+
+            string text_buffer = "";
+
+            int    bb_size_x = 0;
+            int    bb_size_y = 0;
+
+            Bulletin_board_data_clear();
+
+            string test7 = "";
+
+            for( uint i = 0; i < DATA.length(); i++ )
+            {
+                if( DATA[ i ] == BB_DATA_ARRAY_DIVIDER )            // новый массив
+                {
+
+                    Bulletin_board_data.resize( Bulletin_board_data.length() + 1 );
+                    ;
+                }
+
+                if( DATA[ i ] == BB_DATA_LINE_DIVIDER )            // новый элемент массива
+                {
+                    bb_size_x = Bulletin_board_data.length();
+                    bb_size_y = Bulletin_board_data[ bb_size_x - 1 ].length();
+
+
+                    Bulletin_board_data[ bb_size_x - 1 ].resize(      bb_size_y + 1     );
+
+                    bb_size_y = Bulletin_board_data[ bb_size_x - 1 ].length();
+
+                    Bulletin_board_data[ bb_size_x - 1 ][     bb_size_y - 1     ] = text_buffer;
+
+                    text_buffer = "";
+                }
+
+                if( ( DATA[ i ] != BB_DATA_LINE_DIVIDER ) && ( DATA[ i ] != BB_DATA_ARRAY_DIVIDER ) )
+                {
+                    add_char_to_str( DATA[ i ], text_buffer );
+                }
+            }
+        }
+        is_Bulletin_board_loaded = 1;
+    }
+}
+
+
+
+
+
+
+
+
+// ============================================================================================
+// при запуске сбрасывает начальное обьявление на ноль
+void s_dialog_init( Critter& player, Critter@ npc )
+{
+    Load_BB();
+
+    GameVar@ t   = GetUnicumVar( Unic_var, player.Id, player.Id );
+    t = 0;
+}
+
+
+// диалог подтверждения удаления
+void s_dlg_Func_dell( Critter& player, Critter@ npc, string@ lexems )
+{
+
+    GameVar@ t   = GetUnicumVar( Unic_var, player.Id, player.Id );
+
+    // определяем режим ввода
+    if( not IS_DIALOG_SAY_MODE( lexems ) )
+    {
+        // Обычный
+        string page = ( t.GetValue() + 1 );
+        lexems = "$current" +  page;
+    }
+}
+
+
+// показываем выбранное обьявление
+void s_dlg_Func( Critter& player, Critter@ npc, string@ lexems )
+{
+
+    GameVar@ t   = GetUnicumVar( Unic_var, player.Id, player.Id );
+
+    // определяем режим ввода
+    if( IS_DIALOG_SAY_MODE( lexems ) )
+    {
+        // Текст
+        int rez = Bulletin_board_data_new_line( t.GetValue(), lexems );
+        if( rez == FD_ALL_OK )
+        {
+            player.Say( SAY_EMOTE_ON_HEAD, BB_NEW_MESS_LINE );
+            Save_BB();
+        }
+        if( rez == FD_ERROR_LINE_LIMIT )
+        {
+            player.Say( SAY_EMOTE_ON_HEAD, BB_NO_NEW_MESS_LINE_SPACE );
+        }
+        if( rez == FD_ERROR_NO_TEXT )
+        {
+            player.Say( SAY_EMOTE_ON_HEAD, BB_NO_TEXT );
+        }
+
+        return;        // BB_DIALOG_VIEW_ID;
+    }
+    else
+    {
+        // Обычный
+        lexems = Bulletin_board_data_get_page( t.GetValue() );
+    }
+
+    return;    // 0;
+}

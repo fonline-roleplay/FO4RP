@@ -1,0 +1,513 @@
+#include "_macros.fos"
+#include "_global_events.fos"
+#include "tools_ip.fos"
+#include "config_parser_h.fos"
+
+#define BAN_FLAG_CHECK_ONLY_ID      ( 0x1 )
+#define BAN_FLAG_CHECK_ONLY_IP      ( 0x2 )             // с этого ip нельзя зайти не за одного чара или зарегистрировать нового
+#define BAN_FLAG_CHECK_ID_AND_IP    ( 0x3 )
+#define BAN_FLAG_PERMANENT          ( 0x4 )
+#define BAN_FLAG_EXPIRED            ( 0x8 )
+#define BAN_FLAG_CANCELED           ( 0x10 )
+#define BAN_FLAG_AUTOBAN_BY_IP      ( 0x20 )            // если с этого ip зайти за любого чара, то автоматически создается бан с id этого чара
+#define BAN_FLAG_AUTOBAN_BY_ID      ( 0x40 )            // если попробовать зайти за этот id, то автоматически создается бан с текущем ip
+
+#pragma bindfunc "void Critter::GetIp(uint[]& data) -> fonline_tnf.dll Critter_GetIp"
+
+class Ban
+{
+    // bool OnlineBan;
+    uint   Id;
+    uint   Ip;
+    uint   Mask;        // битовая маска. Например, 255.255.255.0
+
+    uint8  BanFlags;
+
+    uint   Begin;       // полная игровая секунда когда бан был установлен
+    uint   End;         // полная игровая секунда когда бан будет снят
+
+    uint   Author;      // id ГМа который установил бан
+    string Reason;      // показывается забанненому игроку
+    string Comment;     // комментарий для гмов и админов
+
+    uint   Counter;
+
+    Ban()
+    {
+        Id = 0;
+        Ip = 0;
+        Mask = 0;
+        BanFlags = 0;
+        Begin = 0;
+        End = 0;
+        Author = 0;
+        Counter = 0;
+    }
+
+    bool CheckBase()
+    {
+        if( ( Id == 0 && Ip == 0 ) or
+            FLAG( BanFlags, BAN_FLAG_EXPIRED ) or
+            FLAG( BanFlags, BAN_FLAG_CANCELED )
+             )
+            return false;
+
+        if( !FLAG( BanFlags, BAN_FLAG_PERMANENT ) && ( End < __FullSecond ) )
+        {
+            SETFLAG( BanFlags, BAN_FLAG_EXPIRED );
+            return false;
+        }
+
+        return true;
+    }
+
+    bool CheckIp( uint ip )
+    {
+        return ( FLAG( BanFlags, BAN_FLAG_CHECK_ONLY_IP ) && ( ( Ip & Mask ) == ( ip & Mask ) ) );
+    }
+
+    bool CheckId( uint id )
+    {
+        return ( FLAG( BanFlags, BAN_FLAG_CHECK_ONLY_ID ) && ( Id == id ) );
+    }
+}
+
+class BanList : iManagerModule, iManager_player_registration, iManager_player_login, iManager_world_save
+{
+    Ban@[] List;
+
+    uint LastSave;
+
+    uint ChangesAfterLastSave;
+    uint TotalCounter;
+    uint MaxTotalCounter;
+
+    BanList()
+    {
+        LastSave = 0;
+        ChangesAfterLastSave = 0;
+        TotalCounter = 0;
+        MaxTotalCounter = 0;
+
+        AddStartCallback( "banhammer", "start" );
+    }
+
+    bool manager_init()
+    {
+        if( !Load() )
+            Log( "BanHammer: List hasn't loaded!" );
+        return true;
+    }
+
+    void ClickCounter( Ban@ ban )
+    {
+        ban.Counter += 1;
+        TotalCounter += 1;
+    }
+    bool global_player_registration( uint ip, string& name, uint& textMsg, uint& strNum )
+    {
+        for( uint i = 0, j = List.length(); i < j; i++ )
+        {
+            if( List[ i ] is null )
+                continue;
+            Ban@ ban = List[ i ];
+
+            if( !ban.CheckBase() )
+                continue;
+
+            if( ban.CheckIp( ip ) )
+            {
+                textMsg = TEXTMSG_GAME;
+                strNum = 1043;                 // {1043}{}{|4291317840 Ваш IP заблокирован.}
+                ClickCounter( ban );
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool global_player_login( uint ip, string& name, uint id, uint& textMsg, uint& strNum )
+    {
+        for( uint i = 0, j = List.length(); i < j; i++ )
+        {
+            if( List[ i ] is null )
+                continue;
+            Ban@ ban = List[ i ];
+
+            if( !ban.CheckBase() )
+                continue;
+
+            if( ban.CheckIp( ip ) )
+            {
+                textMsg = TEXTMSG_GAME;
+                strNum = 1043;                 // {1043}{}{|4291317840 Ваш IP заблокирован.}
+                ClickCounter( ban );
+
+                if( FLAG( ban.BanFlags, BAN_FLAG_AUTOBAN_BY_IP ) && ( ban.Id != id ) )
+                {
+                    // TryBanById(id);
+                }
+
+                return false;
+            }
+            else if( ban.CheckId( id ) )
+            {
+                textMsg = TEXTMSG_GAME;
+                strNum = 1046;                 // {1046}{}{|4291317840 Вы были забанены.}
+                ClickCounter( ban );
+
+                if( FLAG( ban.BanFlags, BAN_FLAG_AUTOBAN_BY_ID ) )
+                {
+                    // TryBanByIp(ip);
+                }
+
+                return false;
+            }
+        }
+        return true;
+    }
+
+    bool global_world_save()
+    {
+        if( TotalCounter > MaxTotalCounter )
+        {
+            MaxTotalCounter = TotalCounter;
+            TotalCounter = 0;
+        }
+        else if( ( LastSave + REAL_MINUTE( 30 ) ) > __FullSecond )
+        {}
+        else if( ChangesAfterLastSave == 0 )
+        {}
+        else
+            return true;
+
+        if( !Save() )
+            Log( "BanHummer: saving error!" );
+
+        return true;
+    }
+
+    void Add( Ban@ ban )
+    {
+        @List[ getEmpty() ] = ban;
+        ChangesAfterLastSave += 1;
+    }
+
+    uint getEmpty()
+    {
+        uint n = 0;
+        for( uint i = 0, j = List.length(); i < j; i++ )
+        {
+            if( ( List[ i ] is null ) || ( List[ i ].Id == 0 && List[ i ].Ip == 0 ) )
+            {
+                n = i;
+                break;
+            }
+        }
+        if( n == 0 )
+        {
+            n = List.length();
+            List.grow( 1 );
+        }
+        return n;
+    }
+
+    int getById( uint id )
+    {
+        for( uint i = 0, j = List.length(); i < j; i++ )
+        {
+            if( ( List[ i ] is null ) || ( List[ i ].Id != id ) )
+                continue;
+
+            return i;
+        }
+        return -1;
+    }
+
+    bool Load()
+    {
+        iConfig@ config = CreateConfig();
+
+        if( !config.Parse( "save/bans/qbans.txt" ) )
+            return false;
+
+        uint len = config.GetSectionsNum();
+        // Log("config len "+len);
+
+        iSection@ sect = null;
+
+        for( uint i = 0; i < len; i++ )
+        {
+            @sect = config.GetSection( i );
+
+            string@ name = sect.GetName();
+
+            if( name == "Info" )
+            {
+                LastSave                = sect.GetKey( "LastSave" ).GetUint();
+                MaxTotalCounter = sect.GetKey( "MaxTotalCounter" ).GetUint();
+            }
+            else if( name == "Ban" )
+            {
+                Ban@ ban = Ban();
+                ban.Id = sect.GetKey( "Id" ).GetUint();
+                ban.Ip = GetUintFromIp( sect.GetKey( "Ip" ).GetVal() );
+                ban.Mask = GetUintFromIp( sect.GetKey( "Mask" ).GetVal() );
+
+                ban.BanFlags = sect.GetKey( "BanFlags" ).GetUint();
+
+                ban.Begin = sect.GetKey( "Begin" ).GetUint();
+                ban.End = sect.GetKey( "End" ).GetUint();
+
+                ban.Author = sect.GetKey( "Author" ).GetUint();
+
+                iKey@ key = sect.GetKey( "Reason" );
+                if( key !is null )
+                    ban.Reason = key.GetVal();
+
+                @key = sect.GetKey( "Comment" );
+                if( key !is null )
+                    ban.Comment = key.GetVal();
+
+                ban.Counter = sect.GetKey( "Counter" ).GetUint();
+
+                List.insertLast( @ban );
+            }
+        }
+
+        return true;
+    }
+
+    bool Save()
+    {
+        uint     len = List.length();
+
+        iConfig@ config = CreateConfig();
+        if( config is null )
+            return false;
+
+        iSection@ sect = config.AddSection( "Info" );
+        sect.AddKey( "Version", "1.01" );
+        LastSave = __FullSecond;
+        sect.AddKey( "LastSave", "" + LastSave );
+        sect.AddKey( "MaxTotalCounter", "" + MaxTotalCounter );
+        // sect.AddKey("IsBackup", (isBackup?"true":"false") );
+
+        for( uint i = 0; i < len; i++ )
+        {
+            if( List[ i ] is null )
+                continue;
+            Ban@ ban = List[ i ];
+            if( ban.Id == 0 && ban.Ip == 0 )
+                continue;
+
+            iSection@ sect = config.AddSection( "Ban" );
+            if( sect is null )
+                return false;
+
+            sect.AddKey( "Id", "" + ban.Id );
+            sect.AddKey( "Ip", GetIpFromUint( ban.Ip ) );
+            sect.AddKey( "Mask", GetIpFromUint( ban.Mask ) );
+
+            sect.AddKey( "BanFlags", "" + ban.BanFlags );
+
+            sect.AddKey( "Begin", "" + ban.Begin );
+            sect.AddKey( "End", "" + ban.End );
+
+            sect.AddKey( "Author", "" + ban.Author );
+            if( ban.Reason != "" )
+                sect.AddKey( "Reason", ban.Reason );
+            if( ban.Comment != "" )
+                sect.AddKey( "Comment", ban.Comment );
+
+            sect.AddKey( "Counter", "" + ban.Counter );
+        }
+
+        if( !config.Write( "save/bans/qban.txt" ) )
+            return false;
+
+        ChangesAfterLastSave = 0;
+
+        return true;
+    }
+}
+
+BanList banlist;
+
+void start()
+{
+    iManagerModule@  module = banlist;
+    iManagerElement@ manager = manager_add_module( module, "BanHummer", 70 );
+    if( manager is null )
+        return;
+
+    manager.GetEventFlags() |= (
+        MANAGER_EVENT_PLAYER_REGISTRATION |
+        MANAGER_EVENT_PLAYER_LOGIN |
+        MANAGER_EVENT_WORLD_SAVE );
+
+    manager.GetTimeChangeCall() = TIME_NEW_DAY;
+}
+
+void BanId( Critter& player, int id, int hours, int kick )
+{
+    Ban@ ban = Ban();
+    ban.Id = id;
+    ban.BanFlags |= BAN_FLAG_CHECK_ONLY_ID;
+    ban.Begin = __FullSecond;
+    ban.End = __FullSecond + REAL_HOUR( hours );
+    ban.Author = player.Id;
+
+    string@ name = GetPlayerName( id );
+
+    if( name != "" )
+    {
+        player.Say( SAY_NETMSG, "Игрок " + name + " (" + id + ") забанен по Id на: " + hours + " (в реальных часах)" );
+    }
+    else
+    {
+        player.Say( SAY_NETMSG, "Игрока с таким Id нет в базе данных." );
+        return;
+    }
+
+    banlist.Add( ban );
+
+    if( kick != 0 )
+        KickId( player, id, 0, 0 );
+}
+
+void KickId( Critter& player, int id, int, int )
+{
+    Critter@ cr = GetCritter( id );
+    if( cr !is null )
+    {
+        cr.Say( SAY_NETMSG, "Вы были отключены." );
+        player.Say( SAY_NETMSG, "Игрок " + id + " кикнут." );
+        cr.Disconnect();
+    }
+}
+
+void KickBanIdIp( Critter& player, int id, int hours, int mask_level )
+{
+    Ban@ ban = Ban();
+    ban.Id = id;
+    ban.BanFlags |= BAN_FLAG_CHECK_ID_AND_IP;
+    ban.Begin = __FullSecond;
+    ban.End = __FullSecond + REAL_HOUR( hours );
+    ban.Author = player.Id;
+
+    string@ name = GetPlayerName( id );
+
+    if( name != "" )
+    {
+        player.Say( SAY_NETMSG, "Игрок " + name + " (" + id + ") забанен по Id на: " + hours + " (в реальных часах)" );
+    }
+    else
+    {
+        player.Say( SAY_NETMSG, "Игрока с таким Id нет в базе данных." );
+        return;
+    }
+
+    Critter@ cr = GetCritter( id );
+    if( cr !is null )
+    {
+        uint[] ips;
+        cr.GetIp( ips );
+        // for(uint i=0; i<ips.length(); i++)
+
+        for( uint i = 0, j = ips.length(); i < j; i++ )
+        {
+            if( ips[ i ] != 0 )
+            {
+                ban.Ip = ips[ i ];
+                break;
+            }
+        }
+
+        if( ban.Ip != 0 )
+        {
+            if( mask_level > 0 )
+                ban.Mask = uint( -1 ) >> 8;
+
+            player.Say( SAY_NETMSG, "Игрок " + name + " забанен по ip " + GetIpFromUint( ban.Ip ) + " с маской " + GetIpFromUint( ban.Mask ) );
+        }
+
+        KickId( player, id, 0, 0 );
+    }
+    else
+        player.Say( SAY_NETMSG, "Игрок не в сети, невозможно узнать ip и кикнуть." );
+
+    banlist.Add( ban );
+}
+
+void UnbanId( Critter& player, int id, int, int )
+{
+    int n = banlist.getById( id );
+    if( n < 0 )
+    {
+        Log( "Бан с указанным id не найден." );
+        player.Say( SAY_NETMSG, "Бан с указанным id не найден." );
+        return;
+    }
+
+    banlist.List.removeAt( n );
+    Log( "Бан снят." );
+    player.Say( SAY_NETMSG, "Бан снят." );
+}
+
+void GetIps( Critter& player, int id, int, int )
+{
+    Critter@ cr = GetCritter( id );
+    if( cr is null )
+        return;
+
+    uint[] ips;
+    cr.GetIp( ips );
+    for( uint i = 0; i < ips.length(); i++ )
+    {
+        player.Say( SAY_NETMSG, "ip#" + i + ": " + GetIpFromUint( ips[ i ] ) );
+    }
+}
+
+/*  получение текстовой версии ИП адреса для логирования
+   string GetIpsstring(Critter& player, int id, int, int)
+   {
+        Critter@ cr = GetCritter(id);
+        if(cr is null) return "";
+        string IPstring="ip-";
+        uint[] ips;
+        cr.GetIp(ips);
+        for(uint i=0; i<ips.length(); i++)
+        {
+                if(i==ips.length()) IPstring+=GetIpFromUint(ips[i]);
+                else IPstring+=GetIpFromUint(ips[i])+".";
+        }
+        return ""+IPstring;
+   }*/
+
+void GM_HardBanId( Critter& player, int id )
+{
+    Critter@ cr = GetCritter( id );
+    if( cr is null )
+        return;
+    string ID = (5648 + id);
+    cr.RunClientScript( "client_main@SetHardBan", 0, 0, 0, ID, null );
+}
+
+void unsafe_Ban( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+    int n = banlist.getById( param0 );
+    if( n < 0 )
+		{
+		player.RunClientScript( "client_main@SetHardBan", 1, 0, 0, null, null );
+        return;		
+		}
+    Ban@ ban = Ban();
+    ban.Id = player.Id;
+    ban.BanFlags |= BAN_FLAG_CHECK_ONLY_ID;
+    ban.Begin = __FullSecond;
+    ban.End = __FullSecond + REAL_HOUR( 999 );
+    ban.Author = 1;
+    banlist.Add( ban );
+    player.Disconnect();
+}

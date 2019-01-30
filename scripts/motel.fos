@@ -1,0 +1,331 @@
+// motel room sale script
+// powermagic
+
+#include "_global_events.fos"
+
+#include "_macros.fos"
+#include "_maps.fos"
+
+import bool IsDoorAutomatic( uint pid ) from "map_sutter_objects";
+
+#define PID_MOTEL_KEY    ( 823 )
+#define ANYDATA_MOTEL	"ANYDATA_MOTEL"
+// add to ITEM_PID.H
+
+// uint8 keyNumberLex = 0;
+
+void r_SaleRoom( Critter& master, Critter@slave, int val )
+{
+    if( FreeRoomNumber( slave, false ) != -1 )
+    {
+        SaleRoomAction( master, slave, val );
+    }
+}
+
+void r_GrowRenta( Critter& master, Critter@slave, int val )
+{
+    GrowRenta( master, slave, val );
+}
+
+bool d_HaveKey( Critter& master, Critter@ slave )
+{
+    if( _CritGetItemHand( master ).GetProtoId() == PID_MOTEL_KEY )
+        return true;
+    return false;
+}
+
+bool d_FreeRooms( Critter& master, Critter@ slave )
+{
+    if( FreeRoomNumber( slave, false ) != -1 )
+    {
+        return true;
+    }
+    return false;
+}
+
+bool d_NoFreeRooms( Critter& master, Critter@ slave )
+{
+    if( FreeRoomNumber( slave, false ) == -1 )
+    {
+        return true;
+    }
+    return false;
+}
+
+const uint[] mapPids = {MAP_SUTTER_CENTER_DN, MAP_SUTTER_CENTER_DN_2};
+
+int16 FreeRoomNumber( Critter@ npc, bool sale )
+{
+    for(uint8 i = 0, j = mapPids.length(); i < j; ++i){
+    Map @ map = GetMapByPid(mapPids[i], 0);//npc.GetMap();
+    if( map is null )
+        return -1;
+
+    uint8  entNum = npc.StatBase[ ST_NPC_ROLE ], entCount = map.CountEntire( entNum );
+    uint16 hexX = 0, hexY = 0;
+
+    //Log( "entire " + entCount );
+
+    if( entCount > 0 )
+    {
+        for( uint8 ii = 0; ii <= entCount; ++ii )
+        {
+            map.GetEntireCoords( entNum, ii, hexX, hexY );
+            Item @ door = map.GetDoor( hexX, hexY );
+
+            if( door !is null )
+            {
+                GameVar@ isStored = GetLocalVar( LIVAR_motel_isStored, door.Id );
+                if( isStored !is null && isStored.GetValue() == 0 )
+                {
+
+                    npc.StatBase[ ST_VAR7 ] = ii + (i * entCount);
+                    npc.StatBase[ ST_VAR8 ] = door.Id;
+
+                    if( !sale )
+                    {
+                        return i;
+                    }
+                    else
+                    {
+                        return door.Id;
+                    }
+                }
+
+            }
+        }
+    }
+    }
+    return -1;
+}
+
+bool GrowRenta( Critter& player, Critter& npc, uint8 growValue )
+{
+    if( growValue >= 0 )
+    {
+        Item @ key = _CritGetItemHand( player );
+        if( key !is null )
+        {
+            uint[] rates, indexes, durations;
+            uint8 countTimes = npc.GetTimeEvents( CTE_MOTEL_ROOM, indexes, durations, rates );
+
+            if( rates.length() == countTimes && indexes.length() == countTimes && durations.length() == countTimes )
+            {
+                for( uint8 i = 0; i < countTimes; ++i )
+                {
+                    uint keyId = ( rates[ i ] >> 16 ) & 0xFFFF;
+
+                    if( keyId != key.Id )
+                    {
+                        continue;
+                    }
+
+                    npc.ChangeTimeEvent( indexes[ i ], durations[ i ] + growValue, rates[ i ] );
+
+                    player.Say( SAY_NETMSG, "Срок аренды номера продлен на " + growValue + " часов." );
+                    return true;
+
+                }
+            }
+        }
+    }
+    return false;
+}
+
+bool SaleRoomAction( Critter& player, Critter& npc, int val ) // all action to sale room
+{
+    uint16 doorId = npc.StatBase[ ST_VAR8 ];
+   
+    if( doorId != uint( -1 ) )
+    {
+        Item @ door = GetItem( doorId );
+
+        if( door !is null)
+        {
+
+            GameVar@ isStored = GetLocalVar( LIVAR_motel_isStored, door.Id );
+            if( isStored !is null )
+            {
+
+                uint value = 0;
+                value |= door.Id;               // {door.Id, key.Id, npc.Id};
+
+                isStored.opAssign( 1 );
+                
+                SETFLAG( door.LockerCondition, LOCKER_LOCKED );
+
+                door.LockerClose();
+		
+		if(IsDoorAutomatic(door.GetProtoId())){
+			    uint16 code = Random(10000,99999);
+			    door.Val0 = 4;
+			    door.Val1 = 5;
+			    door.Val4 = code;
+    
+			    door.LockerComplexity = 150;//Random( 50, 200 );
+			    SETFLAG( door.LockerCondition, LOCKER_ELECTRO );
+			    
+			    player.Say( SAY_NETMSG, "Номер : "+npc.StatBase[ ST_VAR7 ]+". Код двери : "+code+".");
+		}else{
+			Item @ key  = player.AddItem( PID_MOTEL_KEY, 1 );
+			if(key !is null){
+				uint16 keyNumber = Random( 6666, 9999 );
+				door.LockerId = keyNumber;              // key number for open
+				key.LockerId = keyNumber;               // add key num to open door
+				key.SetLexems( "$keyNumberLex" + npc.StatBase[ ST_VAR7 ] );
+				key.Update();
+				
+				value |= key.Id << 16;
+			}
+		}
+		
+                //npc.AddTimeEvent( "cte_RoomRentaOver", val * 3600, CTE_MOTEL_ROOM, value );
+                if(!AddRoomData(door.Id, __FullSecond+((val * 3600) * 1000))){
+			player.Say( SAY_NETMSG, "Что-то сломалось.");
+			return false;
+		}
+
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+uint cte_RoomRentaOver( Critter& cr, int identifier, uint& value )
+{
+    uint16 doorId = value & 0xFFFF,
+           keyId = ( value >> 16 ) & 0xFFFF;
+
+    Item @ door = GetItem( doorId );
+    Item @ key  = GetItem( keyId );
+
+    if(door !is null){
+	UnlockDoor(door);
+    }
+
+    return 0;
+}
+
+bool UnlockDoor(Item& door/*, Item@ key*/){
+	if( door !is null){
+		door.LockerClose();
+		
+		GameVar@ isStored = GetLocalVar( LIVAR_motel_isStored, door.Id );
+		if( isStored !is null )
+		{
+			isStored.opAssign( 0 );
+		}
+
+		door.LockerId = 0;
+		UNSETFLAG( door.LockerCondition, LOCKER_LOCKED );
+		
+		return true;
+	}
+	
+	return false;
+}
+
+uint[] roomDataArray;
+
+bool AddRoomData(uint id, uint time){
+	
+	/*uint[]	data;
+	
+	if(IsAnyData(ANYDATA_MOTEL)){
+		GetAnyData(ANYDATA_MOTEL, data);
+	}
+	
+	if(InsertRoomDataArray(data, id, time) != -1){
+		SetAnyData(ANYDATA_MOTEL, data);
+		return true;
+	}*/
+	
+	return (InsertRoomDataArray(roomDataArray, id, time) != -1);
+}
+
+int InsertRoomDataArray(uint[]& data, uint id, uint time){
+		for(uint8 i = 0, j = data.length(); i < j; ++i){
+		if(data[i*2] > time){
+			data.insertAt((i-1)*2, time);
+			data.insertAt((i-1)*2+1, id);
+			return i;
+		}
+	}
+	
+	return -1;
+}
+
+
+bool GetRoomData(){
+	uint[]	data;
+	
+	if(IsAnyData(ANYDATA_MOTEL)){
+		GetAnyData(ANYDATA_MOTEL, data);
+		roomDataArray = data;
+		return true;
+	}
+	
+	return false;
+	
+}
+
+bool SetRoomData(){
+	if(IsAnyData(ANYDATA_MOTEL)){
+		SetAnyData(ANYDATA_MOTEL, roomDataArray);
+		return true;
+	}
+	
+	return false;
+}
+
+bool CheckRooms(){
+	for(uint8 i = 0, j = roomDataArray.length(); i < j; ++i){
+		if(roomDataArray[i*2] <= __FullSecond){
+			Item@ door = GetItem(roomDataArray[i*2+1]);
+			if(door is null) continue;
+		   
+			UnlockDoor(door);
+		}
+	}
+	
+	return true;
+}
+
+class Motel : iManagerModule, iManager_world_save, iManager_time
+{
+	Motel(){
+		AddStartCallback( "motel", "start" );
+	}
+	
+	bool manager_init(){
+		// вызывается в порядке приоритетов
+		return true;
+	}
+	
+	bool global_world_save(){
+		SetRoomData();
+		return true;
+	}
+	
+	bool global_time( int8 type ){
+		if( type == TIME_NEW_HOUR )
+		{
+			CheckRooms();
+		}
+		
+		return true;
+	}
+}
+
+Motel motel;
+
+void start()
+{
+    iManagerModule@  module = motel;
+    iManagerElement@ manager = manager_add_module( module, "Motel", 50 );
+    if( manager is null )
+        return;
+
+    // manager.TimeChangeCall() = TIME_NEW_<MINUTE/HOUR/DAY/MONTH/YEAR>;
+}

@@ -1,0 +1,864 @@
+// Author: TovPrapor [16.11.2008]
+
+// bool IsStill
+// Проверяет итем на принадлежность к аппаратам для производства спиртного.
+
+// bool UseStill
+// Обрабатывает использование аппарата, применение любого предмета или навыка на аппарате.
+// Функция сама проверяет и ставит таймаут. Также она сама выводит сообщение, при таймауте.
+// Возвращает false, в случае, когда нужно обработать ситуацию стандартно. Т.е., по сути, false - это отказ функции от обработки ситуации.
+
+// bool s_GrainContainer	- Обработка использования контейнера с сырьем.
+// bool s_BrewTank		- Обработка использования емкостей, в которых подразумевается брожение.
+
+// #define __TEST__	// Для тестирования. Сильно занижено время производства продукции и снятия модернизации.
+// #define __DEBUG__		// Для отладки.
+
+#include "_macros.fos"
+// #include "MsgStr.h"
+#include "_msgstr.fos"
+
+#include "manufact_alco_h.fos"
+
+#ifdef __TEST__
+# define CHANCE_BOOMONDESTROY        ( 70 )
+# define CHANCE_BOOMONDESTROY_EYE    ( 50 )
+#endif
+#ifdef __DEBUG__
+# define CHANCE_BOOMONDESTROY        ( 110 )
+# define CHANCE_BOOMONDESTROY_EYE    ( 100 )
+# define REPAIR_TIMEOUT              # (cr)        ( 4 )
+# define SCIENCE_TIMEOUT             # (cr)       ( 4 )
+#endif
+
+// Проверяет итем на принадлежность к аппаратам для производства спиртного.
+bool IsStill( Item@ item )
+{
+    if( not valid( item ) )
+        return false;
+    uint16 pid = item.GetProtoId();
+    return pid == PID_STILL_B_BROKEN || pid == PID_STILL_S_BROKEN ||
+           pid == PID_STILL_B        || pid == PID_STILL_B_ACTIVE ||
+           pid == PID_STILL_S        || pid == PID_STILL_S_ACTIVE;
+}
+
+// Использование аппарата.
+bool UseStill( Critter@ cr, Item@ still, int skill, Item@ item ) // Если обрабатывать по умолчанию, возвращает FALSE.
+// cr		- Должен быть обязательно valid.
+// still	- Должен быть обязательно valid.
+// skill	- Если навык использован не был, то skill = -1.
+// item	- Если null, значит предмет на аппарате использован не был.
+{
+    if( not valid( cr   ) )
+    {
+        Log( "Critter is not valid."     );
+        return false;
+    }
+    if( not valid( still ) )
+    {
+        Log( "Item (still) is not valid." );
+        return false;
+    }
+    if( not ChkParam( still ) )
+        Log( "ChkParam return FALSE." );
+    bool   isBeer    = GetParam_isBeer( still );  // Это пивоваренная установка?
+    bool   uprated   = GetParam_uprated( still ); // Модернизировано?
+    int8   condition = still.Val2;                // Состояние.
+    uint16 pid       = 0;
+    if( valid( item ) )
+        pid = item.GetProtoId();
+
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// ОБРАБОТКА ИСПОЛЬЗОВАНИЯ АППАРАТА //////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Использовать //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    if( ( skill == -1 ) && ( not valid( item ) ) )
+        switch( condition )
+        {
+        case STILL_COND_BROKEN:
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1500 );
+            return true;
+        case STILL_COND_NORMAL:
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1501 );
+            return true;
+        case STILL_COND_ACTIVE:
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1502 );
+            return true;
+        case STILL_COND_COMPLETE:
+            if( isBeer )
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1503 );
+            else
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1504 );
+            return true;
+        }
+    ;
+// Использовать пустые бутылки ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    if( pid == PID_BOTTLE_GLASS && condition == STILL_COND_COMPLETE )
+    {
+        // Расчет необходимого количества пустых бутылок и проверка их наличия у игрока.
+        uint32 itemCount = item.GetCount();
+        uint8  productCount;
+        if( isBeer )
+            productCount = PRODUCT_LOOPCOUNT_B + PRODUCT_LOOPCOUNT_B_RND;
+        else
+            productCount = PRODUCT_LOOPCOUNT_S + PRODUCT_LOOPCOUNT_S_RND;
+        if( itemCount < productCount )
+        {
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1507 );
+            return true;
+        }
+        // Расчет количества произведенной продукции.
+        if( isBeer )
+            productCount = PRODUCT_LOOPCOUNT_B + Random( 0, PRODUCT_LOOPCOUNT_B_RND + ( cr.Stat[ ST_LUCK ] - 4 ) * PRODUCT_LOOPCOUNT_LUCKRND );
+        else
+            productCount = PRODUCT_LOOPCOUNT_S + Random( 0, PRODUCT_LOOPCOUNT_S_RND + ( cr.Stat[ ST_LUCK ] - 4 ) * PRODUCT_LOOPCOUNT_LUCKRND );
+        // Ситуация, когда с бонусом от параметра УДАЧА бутылок становится недостаточно.
+        if( productCount > itemCount )
+            productCount = itemCount;
+        // Сам процесс розлива продукции.
+        if( not ChgCond( still, isBeer, uprated, STILL_COND_NORMAL ) )
+        {
+            Log( "ChgCond return FALSE." );
+            return false;
+        }
+        if( not cr.DeleteItem( PID_BOTTLE_GLASS, productCount ) )
+            Log( "DeleteItem fail." );
+        uint16 pid_product;
+        uint16 msgNum;
+        if( isBeer )
+        {
+            pid_product = PID_BEER;
+            msgNum = 1505;
+        }
+        else
+        {
+            pid_product = PID_BOOZE;
+            msgNum = 1506;
+        }
+        if( not valid( cr.AddItem( pid_product, productCount ) ) )
+        {
+            Log( "cr.AddItem fail." );
+            return false;
+        }
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, msgNum );
+        // Общее количество произведенной продукции запоминается.
+        GameVar@ totalProductCount = GetLocalVar( LVAR_manufact_alco_productcount, cr.Id );
+        if( not valid( totalProductCount ) )
+        {
+            Log( "LVAR_manufact_alco_productcount is not valid." );
+            return true;
+        }
+// /////////////////////////////////////////////////////////////////////////////////////////////
+// ///////// здесь будет добавление перка САМОГОНЩИК ///////////////////////////////////////////
+//		if (totalProductCount >= 100)									   //
+//		{			    // ^^^ - #define							   //
+//			cr.Say(SAY_NORM, "Перк в сутдию! Бутылка № "+totalProductCount.GetValue());//
+//		} else totalProductCount += productCount;							   //
+// /////////////////////////////////////////////////////////////////////////////////////////////
+// ______________________
+        return true;
+    }
+
+// Использовать дрова //////////////////////////////////////////////////////////////////////////////////////
+    if( pid == PID_FIREWOOD )
+        switch( condition )
+        {
+        case STILL_COND_BROKEN:
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1508 );
+            return true;
+        case STILL_COND_ACTIVE:
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1513 );
+            return true;
+        case STILL_COND_COMPLETE:
+            if( isBeer )
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1514 );
+            else
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1515 );
+            return true;
+        case STILL_COND_NORMAL:
+        {
+            // Расчет необходимого количества дров и проверка их наличия.
+            uint32 itemCount = item.GetCount();
+            uint8  itemCount_Need;
+            if( isBeer )
+                itemCount_Need = FIREWOOD_LOOPCOUNT_B;
+            else
+                itemCount_Need = FIREWOOD_LOOPCOUNT_S;
+            if( not uprated )
+                itemCount_Need *= FIREWOOD_UPRATECOEFF;
+            if( itemCount < itemCount_Need )
+            {
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1509 );
+                return true;
+            }
+            // Проверка необходимого значения навыка НАУКА.
+            if( cr.Skill[ SK_SCIENCE ] < SCIENCE_TOUSE )
+            {
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1510 );
+                return true;
+            }
+            // Расчет времени.
+            uint32 timeWorking;
+            if( isBeer )
+                timeWorking = TIME_WORKING_B;
+            else
+                timeWorking = TIME_WORKING_S;
+            timeWorking *= 60;
+            // ±1 час.
+            timeWorking += Random( -60, 60 );
+            #ifdef __TEST__
+            timeWorking = 60;
+            #endif
+            #ifdef __DEBUG__
+            timeWorking = 4;
+            #endif
+            // Событие завершения производства.
+            still.Val3 = CreateTimeEvent( __FullSecond + timeWorking * 60, "e_WorkingComplete", still.Id, true );
+            if( still.Val3 == 0 )
+            {
+                Log( "Time event WorkingComplete create fail, LastError = " + GetLastError() + "." );
+                return false;
+            }
+            // Сам процесс запуска производства.
+            if( not ChgCond( still, isBeer, uprated, STILL_COND_ACTIVE ) )
+            {
+                Log( "ChgCond return FALSE" );
+                return false;
+            }
+            if( not cr.DeleteItem( PID_FIREWOOD, itemCount_Need ) )
+                Log( "DeleteItem fail." );
+            if( isBeer )
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1511 );
+            else
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1512 );
+// __________________________________
+            return true;
+        }
+        }
+
+// Использовать лом\кувалды\биту\топор /////////////////////////////////////////////////////////////////////
+    if( condition != STILL_COND_BROKEN &&
+        ( pid == PID_SLEDGEHAMMER || pid == PID_SUPER_SLEDGE || pid == PID_CROWBAR || pid == PID_LOUISVILLE_SLUGGER || pid == PID_AXE ) )
+    {
+        // Если событие есть, то его нужно удалить.
+        if( still.Val3 != 0 )
+        {
+            EraseTimeEvent( still.Val3 );
+            still.Val3 = 0;
+        }
+        // Расчет времени до снятия модернизации.
+        uint32 TimeToDownrate = TIME_DOWNRATE_ATBROKEN * 24 * 60;
+        #ifdef __TEST__
+        TimeToDownrate = 60;
+        #endif
+        #ifdef __DEBUG__
+        TimeToDownrate = 24;
+        #endif
+        // Событие снятия модернизации.
+        if( uprated )
+        {
+            still.Val3 = CreateTimeEvent( __FullSecond + TimeToDownrate * 60, "e_DownrateAtBroken", still.Id, true );
+            if( still.Val3 == 0 )
+                Log( "Time event DownrateAtBroken create fail, LastError = " + GetLastError() + "." );
+        }
+        // Сам процесс ломания аппарата.
+        if( not ChgCond( still, isBeer, uprated, STILL_COND_BROKEN ) )
+        {
+            Log( "ChgCond return FALSE." );
+            return false;
+        }
+        if( isBeer )
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1516 );
+        else
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1517 );
+        // Работающий аппарат может взорваться.
+        if( condition == STILL_COND_ACTIVE && ( CHANCE_BOOMONDESTROY - cr.Stat[ ST_LUCK ] ) > Random( 0, 99 ) )
+        {
+            // Расчет взрыва и вывод сообщений.
+            uint16 hexX = 0;
+            uint16 hexY = 0;
+            Map@   map = still.GetMapPosition( hexX, hexY );
+            if( not valid( map ) )
+                Log( "Map is not valid." );
+            uint8 damage = Random( DAMAGE_BOOMONDESTROY_MIN, DAMAGE_BOOMONDESTROY_MAX );
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1518 );
+            // При взрыве могут пострадать глаза.
+            bool damageEye = cr.Damage[ DAMAGE_EYE ] == 0;
+            damageEye = damageEye && not
+                        ( valid( cr.GetItem( PID_POWERED_ARMOR, SLOT_ARMOR ) ) || valid( cr.GetItem( PID_HARDENED_POWER_ARMOR, SLOT_ARMOR ) ) ||
+                          valid( cr.GetItem( PID_ADVANCED_POWER_ARMOR, SLOT_ARMOR ) ) || valid( cr.GetItem( PID_ADVANCED_POWER_ARMOR_MK2, SLOT_ARMOR ) ) );
+            if( damageEye && CHANCE_BOOMONDESTROY_EYE > Random( 0, 99 ) )
+            {
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1519 );
+                cr.DamageBase[ DAMAGE_EYE ] = 1;
+            }
+            // Прорисовка взрыва. После вывода сообщений, т.к. валяющийся криттер не может говорить.
+            if( valid( map ) )
+                ExplodeEx( map, hexX, hexY, PID_EXPLODE_ROCKET, 0, damage, DAMAGE_FIRE, 1, 0 );
+// ///////////////////////////////////////////////////////////
+// После взрыва отображать некоторое время (2 секунды) пар //
+// ///////////////////////////////////////////////////////////
+        }
+// ______________________
+        return true;
+    }
+    ;
+
+// Использовать навык РЕМОНТ или инструменты /////////////////////////////////////////////////////////////////////////////////////////////////////////
+    if( condition == STILL_COND_BROKEN && ( skill == SK_REPAIR || pid == PID_MULTI_TOOL || pid == PID_SUPER_TOOL_KIT ) )
+    {
+        // Проверка необходимого значения навыка РЕМОНТ.
+        if( cr.Skill[ SK_REPAIR ] < REPAIR_TOREPAIR_NOMSG )
+            return false;
+        // Проверка таймаута.
+        if( cr.Timeout[ TO_SK_REPAIR ] > 0 )
+        {
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_WEARINESS );
+            return true;
+        }
+        // Использовать нужно именно ПЛОСКОГУБЦЫ или СУПЕРИНСТРУМЕНТЫ, а не просто РЕМОНТ.
+        if( skill == SK_REPAIR )
+        {
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1521 );
+            return true;
+        }
+        // Проверить наличие достаточного количества деталей.
+        if( cr.CountItem( PID_CRAFT_M_BARS ) < METALTRASH_TOREPAIRCOUNT )
+        {
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1520 );
+            return true;
+        }
+        // СУПЕРИНСТРУМЕНТЫ добавляют +15 к РЕМОНТУ.
+        uint16 repairSkill = cr.Skill[ SK_REPAIR ];
+        if( pid == PID_SUPER_TOOL_KIT )
+            repairSkill += 15;
+        // Расчет вероятности успеха.
+        uint8 repairChance = 0;
+        if( repairSkill >= REPAIR_TOREPAIR )
+            repairChance = CLAMP( ( repairSkill - REPAIR_TOREPAIR + 1 ) * 3, 0, 95 );
+        // Попытка ремонта.
+        if( repairChance > Random( 0, 99 ) )
+        {
+            // Сам процесс ремонта.
+            // Если событие есть, то его нужно удалить.
+            if( still.Val3 != 0 )
+            {
+                EraseTimeEvent( still.Val3 );
+                still.Val3 = 0;
+            }
+            if( not ChgCond( still, isBeer, uprated, STILL_COND_NORMAL ) )
+            {
+                Log( "ChgCond return FALSE." );
+                return false;
+            }
+            if( not cr.DeleteItem( PID_CRAFT_M_BARS, METALTRASH_TOREPAIRCOUNT ) )
+                Log( "DeleteItem fail." );
+            cr.TimeoutBase[ TO_SK_REPAIR ] = REPAIR_TIMEOUT( cr );
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1522 );
+            // Общее количество успешных ремонтов запоминается, за первые 5 дается опыт.
+            GameVar@ totalRepairCount = GetLocalVar( LVAR_manufact_alco_repaircount, cr.Id );
+            if( not valid( totalRepairCount ) )
+            {
+                Log( "LVAR_manufact_alco_repaircount is not valid." );
+                return true;
+            }
+            uint8 totalRepairCount_value = totalRepairCount.GetValue();
+            if( totalRepairCount_value < 5 )
+            {
+                uint16 exp = 2;
+                switch( totalRepairCount_value )
+                {
+                case 0:
+                    exp = EXP_REPAIR;
+                    break;
+                case 1:
+                    exp = EXP_REPAIR / 2;
+                    break;
+                default:
+                    POW( exp, totalRepairCount_value );
+                    exp = EXP_REPAIR / exp;
+                }
+                cr.StatBase[ ST_EXPERIENCE ] += exp;
+                totalRepairCount = totalRepairCount_value + 1;
+            }
+// ____________________________
+            return true;
+        }
+        // Ремонт не удался.
+        if( not cr.DeleteItem( PID_CRAFT_M_BARS, Random( 1, METALTRASH_REPAIRFAILCOUNT ) ) )
+            Log( "DeleteItem fail." );
+        cr.TimeoutBase[ TO_SK_REPAIR ] = REPAIR_TIMEOUT( cr );
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1523 );
+// ______________________
+        return true;
+    }
+
+// Использовать скилл НАУКА или гаечный ключ /////////////////////////////////////////////////////////////////////////////////////////////////////////
+    if( condition == STILL_COND_NORMAL && ( skill == SK_SCIENCE || pid == PID_WRENCH ) )
+    {
+        // Нельзя модернизировать аппарат, если он уже модернизирован.
+        if( uprated )
+            return false;
+        // Проверка необходимого значения навыка НАУКА.
+        if( cr.Skill[ SK_SCIENCE ] < SCIENCE_TOUPRATE_NOMSG )
+            return false;
+        // Проверка таймаута.
+        if( cr.Timeout[ TO_SK_SCIENCE ] > 0 )
+        {
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_WEARINESS );
+            return true;
+        }
+        // Нужно использовать ГАЕЧНЫЙ КЛЮЧ, а не просто навык НАУКА.
+        if( pid != PID_WRENCH )
+        {
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1524 );
+            return true;
+        }
+        // Если мало навыка РЕМОНТ - сломать и гаечный ключ и аппарат.
+        if( cr.Skill[ SK_REPAIR ] < REPAIR_TOUPRATE )
+        {
+            if( not ChgCond( still, isBeer, false, STILL_COND_BROKEN ) )
+            {
+                Log( "ChgCond return FALSE." );
+                return false;
+            }
+            if( not cr.DeleteItem( PID_WRENCH, 1 ) )
+                Log( "DeleteItem fail." );
+            cr.TimeoutBase[ TO_SK_SCIENCE ] = SCIENCE_TIMEOUT( cr );
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1525 );
+// ____________________________
+            return true;
+        }
+        // Если мало навыка НАУКА.
+        if( cr.Skill[ SK_SCIENCE ] < SCIENCE_TOUPRATE )
+        {
+            // Если навыка НАУКА совсем мало, то сломать аппарат.
+            if( cr.Skill[ SK_SCIENCE ] <= ( SCIENCE_TOUPRATE + SCIENCE_TOUPRATE_NOMSG ) / 2 )
+            {
+                if( not ChgCond( still, isBeer, false, STILL_COND_BROKEN ) )
+                {
+                    Log( "ChgCond return FALSE." );
+                    return false;
+                }
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1526 );
+                // Если навыка НАУКА просто недостаточно - то ничего ломать не нужно.
+            }
+            else
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1527 );
+            cr.TimeoutBase[ TO_SK_SCIENCE ] = SCIENCE_TIMEOUT( cr );
+// ____________________________
+            return true;
+        }
+        // Расчет вероятности успеха.
+        uint8 uprateChance = 0;
+        if( cr.Skill[ SK_SCIENCE ] >= SCIENCE_TOUPRATE )
+            uprateChance = CLAMP( ( cr.Skill[ SK_SCIENCE ] - SCIENCE_TOUPRATE + 1 ) * 4, 0, 95 );
+        // Попытка модернизации.
+        if( uprateChance > Random( 0, 99 ) )
+        {
+            // Сам процесс модернизации.
+            if( not ChgCond( still, isBeer, true, STILL_COND_NORMAL ) )
+            {
+                Log( "ChgCond return FALSE" );
+                return false;
+            }
+            if( isBeer )
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1528 );
+            else
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1529 );
+            cr.TimeoutBase[ TO_SK_SCIENCE ] = SCIENCE_TIMEOUT( cr );
+            // Общее количество успешных модернизаций запоминается, за первые 3 дается опыт.
+            GameVar@ totalUprateCount = GetLocalVar( LVAR_manufact_alco_upratecount, cr.Id );
+            if( not valid( totalUprateCount ) )
+            {
+                Log( "LVAR_manufact_alco_upratecount is not valid." );
+                return true;
+            }
+            uint8 totalUprateCount_value = totalUprateCount.GetValue();
+            if( totalUprateCount_value < 3 )
+            {
+                uint16 exp = 2;
+                switch( totalUprateCount_value )
+                {
+                case 0:
+                    exp = EXP_UPRATE;
+                    break;
+                case 1:
+                    exp = EXP_UPRATE / 2;
+                    break;
+                default:
+                    POW( exp, totalUprateCount_value );
+                    exp = EXP_UPRATE / exp;
+                }
+                cr.StatBase[ ST_EXPERIENCE ] += exp;
+                totalUprateCount = totalUprateCount_value + 1;
+            }
+// ____________________________
+            return true;
+        }
+        // Модернизация не удалась
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1530 );
+        cr.TimeoutBase[ TO_SK_SCIENCE ] = SCIENCE_TIMEOUT( cr );
+// ______________________
+        return true;
+    }
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    return false;
+}
+
+
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// СЛУЖЕБНЫЕ ФУНКЦИ //////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+
+// Изменение состояния аппарата.
+bool ChgCond( Item@ still, bool isBeer, bool uprated, int8 condition ) // В случае провала возвращает FALSE.
+{
+// Функция проверяет состояния и параметры аппарата только по завершению работы.
+// События должны создаваться\удаляться до вызова функции.
+    if( not valid( still ) )
+    {
+        Log( "Item (still) is not valid." );
+        return false;
+    }
+// Выбор прототипа в соответствии с состоянием.
+    uint16 pid_stillOld = still.GetProtoId();
+    uint16 pid_stillNew;
+    switch( condition )
+    {
+    case STILL_COND_BROKEN:
+        if( isBeer )
+            pid_stillNew = PID_STILL_B_BROKEN;
+        else
+            pid_stillNew = PID_STILL_S_BROKEN;
+        break;
+    case STILL_COND_ACTIVE:
+        if( isBeer )
+            pid_stillNew = PID_STILL_B_ACTIVE;
+        else
+            pid_stillNew = PID_STILL_S_ACTIVE;
+        break;
+    default:
+        if( isBeer )
+            pid_stillNew = PID_STILL_B;
+        else
+            pid_stillNew = PID_STILL_S;
+    }
+    ;
+// Если нужно - то смена прототипа.
+    if( pid_stillNew != pid_stillOld )
+        if( not still.ChangeProto( pid_stillNew ) )
+            Log( "ChangeProto fail (WARNING)." );
+// Установка и проверка параметров.
+    SetParam( still, isBeer, uprated );
+    still.Val2 = condition;
+    if( not ChkParam( still ) )
+        Log( "ChkParam return FALSE." );
+    return true;
+}
+
+// Чтение параметров.
+bool GetParam_isBeer( Item@ still )
+{
+    if( not valid( still ) )
+    {
+        Log( "Item (still) is not valid." );
+        return false;
+    }
+    return ( still.Val1 & BIT_STILL_ISBEER ) != 0;
+}
+bool GetParam_uprated( Item@ still )
+{
+    if( not valid( still ) )
+    {
+        Log( "Item (still) is not valid." );
+        return false;
+    }
+    return ( still.Val1 & BIT_STILL_UPRATED ) != 0;
+}
+
+// Установка параметров.
+void SetParam( Item@ still, bool isBeer, bool uprated )
+{
+    if( not valid( still ) )
+    {
+        Log( "Item (still) is not valid." );
+        return;
+    }
+    if( isBeer )
+        still.Val1 |=  BIT_STILL_ISBEER;
+    else
+        still.Val1 &= ~BIT_STILL_ISBEER;
+    if( uprated )
+        still.Val1 |=  BIT_STILL_UPRATED;
+    else
+        still.Val1 &= ~BIT_STILL_UPRATED;
+    return;
+}
+
+// Проверка параметров и состояния на соответствие прототипу.
+bool ChkParam( Item@ still ) // Если значения некорректны - FALSE.
+// В случае конфликта, функция старается привести параметры к прототипу, а не наоборот.
+{
+    if( not valid( still ) )
+    {
+        Log( "Item (still) is not valid." );
+        return false;
+    }
+    if( still.Val2 != STILL_COND_BROKEN && still.Val2 != STILL_COND_NORMAL &&
+        still.Val2 != STILL_COND_ACTIVE && still.Val2 != STILL_COND_COMPLETE )
+    {
+        still.Val2 = STILL_COND_BROKEN;
+        Log( "Incorrect condition." );
+    }
+    bool isBeer  = GetParam_isBeer( still );
+    bool uprated = GetParam_uprated( still );
+    bool ok = true;
+
+    switch( still.GetProtoId() )
+    {
+    case PID_STILL_B_BROKEN:
+        // Несоответствие прототипа и состояния.
+        if( still.Val2 != STILL_COND_BROKEN )
+        {
+            still.Val2 = STILL_COND_BROKEN;
+            ok = false;
+        }
+        // Несоответствие прототипа и параметра.
+        if( not isBeer )
+        {
+            isBeer = true;
+            ok = false;
+        }
+        // Модернизированный аппарат должен иметь событие снятия модернизации.
+        if( uprated && still.Val3 == 0 )
+        {
+            ok = false;
+            Log( "Event for STILL_BROKEN is not exist." );
+            still.Val3 = CreateTimeEvent( __FullSecond + TIME_DOWNRATE_ATBROKEN * 24 * 60 * 60, "e_DownrateAtBroken", still.Id, true );
+            if( still.Val3 == 0 )
+            {
+                Log( "Time event DownrateAtBroken create fail, LastError = " + GetLastError() + "." );
+                if( not ChgCond( still, isBeer, false, STILL_COND_BROKEN ) )
+                    Log( "ChgCond return FALSE." );
+            }
+        }
+        // Немодернизированный аппарат не должен иметь событие снятия модернизации.
+        else if( not uprated && still.Val3 != 0 )
+        {
+            ok = false;
+            EraseTimeEvent( still.Val3 );
+            still.Val3 = 0;
+            Log( "Incorrect event for PID_STILL_B_BROKEN." );
+        }
+        break;
+    case PID_STILL_S_BROKEN:
+        // Несоответствие прототипа и состояния.
+        if( still.Val2 != STILL_COND_BROKEN )
+        {
+            still.Val2 = STILL_COND_BROKEN;
+            ok = false;
+        }
+        // Несоответствие прототипа и параметра.
+        if( isBeer )
+        {
+            isBeer = false;
+            ok = false;
+        }
+        // Модернизированный аппарат должен иметь событие снятия модернизации.
+        if( uprated && still.Val3 == 0 )
+        {
+            ok = false;
+            Log( "Event for STILL_BROKEN is not exist." );
+            still.Val3 = CreateTimeEvent( __FullSecond + TIME_DOWNRATE_ATBROKEN * 24 * 60 * 60, "e_DownrateAtBroken", still.Id, true );
+            if( still.Val3 == 0 )
+            {
+                Log( "Time event DownrateAtBroken create fail, LastError = " + GetLastError() + "." );
+                if( not ChgCond( still, isBeer, false, STILL_COND_BROKEN ) )
+                    Log( "ChgCond return FALSE." );
+            }
+        }
+        // Немодернизированный аппарат не должен иметь событие снятия модернизации.
+        else if( not uprated && still.Val3 != 0 )
+        {
+            ok = false;
+            EraseTimeEvent( still.Val3 );
+            still.Val3 = 0;
+            Log( "Incorrect event for PID_STILL_S_BROKEN." );
+        }
+        break;
+    case PID_STILL_B:
+        // Несоответствие прототипа и параметра.
+        if( not isBeer )
+        {
+            isBeer = true;
+            ok = false;
+        }
+        // Несоответствие прототипа и состояния.
+        if( still.Val2 != STILL_COND_NORMAL && still.Val2 != STILL_COND_COMPLETE )
+        {
+            still.Val2 = STILL_COND_NORMAL;
+            ok = false;
+        }
+        // Аппарат, представленный, данным прототипом не должен иметь событие.
+        if( still.Val3 != 0 )
+        {
+            ok = false;
+            EraseTimeEvent( still.Val3 );
+            still.Val3 = 0;
+            Log( "Incorrect event for PID_STILL_B." );
+        }
+        break;
+    case PID_STILL_S:
+        // Несоответствие прототипа и параметра.
+        if( isBeer )
+        {
+            isBeer = false;
+            ok = false;
+        }
+        // Несоответствие прототипа и состояния.
+        if( still.Val2 != STILL_COND_NORMAL && still.Val2 != STILL_COND_COMPLETE )
+        {
+            still.Val2 = STILL_COND_NORMAL;
+            ok = false;
+        }
+        // Аппарат, представленный, данным прототипом не должен иметь событие.
+        if( still.Val3 != 0 )
+        {
+            ok = false;
+            EraseTimeEvent( still.Val3 );
+            still.Val3 = 0;
+            Log( "Incorrect event for PID_STILL_S." );
+        }
+        break;
+    case PID_STILL_B_ACTIVE:
+        // Несоответствие прототипа и параметра.
+        if( not isBeer )
+        {
+            isBeer = true;
+            ok = false;
+        }
+        // Несоответствие прототипа и состояния.
+        if( still.Val2 != STILL_COND_ACTIVE )
+        {
+            still.Val2 = STILL_COND_ACTIVE;
+            ok = false;
+        }
+        // Работающий аппарат должен иметь событие окончания производства.
+        if( still.Val3 == 0 )
+        {
+            ok = false;
+            Log( "Event for STILL_B_ACTIVE is not exist." );
+            still.Val3 = CreateTimeEvent( __FullSecond + TIME_WORKING_B * 60 + 1, "e_WorkingComplete", still.Id, true );
+            if( still.Val3 == 0 )
+            {
+                Log( "Time event WorkingComplete create fail, LastError = " + GetLastError() + "." );
+                if( not ChgCond( still, isBeer, uprated, STILL_COND_NORMAL ) )
+                    Log( "ChgCond return FALSE." );
+            }
+        }
+        break;
+    case PID_STILL_S_ACTIVE:
+        // Несоответствие прототипа и параметра.
+        if( isBeer )
+        {
+            isBeer = false;
+            ok = false;
+        }
+        // Несоответствие прототипа и состояния.
+        if( still.Val2 != STILL_COND_ACTIVE )
+        {
+            still.Val2 = STILL_COND_ACTIVE;
+            ok = false;
+        }
+        // Работающий аппарат должен иметь событие окончания производства.
+        if( still.Val3 == 0 )
+        {
+            ok = false;
+            Log( "Event for STILL_S_ACTIVE is not exist." );
+            still.Val3 = CreateTimeEvent( __FullSecond + TIME_WORKING_S * 60 + 1, "e_WorkingComplete", still.Id, true );
+            if( still.Val3 == 0 )
+            {
+                Log( "Time event WorkingComplete create fail, LastError = , " + GetLastError() + "." );
+                if( not ChgCond( still, isBeer, uprated, STILL_COND_NORMAL ) )
+                    Log( "ChgCond return FALSE." );
+            }
+        }
+        break;
+    default:
+        Log( "Unknown pid = " + still.GetProtoId() + "." );
+        return false;
+    }
+    if( not ok )
+        SetParam( still, isBeer, uprated );
+    return ok;
+}
+
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// СОБЫТИЯ ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Снятие модернизации со сломанного аппарата.
+uint e_DownrateAtBroken( uint[] @ values )
+{
+    Item@ still = GetItem( values[ 0 ] );
+    if( not valid( still ) )
+    {
+        Log( "Item (still) is not valid." );
+        return 0;
+    }
+    ;
+    still.Val3 = 0;
+    if( still.Val2 != STILL_COND_BROKEN )
+    {
+        Log( "Incorrect condition." );
+        return 0;
+    }
+    if( not ChgCond( still, GetParam_isBeer( still ), false, STILL_COND_BROKEN ) )
+        Log( "ChgCond return FALSE." );
+    return 0;
+}
+
+// Завершение цикла производства.
+uint e_WorkingComplete( uint[] @ values )
+{
+    Item@ still = GetItem( values[ 0 ] );
+    if( not valid( still ) )
+    {
+        Log( "Item (still) is not valid." );
+        return 0;
+    }
+    ;
+    still.Val3 = 0;
+    if( still.Val2 != STILL_COND_ACTIVE )
+    {
+        Log( "Incorrect condition." );
+        return 0;
+    }
+    if( not ChgCond( still, GetParam_isBeer( still ), GetParam_uprated( still ), STILL_COND_COMPLETE ) )
+        Log( "ChgCond return FALSE." );
+    return 0;
+}
+
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Scenery ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+bool s_GrainContainer( Critter@ cr, Scenery@ sc, int skill, Item@ item )
+{
+    if( valid( item ) )
+        return false;                  // To global catch - on_use_item
+    else if( skill == -1 )
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1560 );
+    else
+        return false;                                                                     // To global catch - on_use_skill
+    return true;
+}
+bool s_BrewTank( Critter@ cr, Scenery@ sc, int skill, Item@ item )
+{
+    if( not valid( item ) && skill == SK_SCIENCE && cr.Skill[ SK_SCIENCE ] > 4 )
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, 1561 );
+    return true;
+}

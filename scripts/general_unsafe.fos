@@ -1,0 +1,1424 @@
+#include "_macros.fos"
+#include "_colors.fos"
+
+import void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo ) from "main";
+import bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param ) from "main";
+import void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16 hexX, uint16 hexY ) from "combat";
+import bool AddAttackPlane( Critter& npc, uint priority, Critter& target, bool run ) from "npc_planes";
+import bool AddWalkPlane( Critter& npc, uint priority, uint16 hexX, uint16 hexY, uint8 dir, bool run, uint cut ) from "npc_planes";
+import void Actions( Critter& cr, uint8 actionType, uint16 pickType ) from "context_callback";
+
+void unsafe_contmenu_callback( Critter& player, int id, int screenId, int actionId, string@ command, int[] @ myArr )
+{
+    // fastpanel
+    /*if(screenId != 0)
+       {
+            switch(screenId)
+            {
+              case SCREEN_SKILLBOX :
+            }
+       }*/
+
+    // myArr[0] = 123;
+    // player.Say(SAY_NETMSG, "unsafe done");
+    player.StatBase[ ST_LAST_CRIT_ID ] = myArr[ ARRAY_ID_INDEX ];
+    player.StatBase[ ST_OBJECT_TYPE ] = myArr[ ARRAY_OBJ_INDEX ];
+    player.StatBase[ ST_ITEM_HEXX ] = myArr[ ARRAY_ITEM_HEXX ];
+    player.StatBase[ ST_ITEM_HEXY ] = myArr[ ARRAY_ITEM_HEXY ];
+    player.StatBase[ ST_ITEM_PID ] = myArr[ ARRAY_ITEM_PID ];
+
+
+    switch( myArr[ ARRAY_SCREEN_INDEX ] )
+    {
+    case SCREEN_BAG:
+        player.ShowScreen( myArr[ ARRAY_SCREEN_INDEX ], id, "context_callback@ScreenBag" );
+        break;
+    case SCREEN_SKILLBOX:
+        player.ShowScreen( myArr[ ARRAY_SCREEN_INDEX ], id, "context_callback@ScreenSkillbox" );
+        break;
+    case ACTION_PICK_ITEM:
+        Actions( player, myArr[ ARRAY_SCREEN_INDEX ], 0 );
+        break;
+    case ACTION_PICK_CRITTER:
+        Actions( player, myArr[ ARRAY_SCREEN_INDEX ], myArr[ ARRAY_PICK_TYPE ] );
+        break;
+    case ACTION_DIR:
+        Actions( player, myArr[ ARRAY_SCREEN_INDEX ], 0 );
+        break;
+    case ACTION_TALK:
+        Actions( player, myArr[ ARRAY_SCREEN_INDEX ], 0 );
+        break;
+    case ACTION_FAST:
+        Actions( player, myArr[ ARRAY_SCREEN_INDEX ], myArr[ ARRAY_SKILL_INDEX ] );
+        break;
+    default:
+        break;
+    }
+
+}
+
+#define BT_BRAHMIN         ( 15 )
+#define BT_DOG             ( 16 )
+#define BT_RAT_GRIZLY      ( 19 )
+#define BT_SCORP           ( 22 )
+#define BT_FLOATER         ( 23 )
+#define BT_RAT             ( 24 )
+#define BT_CENTAUR         ( 25 )
+#define BT_CLAW            ( 51 )
+#define BT_MANTIS          ( 52 )
+#define BT_RAT_PIG         ( 55 )
+#define BT_SCORP_SMALL     ( 59 )
+#define BT_CLAW_SMALL      ( 60 )
+#define BT_GECKO_SILVER    ( 67 )
+#define BT_GECKO_GOLD      ( 68 )
+#define BT_RAT_KING        ( 76 )
+#define BT_ALIEN           ( 80 )
+#define BT_GECKO_FIRE      ( 81 )
+#define BT_ALIEN_QUEEN     ( 86 )
+#define BT_GIGANT_ANT      ( 97 )
+#define BT_CLAW_KING       ( 100 )
+
+void unsafe_log(Critter& cr, int locX, int locY, int type, string@ message, int[] @ p4 ){
+    file f;
+    if( f.open( "logs\\commandslog.txt", "a" ) >= 0 )
+    {
+        f.writeString( __Day + "." + __Month + "." + __Year + " " + MakeTime( __FullSecond ) + message + "\n" );
+        f.close();
+    }
+    else
+        Log( "can't open log file!" );	//Логгирование команд # $ ~
+}
+
+void unsafe_log_1(Critter& cr, int locX, int locY, int type, string@ message, int[] @ p4 ){
+    file f;
+    if( f.open( "logs\\saylog.txt", "a" ) >= 0 )
+    {
+        f.writeString( __Day + "." + __Month + "." + __Year + " " + MakeTime( __FullSecond ) + message + "\n" );
+        f.close();
+    }
+    else
+        Log( "can't open log file!" );	//Логгирование части эмоутов, разговоров и прочего
+}
+
+void unsafe_log_2(Critter& cr, int locX, int locY, int type, string@ message, int[] @ p4 ){
+    file f;
+    if( f.open( "logs\\gm_panel.txt", "a" ) >= 0 )
+    {
+        f.writeString( __Day + "." + __Month + "." + __Year + " " + MakeTime( __FullSecond ) + message + "\n" );
+        f.close();
+    }
+    else
+        Log( "can't open log file!" );	//Логгирование действий в гм панели
+}
+ 
+string@ MakeTime( uint val )
+{
+    uint t = val % 86400,           // 60*60*24
+         m = t / 60, mm = m % 60,
+         h = m / 60, s = t % 60;
+ 
+    return ( ( h < 10 ) ? "0" : "" ) + h + ( ( mm < 10 ) ? ":0" : ":" ) + ( mm ) + ( ( s < 10 ) ? ":0" : ":" ) + ( s ) + " Х ";
+}
+
+void unsafe_set_arcade_stat( Critter& cr, int locX, int locY, int type, string@ message, int[] @ p4 ) // if p1 > 0 | skill == exp to player
+{
+    string animIndex = "";
+    // cr.Say(SAY_NETMSG, ""+type);
+    switch( type )
+    {
+    case BT_RAT:
+        cr.ParamBase[ ST_STRENGTH ] = 2;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 2;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 4;
+        cr.ParamBase[ ST_LUCK ] = 1;
+        cr.ParamBase[ ST_MAX_LIFE ] = 0;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 5;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 40;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 3;
+        cr.ParamBase[ ST_HEALING_RATE ] = 20;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 1;
+
+        cr.ParamBase[ SK_UNARMED ] = 100;
+        cr.ParamBase[ SK_SNEAK ] = 200;
+
+        animIndex = "masrat";
+        break;
+
+    case BT_MANTIS:
+        cr.ParamBase[ ST_STRENGTH ] = 2;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 2;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 4;
+        cr.ParamBase[ ST_LUCK ] = 1;
+        cr.ParamBase[ ST_MAX_LIFE ] = 0;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 4;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 40;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 5;
+        cr.ParamBase[ ST_HEALING_RATE ] = 10;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 1;
+
+        cr.ParamBase[ SK_UNARMED ] = 150;
+        cr.ParamBase[ SK_SNEAK ] = 150;
+
+        animIndex = "mamant";
+        break;
+
+    case BT_GIGANT_ANT:
+        cr.ParamBase[ ST_STRENGTH ] = 3;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 3;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 5;
+        cr.ParamBase[ ST_LUCK ] = 1;
+        cr.ParamBase[ ST_MAX_LIFE ] = 20;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 6;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 30;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 7;
+        cr.ParamBase[ ST_HEALING_RATE ] = 10;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 170;
+        cr.ParamBase[ SK_SNEAK ] = 130;
+
+        animIndex = "maantt";
+        break;
+
+    case BT_RAT_PIG:
+        cr.ParamBase[ ST_STRENGTH ] = 4;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 4;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 5;
+        cr.ParamBase[ ST_LUCK ] = 1;
+        cr.ParamBase[ ST_MAX_LIFE ] = 35;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 6;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 30;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 10;
+        cr.ParamBase[ ST_HEALING_RATE ] = 6;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 180;
+        cr.ParamBase[ SK_SNEAK ] = 110;
+
+        animIndex = "mamurt";
+        break;
+
+    case BT_GECKO_SILVER:
+        cr.ParamBase[ ST_STRENGTH ] = 4;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 4;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 5;
+        cr.ParamBase[ ST_LUCK ] = 1;
+        cr.ParamBase[ ST_MAX_LIFE ] = 35;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 6;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 20;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 16;
+        cr.ParamBase[ ST_HEALING_RATE ] = 4;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 150;
+        cr.ParamBase[ SK_SNEAK ] = 70;
+
+        animIndex = "magko2";
+        break;
+
+    case BT_DOG:
+        cr.ParamBase[ ST_STRENGTH ] = 5;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 5;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 5;
+        cr.ParamBase[ ST_LUCK ] = 1;
+        cr.ParamBase[ ST_MAX_LIFE ] = 35;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 7;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 25;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 7;
+        cr.ParamBase[ ST_HEALING_RATE ] = 6;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 180;
+        cr.ParamBase[ SK_SNEAK ] = 110;
+
+        animIndex = "maddog";
+        break;
+
+    case BT_GECKO_GOLD:
+        cr.ParamBase[ ST_STRENGTH ] = 5;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 5;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 6;
+        cr.ParamBase[ ST_LUCK ] = 2;
+        cr.ParamBase[ ST_MAX_LIFE ] = 40;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 6;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 25;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 16;
+        cr.ParamBase[ ST_HEALING_RATE ] = 5;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 180;
+        cr.ParamBase[ SK_SNEAK ] = 80;
+
+        animIndex = "magcko";
+        break;
+
+    case BT_BRAHMIN:
+        cr.ParamBase[ ST_STRENGTH ] = 5;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 5;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 6;
+        cr.ParamBase[ ST_LUCK ] = 2;
+        cr.ParamBase[ ST_MAX_LIFE ] = 70;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 12;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 30;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 4;
+        cr.ParamBase[ ST_HEALING_RATE ] = 7;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 200;
+        cr.ParamBase[ SK_SNEAK ] = 40;
+
+        animIndex = "mabrom";
+        break;
+
+    case BT_RAT_GRIZLY:
+        cr.ParamBase[ ST_STRENGTH ] = 6;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 6;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 6;
+        cr.ParamBase[ ST_LUCK ] = 2;
+        cr.ParamBase[ ST_MAX_LIFE ] = 60;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 7;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 25;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 16;
+        cr.ParamBase[ ST_HEALING_RATE ] = 5;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 180;
+        cr.ParamBase[ SK_SNEAK ] = 40;
+
+        animIndex = "mamrat";
+        break;
+
+    case BT_RAT_KING:
+        cr.ParamBase[ ST_STRENGTH ] = 6;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 6;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 6;
+        cr.ParamBase[ ST_LUCK ] = 2;
+        cr.ParamBase[ ST_MAX_LIFE ] = 80;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 8;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 30;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 16;
+        cr.ParamBase[ ST_HEALING_RATE ] = 5;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 200;
+        cr.ParamBase[ SK_SNEAK ] = 40;
+
+        animIndex = "mabran";
+        break;
+
+    case BT_SCORP_SMALL:
+        cr.ParamBase[ ST_STRENGTH ] = 6;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 6;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 6;
+        cr.ParamBase[ ST_LUCK ] = 2;
+        cr.ParamBase[ ST_MAX_LIFE ] = 80;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 8;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 30;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 12;
+        cr.ParamBase[ ST_HEALING_RATE ] = 5;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 200;
+        cr.ParamBase[ SK_SNEAK ] = 140;
+
+        animIndex = "mascp2";
+        break;
+
+    case BT_SCORP:
+        cr.ParamBase[ ST_STRENGTH ] = 7;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 7;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 6;
+        cr.ParamBase[ ST_LUCK ] = 2;
+        cr.ParamBase[ ST_MAX_LIFE ] = 100;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 8;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 30;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 16;
+        cr.ParamBase[ ST_HEALING_RATE ] = 4;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 210;
+        cr.ParamBase[ SK_SNEAK ] = 80;
+
+        animIndex = "mascrp";
+        break;
+
+    case BT_CLAW_SMALL:
+        cr.ParamBase[ ST_STRENGTH ] = 7;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 7;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 6;
+        cr.ParamBase[ ST_LUCK ] = 3;
+        cr.ParamBase[ ST_MAX_LIFE ] = 80;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 6;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 25;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 10;
+        cr.ParamBase[ ST_HEALING_RATE ] = 4;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 210;
+        cr.ParamBase[ SK_SNEAK ] = 140;
+
+        animIndex = "maclw2";
+        break;
+
+    case BT_ALIEN:
+        cr.ParamBase[ ST_STRENGTH ] = 7;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 7;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 7;
+        cr.ParamBase[ ST_LUCK ] = 3;
+        cr.ParamBase[ ST_MAX_LIFE ] = 120;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 8;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 30;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 15;
+        cr.ParamBase[ ST_HEALING_RATE ] = 4;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 240;
+        cr.ParamBase[ SK_SNEAK ] = 80;
+
+        animIndex = "malien";
+        break;
+
+    case BT_CENTAUR:
+        cr.ParamBase[ ST_STRENGTH ] = 8;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 8;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 7;
+        cr.ParamBase[ ST_LUCK ] = 4;
+        cr.ParamBase[ ST_MAX_LIFE ] = 150;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 8;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 30;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 15;
+        cr.ParamBase[ ST_HEALING_RATE ] = 3;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 240;
+        cr.ParamBase[ SK_SNEAK ] = 40;
+
+        animIndex = "mathng";
+        break;
+
+    case BT_CLAW:
+        cr.ParamBase[ ST_STRENGTH ] = 8;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 8;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 7;
+        cr.ParamBase[ ST_LUCK ] = 4;
+        cr.ParamBase[ ST_MAX_LIFE ] = 170;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 6;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 25;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 13;
+        cr.ParamBase[ ST_HEALING_RATE ] = 3;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 240;
+        cr.ParamBase[ SK_SNEAK ] = 80;
+
+        animIndex = "maclaw";
+        break;
+
+    case BT_FLOATER:
+        cr.ParamBase[ ST_STRENGTH ] = 8;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 8;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 7;
+        cr.ParamBase[ ST_LUCK ] = 3;
+        cr.ParamBase[ ST_MAX_LIFE ] = 220;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 8;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 20;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 15;
+        cr.ParamBase[ ST_HEALING_RATE ] = 2;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 3;
+
+        cr.ParamBase[ SK_UNARMED ] = 250;
+        cr.ParamBase[ SK_SNEAK ] = 100;
+
+        animIndex = "masphn";
+        break;
+
+    case BT_ALIEN_QUEEN:
+        cr.ParamBase[ ST_STRENGTH ] = 9;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 9;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 7;
+        cr.ParamBase[ ST_LUCK ] = 3;
+        cr.ParamBase[ ST_MAX_LIFE ] = 200;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 8;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 30;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 25;
+        cr.ParamBase[ ST_HEALING_RATE ] = 1;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 5;
+
+        cr.ParamBase[ SK_UNARMED ] = 260;
+        cr.ParamBase[ SK_SNEAK ] = 120;
+
+        animIndex = "maquen";
+        break;
+
+    case BT_CLAW_KING:
+        cr.ParamBase[ ST_STRENGTH ] = 9;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 9;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 7;
+        cr.ParamBase[ ST_LUCK ] = 3;
+        cr.ParamBase[ ST_MAX_LIFE ] = 250;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 6;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 20;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 15;
+        cr.ParamBase[ ST_HEALING_RATE ] = 1;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 5;
+
+        cr.ParamBase[ SK_UNARMED ] = 240;
+        cr.ParamBase[ SK_SNEAK ] = 80;
+
+        animIndex = "madeth";
+        break;
+
+    case BT_GECKO_FIRE:
+        cr.ParamBase[ ST_STRENGTH ] = 9;
+        cr.ParamBase[ ST_PERCEPTION ] = 6;
+        cr.ParamBase[ ST_ENDURANCE ] = 9;
+        cr.ParamBase[ ST_CHARISMA ] = 1;
+        cr.ParamBase[ ST_INTELLECT ] = 1;
+        cr.ParamBase[ ST_AGILITY ] = 7;
+        cr.ParamBase[ ST_LUCK ] = 3;
+        cr.ParamBase[ ST_MAX_LIFE ] = 150;
+        cr.ParamBase[ ST_ACTION_POINTS ] = 6;
+        cr.ParamBase[ ST_ARMOR_CLASS ] = 15;
+        cr.ParamBase[ ST_MELEE_DAMAGE ] = 10;
+        cr.ParamBase[ ST_HEALING_RATE ] = 4;
+        cr.ParamBase[ ST_CRITICAL_CHANCE ] = 1;
+
+        cr.ParamBase[ SK_UNARMED ] = 240;
+        cr.ParamBase[ SK_SNEAK ] = 100;
+
+        animIndex = "mafire";
+    default:
+        animIndex = "hmjmps";
+        break;
+    }
+
+    cr.ParamBase[ ST_CURRENT_HP ] = cr.ParamBase[ ST_MAX_LIFE ] * 0.1;
+    cr.ParamBase[ PE_AWARENESS ] = 0;
+    skin( cr, type );
+
+    cr.RunClientScript( "client_screen_additional@SendAnimIndex", locX, locY, type, animIndex, null );
+}
+
+import int  GetCellMap( uint16 x, uint16 y ) from "globalmap_group";
+import uint GenerateWasteland( Critter& cr, uint8 x, uint8 y ) from "mapgen_wasteland";
+
+void unsafe_set_arcade_start( Critter& cr, int x, int y, int p2, string@ message, int[] @ p4 )
+{
+    int mapId = GetCellMap( x, y );
+
+    if( mapId == -1 )
+    {
+        mapId = GenerateWasteland( cr, x * 0.1, y * 0.1 );
+    }
+
+    Map@ map = GetMap( mapId );
+    if( @map == null )
+        return;
+
+    cr.TransitToMap( map.Id, 0 );
+
+    cr.StatBase[ ST_ARCADE_DEAD ] = 0;
+    cr.StatBase[ ST_CRSTATUS ] = 0;
+}
+
+// teaching
+
+#include "_ltp.fos"
+
+#define TEACHER_BASE_WAIT    ( 60000 )
+#define STR_SKILLS           ( 10200 )
+
+string[] skillNames = { "Легкое оружие", "Тяжелое оружие", "Энергооружие", "Рукопашная", "Xолодное оружие", "Метательное оружие", "Санитар", "Доктор", "Скрытность", "Взлом замков", "Воровство", "Ловушки", "Наука", "Ремонт", "Красноречие", "Торговля", "Азартные игры", "Скиталец" };
+
+bool ltp_teach_inited = false;
+
+
+void unsafe_teach( Critter& cr, int skill, int p1, int p2, string@ message, int[] @ p4 ) // if p1 > 0 | skill == exp to player
+{
+    if( cr.Param[ QST_GAMEMODE ] == GAME_ARCADE )
+    {
+        cr.Say( SAY_NETMSG, "Запрещено аркадным игрокам." );
+        return;
+    }
+    if( p1 > 0 )                                     // added exp to critter
+    {
+        uint studyExp = cr.StatBase[ ST_STUDY_EXP ]; // = (cr.StatBase[ST_STUDY_EXP] > 100 ? cr.StatBase[ST_STUDY_EXP] : 100);
+        if( skill > studyExp || skill <= 0 )
+        {
+            cr.Say( SAY_NETMSG, "Недостаточно опыта." );
+            return;
+        }
+        Critter @ target = GetCritter( p2 );
+        if( @target == null )
+            return;
+        if( cr.Id == target.Id )
+        {
+            cr.Say( SAY_NETMSG, "Нельзя дать опыт самому себе." );
+            return;
+        }
+        if( target.IsNpc() )
+        {
+            cr.Say( SAY_NETMSG, "Нельзя дать опыт не игровому персонажу." );
+            return;
+        }
+        target.StatBase[ ST_EXPERIENCE ] += skill;
+        cr.StatBase[ ST_STUDY_EXP ] = CLAMP( cr.StatBase[ ST_STUDY_EXP ] - skill, 0, 10000 );
+
+        cr.Say( SAY_NETMSG, "Вы наградили юзернеим " + skill + " очками опыта" );
+        return;
+
+    }
+
+    if( cr.Skill[ skill ] < 120 )
+    {
+        cr.Say( SAY_NETMSG, "Вашего навыка недостаточно для обучения." );
+        return;
+    }
+
+    if( !ltp_teach_inited )
+        ltp_teach_init();
+
+    bool validSKill = false;
+    for( uint8 i = 0; i < 4; i++ )
+    {
+        if( cr.Param[ 226 + i ] == skill )
+        {
+            validSKill = true;
+        }
+    }
+
+    if( validSKill )
+        StartProcess( cr, LTP_TEACH, skill, 0, 0, TEACHER_BASE_WAIT - ( cr.Skill[ SK_SPEECH ] * 200 ) );
+    else
+        cr.Say( SAY_NETMSG, "Выбранный навык не является профилирующим." );
+}
+
+void ltp_teach_init()
+{
+    LTPREG( LTP_TEACH, process_teach )
+    ltp_teach_inited = true;
+}
+
+uint process_teach( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESSD( LTP_TEACH )
+
+    GameVar@ wearinessMaster = GetLocalVar( LVAR_weariness, cr.Id );
+    if( wearinessMaster < 1000 )
+        wearinessMaster.opAddAssign( Random( 50, 75 ) );
+    else
+    {
+        cr.Say( SAY_NETMSG, "Вы слишком устали" );
+        return 0;
+    }
+
+    Critter@[] crs;
+    cr.GetMap().GetCrittersHex( cr.HexX, cr.HexY, 7, FIND_LIFE, crs );
+
+    uint8 length = crs.length();
+    if( length <= 0 )
+        return 0;
+    uint16 skillTeacher = cr.Skill[ param0 ];
+
+    for( uint8 i = 0; i < length; i++ )
+    {
+        uint16 skillStude = crs[ i ].Skill[ param0 ];
+        if( cr.Id != crs[ i ].Id )
+        {
+            if( skillTeacher >= skillStude + 30 )
+            {
+                GameVar@ wearinessSlave = GetLocalVar( LVAR_weariness, crs[ i ].Id );
+                // crs[i].Say(SAY_NETMSG, "before "+crs[i].Skill[param0]+" "+(wearinessSlave.GetValue() / 10));
+                if( wearinessSlave.GetValue() < 1000 )
+                {
+                    uint16 wearSlave = ( wearinessSlave.GetValue() / 10 );
+                    int16  skillDifference = skillTeacher - skillStude;
+                    uint16 skillBase = ( skillDifference > 0 ? skillDifference : 1 )  / ( wearSlave > 0 ? wearSlave : 1 ) * ( crs[ i ].Stat[ ST_INTELLECT ] / 2 );
+
+                    if( skillBase > 0 )
+                    {
+                        wearinessSlave.opAddAssign( Random( 50, 150 ) );
+                        skillBase = CLAMP( skillBase, 1, 5 );
+                        crs[ i ].SkillBase[ param0 ] += skillBase;
+                        crs[ i ].Say( SAY_NETMSG, "Вы научились лучше обращаться с навыком " + skillNames[ param0 - 200 ] + "." );
+                    }
+                    else
+                    {
+                        crs[ i ].Say( SAY_NETMSG, "Вы ничему не научились." );
+                    }
+
+                    // crs[i].Say(SAY_NETMSG, "base "+(skillBase));
+                }
+                else
+                {
+                    crs[ i ].Say( SAY_NETMSG, "Вы слишком устали." );
+                }
+
+                // crs[i].Say(SAY_NETMSG, "after "+(crs[i].Skill[param0]));
+            }
+            else
+            {
+                crs[ i ].Say( SAY_NETMSG, "Вас нельзя научить." );
+            }
+        }
+
+    }
+
+    return TEACHER_BASE_WAIT - ( ( cr.Skill[ SK_SPEECH ] * 200 ) / wearinessMaster.GetValue() );
+}
+
+// teaching end
+
+void unsafe_fastpanel_say( Critter& player, int p0, int p1, int p2, string@ message, int[] @ p4 )
+{
+    if( message.length() > 0 )
+    {
+        uint8 sayType = 0;
+        switch( p0 )
+        {
+        case 1:
+            sayType = SAY_NORM;
+            break;
+        // case 2 : sayType = SAY_SOCIAL; break;
+        case 2:
+            sayType = SAY_SHOUT;
+            break;
+        case 3:
+            sayType = SAY_EMOTE;
+            break;
+        case 4:
+            sayType = SAY_WHISP;
+            break;
+        default:
+            sayType = SAY_NETMSG;
+            break;
+        }
+
+        if( sayType >= SAY_NORM && sayType <= SAY_RADIO )
+        {
+            for( uint i = 0, len = message.length(); i < len; i++ )
+            {
+                uint8 chr = message[ i ];
+                if( chr < 32 || ( chr > 34 && chr < 42 ) || ( chr > 42 && chr < 44 ) || chr == 47 || ( chr > 57 && chr < 63 ) || chr == 64 || ( chr > 90 && chr < 97 ) || ( chr > 122 && chr < 192 && chr != 168 && chr != 184 ) )
+                {
+                    player.Say( SAY_NETMSG, "В сообщениии есть запрещенные символы." );
+                    return;
+                }
+            }
+        }
+
+        player.Say( sayType, "" + message );
+    }
+}
+
+void SendFastPanelInfo( Critter& cr, bool type )
+{
+    file   f;
+    string word = "", word2 = "";
+    uint   pos = 0;
+    // cr.Say(SAY_NETMSG, "start sendin");
+    if( f.open( PATH_TO_FASTPANEL_FOLDER + cr.Id, "r" ) == 0 )
+    {
+        // cr.Say(SAY_NETMSG, "file open successful");
+        f.setPos( 0 );
+        while( !f.isEndOfFile() )      // || count > length))
+        {
+            pos = f.getPos();
+            f.readLine( word );
+            word2 += word;
+
+//				cr.Say(SAY_NETMSG, word);
+//				cr.Say(SAY_NETMSG, word);
+        }
+        f.close();
+    }
+    // if(word2 != "")	cr.RunClientScript("client_screen_fastpanel@LoadPanel", 0, 0, 0, word2, null); else cr.Say(SAY_NETMSG, "error with sending fastpanel info");
+    if( !type )
+    {
+        if( pos != 0 )
+            cr.RunClientScript( "client_screen_fastpanel@GetServerFileSize", pos, 0, 0, "", null );
+    }
+    else
+    {
+        if( word2 != "" )
+            cr.RunClientScript( "client_screen_fastpanel@LoadPanel", 0, 0, 0, word2, null );
+        else
+            cr.Say( SAY_NETMSG, "error with sending fastpanel info" );
+    }
+}
+
+void unsafe_fastpanel_save( Critter& player, int p0, int p1, int p2, string@ info, int[] @ p4 )
+{
+    file f;
+    if( f.open( PATH_TO_FASTPANEL_FOLDER + player.Id, "w" ) == 0 )
+    {
+        // f.setPos(0);
+        f.writeString( info );
+    }
+    f.close();
+}
+
+void unsafe_send_fastpanel( Critter& cr, int p0, int p1, int p2, string@ info, int[] @ p4 )
+{
+    file   f;
+    string word = "", word2 = "";
+    uint   pos = 0;
+    // cr.Say(SAY_NETMSG, "start sendin");
+    if( f.open( PATH_TO_FASTPANEL_FOLDER + cr.Id, "r" ) == 0 )
+    {
+        // cr.Say(SAY_NETMSG, "file open successful");
+        f.setPos( 0 );
+        while( !f.isEndOfFile() )      // || count > length))
+        {
+            pos = f.getPos();
+            f.readLine( word );
+            word2 += word;
+
+//				cr.Say(SAY_NETMSG, word);
+//				cr.Say(SAY_NETMSG, word);
+        }
+        f.close();
+    }
+    // if(word2 != "")	cr.RunClientScript("client_screen_fastpanel@LoadPanel", 0, 0, 0, word2, null); else cr.Say(SAY_NETMSG, "error with sending fastpanel info");
+    if( p0 == 0 )
+    {
+        if( pos != 0 )
+            cr.RunClientScript( "client_screen_fastpanel@GetServerFileSize", pos, 0, 0, "", null );
+    }
+    else
+    {
+        if( word2 != "" )
+            cr.RunClientScript( "client_screen_fastpanel@LoadPanel", 0, 0, 0, word2, null );
+        else
+            cr.Say( SAY_NETMSG, "error with sending fastpanel info" );
+    }
+    // SendFastPanelInfo(player, true);
+}
+
+void unsafe_openCodeDoor( Critter& player, int itemId, int code, int param2, string@ param3, int[] @ param4 )
+{
+    Item @ item = GetItem( itemId );
+    if( @item == null )
+    {
+        return;
+    }
+    if( ( player.HexX < item.HexX + 2 || player.HexX > item.HexX - 2 ) && ( player.HexY < item.HexY + 2 || player.HexY > item.HexY - 2 ) )
+    {
+        if( param2 != 0 )
+            if( code >= pow( 10, item.Val1 ) )
+            {
+                item.Val4 = code;
+                player.Say( SAY_NETMSG, "Вы установили новый код : " + code );
+                return;
+            }
+            else
+            {
+                player.Say( SAY_NETMSG, "Не допустимый код" );
+                return;
+            }
+        if( item.Val4 == code )
+        {
+            if( _LockerIsClose( item ) )
+            {
+                item.LockerOpen();
+                player.RunClientScript( "client_screen_codedoor@HideScreen", 0, 0, 0, "", null );
+            }
+
+        }
+        else
+            player.Say( SAY_NETMSG, "Не верный код" );
+    }
+    else
+        player.Say( SAY_NETMSG, "Слишком далеко" );
+}
+
+import void LoadClientHistoryBase( Critter& cr, bool all ) from "history_menu";
+import void SaveCritterHistory( Critter& cr, string saveText ) from "history_menu";
+import void LoadCritterHistory( Critter& cr ) from "history_menu";
+
+void unsafe_history_load( Critter& player, int loadType, int param1, int param2, string@ param3, int[] @ param4 )
+{
+    if( player.GetAccess() < 2 )
+    {
+        player.Say( SAY_NETMSG, "hey dude. don't try to hack this. just gohome." );
+        Log( "hack detected player " + player.Id + " name " + GetPlayerName( player.Id ) + " try crack history menu" );
+        return;
+    }
+    Critter@ cr = GetCritter( param1 );
+    switch( loadType )
+    {
+    case 0:
+        LoadClientHistoryBase( player, false );
+        break;
+    case 1:
+        LoadClientHistoryBase( player, true );
+        break;
+    case 2:
+        LoadCritterHistory( @cr != null ? cr : player );
+        break;
+    }
+}
+
+void unsafe_history_save( Critter& player, int param0, int param1, int param2, string@ saveText, int[] @ param4 )
+{
+    if( saveText == "" )
+    {
+        player.Say( SAY_NETMSG, "Oops! Same error here!" );
+        return;
+    }
+    SaveCritterHistory( player, saveText );
+}
+
+void unsafe_hotkey_command( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+
+    string type = "", command = "";
+    string@[] @ cmd = split( param3, "*" );
+    {
+        command = cmd[ 0 ];
+        type = cmd.length() > 1 ? cmd[ 1 ] : "";
+    }
+    if( type == "TEXT" )
+    {
+        if( __FullSecond < player.Timeout[ TO_SAY ] )
+        {
+            player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12601 );
+            return;
+        }
+        player.TimeoutBase[ TO_SAY ] = SAY_TIMEOUT;
+        if( command.length() > 64 )
+            command = substring( command, 0, 64 );
+        string@[] @ words = split( command, "_" );
+        string text = join( words, " " );
+        player.Say( /*(param4[0]>3)?SAY_RADIO:*/ ( param4[ 0 ] * 2 + 1 ), text ); // Param4[0]: 0 - norm, 1 - shout, 2 - emote, 3 - whisp
+    }
+
+    else
+    {
+        if( command == "RELOAD" )
+        {
+            Item@[] weapon;
+            player.GetItems( SLOT_HAND1, weapon );
+            if( not valid( weapon[ 0 ] ) )
+                return;
+            Item@ ammo = player.GetItem( weapon[ 0 ].AmmoPid, SLOT_INV );
+
+            if( valid( ammo ) && weapon[ 0 ].AmmoCount < weapon[ 0 ].Proto.Weapon_MaxAmmoCount && player.Stat[ ST_CURRENT_AP ] >= 2 )
+            {
+                critter_reload_weapon( player, weapon[ 0 ], ammo );
+                player.Action( ACTION_RELOAD_WEAPON, 0, weapon[ 0 ] );
+                player.ParamBase[ ST_CURRENT_AP ] -= 200;
+            }
+            else if( not valid( ammo ) && weapon[ 0 ].AmmoCount > 0 && player.Stat[ ST_CURRENT_AP ] >= 2 )
+            {
+                critter_reload_weapon( player, weapon[ 0 ], null );
+                player.Action( ACTION_RELOAD_WEAPON, 0, weapon[ 0 ] );
+                player.ParamBase[ ST_CURRENT_AP ] -= 200;
+            }
+        }
+
+        else if( command == "USE_SELF" )
+        {
+            Item@ use_item = player.GetItem( param4[ 0 ], -1 );
+            if( valid( use_item ) && player.Stat[ ST_CURRENT_AP ] >= 2 )
+            {
+                critter_use_item( player, use_item, null, null, null, 0 );
+                player.Action( ACTION_USE_ITEM, 0, use_item );
+                player.ParamBase[ ST_CURRENT_AP ] -= 200;
+            }
+        }
+
+        else
+            Log( "Chiter detected: " + GetPlayerName( player.Id ) );
+    }
+}
+
+void unsafe_hex_attack( Critter& player, int hexX, int hexY, int param2, string@ command, int[] @ param4 )
+{
+
+    Map@ map = player.GetMap();
+
+    if( map is null )
+        return;
+
+    Item@[] realweapon;
+    player.GetItems( SLOT_HAND1, realweapon );
+    if( realweapon.length() < 1 || ( realweapon[ 0 ] is null ) )
+        return;
+
+    uint8      mode = realweapon[ 0 ].Mode;
+    ProtoItem@ weapon = GetProtoItem( realweapon[ 0 ].GetProtoId() );
+    // ProtoItem@ weapon = player.GetSlotProto(SLOT_HAND1, mode);
+    ProtoItem@ ammo;
+
+
+    uint16 toHx = hexX, toHy = hexY;
+    int    dist = GetDistantion( player.HexX,  player.HexY, hexX, hexY );
+    map.GetHexCoord( player.HexX,  player.HexY, toHx, toHy,  0.0f, dist );
+    if( ( hexX != toHx ) || ( hexY != toHy ) )
+    {
+        player.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, 104 );
+        return;
+    }
+
+    bool isFlareGun = ( realweapon[ 0 ].AmmoPid == PID_FLARE_GUN_AMMO ) && ( mode == 1 ); // pm added flare gun
+
+    bool isRocket = ( realweapon[ 0 ].AmmoPid == PID_EXPLOSIVE_ROCKET ) || ( realweapon[ 0 ].AmmoPid == PID_ROCKET_AP ) || ( realweapon[ 0 ].AmmoPid == PID_ROBO_ROCKET_AMMO ) || ( realweapon[ 0 ].AmmoPid == PID_GRENADELAUNCHER_AMMO );
+    if( _WeaponSkill( weapon, mode ) != SK_THROWING && !isRocket && !isFlareGun )
+        return;
+
+    int wpnMaxDist = _WeaponMaxDist( weapon, mode );
+    if( _WeaponSkill( weapon, mode ) == SK_THROWING )
+        wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), player.Stat[ ST_STRENGTH ] + 2 * player.Perk[ PE_HEAVE_HO ] ) );
+    if( dist > wpnMaxDist )
+    {
+        player.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, 102 );
+        return;
+    }
+
+
+    if( player.Stat[ ST_CURRENT_AP ] < _WeaponApCost( weapon, mode ) ) {
+        return;
+    }
+
+    if( weapon.Weapon_MaxAmmoCount > 0 )
+    {
+        if( realweapon[ 0 ].AmmoCount == 0 )
+            return;
+        else
+            @ammo = GetProtoItem( realweapon[ 0 ].AmmoPid );
+    }
+
+
+    Critter@ target = map.GetCritter( uint16( hexX ), uint16( hexY ) );
+
+    player.ParamBase[ ST_CURRENT_AP ] -= _WeaponApCost( weapon, mode ) * 100;
+    // HIT_LOCATION_UNCALLED
+    CombatAttack( player, target, weapon, mode, ammo, uint16( hexX ), uint16( hexY ) );
+    player.Wait (200 * _WeaponApCost (weapon, mode));
+}
+
+int[] zomb_skins = { 33, 36, 37, 39, 40, 41, 43, 48, 57, 61, 62, 63, 64 };
+
+
+void zomb( Critter& player, int on, int param1, int param2 )
+{
+    if( on == 0 )
+    {
+        __Zombies = false;
+        player.Say( SAY_NETMSG, "Зомби-мод отключен." );
+    }
+    else
+    {
+        __Zombies = true;
+        player.Say( SAY_NETMSG, "Зомби-мод включен." );
+    }
+}
+
+import void skin( Critter& cr, int crType ) from "skins";
+
+void unsafe_zombie( Critter& player, int hexX, int hexY, int param2, string@ lex, int[] @ param4 )
+{
+    if( !__Zombies )
+    {
+        player.Say( SAY_NETMSG, "Зомби-мод отключен." );
+        return;
+    }
+
+    Map@ map = player.GetMap();
+    Map@ modoc = GetMapByPid( MAP_MODOC_Center, 0 );
+    if( modoc is null )
+        return;
+
+    if( player.Param[ ST_BODY_TYPE ] == BT_ZOMBIE )
+    {
+        if( player.IsDead() )
+        {
+            Item@[] items;
+            if( player.GetItems( 0, items ) > 0 )
+                DeleteItems( items );
+
+            player.ParamBase[ DAMAGE_EYE ] = 0;
+            player.ParamBase[ DAMAGE_RIGHT_ARM ] = 0;
+            player.ParamBase[ DAMAGE_LEFT_ARM ] = 0;
+            player.ParamBase[ DAMAGE_RIGHT_LEG ] = 0;
+            player.ParamBase[ DAMAGE_LEFT_LEG ] = 0;
+            player.ToLife();
+            player.ParamBase[ ST_CURRENT_HP ] = player.Param[ ST_MAX_LIFE ];
+            player.ParamBase[ TO_REPLICATION ] = -1;
+            player.ParamBase[ TO_DEAD ] = __FullSecond + REAL_SECOND( Random( 30, 60 ) );
+            player.ParamBase[ ST_WALK_TIME ] = Random( 200, 800 );
+            player.TransitToMap( modoc.Id, 0 );
+            uint zsl = zomb_skins.length();
+            if( zsl > 0 )
+                skin( player, zomb_skins[ Random( 0, zsl - 1 ) ] );
+        }
+
+    }
+    else if( map is null or map.GetProtoId() != 51 )
+    {
+        return;
+    }
+    else
+    {
+        player.ParamBase[ ST_BODY_TYPE ] = BT_ZOMBIE;
+
+        uint zsl = zomb_skins.length();
+        if( zsl > 0 )
+            skin( player, zomb_skins[ Random( 0, zsl - 1 ) ] );
+
+        player.ParamBase[ ST_MAX_LIFE ] += 100;
+        player.ParamBase[ ST_CURRENT_HP ] += 100;
+        player.ParamBase[ MODE_NO_RUN ] = 1;
+        player.ParamBase[ ST_WALK_TIME ] = Random( 200, 800 );
+        player.ParamBase[ TO_DEAD ] = __FullSecond + REAL_MINUTE( 2 );
+        player.ParamBase[ ST_REPLICATION_TIME ] = -1;
+        player.TransitToMap( modoc.Id, 0 );
+    }
+}
+
+
+void unsafe_stopMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    for( uint i = param0 * 10, ii = 10 + param0 * 10; i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+        if( valid( controlled ) && controlled.ParamBase[ MERC_MASTER_ID ] != player.Id )
+        {
+            player.Say( SAY_NETMSG, "Нет доступа." );
+            return;
+        }
+        if( valid( player ) && valid( controlled ) && controlled.IsNpc() )
+        {
+            controlled.ErasePlane( -1, true );
+            controlled.ClearEnemyStack();
+            controlled.EraseTimeEvents( 9 );
+            controlled.SetDir( GetDirection( controlled.HexX, controlled.HexY, param1, param2 ) );
+        }
+    }
+}
+
+void unsafe_moveMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    for( uint i = param0 * 10, ii = 10 + param0 * 10; i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+        if( valid( controlled ) && controlled.ParamBase[ MERC_MASTER_ID ] != player.Id )
+        {
+            player.Say( SAY_NETMSG, "Нет доступа." );
+            return;
+        }
+        if( valid( player ) && valid( controlled ) && controlled.IsNpc() )
+        {
+            controlled.ErasePlane( -1, true );
+            AddWalkPlane( controlled, 1, param1 + Random( -i, i ), param2 + Random( -i, i ), GetDirection( controlled.HexX, controlled.HexY, param1, param2 ), ( param3 != null ), 0 );
+            if( param0 == 0 )
+                controlled.ClearEnemyStack();
+        }
+    }
+}
+
+void unsafe_attackMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    Critter@ target = GetCritter( param0 );
+    for( uint i = param2 * 10, ii = 10 + param2 * 10; i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+        if( valid( controlled ) && controlled.ParamBase[ MERC_MASTER_ID ] != player.Id )
+        {
+            player.Say( SAY_NETMSG, "Нет доступа." );
+            return;
+        }
+        if( valid( player ) && valid( controlled ) && valid( target ) && controlled.IsNpc() )
+        {
+            controlled.ErasePlane( -1, true );
+            AddAttackPlane( controlled, 0, target, __RunOnCombat );
+            controlled.AddEnemyInStack( target.Id );
+        }
+    }
+}
+
+import uint follow( Critter& cr, int master, uint& rate ) from "raiders";
+
+void unsafe_chaseMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    Critter@ target = GetCritter( param0 );
+    for( uint i = param2 * 10, ii = 10 + param2 * 10; i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+        if( valid( controlled ) && controlled.ParamBase[ MERC_MASTER_ID ] != player.Id )
+        {
+            player.Say( SAY_NETMSG, "Нет доступа." );
+            return;
+        }
+        if( valid( player ) && valid( controlled ) && valid( target ) && controlled.IsNpc() )
+        {
+            controlled.ErasePlane( -1, true );
+            controlled.ModeBase[ MODE_NO_HOME ] = 1;
+            controlled.StatBase[ ST_KILLER_PERSON ] = target.Id;
+            controlled.AddTimeEvent( "follow", 30, 9 );
+        }
+    }
+}
+
+import void say( Critter& player, int param0, int param1, int param2 ) from "gm";
+
+void unsafe_say( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+    Critter@ controlled = GetCritter( param0 );
+    if( param1 != 1 && param1 != 5 && controlled.IsPlayer() )
+    {
+        player.Say( SAY_NETMSG, "Нет доступа." );
+        return;
+    }
+    if( valid( controlled ) && controlled.ParamBase[ MERC_MASTER_ID ] != player.Id )
+    {
+        player.Say( SAY_NETMSG, "Нет доступа." );
+        return;
+    }
+    say( player, param0, param1, 0 );
+}
+
+void unsafe_sleep( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+    if( !valid( player ) )
+        return;
+    if( !player.IsDead() && !player.IsKnockout() && player.GetTimeEvents( CTE_WARNING, null, null, null ) == 0 )
+    {
+        player.StatBase[ ST_CURRENT_AP ] = -100000;
+        player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( param0 == 0 ) ), 5, player.HexX, player.HexY );
+        player.Say( SAY_NETMSG, "вы упали." );
+        player.AddTimeEvent( "cte_sleep", 0, CTE_WARNING, 0 );
+        return;
+    }
+    else if( !player.IsDead() && player.IsKnockout() && player.GetTimeEvents( CTE_WARNING, null, null, null ) != 0 )
+    {
+        player.StatBase[ ST_CURRENT_AP ] = 0;
+        player.EraseTimeEvents( CTE_WARNING );
+        player.Say( SAY_NETMSG, "вы поднимаетесь." );
+        return;
+    }
+
+}
+
+uint cte_sleep( Critter& player, int identifier, uint& rate )
+{
+    if( player.StatBase[ ST_CURRENT_AP ] >= -50000 )
+        player.StatBase[ ST_CURRENT_AP ] = -100000;
+    return 100;
+}
+
+import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat";
+
+import void DragAndDrop( Critter& cr, Critter@ target ) from "handcuffs";
+
+void unsafe_itemhit2( Critter& player, int itemId, int x, int y, string@ param3, int[] @ param4 )
+{
+    if( !( player.IsDead() || player.IsKnockout() ))
+    {
+		if ( player.Timeout[ TO_SK_STEAL ] > 0 )
+		{
+			player.Say( SAY_NETMSG, "Вы не можете бить так часто." );
+			return;
+		}
+		if( ABS( int(x - player.HexX) ) <= 1 && ABS( int(y - player.HexY) ) <= 1 )
+		{
+            player.SetDir( GetDirection( player.HexX, player.HexY, x, y ) );
+			player.GetMap().SetText( x, y, COLOR_GRAY, "cтук" );
+			player.Say( SAY_NETMSG, "Вы постучали." );
+			player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
+			return;
+		}
+		else player.Say( SAY_NETMSG, "Далеко." );
+		return;			
+    }
+}
+
+void unsafe_itemhit( Critter& player, int id, int itemId, int param2, string@ param3, int[] @ param4 )
+{
+    Critter @ target = GetCritter( id );
+
+    if( !( player.IsDead() || player.IsKnockout() ) && valid(target) )
+    {
+		if ( player.Timeout[ TO_SK_STEAL ] > 0 )
+			{
+			player.Say( SAY_NETMSG, "Вы не можете бить так часто." );
+			return;
+			}
+		if ( target.IsDead() || target.IsKnockout())
+			{
+			DragAndDrop( player, target );
+			player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 3 );
+			return;
+			}			
+        if( ABS( int(target.HexX - player.HexX) ) <= 1 && ABS( int(target.HexY - player.HexY) ) <= 1 )
+        {
+            Item @ weapon = _CritGetItemHand( player );
+
+            if( !(weapon is null) )
+            {
+                uint16 weight = weapon.Proto.Weight;
+				weight = CLAMP( weight, 2000, 8000 );
+                uint8  ap = weight * 0.001;
+				ap = CLAMP( ap, 2, 8 );
+                if( ap <= player.Stat[ ST_CURRENT_AP ] )
+                {
+                    player.SetDir( GetDirection( player.HexX, player.HexY, target.HexX, target.HexY ) );
+                    _CritAnimateThrow( player );
+                    player.StatBase[ ST_CURRENT_AP ] = 0;
+					
+					if ( player.Skill[ SK_MELEE_WEAPONS ] - target.Stat[ ST_ARMOR_CLASS ] - ( weight * 0.002 ) - target.Stat[ ST_BLOCK ]*50 < Random( 0, 100) )
+						{
+						player.Say( SAY_NETMSG, "Вы промахнулись." );
+						return;
+						}
+                    uint8 strBonus = ( player.Stat[ ST_STRENGTH ] > 6 ? player.Stat[ ST_STRENGTH ] - 6 : 1 );
+                    int   damage = Random( strBonus + player.StatBase[ ST_MELEE_DAMAGE ], strBonus + player.StatBase[ ST_MELEE_DAMAGE ] + ( weight * 0.002 ) );           // every 500g 1dmg point
+                    InjureCritter( target, damage, DAMAGE_NORMAL, target.Dir, player.Id );
+					
+					player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
+                    player.TimeoutBase[ TO_AGGRESSOR ] = __FullSecond + REAL_MINUTE( 1 );
+                    player.TimeoutBase[ TO_BATTLE ] = __FullSecond + REAL_MINUTE( 1 );
+                    target.TimeoutBase[ TO_BATTLE ] = __FullSecond + REAL_MINUTE( 1 );
+
+                    if( target.IsNpc() && target.IsSee( player ) )
+                        target.AddEnemyInStack( player.Id );
+
+                    return;
+                }
+                player.Say( SAY_NETMSG, "Недостаточно очков действия." );
+                return;
+            }
+			else if( 4 <= player.Stat[ ST_CURRENT_AP ] )
+                {
+                    player.SetDir( GetDirection( player.HexX, player.HexY, target.HexX, target.HexY ) );
+                    _CritAnimateThrow( player );
+                    player.StatBase[ ST_CURRENT_AP ] = 0;
+					
+					if ( player.Skill[ SK_UNARMED ] - target.Stat[ ST_ARMOR_CLASS ] - target.Stat[ ST_BLOCK ]*50 < Random( 0, 100) )
+						{
+						player.Say( SAY_NETMSG, "Вы промахнулись." );
+						return;
+						}
+                    uint8 strBonus = ( player.Stat[ ST_STRENGTH ] > 6 ? player.Stat[ ST_STRENGTH ] - 6 : 1 );
+                    int   damage = Random( strBonus, strBonus + player.StatBase[ ST_MELEE_DAMAGE ] + 1 );           // every 500g 1dmg point
+                    InjureCritter( target, damage, DAMAGE_NORMAL, target.Dir, player.Id );
+					
+					player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
+                    player.TimeoutBase[ TO_AGGRESSOR ] = __FullSecond + REAL_MINUTE( 1 );
+                    player.TimeoutBase[ TO_BATTLE ] = __FullSecond + REAL_MINUTE( 1 );
+                    target.TimeoutBase[ TO_BATTLE ] = __FullSecond + REAL_MINUTE( 1 );
+
+                    if( target.IsNpc() && target.IsSee( player ) )
+                        target.AddEnemyInStack( player.Id );
+                    return;
+                }
+                else player.Say( SAY_NETMSG, "Недостаточно очков действия." );
+                return;			
+        }
+        player.Say( SAY_NETMSG, "Далеко." );
+    }
+
+}
+
+void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ param3, int[] @ param4 ) {
+	Map@ currentMap = player.GetMap ();
+	uint16 tx = hx, ty = hy;
+	uint distance = GetDistantion (player.HexX, player.HexY, hx, hy);
+	currentMap.GetHexCoord (player.HexX,  player.HexY, tx, ty,  0.0f, distance);
+	Critter@ target = currentMap.GetCritter (tx, ty);
+	if (!currentMap.IsHexPassed (tx, ty) && target is null) {
+		currentMap.GetHexCoordWall (player.HexX,  player.HexY, tx, ty,  0.0f, distance);
+	}
+	Item@ itemInHand = _CritGetItemHand (player);
+	if (itemInHand is null) return;
+	if (itemInHand.GetProtoId() == PID_HANDCUFFS_USED || itemInHand.GetProtoId() == PID_ROPE_USED) {
+		player.Say (SAY_NETMSG, "Вы не можете бросить то, чем связаны. Увы.");\
+		return;
+	}
+	bool canThrow = true;
+	
+	if (player.Param [P_BODYSWAPPED] != 0) {
+		player.Say (SAY_NETMSG, "Вы пытаетесь бросить предмет, но сознание владельца тела не дает вам этого сделать.");
+		return;
+	}
+	
+	if (!player.IsDead() && !player.IsKnockout() && distance < player.Stat [ST_STRENGTH]*2) {
+		player.SetDir( GetDirection( player.HexX, player.HexY, tx, ty ) );
+		if (valid(target)) {
+			currentMap.RunFlyEffect( _WeaponEffect( GetProtoItem(PID_FRAG_GRENADE), _WeaponModeUse (0)), player, target, player.HexX, player.HexY, tx, ty );
+			_CritAnimateThrow (player);
+			bool targetFreeHands = (_CritGetItemHand (target) is null);
+			if (targetFreeHands && !(target is player)) {
+				MoveItem (itemInHand, /*player.CountItem (itemInHand.GetProtoId())*/ 1, target);
+				target.Say (SAY_EMOTE, "Поймал предмет");
+			} else {
+				MoveItem (itemInHand, /*player.CountItem (itemInHand.GetProtoId())*/ 1, currentMap, tx, ty);
+				if (!(target is player)) target.Say (SAY_EMOTE, "Руки заняты, не может поймать предмет");
+			}
+		} else {
+			currentMap.RunFlyEffect( _WeaponEffect( GetProtoItem(PID_FRAG_GRENADE), _WeaponModeUse (0)), player, null, player.HexX, player.HexY, tx, ty );
+			_CritAnimateThrow (player);
+			MoveItem (itemInHand, /*player.CountItem (itemInHand.GetProtoId())*/ 1, currentMap, tx, ty);
+		}
+	} else {
+		player.Say (SAY_NETMSG, "Вы не в состоянии кидать так далеко");
+	}
+}

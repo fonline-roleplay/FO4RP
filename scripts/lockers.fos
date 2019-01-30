@@ -1,0 +1,656 @@
+// Author: cvet
+// Doors and keys stuff.
+#include "_macros.fos"
+#include "_msgstr.fos"
+#include "_colors.fos"
+import void Log_Lockpick( Critter& player, int lock, int force, int succes, string@ param3, int[] @ param4 )  from "gm"; // ErlKing
+import bool IsDoorAutomatic( uint pid ) from "map_sutter_objects";
+
+bool UseItemOnLocker( Critter& cr, Item& locker, Item& item )                                                            // Export
+{
+    if( item.GetType() == ITEM_TYPE_KEY )
+    {
+
+        if( item.LockerId == locker.LockerId )
+        {
+            if( !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) )
+            {
+                if( FLAG( locker.LockerCondition, LOCKER_LOCKED ) )
+                {
+                    UNSETFLAG( locker.LockerCondition, LOCKER_LOCKED );
+                    cr.Say( SAY_NETMSG, "Вы отперли дверь." );
+                }
+                else
+                {
+                    SETFLAG( locker.LockerCondition, LOCKER_LOCKED );
+                    cr.Say( SAY_NETMSG, "Вы заперли дверь." );
+                }
+                return true;
+            }
+            cr.Say( SAY_NETMSG, "Дверь должна быть закрыта." );
+            return true;
+        }
+        else
+        {
+            cr.Say( SAY_NETMSG, "Ключ не подходит." );
+            return true;
+        }
+    }
+
+    return true;
+}
+
+import bool AddWalkPlane( Critter& npc, uint priority, uint16 hexX, uint16 hexY, uint8 dir, bool run, uint cut ) from "npc_planes";
+
+bool UseSkillOnLocker( Critter& cr, Item& locker, int skill ) // Export
+{
+    Map@ map = cr.GetMap();
+    if( not valid( map ) )
+    {
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+        return true;
+    }
+    
+    if( cr.StatBase[ST_BODY_TYPE] >= BT_BRAHMIN && cr.StatBase[ST_BODY_TYPE] != BT_ROBOT )
+    {
+	if (cr.IsNpc())
+		{
+		cr.DropPlanes();
+		cr.ErasePlane( AI_PLANE_ATTACK, true );
+		uint16 NpcX = cr.HexX;
+		uint16 NpcY = cr.HexY;		
+        uint8 revDir;
+		revDir = cr.Dir + 3;
+        if( revDir > 5 )
+        revDir = revDir - 6;
+		map.MoveHexByDir( NpcX, NpcY, revDir, Random(5,10) );
+		AddWalkPlane( cr, 0, cr.HexX, cr.HexY, revDir, false, 0 );
+		}
+	
+	cr.Say(SAY_NETMSG, "Это Вам не под силу.");
+	return true;
+    }
+
+    if( skill == SKILL_PICK_ON_GROUND )
+    {
+        if( FLAG( locker.LockerCondition, LOCKER_ELECTRO ) && !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) && ( locker.GetType() == ITEM_TYPE_DOOR || locker.GetType() == ITEM_TYPE_CONTAINER ) )
+        {
+            cr.RunClientScript( "client_screen_codedoor@ShowScreen", locker.Id, locker.Val1, 0, "Введите код", null );
+            return true;
+        }
+        if( locker.GetType() == ITEM_TYPE_DOOR )
+        {
+            // NoOpen
+            if( FLAG( locker.LockerCondition, LOCKER_NOOPEN ) )
+            {
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+                return true;
+            }
+
+            // Critter on hex
+            if( FLAG( locker.LockerCondition, LOCKER_ISOPEN ) && valid( map.GetCritter( locker.HexX, locker.HexY ) ) )
+            {
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+                return true;
+            }
+
+            // Check key
+            if( !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) && locker.LockerId != 0 &&
+                !FLAG( locker.LockerCondition, LOCKER_BROKEN ) && FLAG( locker.LockerCondition, LOCKER_LOCKED ) )
+            {
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_ITEM_LOCKER_NEED_KEY );
+				LockerBudge( locker );
+                return true;
+            }
+
+
+            if( locker.Val6 == 0 && IsDoorAutomatic( locker.GetProtoId() ) )         // pm added //ПМ, ОНА НЕ РАБОТАЕТ, УЖЕ ВЕСЬ МОЗГ ВСКИПЕЛ!!!
+            {
+                cr.Say( SAY_NETMSG, "Энергоснабжение отключено. Дверь заблокированна." );
+                return true;
+            }
+
+            // Change state
+            if( FLAG( locker.LockerCondition, LOCKER_ISOPEN ) )
+                locker.LockerClose();
+            else
+                locker.LockerOpen();
+        }
+        else if( locker.GetType() == ITEM_TYPE_CONTAINER )
+        {
+            if( FLAG( locker.Flags, ITEM_CAN_PICKUP ) )
+            {
+                // cr.Say(SAY_NETMSG, "pick cont up");
+                int freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] - cr.ItemsWeight(),
+                    contWeight = 0;
+                Item@[] items;
+                uint len = locker.GetItems( -1, items );
+                for( uint i = 0; i < len; i++ )
+                {
+                    if( items[ i ] is null )
+                        continue;
+
+                    contWeight += int( items[ i ].Proto.Weight * items[ i ].GetCount() );
+                }
+
+                if( freeWeight >= ( contWeight + int(locker.Proto.Weight) ) )
+                {
+                    MoveItem( locker, 0, cr );
+                    // cr.StatBase[ST_CARRY_WEIGHT_EXT]-=contWeight;
+                    return true;
+                }
+                // else cr.Say(SAY_NETMSG, "heavy");
+            }
+            // NoOpen
+            if( FLAG( locker.LockerCondition, LOCKER_NOOPEN ) )
+            {
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+                return true;
+            }
+
+            // Check key
+            if( !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) && locker.LockerId != 0 &&
+                !FLAG( locker.LockerCondition, LOCKER_BROKEN ) && !IsKeyAviable( cr, locker.LockerId ) )
+            {
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_ITEM_LOCKER_NEED_KEY );
+				LockerBudge( locker );
+                return true;
+            }
+
+            // Is changeble
+            if( locker.Proto.Container_Changeble )
+            {
+                // Change state
+                if( FLAG( locker.LockerCondition, LOCKER_ISOPEN ) )
+                    locker.LockerClose();
+                else
+                {
+                    locker.LockerOpen();
+                    cr.ParamBase[ ST_LAST_CONT_ID ] = locker.Id;
+                    cr.ShowContainer( null, locker, locker.Proto.GroundLevel ? TRANSFER_HEX_CONT_DOWN : TRANSFER_HEX_CONT_UP );
+                }
+            }
+            else
+            {
+                cr.ParamBase[ ST_LAST_CONT_ID ] = locker.Id;
+                cr.ShowContainer( null, locker, locker.Proto.GroundLevel ? TRANSFER_HEX_CONT_DOWN : TRANSFER_HEX_CONT_UP );
+            }
+        }
+    }
+    else if( skill == SK_STEAL )
+    {
+        if( locker.GetType() == ITEM_TYPE_CONTAINER &&
+            ( ( !locker.Proto.Container_Changeble && FLAG( locker.Flags, ITEM_CAN_PICKUP ) && locker.Accessory == ACCESSORY_HEX ) ||
+              FLAG( locker.LockerCondition, LOCKER_ISOPEN ) ) )
+        {
+            cr.ParamBase[ ST_LAST_CONT_ID ] = locker.Id;
+            cr.ShowContainer( null, locker, locker.Proto.GroundLevel ? TRANSFER_HEX_CONT_DOWN : TRANSFER_HEX_CONT_UP );
+        }
+        else
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+    }
+    else if( skill == SK_LOCKPICK )
+    {
+
+        // NoOpen
+        if( FLAG( locker.LockerCondition, LOCKER_NOOPEN ) )
+        {
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+            return true;
+        }
+
+        if( cr.Timeout[ TO_SK_LOCKPICK ] > 0 )
+        {
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_WEARINESS );
+            return true;
+        }
+
+        int base = cr.Skill[ SK_LOCKPICK ] - locker.LockerComplexity;
+        Item@lockpick = cr.GetItem( 0, SLOT_HAND1 );
+        if( locker.Val0 == 4 && valid( lockpick ) && lockpick.GetProtoId() != PID_ELECTRONIC_LOCKPICKS )
+        {
+            cr.Say( SAY_NETMSG, "Нужна электроная отмычка." );
+            return false;
+        }
+
+        // Todo: PID_ELECTRONIC_LOCKPICKS +, PID_ELEC_LOCKPICK_MKII
+
+        if( cr.GetAccess() != ACCESS_ADMIN )
+            base = CLAMP( base, 0, 95 );
+
+        if( locker.LockerComplexity == 300 && cr.GetAccess() != ACCESS_ADMIN )
+            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_LOCKPICK_FAIL );  // постоянный замок
+        else if( locker.LockerCondition == LOCKER_ELECTRO )                  // pm added if block
+        {
+            uint16 complex = locker.LockerComplexity;
+            uint16 exp = complex * 2;
+
+            string tempCode = locker.Val4;
+            uint8  codeLength = tempCode.length();
+            uint16 skillLock = cr.Skill[ SK_LOCKPICK ];
+            uint8  count = complex / codeLength;
+
+            bool   changeCode = true;
+
+            for( uint8 i = 0; i < codeLength; i++ )
+            {
+                // cr.Say(SAY_NETMSG, ""+complex+" "+count+" "+skillLock+" "+exp);
+
+                skillLock = ( skillLock >= count ? ( skillLock - count ) : 0 );
+                if( complex >= skillLock )
+                {
+                    tempCode[ i ] = '*';
+                    exp = ( exp >= count * 4 ? exp - ( count * 4 ) : 0 );
+
+                    changeCode = false;
+                }
+            }
+
+            cr.Say( SAY_NETMSG, "Код двери : " + /*locker.Val4*/ tempCode );
+
+            if( changeCode && complex / 2 <= cr.Skill[ SK_SCIENCE ] )
+            {
+                exp += complex;
+                cr.RunClientScript( "client_screen_codedoor@ShowScreen", locker.Id, locker.Val1, 1, "Введите новый код.\nДлинна " + ( locker.Val1 + 1 ), null );
+            }
+
+            cr.StatBase[ ST_EXPERIENCE ] += exp;
+            // return true;
+        }
+        else
+        {
+            cr.StatBase[ ST_VAR0 ] = locker.Id;
+            cr.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_LOCKPICK" );
+            cr.Say( SAY_DIALOGBOX_TEXT, "Выберите действие" );
+            cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "постучать" );
+            cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "выбить" );
+            cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "начать взлом" );
+            return true;
+        }
+
+        cr.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( cr );
+    }
+    else if( skill == SKILL_TAKE_ALL_CONT )
+    {
+        return false;
+    }
+    else
+    {
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+    }
+    return true;
+}
+
+void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
+{
+    Item@ lock = GetItem( player.Stat[ ST_VAR0 ] );
+    if( lock is null )
+        return;
+    Item@lockpick = player.GetItem( 0, SLOT_HAND1 );
+
+    if( answerI == 0 )
+    {
+        Map@ map = player.GetMap();
+        map.SetText( lock.HexX, lock.HexY, COLOR_GRAY, "тук-тук" );
+        player.Say( SAY_NETMSG, "Вы постучали в дверь." );
+    }
+    if( answerI == 1 )
+    {
+	Map@ map = player.GetMap();
+        map.SetText( lock.HexX, lock.HexY, COLOR_RED, "УДАР" );
+	
+	if(!FLAG( lock.LockerCondition, LOCKER_ISOPEN ) && lock.Val0 != 3  && !IsDoorAutomatic(lock.GetProtoId()))
+	{
+		if(Random(lock.LockerComplexity+50, 350) < player.Stat[ST_STRENGTH] * player.Skill[SK_UNARMED] / 8 && player.Stat[ ST_LEVEL ] >= 12)
+		{
+			lock.LockerOpen();
+			player.Say( SAY_EMOTE_ON_HEAD, "Мощным ударом выбивает дверь" );
+		}
+		
+		else if( player.Stat[ ST_LEVEL ] <= 11 )
+		{
+			player.Say( SAY_NETMSG, "Вы сильно врезали по замку, но без какого либо эфекта." );
+		}}
+		else
+		{
+			player.Say( SAY_NETMSG, "Здесь это не поможет." );
+		}
+	//lock.LockerComplexity
+        /*
+        if(  && lock.Val0 == 0 )
+        {
+            lock.LockerOpen();
+            return;
+        }*/
+        
+        Log_Lockpick( player, player.Stat[ ST_VAR0 ], 1, 0, null, null );
+	
+	return;
+    }
+    if( answerI == 2 )
+    {
+        if( FLAG( lock.LockerCondition, LOCKER_ISOPEN ) )
+        {
+            player.Say( SAY_NETMSG, "Дверь и так открыта." );
+            return;
+        }
+        if( lock.Val0 == 0 )
+        {
+            player.Say( SAY_NETMSG, "Нет замка." );
+            return;
+        }
+        if( lock.Val0 == 1 )
+        {
+            lock.Val5 = Random( 10, 99 );
+            lock.Val4 = 10;
+        }
+        if( lock.Val0 == 2 )
+        {
+            if( !valid( lockpick ) || ( lockpick.GetProtoId() != PID_EXP_LOCKPICK_SET && lockpick.GetProtoId() != PID_LOCKPICKS ) )
+            {
+                player.Say( SAY_NETMSG, "Нужны отмычки." );
+                return;
+            }
+            lock.Val5 = Random( 100, 999 );
+            lock.Val4 = 100;
+        }
+        if( lock.Val0 == 3 )
+        {
+            if( !valid( lockpick ) || lockpick.GetProtoId() != PID_EXP_LOCKPICK_SET )
+            {
+                player.Say( SAY_NETMSG, "Нужен большой набор отмычек." );
+                return;
+            }
+            lock.Val5 = Random( 1000, 9999 );
+            lock.Val4 = 1000;
+        }
+        if( valid( lockpick ) && lockpick.Val0 != 0 && (lockpick.GetProtoId() == PID_EXP_LOCKPICK_SET || lockpick.GetProtoId() == PID_LOCKPICKS) )
+        {
+            DeleteItem( lockpick );
+            player.Say( SAY_NETMSG, "Отмычка сломалась, видимо ее неудачно вытащили ее из замка в прошлый раз." );
+            return;
+        }
+        else if( valid( lockpick ) && Random( 0, 1 ) == 0 )
+            lockpick.Val0 = 10;
+        player.StatBase[ ST_VAR1 ] = 1;     // положение щупа
+        player.StatBase[ ST_VAR2 ] = 0;     // число попыток
+
+        player.ShowScreen( SCREEN_DIALOGBOX, 7, "answer_LOCKPICK_lock" );
+        player.Say( SAY_DIALOGBOX_TEXT, "Состояние замка неизвестно" );
+        player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Осмотреть замок" );
+        player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "Щуп дальше" );
+        player.Say( SAY_DIALOGBOX_BUTTON( 2 ), "Щуп назад" );
+        player.Say( SAY_DIALOGBOX_BUTTON( 3 ), "Щуп вверх" );
+        player.Say( SAY_DIALOGBOX_BUTTON( 4 ), "Щуп вниз" );
+        player.Say( SAY_DIALOGBOX_BUTTON( 5 ), "Повернуть" );
+        player.Say( SAY_DIALOGBOX_BUTTON( 6 ), "Вынуть отмычку" );
+        Log_Lockpick( player, player.Stat[ ST_VAR0 ], 0, 0, null, null );
+        player.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( player );
+    }
+}
+
+void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
+{
+    Item@ lock = GetItem( player.Stat[ ST_VAR0 ] );
+    if( lock is null )
+        return;
+    Map@ map = player.GetMap();
+    int  base = player.Skill[ SK_LOCKPICK ] - lock.LockerComplexity;
+    base = CLAMP( base, 5, 95 );
+    Item@lockpick = player.GetItem( 0, SLOT_HAND1 );
+
+    string state = "";
+    string comb = lock.Val4;
+    int    curPos = 0, curComb = 0;
+
+    if( answerI == 0 )
+    {
+        if( lock.Val0 < 2 )
+            state = "Замок так себе, ";
+        if( lock.Val0 == 2 )
+            state = "Замок в хорошем состоянии, ";
+        if( lock.Val0 == 3 )
+            state = "Очень хороший замок, ";
+    }
+    if( answerI == 1 )
+    {
+        if( player.Timeout[ TO_HEALING ] > REAL_MINUTE( 2 ) )
+            state = "Щуп застрял, нужно чуть ослабить зажим и попробовать еще раз, ";
+        else if( player.StatBase[ ST_VAR1 ] < lock.Val0 + 1 )
+        {
+            player.StatBase[ ST_VAR1 ]++;
+            state = "Вы продвинули щуп дальше, ";
+            if( Random( 0, 2 ) == 0 )
+                player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 2 );
+        }
+        else
+            state = "Щуп уперся и дальше в замок не продвигается, ";
+    }
+    if( answerI == 2 )
+    {
+        if( player.Timeout[ TO_SK_LOCKPICK ] > REAL_MINUTE( 2 ) )
+            state = "Щуп застрял, нужно чуть ослабить зажим и попробовать еще раз, ";
+        else if( player.StatBase[ ST_VAR1 ] > 1 )
+        {
+            player.StatBase[ ST_VAR1 ]--;
+            state = "Вы отодвинули щуп назад, ";
+            if( Random( 0, 2 ) == 0 )
+                player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 2 );
+        }
+        else
+            state = "Щуп уже в крайнем положении, остается только вытащить его, ";
+    }
+    if( answerI == 3 )
+    {
+        curPos = ( lock.Val4 % pow( 10, player.StatBase[ ST_VAR1 ] ) ) / pow( 10, player.StatBase[ ST_VAR1 ] - 1 );
+        if( curPos < 9 )
+        {
+            curComb = ( lock.Val5 % pow( 10, player.StatBase[ ST_VAR1 ] ) ) / pow( 10, player.StatBase[ ST_VAR1 ] - 1 );
+            lock.Val4 += pow( 10, player.StatBase[ ST_VAR1 ] - 1 );
+            curPos++;
+            state = "Вы подвинули щупом язычек замка вверх, ";
+            if( player.Timeout[ TO_SK_LOCKPICK ] > 0 && Random( 0, 2 ) == 0 )
+            {
+                map.SetText( lock.HexX, lock.HexY, COLOR_GRAY, "click" );
+                state += "вы поторопились и неловко дернули щупом, ";
+                if( Random( 0, 1 ) == 0 )
+                {
+                    int bar = Random( 1, lock.Val0 + 1 );
+                    curComb = ( lock.Val5 % pow( 10, bar ) ) / pow( 10, bar - 1 );
+                    lock.Val5 += ( Random( 0, 9 ) - curComb ) * pow( 10, bar - 1 );
+                }
+            }
+            else if( curComb == curPos && base > Random( 0, 100 ) )
+            {
+                if( player.Skill[ SK_LOCKPICK ] < Random( 0, 200 ) )
+                    map.SetText( lock.HexX, lock.HexY, COLOR_GRAY, "click" );
+                state += "вы услышали щелчек, ";
+            }
+            else if( ( curComb == ( curPos - 1 ) || curComb == ( curPos + 1 ) ) && base > Random( 0, 100 ) && Random( 0, 1 ) == 0 )
+            {
+                if( player.Skill[ SK_LOCKPICK ] < Random( 0, 200 ) )
+                    map.SetText( lock.HexX, lock.HexY, COLOR_GRAY, "click" );
+                state += "вы услышали щелчек, ";
+            }
+            else if( ( curComb == ( curPos - 2 ) || curComb == ( curPos + 2 ) ) && base > Random( 0, 100 ) && Random( 0, 3 ) == 0 )
+            {
+                if( player.Skill[ SK_LOCKPICK ] < Random( 0, 200 ) )
+                    map.SetText( lock.HexX, lock.HexY, COLOR_GRAY, "click" );
+                state += "вы услышали щелчек, ";
+            }
+            else if( base < Random( 0, 100 ) && Random( 0, 9 ) == 0 )
+            {
+                if( player.Skill[ SK_LOCKPICK ] < Random( 0, 200 ) )
+                    map.SetText( lock.HexX, lock.HexY, COLOR_GRAY, "click" );
+                state += "вы услышали щелчек, ";
+            }
+            player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 10 - player.Skill[ SK_LOCKPICK ] * 0.03 );
+        }
+        else
+            state = "Щуп уперся, пружина язычка уже максимально зажата, ";
+    }
+    if( answerI == 4 )
+    {
+        curPos = ( lock.Val4 % pow( 10, player.StatBase[ ST_VAR1 ] ) ) / pow( 10, player.StatBase[ ST_VAR1 ] - 1 );
+        if( curPos > 1 || ( curPos >= 1 && player.StatBase[ ST_VAR1 ] >= ( lock.Val0 + 1 ) ) )
+        {
+            curComb = ( lock.Val5 % pow( 10, player.StatBase[ ST_VAR1 ] ) ) / pow( 10, player.StatBase[ ST_VAR1 ] - 1 );
+            lock.Val4 -= pow( 10, player.StatBase[ ST_VAR1 ] - 1 );
+            curPos--;
+            state = "Вы подвинули щупом язычек замка вниз, ";
+            if( player.Timeout[ TO_SK_LOCKPICK ] > REAL_MINUTE( 2 ) )
+            {
+                map.SetText( lock.HexX, lock.HexY, COLOR_GRAY, "click" );
+                state += "вы поторопились и неловко дернули щупом, ";
+                if( Random( 0, 1 ) == 0 )
+                {
+                    int bar = Random( 1, lock.Val0 + 1 );
+                    curComb = ( lock.Val5 % pow( 10, bar ) ) / pow( 10, bar - 1 );
+                    lock.Val5 += ( Random( 0, 9 ) - curComb ) * pow( 10, bar - 1 );
+                }
+            }
+            else if( curComb == curPos && base > Random( 0, 100 ) )
+            {
+                if( player.Skill[ SK_LOCKPICK ] < Random( 0, 200 ) )
+                    map.SetText( lock.HexX, lock.HexY, COLOR_GRAY, "click" );
+                state += "вы услышали щелчек, ";
+            }
+            else if( ( curComb == ( curPos - 1 ) || curComb == ( curPos + 1 ) ) && base > Random( 0, 100 ) && Random( 0, 1 ) == 0 )
+            {
+                if( player.Skill[ SK_LOCKPICK ] < Random( 0, 200 ) )
+                    map.SetText( lock.HexX, lock.HexY, COLOR_GRAY, "click" );
+                state += "вы услышали щелчек, ";
+            }
+            else if( ( curComb == ( curPos - 2 ) || curComb == ( curPos + 2 ) ) && base > Random( 0, 100 ) && Random( 0, 3 ) == 0 )
+            {
+                if( player.Skill[ SK_LOCKPICK ] < Random( 0, 200 ) )
+                    map.SetText( lock.HexX, lock.HexY, COLOR_GRAY, "click" );
+                state += "вы услышали щелчек, ";
+            }
+            else if( base < Random( 0, 100 ) && Random( 0, 9 ) == 0 )
+            {
+                if( player.Skill[ SK_LOCKPICK ] < Random( 0, 200 ) )
+                    map.SetText( lock.HexX, lock.HexY, COLOR_GRAY, "click" );
+                state += "вы услышали щелчек, ";
+            }
+            player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 10 - player.Skill[ SK_LOCKPICK ] * 0.03 );
+        }
+        else
+            state = "Щуп уперся, пружина язычка уже максимально отжата, ";
+    }
+    if( answerI == 5 )
+    {
+        /* ограничение на взлом в Модоке
+           Location @ loc = map.GetLocation();
+           if ((map.GetLocation().GetProtoId()<=6 || map.GetLocation().GetProtoId()==42) && player.PerkBase[PE_MASTER_THIEF]==0)
+                {
+                player.SayMsg(SAY_NETMSG,TEXTMSG_GAME,STR_SKILL_LOCKPICK_FAIL);
+                return;
+                }
+         */
+        if( lock.Val4 == lock.Val5 )
+        {
+            lock.LockerOpen();
+            if( lock.GetType() == ITEM_TYPE_CONTAINER )
+            {
+                player.ShowContainer( null, lock, lock.Proto.GroundLevel ? TRANSFER_HEX_CONT_DOWN : TRANSFER_HEX_CONT_UP );
+            }
+            else
+                player.Say( SAY_NETMSG, "Вы успешно вскрыли замок. Осторожно, дверь может захлонуться." );
+            lock.Update();
+            player.AddScore( SCORE_CRACKER, 1 );
+            if( valid( lockpick ) )
+                lockpick.Val0 = 0;
+            Log_Lockpick( player, player.Stat[ ST_VAR0 ], 0, 1, null, null );
+            return;
+        }
+        else if( player.StatBase[ ST_VAR2 ] < Random( 0, player.Skill[ SK_LOCKPICK ] * 0.05 ) )
+        {
+            state = "Замок не поворачивается, ";
+            player.StatBase[ ST_VAR2 ]++;
+        }
+        else
+        {
+            player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_LOCKPICK_FAIL );
+            if( valid( lockpick ) && Random( 0, 1 ) == 0 )
+                lockpick.Val0 = 0;
+            return;
+        }
+    }
+    if( answerI == 6 )
+    {
+        if( player.StatBase[ ST_VAR1 ] > 1 )
+            state = "Сначала выдвините щуп в первую позицию, ";
+        else
+        {
+            lockpick.Val0 = 0;
+            player.Say( SAY_NETMSG, "Вы аккуратно вытащили отмычку из замка." );
+            return;
+        }
+    }
+
+    player.Say( SAY_EMOTE_ON_HEAD, "возится с замком" );
+    state += "позиция щупа - " + player.StatBase[ ST_VAR1 ];
+    player.ShowScreen( SCREEN_DIALOGBOX, 7, "answer_LOCKPICK_lock" );
+    player.Say( SAY_DIALOGBOX_TEXT, state );
+    player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Осмотреть замок" );
+    player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "Щуп дальше" );
+    player.Say( SAY_DIALOGBOX_BUTTON( 2 ), "Щуп назад" );
+    player.Say( SAY_DIALOGBOX_BUTTON( 3 ), "Щуп вверх" );
+    player.Say( SAY_DIALOGBOX_BUTTON( 4 ), "Щуп вниз" );
+    player.Say( SAY_DIALOGBOX_BUTTON( 5 ), "Повернуть" );
+    player.Say( SAY_DIALOGBOX_BUTTON( 6 ), "Вынуть отмычку" );
+}
+
+bool IsKeyAviable( Critter& cr, uint lockerId ) // Export
+{
+    if( lockerId == 0 )
+        return true;
+    if( _CritFingersDoorId( cr.Id ) == lockerId || _CritEyesDoorId( cr.Id ) == lockerId )
+        return true;
+    Item@[] keys;
+    for( uint i = 0, j = cr.GetItemsByType( ITEM_TYPE_KEY, keys ); i < j; i++ )
+        if( keys[ i ].LockerId == lockerId )
+            return true;
+    return false;
+}
+
+uint GetKeyId( Critter& cr, uint lockerId ) // Export
+{
+    if( lockerId == 0 || _CritFingersDoorId( cr.Id ) == lockerId || _CritEyesDoorId( cr.Id ) == lockerId )
+        return 0;
+    Item@[] keys;
+    for( uint i = 0, j = cr.GetItemsByType( ITEM_TYPE_KEY, keys ); i < j; i++ )
+        if( keys[ i ].LockerId == lockerId )
+            return keys[ i ].Id;
+    return 0;
+}
+
+void SwitchState( Item& locker ) // Export
+{
+    // Todo: show messages
+
+    if( locker.GetType() == ITEM_TYPE_DOOR || locker.GetType() == ITEM_TYPE_CONTAINER )
+    {
+        // Check open aviability
+        if( not FLAG( locker.LockerCondition, LOCKER_NOOPEN ) )
+        {
+            // Change state
+            if( FLAG( locker.LockerCondition, LOCKER_ISOPEN ) )
+                locker.LockerClose();
+            else
+                locker.LockerOpen();
+        }
+    }
+}
+
+void LockerBudge( Item& item )   // export
+{
+    Map@ map = GetMap( item.MapId );
+    if( !valid( map ) )
+        return;
+    string sound = item.GetType() == ITEM_TYPE_DOOR ? "SLDOORSC.ACM" : "ILCNTNRB.ACM";
+    // sound[ 7 ] = item.Proto.SoundId;
+    map.PlaySound( sound, item.HexX, item.HexY, 8 );
+}
+

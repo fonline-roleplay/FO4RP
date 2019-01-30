@@ -1,0 +1,926 @@
+// Author: heX, cvet
+
+/*
+        Generic mob ai
+        Только для мобов животных.
+        Var6..Var9 заняты.
+        рекомендуеться выставлять TeamId в диапазоне: 24..33
+        33 - не групируется, это значит что мобы не будут помогать друг другу.
+        также учтите что группа 0 тоже не группируется.
+
+        TODO:
+        сделать чтобы VarFear както уменьшался
+        включать обработчик idle только если рядом есть игрок.
+        таблица типа поведения монстров.
+        трусость мобов - сначало нужно отбегать от атакующего, затем старатся приблизится к дому на расстоянии от атакующего.
+        {
+                атака тех кто атакует (нужно для блокировки чита 'бегун')
+                при условии что злость(Fury) меньше X (нужно для блокировки 'pin-pong' чита)
+                и текущий враг не на расстоянии поражения
+                и новый враг на не слишком большой дистанции
+        }
+        отступление если игрок атакует из недостижимой точки (чит 'безопастной атаки').
+        ? блокировка возвращения домой если мы уже стоим впритык к противнику и успешно атакуем его.
+        ? отступать домой только если вся группа так решила.
+
+        тест:
+        DONE запрет атаковать всех из своей группы (ситуация вознимает если они блокируют проход)
+        DONE трусость мобов - если то он не должен идти в атаку при атаке
+
+        ok:
+        DONE трусость мобов - отступление если мало жизней
+        DONE скан при возвращении домой (Watch)
+        DONE сброс VarX при респавне
+        DONE трусость мобов - добавить отступление при больших потерях
+        DONE блокировка GoHo если они уже дома
+        DONE остановка преследования при большой дистанции - отладить (несрабатывает)
+ */
+
+#include "_macros.fos"
+#include "_npc_pids.fos"
+
+import bool AddAttackPlane( Critter& npc, uint priority, Critter& target ) from "npc_planes";
+import bool AddWalkPlane( Critter& npc, uint priority, uint16 hexX, uint16 hexY, uint8 dir, bool run, uint cut ) from "npc_planes";
+import uint EraseAttackPlane( Critter& npc, Critter& target ) from "npc_planes";
+
+import bool ChangeWildness( uint16 x, uint16 y, int delta ) from "globalmap_group";
+import void ChangeMonsterCount( Critter& cr, bool increase ) from "globalmap_group";
+import void ReduseWildByWildness( Critter& cr ) from "globalmap_group";
+
+// OPTIONS:
+#define DISTANCE_ATTACK          ( 10 ) // расстояние начала атаки
+#define DISTANCE_GROUP_RADIUS    ( 35 ) // расстояние на котором группа видит друг друга (и помогает атаковать противника)
+#define DISTANCE_GO_HOME         ( 15 ) // расстояние от дома при котором моб идет домой
+#define MAX_FURY                 ( 2 )  // сколько раз нужно разозлить НПС чтобы он стал игнорить границы обитания
+#define DISTANCE_HELP            ( 35 ) // расстояние помощи
+#define TIME_TEST_GO_HOME        ( 10 ) // переодичность тестирования на возврат домой и отмену атаки
+
+// номера сообщений
+#define MSG_GROUP_ATTACK         ( 16001 )
+#define MSG_GROUP_FURY           ( 16002 )
+
+// переименования VarX (для удобства и абстрактности)
+#define VarAttacked              StatBase[ ST_VAR6 ]
+#define VarFury                  StatBase[ ST_VAR7 ]
+#define VarFear                  StatBase[ ST_VAR8 ]
+#define VarMaxFear               StatBase[ ST_VAR9 ]
+
+const uint16[] Pids_BestialMobs =
+{
+	NPC_PID_RegularRat,
+	NPC_PID_Mantis,
+	NPC_PID_Ant,
+	NPC_PID_RegularPigRat,
+	NPC_PID_Molerat,
+	NPC_PID_MutatedMolerat,
+	NPC_PID_SmallSilverGecko,
+	NPC_PID_GoldenGecko,
+	NPC_PID_WildDog,
+	NPC_PID_SmallRadscorpion,
+	NPC_PID_LargeRadscorpion,
+	NPC_PID_Brahmin,
+	// NPC_PID_SporePlant,	// - Отключил. У них нет ножек, нужен другой 'алгоритм'.
+	NPC_PID_Alien,
+	NPC_PID_SmDeathclaw,
+	NPC_PID_Deathclaw,
+	NPC_PID_ToughDeathclaw,
+	NPC_PID_FireGecko,
+	NPC_PID_Centaur,
+	NPC_PID_Floater,
+	NPC_PID_MirelurkWeak
+};
+
+void GM_MobInit( Critter& npc ) // Export
+{
+    npc.SetScript( "_MobInit" );
+}
+
+void GM_MobBossInit( Critter& npc ) // Export
+{
+    npc.SetScript( "_BossMobInit" );
+}
+
+void GM_MobMinionInit( Critter& npc ) // Export
+{
+	npc.PerkBase[ PE_SILENT_RUNNING ] = 1;
+    npc.SetScript( "_MinionMobInit" );
+}
+
+void _MobsMapInit( Map& map, bool firstTime )
+{
+    ActivateMobScript( map );
+}
+
+void _MobInit( Critter& npc, bool firstTime )
+{
+    npc.ModeBase[ MODE_NO_HOME ] = 0;
+
+    uint16 locPid = npc.GetMap().GetLocation().GetProtoId();
+    if( LOCATION_IS_CITY( locPid ) )
+        // npc.StatBase[ST_REPLICATION_TIME]= 6 * 60 * __TimeMultiplier; // 6 real hours
+        npc.StatBase[ ST_REPLICATION_TIME ] = __FullSecond + REAL_HOUR( 2 );
+    else
+        npc.StatBase[ ST_REPLICATION_TIME ] = -1;      // Newer
+
+    ResetVars( npc );
+
+    npc.ShowCritterDist1 = DISTANCE_ATTACK;
+    npc.SetEvent( CRITTER_EVENT_SHOW_CRITTER_1, "_ShowPlayer" );
+    npc.SetEvent( CRITTER_EVENT_HIDE_CRITTER, "_HidePlayer" );    // отсутствие "_1" это не ошибка, так надо.
+
+    // дистанция мнгновенной атаки
+//	npc.ShowCritterDist2=1;
+    npc.SetEvent( CRITTER_EVENT_SHOW_CRITTER_2, "_ShowPlayerFastAttack" );
+    npc.SetEvent( CRITTER_EVENT_HIDE_CRITTER_2, "_HidePlayerFastAttack" );
+
+    npc.SetEvent( CRITTER_EVENT_IDLE,        "_Idle" );
+    npc.SetEvent( CRITTER_EVENT_MESSAGE,     "_OnMessage" );
+    npc.SetEvent( CRITTER_EVENT_PLANE_BEGIN, "_PlaneBegin" );
+    npc.SetEvent( CRITTER_EVENT_SMTH_DEAD,   "_Death" );
+    // npc.SetEvent(CRITTER_EVENT_DEAD,        "_MyDeath");
+    npc.SetEvent( CRITTER_EVENT_RESPAWN,     "_Respawn" );
+    npc.SetEvent( CRITTER_EVENT_ATTACKED,    "_Attacked" );
+}
+
+void _MobInit1( Critter& npc, bool firstTime )
+{
+    npc.ModeBase[ MODE_NO_HOME ] = 0;
+
+    uint16 locPid = npc.GetMap().GetLocation().GetProtoId();
+    if( LOCATION_IS_CITY( locPid ) )
+        // npc.StatBase[ST_REPLICATION_TIME]= 6 * 60 * __TimeMultiplier; // 6 real hours
+        npc.StatBase[ ST_REPLICATION_TIME ] = = -1;
+    else
+        npc.StatBase[ ST_REPLICATION_TIME ] = -1;      // Newer
+
+    ResetVars( npc );
+
+    npc.ShowCritterDist1 = 20;
+	npc.ParamBase[ ST_TEAM_ID ] = 17;
+    npc.SetEvent( CRITTER_EVENT_SHOW_CRITTER_1, "_ShowPlayer" );
+    npc.SetEvent( CRITTER_EVENT_HIDE_CRITTER, "_HidePlayer" );    // отсутствие "_1" это не ошибка, так надо.
+	//npc.SetFavoriteItem( SLOT_HAND1, 299 ); 
+
+    // дистанция мнгновенной атаки
+//	npc.ShowCritterDist2=1;
+    npc.SetEvent( CRITTER_EVENT_SHOW_CRITTER_2, "_ShowPlayerFastAttack" );
+    npc.SetEvent( CRITTER_EVENT_HIDE_CRITTER_2, "_HidePlayerFastAttack" );
+
+    npc.SetEvent( CRITTER_EVENT_IDLE,        "_Idle" );
+    npc.SetEvent( CRITTER_EVENT_MESSAGE,     "_OnMessage1" );
+    npc.SetEvent( CRITTER_EVENT_PLANE_BEGIN, "_PlaneBegin1" );
+    //npc.SetEvent( CRITTER_EVENT_SMTH_DEAD,   "_Death" );
+    // npc.SetEvent(CRITTER_EVENT_DEAD,        "_MyDeath");
+    npc.SetEvent( CRITTER_EVENT_ATTACKED,    "_Attacked" );
+}
+
+void ActivateMobScript( Map& map ) // Export
+{
+    Critter@[] critters;
+    for( uint i = 0, j = Pids_BestialMobs.length(); i < j; i++ )
+        map.GetCritters( Pids_BestialMobs[ i ], FIND_ALL | FIND_ONLY_NPC, critters );
+
+    for( uint i = 0, j = critters.length(); i < j; i++ )
+    {
+        if( critters[ i ].GetScriptId() == 0 && ( critters[ i ].Stat[ ST_TEAM_ID ] == 0 || ( critters[ i ].Stat[ ST_TEAM_ID ] >= 24 && critters[ i ].Stat[ ST_TEAM_ID ] <= 33 ) ) )
+            critters[ i ].SetScript( "_MobInit" );
+    }
+}
+
+void ResetVars( Critter& npc )
+{
+    npc.VarAttacked = 0;
+    npc.VarFury = 0;
+    npc.VarFear = 0;
+    if( not ( npc.Stat[ ST_TEAM_ID ] == 0 || npc.Stat[ ST_TEAM_ID ] == 33 ) )
+        npc.VarMaxFear = GetMyTeamCount( npc ) * 80 / 100;
+    else
+        npc.VarMaxFear = 10;
+}
+
+// Try go to home position
+void TryGoHome( Critter& npc )
+{
+    if( npc.VarFury < MAX_FURY && npc.IsLife() )
+    {
+        uint   mapId = 0;
+        uint16 homeX = 0;
+        uint16 homeY = 0;
+        uint8  dir = 0;
+        npc.GetHomePos( mapId, homeX, homeY, dir );
+        if( npc.GetMapId() == mapId && GetDistantion( homeX, homeY, npc.HexX, npc.HexY ) > DISTANCE_GO_HOME )
+        {
+            npc.DropPlanes();
+            AddWalkPlane( npc, 0, homeX, homeY, dir, false, 0 );
+        }
+    }
+}
+
+// убегаем от когото
+void AddPlaneEscape( Critter& npc, Critter& fromRunning )
+{
+    // TMP:
+    TryGoHome( npc );
+    // нужно взять угол от атакующего и бежать в противоположном направлении
+    // причем нужно еще делать проверку на дистанцию
+}
+
+// собрать нпц по номеру группы
+uint GetCrittersByTeam( Map& map, uint x, uint y, uint radius, int team )
+{
+    uint count = 0;
+    Critter@[] critters;
+    for( uint i = 0, j = map.GetCrittersHex( x, y, radius, FIND_LIFE | FIND_ONLY_NPC, critters ); i < j; i++ )
+        if( critters[ i ].Stat[ ST_TEAM_ID ] == team )
+            count++;
+    return count;
+}
+
+uint GetMyTeamCount( Critter& npc )
+{
+    return GetCrittersByTeam( npc.GetMap(), npc.HexX, npc.HexY, DISTANCE_GROUP_RADIUS, npc.Stat[ ST_TEAM_ID ] );
+}
+
+// CRITTER_EVENT_SMTH_DEAD
+// Когда криттер в области видимости умирает. См. CRITTER_EVENT_DEAD.
+void _Death( Critter& npc, Critter& fromCrit, Critter@ killer )
+{
+    if( not valid( killer ) )
+        return;
+    if( npc.Stat[ ST_TEAM_ID ] == 0 || npc.Stat[ ST_TEAM_ID ] == 33 )
+        return;
+
+    if( npc.Stat[ ST_TEAM_ID ] == fromCrit.Stat[ ST_TEAM_ID ] )
+    {
+        // если убили когото из своей команды то пугаемся
+        npc.VarFear++;
+        if( npc.VarFear > npc.VarMaxFear )
+        {
+            // если слишком страшно то убегаем
+            npc.DropPlanes();
+            npc.EraseEnemyFromStack( killer.Id );
+            AddPlaneEscape( npc, killer );
+        }
+    }
+    else if( npc.Stat[ ST_TEAM_ID ] == killer.Stat[ ST_TEAM_ID ] )
+    {
+        // если ктото из своей команды убивает то поднимаем боевой дух (уменьшаем страх)
+        npc.VarFear -= 2;
+    }
+}
+
+// CRITTER_EVENT_DEAD
+void _MyDeath( Critter& npc, Critter@ killer )
+{
+    ChangeMonsterCount( npc, false );
+    //ReduseWildByWildness( npc );
+    npc.ClearEnemyStack();     // моб забывает своих обидчиков
+    // ChangeWildness(npc.WorldX/10, npc.WorldY/10, -5);
+}
+
+// CRITTER_EVENT_RESPAWN
+void _Respawn( Critter& npc )
+{
+    // ResetVars(npc);
+    DeleteNpc( npc );
+}
+
+// CRITTER_EVENT_SHOW_CRITTER
+// Появился новый криттер в поле зрения.
+void _ShowPlayer( Critter& npc, Critter& player )
+{
+	Critter@ target = ::GetCritter( player.Id );
+    if( not player.IsPlayer() /* && player.StatBase[ST_BODY_TYPE] > 4*/ )
+        return;
+
+    if( npc.StatBase[ ST_BASE_CRTYPE ] == player.StatBase[ ST_BASE_CRTYPE ] )
+        return;
+
+    if( npc.VarFear > npc.VarMaxFear )
+    {
+        // если испуганы то игнорим и убегаем
+        if( npc.IsNoPlanes() )
+            AddPlaneEscape( npc, player );
+    }
+    else
+    {
+        if( player.Param[ QST_GAMEMODE ] != GAME_ARCADE )
+		npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
+            AddAttackPlane( npc, 10, player );
+    }
+}
+
+void _ShowPlayer1( Critter& npc, Critter& player )
+{
+    /*if( not player.IsPlayer() /* && player.StatBase[ST_BODY_TYPE] > 4 )
+        return;*/
+
+    if( npc.StatBase[ ST_BASE_CRTYPE ] == player.StatBase[ ST_BASE_CRTYPE ] )
+        return;
+
+    if( npc.VarFear > npc.VarMaxFear )
+    {
+        // если испуганы то игнорим и убегаем
+        if( npc.IsNoPlanes() )
+            AddPlaneEscape( npc, player );
+    }
+    else
+    {
+        if( player.Param[ QST_GAMEMODE ] != GAME_ARCADE )
+            AddAttackPlane( npc, 10, player );
+    }
+}
+
+// CRITTER_EVENT_HIDE_CRITTER
+// Пропал криттер с поля зрения.
+void _HidePlayer( Critter& npc, Critter& player )
+{
+    if( not player.IsPlayer() )
+        return;
+    if( npc.VarFury < MAX_FURY )
+    {
+        npc.EraseEnemyFromStack( player.Id );
+        EraseAttackPlane( npc, player );
+    }
+}
+
+// CRITTER_EVENT_SHOW_CRITTER
+// Появился новый криттер в поле зрения.
+void _ShowPlayerFastAttack( Critter& npc, Critter& player )
+{
+    if( not player.IsPlayer() )
+        return;
+    AddAttackPlane( npc, AI_PLANE_ATTACK_PRIORITY + 1, player );
+}
+
+// CRITTER_EVENT_HIDE_CRITTER
+// Пропал криттер с поля зрения.
+void _HidePlayerFastAttack( Critter& npc, Critter& player )
+{
+    if( not player.IsPlayer() )
+        return;
+    EraseAttackPlane( npc, player );
+}
+
+// CRITTER_EVENT_MESSAGE
+// Пришло сообщение отправленное с помощью Critter::SendMessage.
+void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
+{
+    if( npc.IsPlayer() )
+        return;
+    if( not npc.IsLife() )
+        return;
+    if( npc.Stat[ ST_TEAM_ID ] == 0 )
+        return;                               // 0 группа не групируеться
+    if( npc.Stat[ ST_TEAM_ID ] == 33 )
+        return;                               // 33 группа не групируеться
+    if( npc.Stat[ ST_TEAM_ID ] != fromCrit.Stat[ ST_TEAM_ID ] )
+        return;                               // ктото не из нашей группы
+
+    if( fromCrit.IsPlayer() )
+    {
+        AddAttackPlane( npc, 10, fromCrit );
+    }
+
+    if( message == MSG_GROUP_ATTACK )
+    {
+        Critter@ target = ::GetCritter( value );
+        if( not valid( target ) )
+            return;
+        if( ::GetCrittersDistantion( npc, fromCrit ) > DISTANCE_GROUP_RADIUS )
+            return;
+        AddAttackPlane( npc, 0, target );
+    }
+    else if( message == MSG_GROUP_FURY )
+    {
+        npc.VarFury++;
+    }
+}
+
+void _OnMessage1( Critter& npc, Critter& fromCrit, int message, int value )
+{
+    if( npc.IsPlayer() )
+        return;
+    if( not npc.IsLife() )
+        return;
+    if( npc.Stat[ ST_TEAM_ID ] == 0 )
+        return;                               // 0 группа не групируеться
+    if( npc.Stat[ ST_TEAM_ID ] == 33 )
+        return;                               // 33 группа не групируеться
+    if( npc.Stat[ ST_TEAM_ID ] != fromCrit.Stat[ ST_TEAM_ID ] )
+        return;                               // ктото не из нашей группы
+
+    if( fromCrit.IsPlayer() )
+    {
+        AddAttackPlane( npc, 10, fromCrit );
+    }
+
+    if( message == MSG_GROUP_ATTACK )
+    {
+        Critter@ target = ::GetCritter( value );
+        if( not valid( target ) )
+            return;
+        if( ::GetCrittersDistantion( npc, fromCrit ) > 70 )
+            return;
+        AddAttackPlane( npc, 0, target );
+    }
+    else if( message == MSG_GROUP_FURY )
+    {
+        npc.VarFury++;
+    }
+}
+
+// CRITTER_EVENT_IDLE
+// Простой, вызывается каждые __CritterIdleTick секунд, для изменения времени вызывайте Critter::Wait в функции.
+void _Idle( Critter& npc )
+{
+    // if( Random(0,9) == 0 ) npc.MoveRandom();
+}
+
+void _BossIdle( Critter& npc )
+{
+	Map @ map = npc.GetMap();
+	if( map.GetData( 0 ) <= 0 ) return; // не бродить без игроков на карте
+
+	if( Random(0,9) == 0 )
+	{
+    uint16 HomeHx = npc.HexX + Random(-20,20);
+    uint16 HomeHy = npc.HexY + Random(-20,20);	
+	if( not map.IsHexPassed( HomeHx, HomeHy ) || map.GetPathLength( npc, HomeHx, HomeHy, 0 ) > 50 || GetDistantion( HomeHx, HomeHy, npc.HexX, npc.HexY ) <= DISTANCE_GO_HOME ) return;
+	
+	npc.SetHomePos( HomeHx, HomeHy, Random(0, 5) );
+	TryGoHome(npc);
+	//Log("leaderpatrol");
+	if(npc.StatBase[ST_VAR2]!=0)
+		{
+		uint[] minions = {npc.StatBase[ST_VAR2], npc.StatBase[ST_VAR3], npc.StatBase[ST_VAR4], npc.StatBase[ST_VAR5]};
+		for(uint i=0,ii=minions.length();i<ii;i++)
+			{
+			if (minions[i]==0 || !valid(GetCritter(5000000 + minions[i])))
+				{
+				if(i<ii-1)
+					{
+					minions[i]=minions[i+1];
+					minions[i+1]=0;
+					}
+				else minions[i]=0;
+				}
+			if (minions[i]==0) continue;
+			Critter@ minion = GetCritter(5000000 + minions[i]);
+			if (!valid(minion) || minion.IsKnockout() || minion.IsDead()) continue;
+			else
+				{
+				if (5000000 + minion.StatBase[ST_VAR1]!=npc.Id)
+					{
+					if(i<ii-1)
+						{
+						minions[i]=minions[i+1];
+						minions[i+1]=0;
+						}
+					else minions[i]=0;
+					}
+				else
+					{
+					minion.SetHomePos(HomeHx + Random(-5-i,5+i), HomeHy + Random(-5-i, 5+i), Random(0, 5));
+					TryGoHome(minion);
+					}
+				}
+			}
+		npc.StatBase[ST_VAR2]=minions[0];
+		npc.StatBase[ST_VAR3]=minions[1];
+		npc.StatBase[ST_VAR4]=minions[2];
+		npc.StatBase[ST_VAR5]=minions[3];
+		}
+	}
+}
+
+// CRITTER_EVENT_PLANE_BEGIN
+// Когда движок создает план для Нпц. Вызывается и для потомков основного плана в том числе.
+// int reason указывает причину начала плана (см. Plane begin/wait/end reasons в _defines.fos).
+int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem )
+{
+    if( plane.Type == AI_PLANE_ATTACK )
+    {
+        Critter@ target = ::GetCritter( plane.Attack_TargId );
+        if( not valid( target ) )
+            return PLANE_RUN_GLOBAL;
+
+        if( target.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] )
+            return PLANE_DISCARD;                                                         // не атакуем всех из своей команды
+
+        if( reason == REASON_FOUND_IN_ENEMY_STACK )
+        {
+            uint distantion = ::GetCrittersDistantion( npc, target );
+            if( distantion <= DISTANCE_ATTACK )
+            {
+                // если противник подошел достаточно близко, то разрешаем атаку
+                // анализ на дальность
+                uint pathLength = npc.GetMap().GetPathLength( npc, target.HexX, target.HexY, 1 );
+                // если пройти нельзя, то не идем
+                if( pathLength == 0 )
+                    return PLANE_DISCARD;
+                // если слишком далеко, то не идем
+                if( pathLength > distantion * 3 )
+                    return PLANE_DISCARD;
+                // зовем друзей
+                npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
+                return PLANE_KEEP;
+            }
+            else
+            {
+                // иначе запрещаем атаку
+                return PLANE_DISCARD;
+            }
+        }
+    }
+    return PLANE_RUN_GLOBAL;
+}
+
+int _PlaneBegin1( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem )
+{
+    if( plane.Type == AI_PLANE_ATTACK )
+    {
+        Critter@ target = ::GetCritter( plane.Attack_TargId );
+        if( not valid( target ) )
+            return PLANE_RUN_GLOBAL;
+
+        if( target.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] )
+            return PLANE_DISCARD;        // не атакуем всех из своей команды
+		
+
+        if( reason == REASON_FOUND_IN_ENEMY_STACK )
+        {
+            uint distantion = ::GetCrittersDistantion( npc, target );
+            if( distantion <= 20 )
+            {
+                // если противник подошел достаточно близко, то разрешаем атаку
+                // анализ на дальность
+                uint pathLength = npc.GetMap().GetPathLength( npc, target.HexX, target.HexY, 1 );
+                // если пройти нельзя, то не идем
+                if( pathLength == 0 )
+                    return PLANE_DISCARD;
+                // если слишком далеко, то не идем
+                if( pathLength > distantion * 9 )
+                    return PLANE_DISCARD;
+                // зовем друзей
+                npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
+                return PLANE_KEEP;
+            }
+            else
+            {
+                // иначе запрещаем атаку
+                return PLANE_DISCARD;
+            }
+        }
+    }
+    return PLANE_RUN_GLOBAL;
+}
+
+// CRITTER_EVENT_ATTACKED
+bool _Attacked( Critter& npc, Critter& attacker )
+{
+    npc.VarAttacked = attacker.Id;
+    npc.VarFury++;     // злимся
+    // друзья тоже зляться!
+    npc.SendMessage( MSG_GROUP_FURY, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
+    // зовем друзей
+    npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
+//	AddAttackPlane(npc, 0, attacker);
+
+    if( npc.VarFear <= npc.VarMaxFear && npc.Stat[ ST_CURRENT_HP ] < npc.Stat[ ST_MAX_LIFE ] / 5 )
+        npc.VarFear = npc.VarMaxFear + 1;
+    if( npc.VarFear > npc.VarMaxFear )
+    {
+        npc.ErasePlane( AI_PLANE_ATTACK, true );
+        AddPlaneEscape( npc, attacker );
+    }
+    return true;     // Handle attacked processing
+}
+
+void _BossMobInit(Critter& npc, bool firstTime)
+{
+	npc.ModeBase[ MODE_NO_HOME ] = 1;
+	npc.StatBase[ ST_REPLICATION_TIME ] = __FullSecond + REAL_HOUR( 2 );
+
+	ResetVars(npc);
+
+	npc.ShowCritterDist1 = DISTANCE_ATTACK;
+	npc.SetEvent(CRITTER_EVENT_SHOW_CRITTER_1, "_ShowPlayer");
+	npc.SetEvent(CRITTER_EVENT_HIDE_CRITTER  , "_HidePlayer");// отсутствие "_1" это не ошибка, так надо.
+
+	npc.SetEvent(CRITTER_EVENT_IDLE,        "_BossIdle");
+	npc.SetEvent(CRITTER_EVENT_MESSAGE,     "_OnMessage");
+	npc.SetEvent(CRITTER_EVENT_PLANE_BEGIN, "_PlaneBegin");
+	npc.SetEvent(CRITTER_EVENT_SMTH_DEAD,   "_Death");
+	npc.SetEvent(CRITTER_EVENT_DEAD,        "_BossMyDeath");
+	npc.SetEvent(CRITTER_EVENT_ATTACKED,    "_Attacked");
+    npc.SetEvent(CRITTER_EVENT_RESPAWN,     "_Respawn" );	
+
+	npc.StatBase[ST_VAR1] = npc.Id - 5000000;
+}
+
+void _MinionMobInit(Critter& npc, bool firstTime)
+{
+	npc.ModeBase[MODE_NO_HOME] = 1;
+	npc.StatBase[ ST_REPLICATION_TIME ] = __FullSecond + REAL_HOUR( 2 );
+
+	npc.ShowCritterDist1 = DISTANCE_ATTACK;
+	npc.SetEvent(CRITTER_EVENT_SHOW_CRITTER_1, "_ShowPlayer");
+	npc.SetEvent(CRITTER_EVENT_HIDE_CRITTER  , "_HidePlayer");// отсутствие "_1" это не ошибка, так надо.
+
+	npc.SetEvent(CRITTER_EVENT_IDLE,        "_Idle");
+	npc.SetEvent(CRITTER_EVENT_MESSAGE,     "_OnMessage");
+	npc.SetEvent(CRITTER_EVENT_PLANE_BEGIN, "_PlaneBegin");
+	npc.SetEvent(CRITTER_EVENT_SMTH_DEAD,   "_Death");
+	npc.SetEvent(CRITTER_EVENT_DEAD,        "_MinionMyDeath");
+	npc.SetEvent(CRITTER_EVENT_ATTACKED,    "_Attacked");
+    npc.SetEvent(CRITTER_EVENT_RESPAWN,     "_Respawn" );	
+
+	if (npc.StatBase[ST_VAR1]==0 || !valid(GetCritter( 5000000 + npc.StatBase[ST_VAR1]))) npc.AddTimeEvent( "cte_findboss",Random(10,100), 0 );
+	ResetVars(npc);	
+}
+
+uint cte_findboss (Critter& npc, int identifier, uint& rate)
+{
+	Critter@[] critters;
+	
+	uint8 BossRADIUS = 10;
+	
+	if( npc.PerkBase[ PE_SILENT_RUNNING ] == 1 ) npc.GetMap().GetCrittersHex( npc.HexX, npc.HexY, BossRADIUS, FIND_LIFE | FIND_ONLY_NPC, critters);
+	else npc.GetMap().GetCritters( npc.GetProtoId(), FIND_LIFE|FIND_ONLY_NPC, critters );
+	bool noBoss = true;
+	for(uint16 i = 0, j = critters.length(); i < j; i++)
+		{
+		if ( npc.GetProtoId() != critters[i].GetProtoId() ) continue;
+		if ( npc.PerkBase[ PE_SILENT_RUNNING ] != 1 || npc.GetMap().GetPathLength( npc, critters[i].HexX, critters[i].HexY, 0 ) > 40 ) continue;
+		int CrId = critters[i].Id - 5000000;
+		int NpcId = npc.Id - 5000000;
+		if( critters[i].StatBase[ST_VAR1] == CrId )
+			{
+			if (critters[i].StatBase[ST_VAR2]==0) {critters[i].StatBase[ST_VAR2]=NpcId; noBoss = false;}
+			else if (critters[i].StatBase[ST_VAR3]==0) {critters[i].StatBase[ST_VAR3]=NpcId; noBoss = false;}
+			else if (critters[i].StatBase[ST_VAR4]==0) {critters[i].StatBase[ST_VAR4]=NpcId; noBoss = false;}
+			else if (critters[i].StatBase[ST_VAR5]==0) {critters[i].StatBase[ST_VAR5]=NpcId; noBoss = false;}
+			else if (critters[i].StatBase[ST_VAR5]==0) {critters[i].StatBase[ST_VAR5]=NpcId; noBoss = false;}
+			
+			if(!noBoss)
+				{
+				npc.StatBase[ST_VAR1] = CrId;
+				npc.StatBase[ ST_TEAM_ID ] = critters[ i ].StatBase[ ST_TEAM_ID ];
+				//Log("foundBoss");
+				break;
+				}
+			}
+		}
+	if (noBoss)	npc.SetScript("_BossMobInit");
+	return 0;
+}
+
+// CRITTER_EVENT_DEAD
+void _MinionMyDeath( Critter& npc, Critter@ killer )
+{
+    ChangeMonsterCount( npc, false );
+    npc.ClearEnemyStack();     // моб забывает своих обидчиков
+}
+
+void _BossMyDeath(Critter& npc, Critter@ killer)
+{
+	ChangeMonsterCount(npc, false);
+	npc.ClearEnemyStack(); // моб забывает своих обидчиков
+
+	if(npc.StatBase[ST_VAR2]!=0)
+		{
+		uint[] minions = {npc.StatBase[ST_VAR2], npc.StatBase[ST_VAR3], npc.StatBase[ST_VAR4], npc.StatBase[ST_VAR5]};
+		for(uint i=0,ii=minions.length();i<ii;i++)
+			{
+			if (minions[i]==0 || !valid(GetCritter(5000000 + minions[i])))
+				{
+				if(i<ii-1)
+					{
+					minions[i]=minions[i+1];
+					minions[i+1]=0;
+					}
+				else minions[i]=0;
+				}
+			}
+		if (minions[0]==0) return;
+		Critter@ minion = GetCritter(minions[0]);
+		if (!valid(minion)) return;
+		minion.StatBase[ST_VAR1]=minion.Id - 5000000;
+		minion.StatBase[ST_VAR2]=minions[1];
+		minion.StatBase[ST_VAR3]=minions[2];
+		minion.StatBase[ST_VAR4]=minions[3];
+		minion.StatBase[ST_VAR5]=0;
+		if (minion.IsDead())
+			{
+			_BossMyDeath(minion, killer);
+			return;
+			}
+		minion.SetScript("_BossMobInit");
+		for(uint i=0,ii=minions.length();i<ii;i++)
+			{
+			Critter@ minion_t = GetCritter(5000000 + minions[i]);
+			if (valid(minion_t)) minion_t.StatBase[ST_VAR1]=minion.Id - 5000000;
+			}
+		}
+}
+
+
+void _InitSkinningKnife( Item& item, bool firstTime )
+{
+    item.SetEvent( ITEM_EVENT_USE, "e_InitSkinningUse" );
+}
+
+
+bool e_InitSkinningUse( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
+{
+    if( onCritter.IsDead() && onCritter.IsNpc() )
+    {
+	Log("begin");	
+		Item @ darts = onCritter.GetItem(PID_DARTS_LOW, -1);
+        if( valid(darts) ) { MoveItem( darts, darts.GetCount(), cr ); cr.Say( SAY_NETMSG, "Вы достали дротики." ); }
+
+        if( onCritter.Stat[ ST_DESEASE ] != 0 )
+        {
+            cr.Say( SAY_NETMSG, "Этот труп уже кем-то разворочен. Здесь нечего свежевать.");
+            return true;
+        }
+
+        uint16 npcPid = onCritter.GetProtoId();
+        uint16 dropPid = 0;
+		Log("npcPid= "+npcPid);
+        bool skinned = false;
+        if (cr.Skill [SK_OUTDOORSMAN] < 100) {
+        	Log ("Not enough skill");
+        	cr.Say (SAY_NETMSG, "Вы мучаете тушку некоторое время, но только все портите.");
+        	onCritter.StatBase [ST_DESEASE] = 1;
+        	return true;
+        }
+        switch( npcPid )
+        {
+        case NPC_PID_RegularRat:
+            _CritAddItem( cr, PID_RAT_MEAT, 1 );
+            if( cr.Perk[ PE_GECKO_SKINNING ] != 0 )
+            {
+                _CritAddItem( cr, PID_MOUSE_SKIN, 1 );
+                cr.Say( SAY_NETMSG, "Вы сдираете шкуру с крысы" );
+            }
+			skinned = true;
+            break;
+        case NPC_PID_Mantis:
+        case NPC_PID_Ant:
+            if( ( cr.Skill[ SK_OUTDOORSMAN ] > 140 ) || cr.Perk [PE_GECKO_SKINNING] != 0)
+            {
+                _CritAddItem( cr, PID_MANTIS_SHELL, 1 );
+                skinned = true;
+                cr.Say( SAY_NETMSG, "Вы срезаете хитиновый панцирь." );
+            }
+			else {
+				cr.Say( SAY_NETMSG, "Вы пытаетесь срезать хитиновый панцирь, но ломаете его в процессе." );
+				skinned = true;
+			}
+            break;
+        case NPC_PID_RegularPigRat:
+            _CritAddItem( cr, PID_MEAT, 1 );
+            if (cr.Perk [PE_GECKO_SKINNING] != 0) {
+            	_CritAddItem (cr, PID_MEAT, 1);
+            }
+			skinned = true;
+            break;
+        case NPC_PID_Molerat:
+        case NPC_PID_MutatedMolerat:
+        	if (cr.Perk [PE_GECKO_SKINNING] != 0) {
+        		_CritAddItem (cr, PID_MEAT, 1);
+        	}
+            _CritAddItem( cr, PID_MEAT, 1 );
+            _CritAddItem( cr, PID_MOLERAT_STOMATCH, 1 );
+            cr.Say( SAY_NETMSG, "Вы вырезаете желудок кротокрыса" );
+			skinned = true;
+            break;
+        case NPC_PID_SmallSilverGecko:
+			Log("silver1");
+            _CritAddItem( cr, PID_GECKO_MEAT, 1 );
+            cr.Say( SAY_NETMSG, "Вы разделываете тушу" );
+            if( cr.Perk[ PE_GECKO_SKINNING ] != 0 )
+            {
+			Log("silver2");
+                _CritAddItem( cr, PID_GECKO_PELT, 1 );
+                _CritAddItem (cr, PID_GECKO_MEAT, 1);
+                cr.Say( SAY_NETMSG, "Вы сдираете шкуру с гекко" );
+            }
+			skinned = true;
+            break;
+        case NPC_PID_GoldenGecko:
+			Log("gold1");
+            _CritAddItem( cr, PID_GECKO_MEAT, 1 );
+            cr.Say( SAY_NETMSG, "Вы разделываете тушу" );
+            if( cr.Perk[ PE_GECKO_SKINNING ] != 0 )
+            {
+				Log("gold2");
+                _CritAddItem( cr, PID_GOLDEN_GECKO_PELT, 1 );
+                _CritAddItem (cr, PID_GECKO_MEAT, 1);
+                cr.Say( SAY_NETMSG, "Вы сдираете шкуру с гекко" );
+            }
+			skinned = true;
+            break;
+        case NPC_PID_WildDog:
+            _CritAddItem( cr, PID_MEAT, 1 );
+            if (cr.Perk [PE_GECKO_SKINNING] != 0) {
+            	_CritAddItem (cr, PID_MEAT, 1);
+            }
+            skinned = true;
+            break;
+        case NPC_PID_SmallRadscorpion:
+        	skinned = true;
+            if( ( cr.Skill[ SK_OUTDOORSMAN ] > 140 ) || cr.Perk [PE_GECKO_SKINNING] != 0)
+            {
+                _CritAddItem( cr, PID_MANTIS_SHELL, 1 );
+                cr.Say( SAY_NETMSG, "Вы срезаете хитиновый панцирь." );
+            }
+			else cr.Say( SAY_NETMSG, "Вы пытаетесь срезать хитиновый панцирь, но ломаете его в процессе." );
+            break;
+        case NPC_PID_LargeRadscorpion:
+        	skinned = true;
+            if( ( cr.Skill[ SK_OUTDOORSMAN ] > 140 ) || cr.Perk [PE_GECKO_SKINNING] != 0)
+            {
+                _CritAddItem( cr, PID_MANTIS_SHELL, 1 );
+                _CritAddItem( cr, PID_SCORPION_TAIL, 1 );
+                cr.Say( SAY_NETMSG, "Вы разделываете гигантского скорпиона" );
+            }
+		else cr.Say( SAY_NETMSG, "Вам не удается вырезать ничего ценного из туши." );
+            break;
+        case NPC_PID_Brahmin:
+            _CritAddItem( cr, PID_MEAT, 4 );
+            if (cr.Perk [PE_GECKO_SKINNING] != 0) {
+            	_CritAddItem (cr, PID_MEAT, 6);
+            }
+            skinned = true;
+            break;
+        case NPC_PID_SporePlant:
+            _CritAddItem( cr, PID_PLANT_SPIKE, 4 );
+            skinned = true;
+            break;
+        case NPC_PID_Alien:
+            _CritAddItem( cr, PID_RAD_MEAT, 2 );
+            skinned = true;
+        case NPC_PID_SmDeathclaw:
+            _CritAddItem( cr, PID_MEAT, 1 );
+            if (cr.Perk [PE_GECKO_SKINNING] != 0) {
+            	_CritAddItem (cr, PID_MEAT, 1);
+            }
+            skinned = true;
+            break;
+        case NPC_PID_Deathclaw:
+        case NPC_PID_ToughDeathclaw:
+		case NPC_CHIM:
+            if( ( cr.Skill[ SK_OUTDOORSMAN ] > 150 ) || cr.Perk [PE_GECKO_SKINNING] != 0)
+            {
+				_CritAddItem( cr, PID_H_CLAW, 1 );
+				_CritAddItem( cr, PID_MEAT, 4 );
+                cr.Say( SAY_NETMSG, "Вы разделываете огромное существо и отрезаете его голову" );
+				cr.Say( SAY_EMOTE, "Отрезает голову" );
+            }
+			else cr.Say( SAY_NETMSG, "Вы разделываете огромное существо" ); _CritAddItem( cr, PID_MEAT, 2 ); 
+			skinned = true;
+            break;
+        case NPC_PID_FireGecko:
+            _CritAddItem( cr, PID_GECKO_MEAT, 1 );
+            if( cr.Perk[ PE_GECKO_SKINNING ] != 0 )
+            {
+                _CritAddItem( cr, PID_FIRE_GECKO_PELT, 1 );
+                _CritAddItem (cr, PID_GECKO_MEAT, 1);
+                cr.Say( SAY_NETMSG, "Вы сдираете шкуру с гекко" );
+            }
+			skinned = true;
+            break;
+        case NPC_PID_Centaur:
+            _CritAddItem( cr, PID_RAD_MEAT, 4 );
+            _CritAddItem( cr, PID_MUTATED_GLAND, 1 );
+            cr.Say( SAY_NETMSG, "Вы извлекаете железу твари" );
+            skinned = true;
+            break;
+        case NPC_PID_Floater:
+            _CritAddItem( cr, PID_RAD_MEAT, 1 );
+            _CritAddItem( cr, PID_MUTATED_GLAND, 1 );
+            cr.Say( SAY_NETMSG, "Вы извлекаете железу твари" );
+            skinned = true;
+            break;
+        case NPC_PID_MirelurkWeak:
+            if( ( cr.Skill[ SK_OUTDOORSMAN ] > 200 ) && cr.Perk[ PE_GECKO_SKINNING ] != 0 )
+            {
+                _CritAddItem( cr, PID_MIRELUK_SHELL, 1 );
+                cr.Say( SAY_NETMSG, "Вы срываете панцирь с мяса болотника" );
+            }
+			else cr.Say( SAY_NETMSG, "Вы вдоволь издеваетесь над трупом болотника, но это не приносит никакой пользы. Туша испорчена." );
+			skinned = true;
+			break;
+        }
+        if( skinned )
+	    {
+		Log("skinned");
+            onCritter.StatBase[ ST_DESEASE ] = 1;
+	    }
+    }
+	Log("end");
+    return true;
+}

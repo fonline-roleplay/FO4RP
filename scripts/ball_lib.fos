@@ -1,0 +1,336 @@
+// Прототип футбола. Версия 0.7. Автор - binyan
+
+#include "_macros.fos"
+#include "_animation.fos"
+#include "_npc_pids.fos"
+
+
+#define STOP_TRACE          # ( a, b )a = 0; b = 0
+#define TRACE_IS_STOPPED    # ( a, b )( ( a == 0 ) && ( b == 0 ) )
+
+import bool AddWalkPlane( Critter& npc, uint priority, int identifier, uint identifierExt, uint16 hexX, uint16 hexY, uint8 dir, bool run, uint cut ) from "npc_planes";
+
+
+/*-------------------------------МЕТОДЫ ДЛЯ МЯЧА ИТЕМА-----------------------------------*/
+
+void e_ConvertBallToCrit( Item& ball )
+{
+    uint16 x = 0,  y = 0, tempX = 0, tempY = 0;
+    uint8  Dir = 0;
+    Map @ map = ball.GetMapPosition( tempX, tempY );
+    x = tempX;
+    y = tempY;
+    while( !map.IsHexPassed( x, y ) && ( Dir < 6 ) )
+    {
+        x = tempX;
+        y = tempY;
+        map.MoveHexByDir( x, y, Dir, 1 );
+        Dir++;
+    }
+    if( Dir != 6 )
+    {
+        if( ball.GetCount() > 1 )
+            ball.SetCount( ball.GetCount() - 1 );
+        else
+            DeleteItem( ball );
+        map.AddNpc( NPC_PID_Ball,  x,  y,  0, null, null, "ball_init@_CritterInit" );
+    }
+    else
+        return;
+}
+// Методы-обработчики событий
+// //ITEM_EVENT_DROP
+void e_ConvertBallToCrit( Item& ball, Critter& crt )
+{
+    uint16 x = 0,  y = 0, tempX = 0, tempY = 0;
+    uint8  Dir = 0;
+    Map @ map = ball.GetMapPosition( tempX, tempY );
+    x = tempX;
+    y = tempY;
+    map.MoveHexByDir( x, y, crt.Dir, 1 );
+    while( !map.IsHexPassed( x, y ) && ( Dir < 6 ) )
+    {
+        x = tempX;
+        y = tempY;
+        map.MoveHexByDir( x, y, Dir, 1 );
+        Dir++;
+    }
+    if( Dir != 6 )
+    {
+        if( ball.GetCount() > 1 )
+            ball.SetCount( ball.GetCount() - 1 );
+        else
+            DeleteItem( ball );
+        map.AddNpc( NPC_PID_Ball,  x,  y,  0, null, null, "ball_init@_CritterInit" );
+    }
+    else
+        return;
+}
+
+// ITEM_EVENT_ATTACK
+void e_ConvertBallToCrit( Critter& attacker, Item& ball, uint16 tx, uint16 ty )
+{
+    uint8 Dir;
+    Map @ map = attacker.GetMap();
+    REVERSE_DIRECTION( Dir, attacker.Dir );
+// Если мячиков несколько - удаляем 1. Если 1 - удаляем его.
+    if( ball.GetCount() > 1 )
+        ball.SetCount( ball.GetCount() - 1 );
+    else
+        DeleteItem( ball );
+// Выкидываем мяч криттер на первом свободном гексе от целевого (включая его) по направлению к бросающему мяч.
+    while( !map.IsHexPassed( tx, ty ) )
+        map.MoveHexByDir( tx, ty, Dir, 1 );
+    map.AddNpc( NPC_PID_Ball,  tx,  ty,  attacker.Dir, null, null, "ball_init@_CritterInit" );
+
+}
+/*--------------------------------------------------------------------------------------*/
+
+
+/*--------------------------------МЕТОДЫ ДЛЯ МЯЧА КРИТТЕРА------------------------------*/
+
+// Обработка попадания по мячу:
+
+void BallAttackHandling( Critter& ball, Critter& crt, uint16 WeaponPid )
+{
+    uint   steps;
+    uint16 x, y;
+
+    Map @ map = ball.GetMap();
+    uint8 Dir = crt.Dir;
+    ball.DropPlanes();
+    bool  isLeg = ( WeaponPid == 1020 ) || ( WeaponPid == 1021 ) || ( WeaponPid == 1022 ) || ( WeaponPid == 1023 ) || ( WeaponPid == 1030 ) || ( WeaponPid == 1031 ) || ( WeaponPid == 1032 );
+
+    if( isLeg )
+    {
+        if( crt.StatBase[ ST_AGILITY ] < 6 ) // Бросок на ловкость. Если меньше 6 - есть шанс пнуть мяч в сторону.
+        {
+            uint8 NearPlus, NearMinus, rand;
+            GET_NEAR_DIRECTION( Dir, NearPlus, NearMinus );
+            rand = Random( 0, 2 );
+            switch( rand )
+            {
+            case 0:
+                Dir = NearPlus;
+                break;
+            case 1:
+                Dir = NearMinus;
+                break;
+            }
+        }
+        x = ball.HexX;
+        y = ball.HexY;
+        map.MoveHexByDir( x, y, Dir, 1 );
+        steps = crt.StatBase[ ST_STRENGTH ];
+        if( steps > 11 )
+        {
+            steps = 11;
+            Log( "Внимание! Обнаружен гнусный читер! Id = " + crt.Id + ", Nickname = " + GetPlayerName( crt.Id ) + ", Сила = " + crt.StatBase[ ST_STRENGTH ] + ", сила удара уменьшена до 11" );
+        }
+        trace_Path( ball, x, y, steps, Dir );
+    }
+    else
+    {
+        ball.Say( SAY_SHOUT, "Buuummm!!!" );
+        ball.ToDead( ANIM2_DEAD_BACK, crt );
+    }
+
+}
+
+// Методы-обработчики событий:
+
+/*//CRITTER_EVENT_ATTACKED
+   bool e_Ignore_Attack()
+   {
+   return true; //При возвращенном значении true глобальный обработчик critter_attacked не вызывается.
+   }*/
+
+// CRITTER_EVENT_PLANE_END
+int e_Ball_Check_Path( Critter& ball, NpcPlane& plane )
+{
+    uint8  Dir = ball.Dir;
+    uint16 x, y, curX, curY;
+    uint   stepsRest;
+// ball.GetCurPlane()
+    int    Id = plane.Identifier;
+    Map @ map = ball.GetMap();
+    NpcPlane @[] tempPlanes;
+// Записываем в конец массива tempPlanes все планы с идентификатором Id+1 (поидее такой должен быть 1 - следующий в очереди план)
+    if( ball.GetPlanes( Id + 1, tempPlanes ) != 0 )
+    {
+        if( tempPlanes.length() != 0 )
+        {
+            x = tempPlanes[ 0 ].Walk_HexX;
+            y = tempPlanes[ 0 ].Walk_HexY;
+            /*Проверяем хекс следующего плана на проходимость. Если непроходим - значит на нем динамическое препятствия,
+               т.к. по умолчанию все планы ведут на не занятые статичными объектами хексы. В этом случае просчитываем новую траекторию.*/
+            if( !map.IsHexPassed( x, y ) )
+            {
+                // Получаем кол-во шагов оставшихся прокатиться и уменьшаем его в два раза.
+                stepsRest = ( ball.GetPlanes( null ) - 1 ) / 2;
+                ball.DropPlanes();
+                Critter @ crOccup = map.GetCritter( x, y );
+                if( crOccup.GetProtoId() == NPC_PID_Ball )               // Если препятсвие - мяч, передаем ему половину кинетической энергии и останавливаемся.
+                {
+                    map.MoveHexByDir( x, y, Dir, 1 );
+                    trace_Path( crOccup, x, y, stepsRest, Dir );
+                    return PLANE_DISCARD;
+                }
+                curX = ball.HexX;
+                curY = ball.HexY;
+                Dir = ball.Dir;
+                Get_Next_Coord_Dynamic( curX, curY, x, y, Dir, map );
+                if( !TRACE_IS_STOPPED( curX, curY ) )
+                {
+                    // Криттер расположен спиной к мячу. Мяч отскакивает
+                    trace_Path( ball, curX, curY, stepsRest, Dir );
+                }
+
+            }
+
+        }
+    }
+    return PLANE_DISCARD; // Удаление плана
+
+}
+
+
+// CRITTER_EVENT_TALK
+void e_BallIntoInven( Critter& ball, Critter& crt, bool SetToActiveHand )
+{
+    if( GetDistantion( ball.HexX, ball.HexY, crt.HexX, crt.HexY ) > 1 )
+        crt.Say( SAY_NETMSG, "Вы слишком далеко от мяча" );
+    else
+    {
+        // Помещение мячика в инвентарь. Заменяем на айтем мяч
+        crt.Action( ACTION_PICK_ITEM, 1, null );
+        DeleteNpc( ball );
+        Item @ b_item = crt.AddItem( PID_BALL, 1 );
+        if( SetToActiveHand )
+            crt.MoveItem( b_item.Id, SLOT_HAND1, 1 );
+    }
+
+}
+
+
+// CRITTER_EVENT_DEAD
+void e_BallDeflated( Critter& ball, Critter@ crt )
+{
+    // Мяч умер - заменяем на айтем сдутого мяча
+    uint16 x, y;
+    x = ball.HexX;
+    y = ball.HexY;
+    Map @ map = ball.GetMap();
+    DeleteNpc( ball );
+    map.AddItem( x, y, PID_BALL_DEAD, 1 );
+
+}
+
+
+// Методы подсчета траектории:
+
+void trace_Path( Critter& ball, uint16 x, uint16 y, uint steps, uint8 Dir )
+{
+    uint16 curX, curY, xOccuped, yOccuped; // Предыдущие координаты
+// x и y - следующие координаты траектории
+    Map @ map = ball.GetMap();
+    curX = ball.HexX;
+    curY = ball.HexY;
+    // Просчитываем начальную траекторию, игнорируя криттеров.
+    for( uint i = 1; i <= steps; ++i )
+    {
+
+        // Если хекс проходимый, или на нем стоит криттер, добавляем его в траекторию.
+        // Если же он непроходимый и на нем статический объект - процедура рикошета для статических объектов
+        if( map.IsHexPassed( x, y ) || valid( map.GetCritter( x, y ) ) )
+        // Планы добавляем с идентификаторами специально, чтобы при пересчете траектории можно было их удалить.
+        // Идентификатором служит текущий шаг.
+        {
+            Critter @ crOccup =  map.GetCritter( x, y );
+            if( valid( crOccup ) && ( i == 1 ) )            // Первичная проверка на динамическое препятствие, остальные проверки в конце планов.
+            {
+                if( crOccup.GetProtoId() == NPC_PID_Ball )  // Если препятсвие - мяч, передаем ему половину кинетической энергии и останавливаемся.
+                {
+                    map.MoveHexByDir( x, y, Dir, 1 );
+                    trace_Path( crOccup, x, y, steps / 2, Dir );
+                    return;
+                }
+                xOccuped = x;
+                yOccuped = y;
+                x = curX;
+                y = curY;
+                steps /= 2;                 // Уменьшаем в два раза оставшийся путь
+                Get_Next_Coord_Dynamic( x, y, xOccuped, yOccuped, Dir, map );
+                if( TRACE_IS_STOPPED( x, y ) )
+                    return;
+            }
+            AddWalkPlane( ball, AI_PLANE_ATTACK_PRIORITY, i, 0, x, y, Dir, false, 0 );
+            curX = x;
+            curY = y;
+            map.MoveHexByDir( x, y, Dir, 1 );
+        }
+
+        else
+        {
+            steps -= ( steps - i ) / 2;              // Уменьшаем в два раза оставшийся путь
+            x = curX;
+            y = curY;
+            Get_Next_Coord_Static( x, y, Dir, map ); // В качестве координат передается последние проходимые координаты
+        }
+    }
+
+}
+
+void Get_Next_Coord_Dynamic( uint16& x, uint16& y, uint16 xOccuped, uint16 yOccuped, uint8& Dir, Map& map )
+{
+    uint8 RevDir, NearPlus;
+    int8  NearMinus;
+    Critter @ crit =  map.GetCritter( xOccuped, yOccuped );
+
+// ищем направление проивоположное текущему
+    REVERSE_DIRECTION( RevDir, Dir )
+// ищем направления ближайшие к противоположному
+    GET_NEAR_DIRECTION( RevDir, NearPlus, NearMinus )
+// Если мяч утыкается в криттера спереди, то он останавливается. Если же нет, отскакивает.
+    if( valid( crit ) && ( ( crit.Dir == RevDir ) || ( crit.Dir == NearPlus ) || ( crit.Dir == NearMinus ) ) )
+    {
+        STOP_TRACE( x, y );
+    }
+    else
+        Get_Next_Coord_Static( x, y, Dir, map );
+}
+
+// Вычисляем следующую координату после того как мячик отскочил (для статичных объектов)
+void Get_Next_Coord_Static( uint16& x, uint16& y, uint8& Dir, Map& map )
+{
+    uint8 RevDir, NearPlus;
+    int8  NearMinus;
+// ищем направление проивоположное текущему
+    REVERSE_DIRECTION( RevDir, Dir )
+// Ищем направления ближайшие текущему
+    GET_NEAR_DIRECTION( Dir, NearPlus, NearMinus )
+    map.MoveHexByDir( x, y, NearPlus, 1 );
+    if( map.IsHexPassed( x, y ) )
+        Dir = NearPlus;
+    else
+    {
+
+        map.MoveHexByDir( x, y, NearMinus, 1 );
+        if( map.IsHexPassed( x, y ) )
+            Dir = NearMinus;
+        else
+        {
+
+            map.MoveHexByDir( x, y, RevDir, 1 );
+            if( map.IsHexPassed( x, y ) )
+                Dir = RevDir;
+            else
+            {
+                STOP_TRACE( x, y );
+            }
+
+        }
+    }
+
+}
+/*--------------------------------------------------------------------------------------------*/

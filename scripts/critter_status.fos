@@ -1,0 +1,224 @@
+// critter status
+// pm
+
+#include "_macros.fos"
+
+import int  GetDeteriorationProcent( Item& item ) from "repair";
+import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat"; // Export
+
+void ChangeStatus( Critter& cr, uint16 status, uint8 value, bool set )                                      // export
+{
+    bool onlyFlag = false;
+
+    if( set )
+    {
+        switch( status )
+        {
+        case CR_STATUS_BLEED:
+            BleedCritter( cr, value );
+            break;
+        case CR_STATUS_BLOOD_TOXIC:
+            BloodToxicCritter( cr );
+            break;
+        default:
+            break;
+        }
+
+        SETFLAG( cr.StatBase[ ST_CRSTATUS ], status );
+    }
+    else
+    {
+        switch( status )
+        {
+        case CR_STATUS_HEAVY_DMG:
+            onlyFlag = true;
+            break;
+        case CR_STATUS_BULLET_OVER:
+            onlyFlag = true;
+            break;
+        default:
+            break;
+        }
+
+        if( onlyFlag && FLAG( cr.StatBase[ ST_CRSTATUS ], status ) )
+            UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], status );
+    }
+}
+
+void BleedCritter( Critter& cr, int8 bleedValue )
+{
+
+    uint[] indexes;
+    uint[] rates;
+    uint[] durations;
+    int eventCount = cr.GetTimeEvents( CTE_BLEED, indexes, durations, rates );
+    uint  time = 60 * __TimeMultiplier;
+    int maxHP = cr.Stat [ST_MAX_LIFE];
+
+    if( eventCount > 0 ) {
+		cr.StatBase[ ST_BLEED ] += bleedValue/3;
+		if (cr.StatBase [ST_BLEED] > maxHP/5) {
+			cr.Say (SAY_NETMSG, "Из вас хлещет кровь");
+        	cr.Say (SAY_EMOTE, "Кровь бьет фонтаном");
+        	DropBleed (cr);
+        	cr.AddTimeEvent( "cte_bleed", 0, CTE_BLEED, 0 );
+        }
+	} else {
+	cr.StatBase[ ST_BLEED ] = bleedValue/3;
+        cr.AddTimeEvent( "cte_bleed", 0, CTE_BLEED, 0 );
+        if (bleedValue/3 < maxHP/10) cr.Say (SAY_NETMSG, "У Вас началось легкое кровотечение.");
+        else if (bleedValue/3 < maxHP/5) cr.Say( SAY_NETMSG, "У Вас началось кровотечение." );
+        else {
+        	cr.Say (SAY_NETMSG, "Из вас хлещет кровь");
+        	cr.Say (SAY_EMOTE, "Кровь бьет фонтаном");
+        }
+	}
+}
+
+uint cte_bleed( Critter& cr, int identifier, uint& rate )
+{
+	int maxHP = cr.Stat [ST_MAX_LIFE];
+    int bleed = cr.StatBase[ ST_BLEED ];
+    if( (bleed <= 0) || (cr.ParamBase [BP_BLOOD_LOSS] > maxHP - __DeadHitPoints))
+    {
+    	if (cr.ParamBase [BP_BLOOD_LOSS] > maxHP - __DeadHitPoints) cr.ParamBase [BP_BLOOD_LOSS] = maxHP - __DeadHitPoints;
+        UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLEED );
+        cr.Say( SAY_NETMSG, "Вы перестали истекать кровью." );
+        return 0;
+    }
+    int damage = Random( 2, 6 );
+    uint anim2Dead = 0;
+    
+    //cr.StatBase[ ST_CURRENT_HP ] -= damage;
+    cr.ParamBase [BP_BLOOD_LOSS] += damage;
+    if (cr.ParamBase [BP_BLOOD_LOSS] >= maxHP - __DeadHitPoints) {
+    	if(cr.IsKnockout()) {
+            if(cr.Anim2Knockout == ANIM2_IDLE_PRONE_FRONT)
+                anim2Dead = ANIM2_DEAD_PRONE_FRONT;
+            else
+                anim2Dead = ANIM2_DEAD_PRONE_BACK;
+        } else {
+        	anim2Dead = ANIM2_DEAD_FRONT;
+        }
+        cr.ToDead (anim2Dead, cr);
+    }
+
+    if( bleed < maxHP/5 )
+	{
+    bleed --;
+    bleed = CLAMP( bleed, 0, 100 );
+    cr.StatBase[ ST_BLEED ] = bleed;
+	cr.Say( SAY_NETMSG, "Используйте тряпки или бинты, чтобы остановить кровотечение" );
+	cr.Say( SAY_EMOTE, "Истекает кровью" );
+	uint16 hx = cr.HexX, hy = cr.HexY;
+	cr.GetMap().AddItem( hx, hy, Random( 3321, 3323 ), 1 );
+	}
+	else
+	{
+    /*cr.Say( SAY_NETMSG, "Используйте тряпки или бинты, чтобы остановить кровотечение" );
+	cr.Say( SAY_EMOTE, "Истекает кровью" );*/
+	if (Random (0, 4) == 0) {
+		cr.StatBase[ ST_BLEED ] -= Random( 0, 1 );
+		cr.Say (SAY_NETMSG, "Кровь хлещет из Вас!");
+		cr.Say (SAY_EMOTE, "Быстро теряет кровь");
+		uint16 hx = cr.HexX, hy = cr.HexY;
+		cr.GetMap().AddItem( hx, hy, Random( 3321, 3326 ), 1 );
+	}
+	return ( 12 * __TimeMultiplier );
+	}
+	return ( 60 * __TimeMultiplier );
+}
+
+void DropBleed( Critter& cr )
+{
+    uint[] indexes;
+    uint[] rates;
+    uint[] durations;
+    uint8 eventCount = cr.GetTimeEvents( CTE_BLEED, indexes, durations, rates );
+
+    if( eventCount > 0 )
+    {
+        cr.EraseTimeEvents (CTE_BLEED);
+    }
+}
+
+void BloodToxicCritter( Critter& cr )
+{
+    if( cr.GetTimeEvents( CTE_BLOOD_TOXIC, null, null, null ) > 0 )
+	{
+	    cr.StatBase[ ST_BLOOD_TOXIC ] ++;
+	}
+	//else if( ST_BLOOD_TOXIC >= 0 ) cr.AddTimeEvent( "cte_org_dmg",  10 * __TimeMultiplier , CTE_ORG_DMG, 0 );
+    else cr.AddTimeEvent( "cte_blood_toxic",  10 * __TimeMultiplier , CTE_BLOOD_TOXIC, 0 );
+}
+
+uint cte_blood_toxic( Critter& cr, int identifier, uint& rate )
+{
+    uint8 toxicLevel = cr.StatBase[ ST_BLOOD_TOXIC ];
+	if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT )
+    {
+        UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLOOD_TOXIC );
+		cr.StatBase[ ST_BLOOD_TOXIC ] = 0;
+        cr.Say( SAY_NETMSG, "Роботы не страдают от заражения крови, ведь у них ее нет!" );
+        return 0;
+    }
+    if( toxicLevel >= cr.Stat[ ST_ENDURANCE ] * 20 )
+    {
+        cr.ToDead( Random( 0, 1 ) == 0 ? ANIM2_DEAD_FRONT : ANIM2_DEAD_BACK, null );
+        UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLOOD_TOXIC );
+	cr.StatBase[ ST_BLOOD_TOXIC ] = 0;
+        cr.Say( SAY_NETMSG, "Вы умерли от заражения крови." );
+        return 0;
+    }
+    else if( toxicLevel <= 0 )
+        return 0;
+
+    cr.StatBase[ ST_BLOOD_TOXIC ] ++;
+    cr.Say( SAY_NETMSG, "Вы страдаете от заражения крови. /используйте таблетки через навык доктора, дабы спасти себя/");
+    return ( 60 * 5 * __TimeMultiplier );
+}
+
+void DropToxic( Critter& cr )
+{
+    uint[] indexes;
+    uint[] rates;
+    uint[] durations;
+    uint8 eventCount = cr.GetTimeEvents( CTE_BLOOD_TOXIC, indexes, durations, rates );
+
+    if( eventCount > 0 )
+    {
+        cr.EraseTimeEvent( indexes[ 0 ] );
+    }
+
+    cr.StatBase[ ST_BLOOD_TOXIC ] = 0;
+}
+
+//#####################################################################################
+/*void OrgDmgCritter( Critter& cr )
+{
+    if( cr.StatBase[ ST_ORG_DMG ] >= 1 )
+	{
+	    cr.StatBase[ ST_ORG_DMG ] ++;
+		cr.AddTimeEvent( "cte_org_dmg",  10 * __TimeMultiplier , CTE_ORG_DMG, 0 );
+	}
+    else cr.AddTimeEvent( "cte_org_dmg",  10 * __TimeMultiplier , CTE_ORG_DMG, 0 );
+}
+
+uint cte_org_dmg( Critter& cr, int identifier, uint& rate )
+{
+    uint8 orgDmg = cr.StatBase[ ST_ORG_DMG ];
+    if( orgDmg >= cr.Stat[ ST_ENDURANCE ] * 90 )
+    {
+        cr.ToDead( Random( 0, 1 ) == 0 ? ANIM2_DEAD_FRONT : ANIM2_DEAD_BACK, null );
+        UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_ORG_DMG );
+	cr.StatBase[ ST_ORG_DMG ] = 0;
+        cr.Say( SAY_NETMSG, "У вас отказал жизненно важный орган" );
+        return 0;
+    }
+    else if( orgDmg <= 0 )
+        return 0;
+
+    cr.StatBase[ ST_ORG_DMG ] ++;
+    cr.Say( SAY_NETMSG, "Жуткая боль пронзает все ваше тело. /используйте таблетки через навык доктора, дабы спасти себя/");
+    return ( 60 * 1 * __TimeMultiplier );
+}*/

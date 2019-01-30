@@ -1,0 +1,1214 @@
+// heal
+// pm
+
+#include "_macros.fos"
+
+import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat"; // Export
+
+import void ChangeStatus( Critter& cr, uint16 status, uint8 value, bool set ) from "critter_status";        // pm added
+import void ChangeCritterSpeed( Critter& cr ) from "speed";                                                 // pm add
+import void UseDrug( Critter& cr, Item& drug ) from "drugs";
+
+
+#define _DecItem        # ( x, count )x.GetCount() > count ? x.SetCount( x.GetCount() - count ) : DeleteItem( x )
+#define HEAVY_DAMAGE    ( 507 )
+
+void ProccessFirstAidSkill( Critter& cr, Critter& targetCr, bool alreadyAllowed )
+{
+	if( targetCr.IsDead() )
+	{
+		cr.Say( SAY_NETMSG, "Это уже не поможет." );
+		return;
+	}
+	
+	targetCr.StatBase[ST_VAR0] = cr.Id;
+	cr.StatBase[ST_VAR0] = targetCr.Id;
+	
+	if(targetCr.Id != cr.Id && targetCr.Stat[ST_CURRENT_HP] > -30 && !alreadyAllowed && targetCr.IsPlayer()){
+		targetCr.ShowScreen( SCREEN_DIALOGBOX, 2, "answer_ProccessFirstAidSkill" );
+		targetCr.Say( SAY_DIALOGBOX_TEXT, "Вас хотят осмотреть, согласиться?");
+		targetCr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Да" );
+		targetCr.Say( SAY_NETMSG, "Вас хотят осмотреть" );
+	}else{
+		answer_ProccessFirstAidSkill(targetCr, 0, "");
+	}
+}
+    
+void answer_ProccessFirstAidSkill( Critter& targetCr, uint answerI, string& answerS)
+{
+  
+    Critter@ cr = GetCritter(targetCr.StatBase[ST_VAR0]);
+    if(cr is null) return;
+    
+    bool isBandaged = ( targetCr.GetTimeEvents( CTE_HEAL, null, null, null ) > 0 );
+
+	bool powder = (_CritCountItem( cr, PID_HEALING_POWDER )>0);
+	bool stim = (_CritCountItem( cr, PID_STIMPAK )>0);
+	bool ss = (_CritCountItem( cr, PID_SUPER_STIMPAK )>0);
+
+
+	uint16 statusFlag = targetCr.StatBase[ ST_CRSTATUS ];
+	bool isDamaged = false;
+	string state = "повреждения: ";
+
+	int i = BP_LIMBS_BEGIN;	// Kriegwolf: подробный осмотр конечностей
+	int maxHP = targetCr.Stat [ST_MAX_LIFE];
+	while (i < BP_LIMBS_END) {
+		if (targetCr.ParamBase [i] > maxHP * 0.8) {
+					state += "крит. ";
+				} else if (targetCr.ParamBase[i] > maxHP * 0.6) {
+					state += "оч. тяж. ";
+				} else if (targetCr.ParamBase[i] > maxHP * 0.4) {
+					state += "тяж. ";
+				} else if (targetCr.ParamBase[i] >= maxHP * 0.2) {
+					state += "средн. ";
+				}
+		if (targetCr.ParamBase [i] >= maxHP * 0.2) {
+			isDamaged = true;
+			switch (i) {
+				case BP_HEAD_HP:
+					state += "головы, ";
+					break;
+				case BP_EYES_HP:
+					state += "глаз, ";
+					break;
+				case BP_LEFT_ARM_HP:
+					state += "левой руки, ";
+					break;
+				case BP_RIGHT_ARM_HP:
+					state += "правой руки, ";
+					break;
+				case BP_LEFT_LEG_HP:
+					state += "левой ноги, ";
+					break;
+				case BP_RIGHT_LEG_HP:
+					state += "правой ноги, ";
+					break;
+				case BP_GROIN_HP:
+					state += "паха, ";
+					break;
+				case BP_TORSO_HP:
+					state += "корпуса, ";
+					break;
+			}
+		}
+		i ++;
+	}
+
+/*	if (0.8*targetCr.Stat[ ST_MAX_LIFE ] <= targetCr.Stat[ ST_CURRENT_HP ]) state="хорошее состояние";
+	else if (0.6*targetCr.Stat[ ST_MAX_LIFE ] <= targetCr.Stat[ ST_CURRENT_HP ]) state="удволетворительное состояние";
+	else if (0.4*targetCr.Stat[ ST_MAX_LIFE ] <= targetCr.Stat[ ST_CURRENT_HP ]) state="плохое состояние";
+	else if (0.2*targetCr.Stat[ ST_MAX_LIFE ] <= targetCr.Stat[ ST_CURRENT_HP ]) state="тяжелое состояние";
+	else state="критические состояние";*/
+	
+	if (!isDamaged) state += "нет серьезных повреждений";
+
+	if (FLAG(statusFlag, CR_STATUS_BLEED)) state+=", кровотечение";
+	if (FLAG(statusFlag, CR_STATUS_HEAVY_DMG))
+		{
+		state+=", глубокие раны";
+		cr.StatBase[ ST_VAR0 ] = targetCr.Id;
+		cr.ShowScreen( SCREEN_DIALOGBOX, 4, "answer_FIRSTAID_TO_DOCTOR" );
+	        cr.Say( SAY_DIALOGBOX_TEXT, "Результат осмотра - " + state);
+		cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "ХИРУРГИЯ" );
+		if (powder) cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "исп. порошок" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет Порошка" );
+		if (stim) cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "исп. стимпак" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "нет Стимпака" );
+		if (ss) cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), "исп. СС" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), "нет СС" );
+	        return;
+		}
+
+	if (isBandaged)
+		{
+		state+=", повязки уже наложены.";
+		cr.StatBase[ ST_VAR0 ] = targetCr.Id;
+		cr.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_FIRSTAID_TO_UNBANDAGE" );
+	        cr.Say( SAY_DIALOGBOX_TEXT, "Результат осмотра - " + state);
+		cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Снять повязки" );
+		if (powder) cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "исп. порошок" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет Порошка" );
+		if (stim) cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "исп. стимпак" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "нет Стимпака" );
+	        return;
+		}
+
+	cr.StatBase[ ST_VAR0 ] = targetCr.Id;
+	cr.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_FIRSTAID_1" );
+        cr.Say( SAY_DIALOGBOX_TEXT, "Результат осмотра - " + state);
+
+	if (powder) cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "исп. Порошок" );
+	else cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "нет Порошка" );
+
+	if (stim) cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "исп. Стимпак" );
+	else cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет Стимпака" );
+
+	cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "без стимулянта" );
+}
+
+void answer_FIRSTAID_1( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+
+	bool powder = (_CritCountItem( player, PID_HEALING_POWDER )>0);
+	bool stim = (_CritCountItem( player, PID_STIMPAK )>0);
+
+    if( answerI == 0 )
+    {
+	if(powder) player.StatBase[ ST_VAR1 ] = 1;
+	else {ProccessFirstAidSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 1 )
+    {
+	if(stim) player.StatBase[ ST_VAR1 ] = 2;
+	else {ProccessFirstAidSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 2 )
+    {
+	player.StatBase[ ST_VAR1 ] = 0;
+    }
+
+	bool booze = (_CritCountItem( player, PID_BOOZE )>0);
+	bool anti = (_CritCountItem( player, PID_ANTISEPTIC )>0);
+
+	player.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_FIRSTAID_2" );
+        player.Say( SAY_DIALOGBOX_TEXT, "Применяем антисептик:");
+
+	if (booze) player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "исп. Самогон" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "нет Самогона" );
+
+	if (anti) player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "исп. Антисептик" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет Антисептика" );
+
+	player.Say( SAY_DIALOGBOX_BUTTON( 2 ), "без обеззараживания" );
+}
+
+void answer_FIRSTAID_2( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+
+	bool booze = (_CritCountItem( player, PID_BOOZE )>0);
+	bool anti = (_CritCountItem( player, PID_ANTISEPTIC )>0);
+
+    if( answerI == 0 )
+    {
+	if(booze) player.StatBase[ ST_VAR2 ] = 1;
+	else {ProccessFirstAidSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 1 )
+    {
+	if(anti) player.StatBase[ ST_VAR2 ] = 2;
+	else {ProccessFirstAidSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 2 )
+    {
+	player.StatBase[ ST_VAR2 ] = 0;
+    }
+
+	bool rags = (_CritCountItem( player, PID_CRAFT_L_RAGS )>0);
+	bool bandage = (_CritCountItem( player, PID_BANDAGE )>0);
+
+	player.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_FIRSTAID_3" );
+        player.Say( SAY_DIALOGBOX_TEXT, "Материал повязки:");
+
+	if (rags) player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "исп. тряпки" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "нет тряпок" );
+
+	if (bandage) player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "исп. бинт" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет бинтов" );
+
+	player.Say( SAY_DIALOGBOX_BUTTON( 2 ), "без перевязки" );
+}
+
+void answer_FIRSTAID_3( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+
+	int sk = player.Skill[ SK_FIRST_AID ];
+
+	bool booze = (_CritCountItem( player, PID_BOOZE )>0);
+	bool anti = (_CritCountItem( player, PID_ANTISEPTIC )>0);
+	bool rags = (_CritCountItem( player, PID_CRAFT_L_RAGS )>0);
+	bool bandage = (_CritCountItem( player, PID_BANDAGE )>0);
+	bool powder = (_CritCountItem( player, PID_HEALING_POWDER )>0);
+	bool stim = (_CritCountItem( player, PID_STIMPAK )>0);
+
+    if( answerI == 0 )
+    {
+	if(rags)
+		{
+		player.StatBase[ ST_VAR3 ] = 1;
+		player.DeleteItem( PID_CRAFT_L_RAGS, 1 );
+		}
+	else {ProccessFirstAidSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 1 )
+    {
+	if(bandage)
+		{
+		player.StatBase[ ST_VAR3 ] = 2;
+		player.DeleteItem( PID_BANDAGE, 1 );
+		}
+	else {ProccessFirstAidSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 2 )
+    {
+	player.StatBase[ ST_VAR3 ] = 0;
+    }
+
+	if (player.StatBase[ ST_VAR1 ] == 0 && player.StatBase[ ST_VAR2 ] == 0 && player.StatBase[ ST_VAR3 ] == 0)
+		{
+		player.Say( SAY_NETMSG, "Вы практически ничего не сделали." );
+		return;
+		}
+
+	if (stim && player.StatBase[ ST_VAR1 ] == 2)
+		{
+		Item@ item = player.GetItem( PID_STIMPAK, -1 );
+		ItemStimpackUse( targetCr, item);
+		_DecItem (item, 1);
+		sk+= 30;
+		}
+
+	if (powder && player.StatBase[ ST_VAR1 ] == 1)
+		{
+		Item@ item = player.GetItem( PID_HEALING_POWDER, -1 );
+		ItemPowderUse( targetCr, item);
+		sk+= 60;
+		}
+
+	if (player.StatBase[ ST_VAR3 ] == 0)
+		{
+		player.Say( SAY_NETMSG, "Без повязки раны быстрее заживать не будут." );
+		return;
+		}
+
+	int  chance = 0;
+
+	if (anti && player.StatBase[ ST_VAR2 ] == 2)
+		{
+		player.DeleteItem( PID_ANTISEPTIC, 1 );
+		sk+= 30;
+		}
+	else
+		{
+		int16 hpCurrent = targetCr.StatBase[ ST_CURRENT_HP ];
+		int16 hpMax = ( targetCr.StatBase[ ST_MAX_LIFE ] + targetCr.StatBase[ ST_STRENGTH ] * 4 + targetCr.StatBase[ ST_ENDURANCE ] * 8 );
+		chance = 20 - targetCr.Stat [ST_LUCK];
+		chance = CLAMP( chance, 0, 20 );
+		}
+
+        if (booze && player.StatBase[ ST_VAR2 ] == 1) {chance*=0.1; sk+= 10; player.DeleteItem( PID_BOOZE, 1 ); player.AddItem( PID_BOTTLE_GLASS, 1 );}
+
+	if (rags && player.StatBase[ ST_VAR3 ] == 1) {sk+= 10; UseBandage( player, targetCr, sk );}
+	else if (bandage && player.StatBase[ ST_VAR3 ] == 2) {chance*=0.5; sk+= 30; UseBandage( player, targetCr, sk );}
+
+	if(Random(0, 100) < chance)	ChangeStatus( targetCr, CR_STATUS_BLOOD_TOXIC, 0, true );
+
+}
+
+void answer_FIRSTAID_TO_DOCTOR( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+    if( answerI == 0 )
+    {
+        ProccessDoctorSkill(player, targetCr, false);
+		return;
+    }
+    if( answerI == 1 && (_CritCountItem( player, PID_HEALING_POWDER )>0))
+    {
+	Item@ item = player.GetItem( PID_HEALING_POWDER, -1 );
+	ItemPowderUse( targetCr, item);
+    }
+    if( answerI == 2 && (_CritCountItem( player, PID_STIMPAK )>0))
+    {
+	Item@ item = player.GetItem( PID_STIMPAK, -1 );
+	ItemStimpackUse( targetCr, item);
+	_DecItem (item, 1);
+    }
+    if( answerI == 3 && (_CritCountItem( player, PID_SUPER_STIMPAK )>0))
+    {
+	Item@ item = player.GetItem( PID_SUPER_STIMPAK, -1 );
+	ItemSupUse( targetCr, item );
+	player.DeleteItem( PID_SUPER_STIMPAK, 1 );
+    }
+	ProccessFirstAidSkill( player, targetCr, true);
+}
+
+void answer_FIRSTAID_TO_UNBANDAGE( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+    if( answerI == 0 )
+    {
+	player.Say( SAY_NETMSG, "Вы сняли бинты." );
+        targetCr.EraseTimeEvents( CTE_HEAL );
+    }
+    if( answerI == 1 && (_CritCountItem( player, PID_HEALING_POWDER )>0))
+    {
+	Item@ item = null;
+	ItemPowderUse( targetCr, item);
+	player.DeleteItem( PID_HEALING_POWDER, 1 );
+    }
+    if( answerI == 2 && (_CritCountItem( player, PID_STIMPAK )>0))
+    {
+	Item@ item = null;
+	ItemStimpackUse( targetCr, item);
+	player.DeleteItem( PID_STIMPAK, 1 );
+    }
+	ProccessFirstAidSkill( player, targetCr, true);
+}
+
+void ProccessDoctorSkill( Critter& cr, Critter& targetCr, bool alreadyAllowed )
+{
+	targetCr.StatBase[ST_VAR0] = cr.Id;
+	cr.StatBase[ST_VAR0] = targetCr.Id;
+	
+	if(targetCr.Id != cr.Id && targetCr.Stat[ST_CURRENT_HP] > -30 && !alreadyAllowed && targetCr.IsPlayer ()){
+		targetCr.ShowScreen( SCREEN_DIALOGBOX, 2, "answer_ProccessDoctorSkill" );
+		targetCr.Say( SAY_DIALOGBOX_TEXT, "Вас хотят оперировать, согласиться?");
+		targetCr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Да" );
+		targetCr.Say( SAY_NETMSG, "Вас хотят осмотреть" );
+	}else{
+		answer_ProccessDoctorSkill(cr, 0, "");
+	}
+}
+
+void answer_ProccessDoctorSkill(Critter& targetCr, uint answerI, string& answerS)
+{
+	if(answerI != 0) return;
+	
+	Critter@ cr = GetCritter(targetCr.StatBase[ST_VAR0]);
+	if(cr is null) return;
+	
+	uint16 statusFlag = targetCr.StatBase[ ST_CRSTATUS ];
+	string state;
+
+	if( targetCr.Stat[ ST_CURRENT_HP ] > 0 ) state = "Есть пульс";
+	else if ( targetCr.Stat[ ST_CURRENT_HP ] > -30 ) state = "Пульс слабый";
+	else state = "Нет пульса";
+
+	bool damages = false;
+
+	if (targetCr.ParamBase[ DAMAGE_EYE ] >0) {state+=", повреждены глаза"; damages = true;}
+	if (targetCr.ParamBase[ DAMAGE_RIGHT_ARM ] >0) {state+=", повреждена правая рука"; damages = true;}
+	if (targetCr.ParamBase[ DAMAGE_LEFT_ARM ] >0) {state+=", повреждена левая рука"; damages = true;}
+	if (targetCr.ParamBase[ DAMAGE_RIGHT_LEG ] >0) {state+=", повреждена правая нога"; damages = true;}
+	if (targetCr.ParamBase[ DAMAGE_LEFT_LEG ] >0) {state+=", повреждена левая нога"; damages = true;}
+	if (targetCr.ParamBase[ DAMAGE_POISONED ] >0) {state+=", есть признаки отравления"; damages = true;}
+	if (targetCr.ParamBase[ ST_BLOOD_TOXIC ] >0) {state+=", есть признаки заражения крови"; damages = true;}
+
+	bool knife = (_CritCountItem( cr, PID_KNIFE )>0 || _CritCountItem( cr, PID_COMBAT_KNIFE )>0);
+
+	if (FLAG(statusFlag, CR_STATUS_BLEED)) state+=", кровотечение";
+	if (FLAG(statusFlag, CR_STATUS_BULLET_OVER))
+		{
+		state+=", пуля или осколок в ране, необходимо вынуть перед дальнейшими действиями.";
+		cr.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_DOCTOR_BULLET" );
+	        cr.Say( SAY_DIALOGBOX_TEXT, "" + state);
+		if (_CritCountItem( cr, PID_MEDCLIP )>0) cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "щипцами" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "нет шипцов" );
+		if (_CritCountItem( cr, PID_MULTI_TOOL )>0) cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "мультитулом" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет клещей" );
+		if (knife) cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "ножом" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "нет ножа" );
+	        return;
+		}
+
+	if (FLAG(statusFlag, CR_STATUS_HEAVY_DMG))
+		{
+		state+=", сложная рана, необходимо закрыть ее";
+		cr.ShowScreen( SCREEN_DIALOGBOX, 2, "answer_DOCTOR_HEAVY" );
+ 	        cr.Say( SAY_DIALOGBOX_TEXT, "" + state);
+ 		if (_CritCountItem( cr, PID_MEDNEEDLE )>0 && _CritCountItem( cr, PID_MEDTHREAD )>0) cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "игла + нитки" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "нет иглы и ниток" );
+		if (knife && _CritCountItem( cr, PID_LIGHTER )>0) cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нож + зажигалка" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет ножа и зажигалки" );
+	        return;
+		}
+	if (damages)
+		{
+		cr.ShowScreen( SCREEN_DIALOGBOX, 7, "answer_DOCTOR_CRIPPLE" );
+		cr.Say( SAY_DIALOGBOX_TEXT, "" + state + ".");
+
+		if (targetCr.ParamBase[ DAMAGE_EYE ] >0) cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "лечить глаза" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "глаза в порядке" );
+		if (targetCr.ParamBase[ DAMAGE_RIGHT_ARM ] >0) cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "лечить п.руку" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "п.рука в порядке" );
+		if (targetCr.ParamBase[ DAMAGE_LEFT_ARM ] >0) cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "лечить л.руку" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "л.рука в порядке" );
+		if (targetCr.ParamBase[ DAMAGE_RIGHT_LEG ] >0) cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), "лечить п.ногу" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), "п.нога в порядке" );
+		if (targetCr.ParamBase[ DAMAGE_LEFT_LEG ] >0) cr.Say( SAY_DIALOGBOX_BUTTON( 4 ), "лечить л.ногу" );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 4 ), "л.нога в порядке" );
+		if (targetCr.ParamBase[ ST_BLOOD_TOXIC ] >0) cr.Say( SAY_DIALOGBOX_BUTTON( 5 ), "таблетки от зар." );
+		else cr.Say( SAY_DIALOGBOX_BUTTON( 5 ), "заражения нет" );
+		if (targetCr.ParamBase[ DAMAGE_POISONED ] >0)
+			{
+			if (_CritCountItem( cr, PID_ANTIDOTE )>0) cr.Say( SAY_DIALOGBOX_BUTTON( 6 ), "дать антидот" );
+			else cr.Say( SAY_DIALOGBOX_BUTTON( 6 ), "нет антидота" );
+			}
+		}
+	else
+		{
+		cr.ShowScreen( SCREEN_DIALOGBOX, 1, "answer_DOCTOR_TO_FIRSTAID" );
+		cr.Say( SAY_DIALOGBOX_TEXT, "" + state + ", дальше может потребоваться только перевязка.");
+		cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "перевязка" );
+		}
+	return;
+}
+
+void answer_DOCTOR_CRIPPLE( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+    if( answerI == 5 )
+    {	
+		if (_CritCountItem( player, PID_PILLS )>0)  //Снятие заражения крови
+			{
+			player.DeleteItem( PID_PILLS, 1 );
+			targetCr.StatBase[ ST_BLOOD_TOXIC ] = 0;
+			targetCr.StatBase[ ST_CURRENT_HP ] = 10;
+			targetCr.Say( SAY_EMOTE, "Закидывает горсть таблеток в рот" );
+			UNSETFLAG( targetCr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLOOD_TOXIC );
+			ChangeStatus( targetCr, CR_STATUS_BLOOD_TOXIC, 0, false );
+			}
+		player.Say( SAY_NETMSG, "Уровень заражения " + targetCr.StatBase[ST_BLOOD_TOXIC] + " " + targetCr.StatBase[ CR_STATUS_BLOOD_TOXIC ] );
+	    ProccessDoctorSkill(player, targetCr, true);
+		return;
+	}
+    else if( answerI == 6 )
+    {	
+		if (_CritCountItem( player, PID_ANTIDOTE )>0)
+			{
+			player.DeleteItem( PID_ANTIDOTE, 1 );
+			targetCr.StatBase[ ST_POISONING_LEVEL ] = CLAMP( targetCr.StatBase[ ST_POISONING_LEVEL ] - 50, 0, 1000 );
+			}
+	    ProccessDoctorSkill(player, targetCr, true);
+		return;
+    }
+	else
+	{
+		string state;
+		uint16 damage = answerI + 502;
+		player.StatBase[ ST_VAR1 ] = damage;
+	
+		uint[] rates;
+		uint8 countTimes = targetCr.GetTimeEvents( CTE_DOC, null, null, rates );
+		if( countTimes > 0 )
+		{
+			for( uint8 i = 0; i < countTimes; i++ )
+			{
+				if( rates[ i ] == damage )
+				{
+					player.Say( SAY_NETMSG, "Эта часть тела уже лечится." );
+					ProccessDoctorSkill(player, targetCr, true);
+					return;
+				}
+			}
+		}
+
+		if( targetCr.DamageBase[ damage ] == 0 )
+		{
+			player.Say( SAY_NETMSG, "Эта часть тела не нуждается в лечении." );
+			ProccessDoctorSkill(player, targetCr, true);
+			return;
+		}
+
+		if ( answerI == 0)
+		{
+		state="Необходимо наложить тугую повязку.";
+		player.ShowScreen( SCREEN_DIALOGBOX, 2, "answer_DOCTOR_CRIPPLE_EYE" );
+		player.Say( SAY_DIALOGBOX_TEXT, ""+state);
+		if (_CritCountItem( player, PID_CRAFT_L_RAGS )>0) player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "исп.тряпки" );
+		else player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "нет тряпок" );
+		if (_CritCountItem( player, PID_BANDAGE )>0) player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "исп.бинты" );
+		else player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет бинтов" );
+		}
+		else
+		{
+		state="Необходимо правильно вправить и зафиксировать конечность.";
+		bool plank = (_CritCountItem( player, PID_SPEAR )>0) || 
+		(_CritCountItem( player, PID_SHARP_SPEAR )>0) || 
+		(_CritCountItem( player, PID_SHARPENED_POLE )>0) || 
+		(_CritCountItem( player, PID_CLUB )>0) || 
+		(_CritCountItem( player, PID_WOOD_PLANK )>0) || 
+		(_CritCountItem( player, PID_IRON_PROD )>0) || 
+		(_CritCountItem( player, PID_FIREWOOD )>0) || 
+		(_CritCountItem( player, PID_WOOD_PLANK )>0);
+		player.ShowScreen( SCREEN_DIALOGBOX, 2, "answer_DOCTOR_CRIPPLE_LIMB" );
+		player.Say( SAY_DIALOGBOX_TEXT, ""+state);
+		if (_CritCountItem( player, PID_MEDSPLINT )>0) player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "мед.шина" );
+		else player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "нет шины" );
+		if (plank && _CritCountItem( player, PID_ROPE )>0) player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "веревка+деревяшка" );
+		else player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет веревки и др." );
+		}
+	}	
+}
+
+void answer_DOCTOR_CRIPPLE_EYE( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+    if( answerI == 0 )
+    {
+	if (_CritCountItem( player, PID_CRAFT_L_RAGS )>0) player.DeleteItem( PID_CRAFT_L_RAGS, 1 );
+	else return;
+	}
+	if( answerI == 1 )
+    {
+	if (_CritCountItem( player, PID_BANDAGE )>0) player.DeleteItem( PID_BANDAGE, 1 );
+	else return;
+	}
+
+	int damage = player.StatBase[ ST_VAR1 ];
+	uint docTime = 10* (400 - answerI*100 - player.Skill[ SK_DOCTOR ] - ( targetCr.Stat[ ST_ENDURANCE ] * 10 ));
+	docTime = CLAMP( docTime, 900, 3600 );   // 15-60 минут
+	docTime *= __TimeMultiplier;
+	docTime = 10;	
+	if (damage >= 502 && damage <= 506 ) targetCr.AddTimeEvent( "cte_Doc", docTime, CTE_DOC, damage );
+	else {player.Say( SAY_NETMSG, "Ошибка, обратитесь к разработчикам." ); return;}
+    player.TimeoutBase[ TO_SK_DOCTOR ] = DOCTOR_TIMEOUT( player );
+    player.AddScore( SCORE_DOCTOR, 1 );
+    player.Say( SAY_NETMSG, "Вы наложили тугую повязку, остается только ждать." );
+}
+
+void answer_DOCTOR_CRIPPLE_LIMB( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+    if( answerI == 0 )
+    {
+	if (_CritCountItem( player, PID_MEDSPLINT )>0) player.DeleteItem( PID_MEDSPLINT, 1 );
+	else {player.Say( SAY_NETMSG, "У вас нет медицинской шины." ); return;}
+	}
+	if( answerI == 1 )
+    {
+		bool plank = (_CritCountItem( player, PID_SPEAR )>0) || 
+		(_CritCountItem( player, PID_SHARP_SPEAR )>0) || 
+		(_CritCountItem( player, PID_SHARPENED_POLE )>0) || 
+		(_CritCountItem( player, PID_CLUB )>0) || 
+		(_CritCountItem( player, PID_WOOD_PLANK )>0) || 
+		(_CritCountItem( player, PID_IRON_PROD )>0) || 
+		(_CritCountItem( player, PID_FIREWOOD )>0) || 
+		(_CritCountItem( player, PID_WOOD_PLANK )>0);
+	if (plank && _CritCountItem( player, PID_ROPE )>0) player.DeleteItem( PID_ROPE, 1 );
+	else {player.Say( SAY_NETMSG, "Нужна веревка и какая-нибудь палка или планка." ); return;}
+	}
+
+	int damage = player.StatBase[ ST_VAR1 ];
+	uint docTime = 10* (400 + answerI*100 - player.Skill[ SK_DOCTOR ] - ( targetCr.Stat[ ST_ENDURANCE ] * 10 ));
+	docTime = CLAMP( docTime, 900, 3600 );   // 15-60 минут
+	docTime *= __TimeMultiplier;
+	docTime = 10;
+	if (damage >= 502 && damage <= 506 ) targetCr.AddTimeEvent( "cte_Doc", docTime, CTE_DOC, damage );
+	else {player.Say( SAY_NETMSG, "Ошибка, обратитесь к разработчикам." ); return;}
+    player.TimeoutBase[ TO_SK_DOCTOR ] = DOCTOR_TIMEOUT( player );
+    player.AddScore( SCORE_DOCTOR, 1 );
+    player.Say( SAY_NETMSG, "Вы зафиксировали конечность, остается только ждать." );
+}
+
+void Prolonged_Doc( Critter& targetCr, uint16 doctime, uint16 damage )   // Export
+{
+    if (damage >= 502 && damage <= 506 ) targetCr.AddTimeEvent( "cte_Doc", doctime, CTE_DOC, damage );
+}
+
+uint cte_Doc( Critter& cr, int identifier, uint& rate )
+{
+    cr.DamageBase[ rate ] = 0;
+	switch( rate )
+        {
+        case DAMAGE_EYE:	cr.Say( SAY_NETMSG, "Кажется глазам возвращается чувствительность." );	break;
+		case DAMAGE_RIGHT_ARM:	cr.Say( SAY_NETMSG, "Кажется вы снова можете свободно двигать правой рукой." );	break;
+		case DAMAGE_LEFT_ARM:	cr.Say( SAY_NETMSG, "Кажется вы снова можете свободно двигать левой рукой." );	break;
+		case DAMAGE_RIGHT_LEG:	cr.Say( SAY_NETMSG, "Кажется вы снова можете свободно двигать правой ногой." );	break;
+		case DAMAGE_LEFT_LEG:	cr.Say( SAY_NETMSG, "Кажется вы снова можете свободно двигать левой ногой." );	break;
+		}
+	ChangeCritterSpeed(cr);
+    return 0;
+}
+
+void answer_DOCTOR_TO_FIRSTAID( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+    if( answerI == 0 )
+    {
+		ProccessFirstAidSkill( player, targetCr, true);
+    }
+}
+
+void answer_DOCTOR_HEAVY( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+
+    if( answerI == 0 )
+    {
+	if(_CritCountItem( player, PID_MEDNEEDLE )>0 && _CritCountItem( player, PID_MEDTHREAD )>0) player.StatBase[ ST_VAR1 ] = 1;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 1 )
+    {
+	bool knife = (_CritCountItem( player, PID_KNIFE )>0 || _CritCountItem( player, PID_COMBAT_KNIFE )>0);
+	if (knife) player.StatBase[ ST_VAR1 ] = 2;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+
+	bool booze = (_CritCountItem( player, PID_BOOZE )>0);
+	bool anti = (_CritCountItem( player, PID_ANTISEPTIC )>0);
+
+	player.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_DOCTOR_HEAVY_2" );
+        player.Say( SAY_DIALOGBOX_TEXT, "Применяем антисептик:");
+
+	if (booze) player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "исп. Самогон" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "нет Самогона" );
+
+	if (anti) player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "исп. Антисептик" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет Антисептика" );
+
+	player.Say( SAY_DIALOGBOX_BUTTON( 2 ), "без обеззараживания" );
+}
+
+void answer_DOCTOR_HEAVY_2( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+
+	bool booze = (_CritCountItem( player, PID_BOOZE )>0);
+	bool anti = (_CritCountItem( player, PID_ANTISEPTIC )>0);
+	bool anest = (_CritCountItem( player, PID_ANESTETIC )>0);
+
+    if( answerI == 0 )
+    {
+	if(booze) player.StatBase[ ST_VAR2 ] = 1;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 1 )
+    {
+	if (_CritCountItem( player, PID_ANTISEPTIC )>0) player.StatBase[ ST_VAR2 ] = 2;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 2 )
+    {
+	player.StatBase[ ST_VAR2 ] = 3;
+    }
+
+
+	player.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_DOCTOR_HEAVY_3" );
+        player.Say( SAY_DIALOGBOX_TEXT, "Применяем анестезию:");
+
+	if (anest) player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "исп. Анестетик" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "нет Анестетика" );
+
+	if (booze) player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "исп. Самогон" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет Самогона" );
+
+	player.Say( SAY_DIALOGBOX_BUTTON( 2 ), "без анестезии" );
+}
+
+void answer_DOCTOR_HEAVY_3( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+
+	bool booze = (_CritCountItem( player, PID_BOOZE )>0);
+	bool anti = (_CritCountItem( player, PID_ANTISEPTIC )>0);
+	bool anest = (_CritCountItem( player, PID_ANESTETIC )>0);
+
+    if( answerI == 0 )
+    {
+	if(anest) player.StatBase[ ST_VAR3 ] = 1;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 1 )
+    {
+	if (booze) player.StatBase[ ST_VAR3 ] = 2;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 2 )
+    {
+	player.StatBase[ ST_VAR3 ] = 3;
+    }
+
+	int damage = 0;
+	uint16 chance = 5;
+	uint16 sk = player.Skill[ SK_DOCTOR ] + 30*(2-player.StatBase[ ST_VAR1 ]);
+	
+	damage+=2+Random(3, 9)*(player.StatBase[ ST_VAR1 ]-1)*player.StatBase[ ST_VAR3 ];
+	damage+=Random(1, 3)*(player.StatBase[ ST_VAR3 ]-1);
+
+	if ( player.StatBase[ ST_VAR2 ] == 1) {chance = 1; player.DeleteItem( PID_BOOZE, 1 ); player.AddItem( PID_BOTTLE_GLASS, 1 );}
+	else if ( player.StatBase[ ST_VAR2 ] == 2) {chance = 0; player.DeleteItem( PID_ANTISEPTIC, 1 );}
+	if ( chance > Random(0, 99) + targetCr.Stat [ST_LUCK]-5) ChangeStatus( targetCr, CR_STATUS_BLOOD_TOXIC, 0, true );
+	
+	if ( player.StatBase[ ST_VAR3 ] == 1) player.DeleteItem( PID_ANESTETIC, 1 );
+	else if ( player.StatBase[ ST_VAR3 ] == 2 && player.StatBase[ ST_VAR2 ] != 1) {player.DeleteItem( PID_BOOZE, 1 ); player.AddItem( PID_BOTTLE_GLASS, 1 );}
+
+	
+    /*if( targetCr.StatBase[ ST_CURRENT_HP ] > damage ) targetCr.StatBase[ ST_CURRENT_HP ] -= damage;
+    else
+		{
+			if( targetCr.StatBase[ ST_CURRENT_HP ] > damage )
+			{
+				damage = targetCr.StatBase[ ST_CURRENT_HP ] / 3;
+				InjureCritter( targetCr, damage, DAMAGE_NORMAL, 0, 0 );
+			}
+		}*/
+	if( targetCr.StatBase[ ST_CURRENT_HP ] > damage ) 
+	{
+	targetCr.StatBase[ ST_CURRENT_HP ] -= damage;
+	}
+	else if( targetCr.StatBase[ ST_CURRENT_HP ] <= damage && targetCr.StatBase[ ST_CURRENT_HP ] > 0 ) 
+	{
+	targetCr.StatBase[ ST_CURRENT_HP ] = 1;
+	}
+	else if( targetCr.StatBase[ ST_CURRENT_HP ] <= damage )
+	{
+	targetCr.StatBase[ ST_CURRENT_HP ] = targetCr.StatBase[ ST_CURRENT_HP ];
+	}
+	if (sk + (player.Stat [ST_LUCK]-5)*5 > Random(0, 100))
+		{
+		ChangeStatus( targetCr, CR_STATUS_HEAVY_DMG, 0, false );
+		if ( player.StatBase[ ST_VAR1 ] == 1) player.Say( SAY_NETMSG, "Вы зашили рану." );
+		else player.Say( SAY_NETMSG, "Вы прижгли рану." );
+		}
+	else player.Say( SAY_NETMSG, "У вас не вышло закрыть рану." );
+    ProccessFirstAidSkill(player, targetCr, true);
+}
+
+void answer_DOCTOR_BULLET( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+
+    if( answerI == 0 )
+    {
+	if(_CritCountItem( player, PID_MEDCLIP )>0) player.StatBase[ ST_VAR1 ] = 1;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 1 )
+    {
+	if (_CritCountItem( player, PID_MULTI_TOOL )>0) player.StatBase[ ST_VAR1 ] = 2;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 2 )
+    {
+	bool knife = (_CritCountItem( player, PID_KNIFE )>0 || _CritCountItem( player, PID_COMBAT_KNIFE )>0);
+	if (knife) player.StatBase[ ST_VAR1 ] = 3;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+
+	bool booze = (_CritCountItem( player, PID_BOOZE )>0);
+	bool anti = (_CritCountItem( player, PID_ANTISEPTIC )>0);
+
+	player.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_DOCTOR_BULLET_2" );
+        player.Say( SAY_DIALOGBOX_TEXT, "Применяем антисептик:");
+
+	if (booze) player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "исп. Самогон" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "нет Самогона" );
+
+	if (anti) player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "исп. Антисептик" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет Антисептика" );
+
+	player.Say( SAY_DIALOGBOX_BUTTON( 2 ), "без обеззараживания" );
+}
+
+void answer_DOCTOR_BULLET_2( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+
+	bool booze = (_CritCountItem( player, PID_BOOZE )>0);
+	bool anti = (_CritCountItem( player, PID_ANTISEPTIC )>0);
+	bool anest = (_CritCountItem( player, PID_ANESTETIC )>0);
+
+    if( answerI == 0 )
+    {
+	if(booze) player.StatBase[ ST_VAR2 ] = 1;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 1 )
+    {
+	if (_CritCountItem( player, PID_ANTISEPTIC )>0) player.StatBase[ ST_VAR2 ] = 2;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 2 )
+    {
+	player.StatBase[ ST_VAR2 ] = 3;
+    }
+
+
+	player.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_DOCTOR_BULLET_3" );
+        player.Say( SAY_DIALOGBOX_TEXT, "Применяем анестезию:");
+
+	if (anest) player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "исп. Анестетик" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "нет Анестетика" );
+
+	if (booze) player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "исп. Самогон" );
+	else player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "нет Самогона" );
+
+	player.Say( SAY_DIALOGBOX_BUTTON( 2 ), "без анестезии" );
+}
+
+void answer_DOCTOR_BULLET_3( Critter& player, uint answerI, string& answerS )
+{
+    Critter@ targetCr = GetCritter( player.Stat[ ST_VAR0 ] );
+    if( targetCr is null )
+        return;
+
+	bool booze = (_CritCountItem( player, PID_BOOZE )>0);
+	bool anti = (_CritCountItem( player, PID_ANTISEPTIC )>0);
+	bool anest = (_CritCountItem( player, PID_ANESTETIC )>0);
+
+    if( answerI == 0 )
+    {
+	if(anest) player.StatBase[ ST_VAR3 ] = 1;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 1 )
+    {
+	if (booze) player.StatBase[ ST_VAR3 ] = 2;
+	else {ProccessDoctorSkill(player, targetCr, true); return;}
+    }
+    if( answerI == 2 )
+    {
+	player.StatBase[ ST_VAR3 ] = 3;
+    }
+
+	int damage = 0;
+	uint16 chance = 5;
+	uint16 sk = player.Skill[ SK_DOCTOR ] + 30*(3-player.StatBase[ ST_VAR1 ]);
+	
+	damage+=Random(1, 5)*player.StatBase[ ST_VAR1 ];
+	damage+=Random(1, 5)*(player.StatBase[ ST_VAR3 ]-1);
+
+	if ( player.StatBase[ ST_VAR2 ] == 1) {chance = 1; player.DeleteItem( PID_BOOZE, 1 );player.AddItem( PID_BOTTLE_GLASS, 1 );}
+	else if ( player.StatBase[ ST_VAR2 ] == 2) {chance = 0; player.DeleteItem( PID_ANTISEPTIC, 1 );}
+	if ( chance > Random(0, 100) ) ChangeStatus( targetCr, CR_STATUS_BLOOD_TOXIC, 0, true );
+	
+	if ( player.StatBase[ ST_VAR3 ] == 1) player.DeleteItem( PID_ANESTETIC, 1 );
+	else if ( player.StatBase[ ST_VAR3 ] == 2 && player.StatBase[ ST_VAR2 ] != 1) {player.DeleteItem( PID_BOOZE, 1 );player.AddItem( PID_BOTTLE_GLASS, 1 );}
+
+    /*if( targetCr.StatBase[ ST_CURRENT_HP ] > damage ) targetCr.StatBase[ ST_CURRENT_HP ] -= damage;
+    else
+		{
+		damage = targetCr.StatBase[ ST_CURRENT_HP ] / 3;
+			if( targetCr.StatBase[ ST_CURRENT_HP ] > damage )
+			{
+				InjureCritter( targetCr, damage, DAMAGE_NORMAL, 0, 0 );
+			}
+		}*/
+	if( targetCr.StatBase[ ST_CURRENT_HP ] > damage ) 
+	{
+	targetCr.StatBase[ ST_CURRENT_HP ] -= damage;
+	}
+	else if( targetCr.StatBase[ ST_CURRENT_HP ] <= damage && targetCr.StatBase[ ST_CURRENT_HP ] > 0 ) 
+	{
+	targetCr.StatBase[ ST_CURRENT_HP ] = 1;
+	}
+	else if( targetCr.StatBase[ ST_CURRENT_HP ] <= damage )
+	{
+	targetCr.StatBase[ ST_CURRENT_HP ] = targetCr.StatBase[ ST_CURRENT_HP ];
+	}
+
+	if (sk + (player.Stat [ST_LUCK]-5)*5 > Random(0, 150))
+		{
+		ChangeStatus( targetCr, CR_STATUS_BULLET_OVER, 0, false );
+		player.Say( SAY_NETMSG, "Вы вытащили пулю из раны." );
+		}
+	else player.Say( SAY_NETMSG, "У вас не вышло извлечь пулю." );
+    ProccessFirstAidSkill(player, targetCr, true);
+}
+
+bool ItemStimpackUse( Critter& cr, Item& item )
+{
+    int16  hpCurrent = cr.StatBase[ ST_CURRENT_HP ];
+    int16 hpMax = ( cr.StatBase[ ST_MAX_LIFE ] + cr.StatBase[ ST_STRENGTH ] * 4 + cr.StatBase[ ST_ENDURANCE ] * 8 );
+    int8  hpHealRate = cr.Stat[ ST_HEALING_RATE ];
+
+    uint8 overdose = cr.GetTimeEvents (CTE_STIMOVERDOSE, null, null, null) + cr.GetTimeEvents (CTE_SSTIMOVERDOSE, null, null, null) * 3; // overdose
+
+    /*if( hpCurrent >= hpMax )
+    {
+        cr.Say( SAY_NETMSG, "Ваше здоровье маскимально." );
+        return true;
+    }*/
+
+    int16 healAdd = ( hpHealRate * (5-overdose));
+    healAdd = CLAMP( healAdd, 1, (cr.Stat[ ST_ENDURANCE ] + cr.Stat[ ST_STRENGTH ])*2);
+    hpCurrent + healAdd > hpMax ? cr.StatBase[ ST_CURRENT_HP ] = hpMax : cr.StatBase[ ST_CURRENT_HP ] += healAdd;
+    
+    cr.Say (SAY_NETMSG, "Ваша боль отступает, а раны начинают затягиваться.");
+    
+    int i = BP_LIMBS_BEGIN;
+    while (i <= BP_LIMBS_END) {
+    	cr.ParamBase [i] -= healAdd;
+    	if (cr.ParamBase [i] < 0) cr.ParamBase [i] = 0;
+    	i ++;
+    }
+    
+    cr.AddTimeEvent ("cte_stimoverdose", 3600, CTE_STIMOVERDOSE, 0);
+
+    // bleed
+    if( hpCurrent >= ( hpMax * 0.75 ) )
+    {
+        ChangeStatus( cr, CR_STATUS_BLEED, healAdd * 0.5, false );
+    }
+
+    //if (valid(item)) _DecItem( item, 1 );                                   // delete stimpack
+
+
+    if (cr.IsNpc()) return true;
+
+    if( overdose <= ( cr.Stat[ ST_ENDURANCE ] + cr.Stat[ ST_STRENGTH ] ) / 2.5 )
+    {
+        overdose++;
+        overdose = CLAMP( overdose, 0, 7 );
+        cr.StatBase[ ST_OVERDOSE ] |= overdose;
+    }
+    else
+    {
+        if( Random( 0, 95 ) > cr.Stat[ ST_LUCK ] * 10 )
+        {
+            cr.ToDead( Random( 0, 1 ) > 0 ? ANIM2_DEAD_FRONT : ANIM2_DEAD_BACK, null );
+            cr.Say( SAY_NETMSG, "Вы умерли от передозировки." );
+            return true;
+        }
+        else
+        {
+            cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), 200 - ( cr.Stat[ ST_ENDURANCE ] * cr.Stat[ ST_HEALING_RATE ] * 2 ), cr.HexX, cr.HexY );
+            cr.Say( SAY_NETMSG, "У Вас передозировка." );
+        }
+    }
+
+    // cr.Say(SAY_NETMSG, "after "+cr.StatBase[ST_OVERDOSE]);
+
+    ChangeCritterSpeed( cr );   // pm added
+
+    cr.Say( SAY_NETMSG, "Вы восстановили " + healAdd + " жизней" );
+    return true;
+}
+
+bool ItemPowderUse( Critter& cr, Item& item )
+{
+    if (cr.IsNpc()) return true;
+
+    uint8 overdose = ( ( cr.StatBase[ ST_OVERDOSE ] >> 4 ) & 0x4 ); // overdose
+
+    int16  hpCurrent = cr.StatBase[ ST_CURRENT_HP ];
+    int16 hpMax = ( cr.StatBase[ ST_MAX_LIFE ] + cr.StatBase[ ST_STRENGTH ] * 4 + cr.StatBase[ ST_ENDURANCE ] * 8 );
+    uint8  hpHealRate = cr.Stat[ ST_HEALING_RATE ];
+
+    /*if( hpCurrent >= hpMax )
+    {
+        cr.Say( SAY_NETMSG, "Ваше здоровье маскимально." );
+        return true;
+    }*/
+
+    int16 healAdd = ( hpHealRate * (3-overdose));
+    healAdd = CLAMP( healAdd, 1, (cr.Stat[ ST_ENDURANCE ] + cr.Stat[ ST_STRENGTH ]));
+    hpCurrent + healAdd > hpMax ? cr.StatBase[ ST_CURRENT_HP ] = hpMax : cr.StatBase[ ST_CURRENT_HP ] += healAdd;
+    
+    cr.Say (SAY_NETMSG, "Ваша боль отступает.");
+    
+    /*int i = BP_LIMBS_BEGIN;
+    while (i < BP_LIMBS_END) {
+    	cr.ParamBase [i] -= healAdd;
+    	if (cr.ParamBase [i] < 0) cr.ParamBase [i] = 0;
+    	i ++;
+    }*/
+
+    if( overdose <= ( ( cr.Stat[ ST_ENDURANCE ] * 2 ) + ( cr.Stat[ ST_STRENGTH ] * 2 ) / 5 ) )
+    {
+        //overdose++;
+        overdose = CLAMP( overdose, 0, 7 );
+        //cr.StatBase[ ST_OVERDOSE ] |= ( overdose << 4 );   // q Была какая то кривая неработающую хуета, исправил на работающую кривую хуету
+    }
+    else
+    {
+        if( Random( 0, 95 ) > cr.Stat[ ST_LUCK ] * 10 )
+        {
+            /*cr.ToDead( Random( 0, 1 ) > 0 ? ANIM2_DEAD_FRONT : ANIM2_DEAD_BACK, null );*/
+			cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), 200 - ( cr.Stat[ ST_ENDURANCE ] * cr.Stat[ ST_HEALING_RATE ] * 2 ), cr.HexX, cr.HexY );
+            cr.Say( SAY_NETMSG, "У вас передозировка." );
+            return true;
+        }
+        else
+        {
+            cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), 200 - ( cr.Stat[ ST_ENDURANCE ] * cr.Stat[ ST_HEALING_RATE ] * 2 ), cr.HexX, cr.HexY );
+            cr.Say( SAY_NETMSG, "У Вас передозировка." );
+        }
+    }
+
+    if (valid(item)) _DecItem( item, 1 );                                   // delete stimpack
+    //cr.Say( SAY_NETMSG, "Вы восстановили " + healAdd + " жизней" );
+    return true;
+}
+
+bool __Bandage( Critter& cr, Critter@ targetCr )
+{
+	ProccessFirstAidSkill(cr, targetCr, false);
+    return true;
+}
+
+void Prolonged_heal ( Critter& targetCr, uint16 sk )   // Export
+{
+    targetCr.AddTimeEvent( "cte_Heal", 1500, CTE_HEAL, sk );
+}
+
+bool UseBandage( Critter& cr, Critter& targetCr, uint16 sk )
+{
+	uint rate = 0;
+	
+	rate = targetCr.Stat [ST_MAX_LIFE] / (750/sk);
+	
+    targetCr.AddTimeEvent( "cte_Heal", 0, CTE_HEAL, rate );
+
+    ChangeStatus( targetCr, CR_STATUS_BLEED, sk * 0.5, false );
+
+    targetCr.Say( SAY_NETMSG, "Вам наложили повязки.");
+	targetCr.StatBase[ ST_BLEED ] = targetCr.StatBase[ ST_BLEED ] / 8;
+
+	if ( valid (cr) )
+	{
+		if( cr.IsPlayer() )
+		{
+			cr.Say( SAY_NETMSG, "Вы наложили повязку." );	
+			cr.TimeoutBase[ TO_SK_FIRST_AID ] = FIRST_AID_TIMEOUT( cr );
+			cr.AddScore( SCORE_DOCTOR, 1 );
+		}
+	}
+    return true;
+}
+
+uint cte_Heal( Critter& cr, int identifier, uint& rate )
+{
+    uint heal = cr.Stat [ST_HEALING_RATE];
+    if (heal < 1) heal = 3;
+    if (heal > rate) heal = rate*2;
+    
+    bool isHealed = true;
+	int i = BP_LIMBS_BEGIN;
+	while (i <= BP_LIMBS_END) {
+		if (cr.ParamBase [i] > 0) isHealed = false;
+    	cr.ParamBase [i] -= heal;
+    	if (cr.ParamBase [i] < 0) cr.ParamBase [i] = 0;
+    	i ++;
+	}
+	cr.StatBase [ST_CURRENT_HP] += heal;
+    int16 aidTime = 6*60*__TimeMultiplier;
+    
+    if (!isHealed) cr.Say (SAY_NETMSG, "Вы восстановили " + heal + " жизней.");
+
+    rate -= heal;
+    if( cr.Param[ QST_GAMEMODE ] == GAME_TEST ) cr.Say( SAY_NETMSG, "+hp="+heal+" ,rate="+rate+" ,time="+aidTime);
+
+    ChangeCritterSpeed( cr );   // pm added
+
+    bool repeat = true;
+
+    if (rate <= 1) {
+    repeat = false;
+	cr.Say( SAY_NETMSG, "Кажется, от повязки больше нет проку.");
+    }
+    return repeat ? aidTime : 0;
+}
+
+void ItemHypoUse (Critter& cr, Item& item) {	// Гипо
+	cr.AddTimeEvent ("cte_quickheal", 0, CTE_QUICKHEAL, cr.Stat [ST_MAX_LIFE]);
+	cr.Say (SAY_NETMSG, "Вы начинаете быстро регенерировать.");
+	cr.Say (SAY_EMOTE, "Раны срастаются");
+	cr.ParamBase[ BP_BLOOD_LOSS ] -= 30;
+	cr.StatBase [ST_CURRENT_HP] += 100;
+}
+
+uint cte_quickheal (Critter& cr, int identifier, uint& rate) {
+	int heal = 10;
+	if (heal > rate) heal = rate;
+	bool isHealed = true;
+	int i = BP_LIMBS_BEGIN;
+	while (i <= BP_LIMBS_END) {
+		if (cr.ParamBase [i] > 0) isHealed = false;
+		cr.ParamBase [i] -= heal;
+		if (cr.ParamBase [i] < 0) cr.ParamBase [i] = 0;
+		i ++;
+	}
+	cr.StatBase [ST_CURRENT_HP] += heal;
+	int16 aidTime = 2;
+	
+	rate -= heal;
+	
+	ChangeCritterSpeed (cr);
+	
+	bool repeat = true;
+	if (rate <= 0) {
+		repeat = false;
+	}
+	return repeat ? aidTime : 0;
+}
+
+void ItemSupUse (Critter& cr, Item& item) 
+{ // Суперстимулятор / СС
+	uint8 overdose = cr.GetTimeEvents (CTE_STIMOVERDOSE, null, null, null) + cr.GetTimeEvents (CTE_SSTIMOVERDOSE, null, null, null) * 3;
+	
+	cr.AddTimeEvent ("cte_quickheal", 0, CTE_QUICKHEAL, cr.Stat[ST_MAX_LIFE]/3);
+	cr.Say (SAY_NETMSG, "Ваше сердце бьется учащенно. Вы чувствуете себя легче.");
+	cr.Say (SAY_EMOTE, "Быстро дышит");
+	cr.AddTimeEvent ("cte_sstimoverdose", 3600, CTE_SSTIMOVERDOSE, 0);
+	
+	if( overdose <= ( cr.Stat[ ST_ENDURANCE ] + cr.Stat[ ST_STRENGTH ] ) / 2.5 )
+    {
+        //overdose++;
+        overdose = CLAMP( overdose, 0, 7 );
+        //cr.StatBase[ ST_OVERDOSE ] |= overdose;
+    }
+    else
+    {
+        if( Random( 0, 95 ) > cr.Stat[ ST_ENDURANCE ] * 10 ) //Допилить
+        {
+            /*cr.ToDead( Random( 0, 1 ) > 0 ? ANIM2_DEAD_FRONT : ANIM2_DEAD_BACK, null );*/
+            cr.Say( SAY_NETMSG, "У вас передозировка" );
+			cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), 30 - ( cr.Stat[ ST_ENDURANCE ] * cr.Stat[ ST_HEALING_RATE ] * 2 ), cr.HexX, cr.HexY );
+        }
+        else
+        {
+            cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), 15 - ( cr.Stat[ ST_ENDURANCE ] * cr.Stat[ ST_HEALING_RATE ] * 2 ), cr.HexX, cr.HexY );
+            cr.Say( SAY_NETMSG, "Вам становится плохо.." );
+        }
+    }
+}
+
+
+uint cte_stimoverdose (Critter& cr, int identifier, uint& rate) {
+	return 0;
+}
+
+uint cte_sstimoverdose (Critter& cr, int identifier, uint& rate) {
+	int damage = cr.Stat [ST_MAX_LIFE] / 12;
+	int i = BP_LIMBS_BEGIN;
+	while (i <= BP_LIMBS_END) {
+		cr.ParamBase [i] += damage;
+		i ++;
+	}
+	return 0;
+}

@@ -1,0 +1,265 @@
+// Auhtor: heX
+// Эмулятор жизни НПС
+// ver 0.0
+
+#include "_macros.fos"
+#include "utils_for_array.fos"
+#include "npc_planes.fos"
+
+// job types
+#define JT_MOVE_TO            ( 1 )
+#define JT_RUN_TO             ( 2 )
+#define JT_MOVE_RND           ( 3 )
+#define JT_RUN_RND            ( 4 )
+#define JT_MOVE_OR_RUN_RND    ( 5 )
+#define JT_STEP_RND           ( 6 )
+
+// true or false  =)
+#define TrueOrFalse           ( Random( 0, 1 ) == 0 )
+
+// класс работы
+// вообще его нужно разделить на десяток подклассов
+// Но:
+// во первых такое дробление часто создает идиотские ООП проблемы
+// во вторых я покачто немного недоверяю классам в AngScr
+// в третьих а нафига все запутывать?
+class CJob {
+    uint8 jobType;        // тип работы
+
+    int   entire;         // номер ENT гекса или
+    int   X;              // точные координаты работы
+    int   Y;
+    int   radiusMin;      // радиус работы (радиус в котором НПС будет шляться)
+    int   radiusMax;
+
+    int   npcId;          // номер НПС к которому они пойдут. radius тоже действует.
+    uint8 npcSocialType;  // социальный тип к которому нужно подойти (выбираеться случайный представитель)
+    bool  ahead;          // стремяться встать перед его взором
+    bool  toFace;         // будут смотреть на него
+    bool  inRoom;         // НПС стоит в комнате, учитывать это (правда покачто реализовать это сложновато...)
+
+    int   time;           // точное время начало работы (если 0 тогда используеться timeHour)
+    int   timeHour;       // час начала работы
+    // int timeHourBegin; // час начала работы
+    // int timeHourEnd; // час завершения работы
+    int  timeMissMinutes; // опоздание на работу в минутах
+    int  timeOutMin;      // как долго нужно быть на работе. если 0 то будет работать пока не придет время другой работы.
+    int  timeOutMax;
+
+    int  ignorePercent;   // процент игнорирования. min=0 -выполнять всегда. max=101 - игнорировать всегда.
+    // bool waitOnIgnore; // ждать при игноре
+    bool nextJobOnIgnore; // запускать следущюю работу при игнорировании
+
+    bool returnToHome;    // возвращаться на исходную позицию после выполнения плана
+
+    CJob()
+    {
+        jobType = 0;
+
+        entire = 0;
+        X = 0;
+        Y = 0;
+        radiusMin = 0;
+        radiusMax = 0;
+
+        npcId = 0;
+        npcSocialType = 0;
+        ahead = false;
+        toFace = false;
+        inRoom = false;
+
+        time = 0;
+        timeHour = 0;
+        timeMissMinutes = 0;
+        timeOutMin = 0;
+        timeOutMax = 0;
+        ignorePercent = 0;
+        // waitOnIgnore=0;
+        nextJobOnIgnore = false;
+        returnToHome = false;
+    }
+
+    void DoWork( Critter@ npc )
+    {
+        // npc.ErasePlane(AI_PLANE_MISC, true); // может вызвать сбои с дургими скриптовыми системами
+        if( ignorePercent > Random( 1, 100 ) )
+        {
+            // if (waitOnIgnore) AddMiscPlane(npc,0,Random(timeOutMin,timeOutMax),null);
+            return;
+        }
+        uint8 j = jobType;
+        if( j == JT_MOVE_OR_RUN_RND )
+            j = TrueOrFalse ? JT_MOVE_RND : JT_RUN_RND;
+        if( j == JT_MOVE_RND or j == JT_RUN_RND )
+        {
+            // размусолил на столько строк потомучто иначе вылазеет warn
+            X = Random( radiusMin, radiusMax );
+            X = npc.HexX + ( TrueOrFalse ? X : -X );
+            Y = Random( radiusMin, radiusMax );
+            Y = npc.HexY + ( TrueOrFalse ? Y : -Y );
+        }
+        switch( j )
+        {
+        case JT_MOVE_TO:
+            AddWalkPlane( npc, 0, X, Y, Random( 0, 5 ), false, Random( radiusMin, radiusMax ) );
+            break;
+        case JT_MOVE_RND:
+            AddWalkPlane( npc, 0, X, Y, Random( 0, 5 ), false, 0 );
+            break;
+        case JT_RUN_TO:
+            AddWalkPlane( npc, 0, X, Y, Random( 0, 5 ), true, Random( radiusMin, radiusMax ) );
+            break;
+        case JT_RUN_RND:
+            AddWalkPlane( npc, 0, X, Y, Random( 0, 5 ), true, 0 );
+            break;
+        case JT_STEP_RND:
+            npc.MoveRandom();
+            break;
+        }
+        // после выполнения подождать
+        // AddMiscPlane(npc,0,Random(timeOutMin,timeOutMax),null);
+    }
+} // CJob
+
+// фильтр для определения классовой принадлежности
+// покачто размещенн в CSocialType
+// class CSocialFilter
+
+// class для определения классовой принадлежности (социальная роль)
+// плюс содержит список работ которые этот социальный класс выполняет
+class CSocialType {
+    CJob[] jobs;     // список работ
+    // CSocialFilter[] filters; // фильтры
+
+    // bool jobGroup; // весь социум будет делать одно и тоже?
+    uint8 jobSwitch; // переключатель работ
+
+    // фильтрации
+    int DialogId;    // по диалогу
+    int NpcRole;     // по роли
+    int BaseType;    // по типу
+
+    CSocialType()
+    {
+        // Log("Social type init begin");
+        DialogId = 0;
+        NpcRole = 0;
+        BaseType = 0;
+        // jobGroup=false;//отключен
+        jobSwitch = 0;
+    }
+
+    // тестирование НПС на вхождение в этот социальный класс
+    // должен ходить по списку фильтра
+    bool TestNPC( Critter@ npc )
+    {
+        if( DialogId != 0 and npc.StatBase[ ST_DIALOG_ID ] == DialogId )
+            return true;
+        if( NpcRole != 0 and npc.StatBase[ ST_NPC_ROLE ] == NpcRole )
+            return true;
+        if( BaseType != 0 and npc.StatBase[ ST_BODY_TYPE ] == BaseType )
+            return true;
+        return false;
+    }
+
+    void DoWork( Critter@ npc )
+    {
+        jobs[ 0 ].DoWork( npc );    // !STUB!
+    }
+}
+
+// основной класс системы
+class CALifeSystem {
+    CSocialType[] socialTypes; // список социальных типов
+    Critter@[] critters;       // массив со всеми НПС
+    uint8[] critRole;          // и смежный массив с их классовой принадлежностью
+    // uint[] critTimeOut; // таймауты
+    // может стоит завести объект для каждого НПС, чтоб не плодить массивы?
+
+    uint crittersCount;
+
+    CALifeSystem()
+    {
+        crittersCount = 0;
+    }
+
+    // добавляет в листы
+    bool AddNpc( Critter@ npc, uint8 role )
+    {
+        for( uint i = 0; i < critters.length(); i++ )
+            if( @critters[ i ] == @npc )
+                return false;
+        AddToArray( critters, npc );
+        AddToArray( critRole, role );
+        crittersCount++;
+        return true;
+    }
+
+    // удаляет из листов по номеру
+    void DeleteNpc( uint index )
+    {
+        // if index>...
+        RemoveFromArrayPtr( critters, index );
+        RemoveFromArray( critRole, index );
+        crittersCount--;
+    }
+
+    // удаляет из листов
+    bool DeleteNpc( Critter@ npc )
+    {
+        return false;
+    }
+
+    // узнает роль НПС
+    uint8 GetNpcRole( Critter@ npc )
+    {
+        return 0;
+    }
+
+    // перемешивает массив критеров (чтобы они слишком синхронно не действовали)
+    void ShuffleCritters() {}
+
+    // регистрация нового НПС
+    void RegisterNpc( Critter@ npc )
+    {
+        if( npc.IsPlayer() )
+            return;
+        for( uint i = 0; i < socialTypes.length(); i++ )
+        {
+            if( socialTypes[ i ].TestNPC( npc ) )
+            {
+                npc.ModeBase[ MODE_NO_HOME ] = 1;
+                AddNpc( npc, i );
+                // Log("Register ok");
+                break;
+            }
+        }
+    }
+
+    void Loop()
+    {
+        for( uint i = 0; i < critters.length(); i++ )
+            socialTypes[ critRole[ i ] ].DoWork( critters[ i ] );
+    }
+} // CALifeSystem
+
+
+
+
+/*
+   ToDo:
+   ENT nomers:
+   A0 - точка вставания. туда НПС будут вставать в этом секторе.
+   A1 - точка куда будут глядеть (ищут ближайшую для сектора).
+   A2 - точки к которым будут подходить.
+   A3
+   A4 - к кому они пришли в этом секторе, точка лежит под нпс.
+   A5
+   A6..A9 - на усмотрение разработчика
+   AA - Any. любое место куда будут иногда приходить нпс.
+   AB - Bar. бар. туда приходять выпить.
+   AC - Cafe. сафе. туда приходят поесть.
+   AD - Do Work. работа.
+   AE - Encounter. точка выхода за пределы карты (на енкаутеры).
+   AF -
+ */

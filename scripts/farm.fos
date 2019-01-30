@@ -1,0 +1,221 @@
+#include "_macros.fos"
+
+// import bool UseShovel(Critter& cr, Item& item) from "farm"; //Export
+
+#include "_ltp.fos"
+
+bool ltp_inited = false;
+void ltp_init()
+{
+    LTPREG( LTP_FARMING, process_farming )
+    ltp_inited = true;
+}
+
+import uint GetTile( Map& map, uint16 hexX, uint16 hexY, uint8 layer ) from "qmap";
+import bool SetTile( Map& map, uint hash, uint16 hexX, uint16 hexY, uint8 layer ) from "qmap";
+
+import uint8 checkSand( Map& map, uint16 tx, uint16 ty ) from "qmap_sand";
+
+bool hashes_inited = false;
+
+#define HASHES_FARM_GARD    ( 0 )
+#define HASHES_FARM_MAX     ( 1 )
+
+uint[][] hashes_farm( HASHES_FARM_MAX );
+
+void init_hashes()
+{
+    string dir = "art/tiles/",
+           gar = "gar",
+           png = ".png",
+           frm = ".frm";
+
+    uint[] @ data = null;
+
+    @data = hashes_farm[ HASHES_FARM_GARD ];
+    data.resize( 0 );
+    data.insertLast( GetStrHash( dir + gar + 1000 + png ) );
+    uint i = 0;
+    for( i = 2000; i <= 2004; i++ )
+        data.insertLast( GetStrHash( dir + gar + i + frm ) );
+
+    hashes_inited = true;
+}
+
+string color_emote = "|0xFF00FF ";
+string color_femote = "|0xFF3366FF ";
+
+void femote( Critter& cr, string& str )
+{
+    cr.Say( SAY_EMOTE_ON_HEAD, color_femote + str + color_emote );
+}
+
+bool UseShovel( Critter& cr, Item& item )
+{
+    return dig( cr );
+}
+
+void dig( Critter& player, int var, int param1, int param2 )
+{
+    dig( player );
+}
+
+bool dig( Critter& player )
+{
+    Map@ map = player.GetMap();
+    if( map is null )
+        return false;
+
+    if( !hashes_inited )
+        init_hashes();
+    if( !ltp_inited )
+        ltp_init();
+
+    //GameVar@ cant_dig = GetLocalVar( LMVAR_cant_dig, map.Id );
+    //if( cant_dig.GetValue() == 1 )
+	if(player.GetAccess()<ACCESS_MODER && map.GetProtoId()!=MAP_PATTERN_BLANK)
+    {
+        player.Say( SAY_NETMSG, "Здесь копать нельзя." );
+        return true;
+    }
+
+    uint16 tx = H2T( player.HexX );
+    uint16 ty = H2T( player.HexY );
+
+    if( checkSand( map, tx, ty ) == 0 )
+    {
+        player.Say( SAY_NETMSG, "Попробуйте копать песок." );
+        return true;
+    }
+
+    uint16 hexX = THX( player.HexX );
+    uint16 hexY = THY( player.HexY );
+
+    uint   hash = GetTile( map, hexX, hexY, 0 );
+
+    if( hash != 0 )
+    {
+        player.Say( SAY_NETMSG, "Нечего копать." );
+        return true;
+    }
+
+    for( int i = -2; i <= 2; i++ )
+    {
+        for( int k = -2; k <= 2; k++ )
+        {
+            if( ( i == 0 && k == 0 ) || map.IsHexPassed( player.HexX + i, player.HexY + k ) )
+                continue;
+            player.Say( SAY_NETMSG, "Здесь нельзя копать." );
+            // player.Say(SAY_NETMSG, "hx "+(player.HexX+i)+" hy "+(player.HexY+k));
+            return true;
+        }
+    }
+
+    femote( player, "копает" );
+    StartProcess( player, LTP_FARMING, ( 11 - player.Param[ ST_STRENGTH ] ) * 1000 );
+
+    return true;
+}
+
+uint process_farming( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESSD( LTP_FARMING )
+
+    Map@ map = cr.GetMap();
+
+    uint16 hexX = THX( cr.HexX );
+    uint16 hexY = THY( cr.HexY );
+
+    uint   hash = GetTile( map, hexX, hexY, 0 );
+
+    if( hash != 0 )
+    {
+        return 0;
+    }
+
+    uint[] @ data = hashes_farm[ HASHES_FARM_GARD ];
+
+    uint prevTile = GetTile( map, hexX, hexY - 1, 0 ),
+         nextTile = GetTile( map, hexX, hexY + 1, 0 ),
+         newTile = 0;
+
+    // player.Say(SAY_NETMSG, "prev "+prevTile+" next "+nextTile);
+
+    bool prev = true, next = true;
+
+    if( prevTile == data[ 0 ] )
+    {
+        SetTile( map, data[ 1 ], hexX, hexY - 1, 0 );
+    }
+    else if( prevTile == data[ 5 ] )
+    {
+        SetTile( map, data[ Random( 2, 4 ) ], hexX, hexY - 1, 0 );
+    }
+    else
+        prev = false;
+
+    if( nextTile == data[ 0 ] )
+    {
+        SetTile( map, data[ 5 ], hexX, hexY + 1, 0 );
+    }
+    else if( nextTile == data[ 1 ] )
+    {
+        SetTile( map, data[ Random( 2, 4 ) ], hexX, hexY + 1, 0 );
+    }
+    else
+        next = false;
+
+    if( prev && next )
+        newTile = data[ Random( 2, 4 ) ];
+    else if( prev )
+        newTile = data[ 5 ];
+    else if( next )
+        newTile = data[ 1 ];
+    else
+        newTile = data[ 0 ];
+
+    // player.Say(SAY_NETMSG, "hash "+newTile);
+
+    SetTile( map, newTile, hexX, hexY, 0 );
+
+    return 0;
+}
+
+void CheckGard( Critter& player, int var, int param1, int param2 )
+{
+    Map@ map = player.GetMap();
+    if( map is null )
+        return;
+
+    player.Say( SAY_NETMSG, "На грядке " + ( CheckGard( map, player.HexX, player.HexY ) ? "true" : "false" ) );
+}
+
+bool CheckGard( Map& map, uint16 hexX, uint16 hexY )
+{
+    if( !hashes_inited )
+        init_hashes();
+
+    uint16 hexX0 = ( ( hexX >> 1 ) << 1 ) + 1;
+
+    if( hexX != hexX0 )
+    {
+        /*Log("не попадает в ряд грядки");*/
+        return false;
+    }
+
+    uint tile = GetTile( map, THX( hexX ), THY( hexY ), 0 ),
+         tile2 = map.GetTile( hexX >> 1, hexY >> 1 );
+
+    uint[] @ data = hashes_farm[ HASHES_FARM_GARD ];
+
+    if( tile == data[ 0 ] || tile == data[ 5 ] || tile2 == data[ 0 ] || tile2 == data[ 5 ] )
+        return ( hexY % 2 == 0 );
+
+    if( tile == data[ 1 ] || tile2 == data[ 1 ] )
+        return ( hexY % 2 == 1 );
+
+    if( tile == data[ 2 ] || tile == data[ 3 ] || tile == data[ 4 ] || tile2 == data[ 2 ] || tile2 == data[ 3 ] || tile2 == data[ 4 ] )
+        return true;
+
+    return false;
+}

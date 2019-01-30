@@ -1,0 +1,3259 @@
+// Author: cvet
+#include "_maps.fos"
+#include "_macros.fos"
+#include "_msgstr.fos"
+#include "_math.fos"
+#include "entire.fos"
+
+#include "_itempid.fos"
+
+#include "_global_events.fos"
+
+#define MSG_ONLY_SUTTER (15000)
+
+import void FindEncounter( Critter@[]& group, Item@ car, uint x, uint y, uint& encounterDescriptor, bool& waitForAnswer, bool empty, int ec ) from "worldmap";
+import void InviteToEncounter( Critter@[]& group, Item@ car, uint encounterDescriptor, int combatMode, uint& mapId, uint16& hexX, uint16& hexY, uint8& dir ) from "worldmap";
+import bool CheckFoundedEncounter( uint index ) from "worldmap";
+import uint GetGlobalMapRelief( uint x, uint y ) from "worldmap";
+
+import uint GenerateWasteland( Critter& cr, uint8 x, uint8 y ) from "mapgen_wasteland";
+
+import void testgen( Critter& cr, int, int, int ) from "mapgen_wasteland";
+
+// import void SetOnline(Critter& cr, bool online) from "manager";
+// import uint GetAllPlayers(Critter@[]& crs) from "manager";
+// import uint GetPlayers(Critter& cr, uint16 radius, bool square, Critter@[]& crs) from "manager";
+
+import void StartArcadeMenu( Critter@ cr ) from "arcade_menu";
+
+import bool SpawnItemCell( uint mapId ) from "local_population";
+import void AddCritter( Map& map ) from "local_population";
+
+import bool IsTileAvalible( uint hash, uint8 group ) from "cimp";
+import bool IsTileGround( uint hash ) from "cimp";
+
+#define ENTIRE_NUM            ( 255 )
+#define MAP_SIZE              ( 150 )
+#define ADD_HEX_COUNT         ( 5 )
+#define SEARCH_HEX_COUNT      ( 3 )
+#define CELL_SIZE             ( 10 )
+#define CELL_LEVEL_DEFAULT    ( 2 )
+#define CELL_LEVEL_MAX        ( 5 )
+
+#define SKILL_OUTDORSMAN_MOD	(20)
+
+#include "_cell.fos"
+
+class CellContent
+{
+    uint[] MapId;
+    uint  Index;
+    uint8 Type;
+    int8  Visibility;
+    uint8 Durability;
+
+    uint[][] Critters;
+
+    CellContent()
+    {
+
+        Index = uint( -1 );
+        Type = 0;
+        Visibility = 0;
+        Durability = 0;
+
+        Critters.resize( CELL_CRITTERS_MAX );
+        MapId.resize( CELL_LEVEL_MAX );
+
+        MapId[ CELL_LEVEL_DEFAULT ] = 0;
+    }
+
+    CellContent( uint mapId, uint8 type, int8 visibility )
+    {
+        Index = uint( -1 );
+        Type = type;
+        Visibility = visibility;
+        Durability = 255;
+
+        Critters.resize( CELL_CRITTERS_MAX );
+        MapId.resize( CELL_LEVEL_MAX );
+        MapId[ CELL_LEVEL_DEFAULT ] = mapId;
+    }
+
+    uint GetCrittersCount( int type )
+    {
+        if( type >= 0 )
+        {
+            if( type >= CELL_CRITTERS_MAX )
+                return 0;
+
+            return Critters[ type ].length();
+        }
+        else
+        {
+            uint count = 0;
+            for( uint i = 0; i < CELL_CRITTERS_MAX; i++ )
+            {
+                count += Critters[ i ].length();
+            }
+            return count;
+        }
+    }
+
+    uint GetCritters( Critter@[] crs, int type )
+    {
+        if( type >= 0 )
+        {
+            if( type >= CELL_CRITTERS_MAX )
+                return 0;
+
+            uint[] @ crIds = Critters[ type ];
+            Critter@ cr = null;
+
+            uint     k = crs.length(),
+                     len = crIds.length();
+
+            crs.resize( k + len );
+
+            for( uint i = 0; i < len; i++ )
+            {
+                @cr = GetCritter( crIds[ i ] );
+                if( cr is null )
+                    continue;
+
+                @crs[ k++ ] = cr;
+            }
+
+            crs.resize( k );
+
+            return k;
+        }
+        else
+        {
+            uint[] @ crIds = Critters[ type ];
+            Critter@ cr = null;
+
+            uint     k = crs.length(),
+                     len = 0;
+
+            for( uint i = 0; i < CELL_CRITTERS_MAX; i++ )
+            {
+                len = crIds.length();
+                crs.resize( k + len );
+
+                for( uint t = 0; t < len; t++ )
+                {
+                    @cr = GetCritter( crIds[ t ] );
+                    if( cr is null )
+                        continue;
+
+                    @crs[ k++ ] = cr;
+                }
+
+            }
+
+            return k;
+        }
+    }
+
+    bool ShiftCritter( Critter& cr, uint type, bool del )
+    {
+        if( type >= CELL_CRITTERS_MAX )
+            return false;
+
+        if( del )
+        {
+            int index = Critters[ type ].find( cr.Id );
+
+            if( index == -1 )
+                return false;
+
+            Critters[ type ].removeAt( index );
+        }
+        else
+        {
+            Critters[ type ].insertLast( cr.Id );
+        }
+        return true;
+    }
+
+    Map@ GetMap()
+    {
+        return ::GetMap( MapId[ CELL_LEVEL_DEFAULT ] );
+    }
+
+    Map@ GetMap( int level )
+    {
+        return ::GetMap( MapId[ CELL_LEVEL_DEFAULT ] + level );
+    }
+
+}
+
+class Cell
+{
+    // uint Color;
+    uint8        SizeX; // pm added
+    uint8        SizeY;
+    uint8        ParantX;
+    uint8        ParantY;
+    uint16       X;
+    uint16       Y;
+    uint8        Wildness;
+    CellContent@ Content;
+
+    uint8        PopulationMax;
+    uint16       MonsterType;
+    int          MonsterCount;
+    bool         IsHavePopulation;
+//	uint16 CellX, CellY;
+
+    // uint[] Groups;
+
+    Cell()
+    {
+        // Color=0x33773333;
+        Wildness = 50;
+        SizeX = 1;         // pm added
+        SizeY = 1;         // pm added
+        // @Content = null;
+
+        MonsterType = 0;
+        MonsterCount = 0;
+        PopulationMax = 50;
+        IsHavePopulation = false;
+    }
+
+    uint8 ChangeWildness( int delta )
+    {
+        int wild = Wildness + delta;
+        wild = CLAMP( wild, 0, 100 );
+        Wildness = uint8( wild );
+
+        return Wildness;
+    }
+
+    void DropWildness()
+    {
+        Wildness = 0;
+        Log( "Wildness " + Wildness );
+    }
+
+    void ChangeMonsterCount( bool increase )
+    {
+        if( !increase )
+        {
+            if( MonsterCount > 0 )
+                MonsterCount--;
+        }
+        else
+        {
+            MonsterCount++;
+        }
+    }
+
+    void ChangeMonsterCount( uint8 count, bool increase )
+    {
+        MonsterCount += ( increase ? count : ( count - ( count * 2 ) ) );
+        MonsterCount = CLAMP( MonsterCount, 0, PopulationMax );
+    }
+
+    bool SetLocation( uint16 pid )
+    {
+        // if(Content !is null) return;
+
+        @Content = CellContent();
+        if( Content is null )
+            return false;
+
+        uint id = CreateLocation( pid, X, Y, null );
+
+        Location @ loc = GetLocation( id );
+        if( loc is null )
+            return false;
+
+        Content.MapId[ CELL_LEVEL_DEFAULT ] = loc.GetMapByIndex( 0 ).Id;
+
+
+        if( pid != 90 )
+            Content.Type = CELLMAP_TYPE_STATIC;
+        else
+            Content.Type = CELLMAP_TYPE_ENCOUTER;                                                            // 90 is encounter pid
+
+        return true;
+    }
+
+    int CellCreate( uint16 pid, bool force )
+    {
+        if( Content !is null && !force )
+            return -1;
+
+        if( !SetLocation( pid ) )
+            return -2;
+
+        return 0;
+    }
+
+    int CellCreate( uint16 pid, int wildness, int livetime, bool force )
+    {
+        if( Content !is null && !force )
+            return -1;
+
+        if( !SetLocation( pid ) )
+            return -2;
+
+        Wildness = wildness;
+        Content.Durability = livetime;
+
+        return 0;
+    }
+
+    int CellMove( uint16 x, uint16 y )
+    {
+        Cell @ target = world.GetCell( x, y );
+        if( target is null /* || target.Content is null*/ )
+            return -1;
+
+        // @target = this;
+        // @target.Content = this.Content;
+        // @ = Cell();
+
+        @target.Content = CellContent();
+        target.Content.MapId = Content.MapId;
+        target.Content.Durability = Content.Durability;
+        target.Content.Type = Content.Type;
+
+        @this.Content = null;
+
+
+        return 0;
+    }
+
+    int CellDelete()
+    {
+        if( Content is null )
+            return -1;
+        DeleteLocation( GetMap( Content.MapId[ CELL_LEVEL_DEFAULT ] ).GetLocation().Id );
+        @Content = null;
+
+
+
+        return 0;        // CellCreate(0, Wildness, 0, true);
+    }
+
+    int CellSetSize( int x, int y )
+    {
+
+        for( uint8 i = 0; i < y; ++i )
+        {
+            for( uint8 j = 0; j < x; ++j )
+            {
+                Cell @ child = world.GetCell( X - j, Y + i );
+                if( child is null )
+                {
+                    return -1;
+                }
+
+                if( child.Content is null )
+                {
+                    @child.Content = CellContent();
+                }
+
+                child.ParantX = X;
+                child.ParantY = Y;
+                child.Wildness = Wildness;
+
+                child.Content.MapId = Content.MapId;
+                child.Content.Type = Content.Type;
+                child.Content.Durability = Content.Durability;
+
+            }
+        }
+
+        return 0;
+    }
+
+    bool SpawnLo()
+    {
+        if( !(Content is null) )
+        {
+            return SpawnItemCell( Content.MapId[ CELL_LEVEL_DEFAULT ] );
+        }
+        return false;
+    }
+
+    bool SpawnLo( int level )
+    {
+        if( !(Content is null) )
+        {
+            return SpawnItemCell( Content.MapId[ CELL_LEVEL_DEFAULT + level ] );
+        }
+        return false;
+    }
+
+    /*int CellReCreate(uint16 pid)
+       {
+            @Content = CellContent();
+
+       }*/
+
+
+    void SetMapLevel( uint[] mapId )
+    {
+        if( !(Content is null) )
+        {
+            Content.MapId = mapId;
+        }
+    }
+}
+
+class CellWorld : iManagerModule, iManager_map_critter_in, iManager_map_critter_out, iManager_world_save
+{
+    Cell[] Cells;
+    uint16 CellsW;
+    uint16 CellsH;
+
+    CellWorld()
+    {
+        AddStartCallback( "globalmap_group", "start" );
+
+        CellsW = 7 * 5;
+        CellsH = 12 * 5;
+        Cells.resize( CellsW * CellsH );
+        for( uint y = 0; y < CellsH; y++ )
+        {
+            uint cy = y * CellsW;
+            for( uint x = 0; x < CellsW; x++ )
+            {
+                Cells[ x + cy ].X = x;
+                Cells[ x + cy ].Y = y;
+            }
+        }
+    }
+
+    bool manager_init()
+    {
+        Init();
+
+        return true;
+    }
+
+    uint GetCells( Cell@[]& cells, uint16 x, uint16 y, uint8 radius )
+    {
+        uint len = cells.length(),
+             len2 = len;
+
+        if( radius < 1 )
+            return len;
+
+        for( uint8 i = 1; i <= radius; i++ )
+        {
+            len2 += i * 8;
+        }
+
+        cells.resize( len2 );
+        int x0 = x, y0 = y;
+
+        int h = 1, g = 0, u = 0, r = 1;
+
+        for( uint i = len; i < len2; i++ )
+        {
+            u = ( g / h );
+
+            x0 += ( 1 - u ) * r;
+            y0 += u * r;
+
+            @cells[ i ] = GetCell( x0, y0 );
+            g++;
+            if( g >= h * 2 )
+            {
+                g = 0;
+                h += 1;
+                r *= -1;
+            }
+        }
+
+        return cells.length();
+    }
+
+    Cell@ GetCell( Critter@ cr )
+    {
+        uint16 x = cr.WorldX / 10, y = cr.WorldY / 10;
+        if( x >= CellsW || y >= CellsH )
+            return null;
+        return Cells[ x + y * CellsW ];
+    }
+
+    Cell@ GetCell( uint16 x, uint16 y )
+    {
+        if( x >= CellsW || y >= CellsH )
+            return null;
+        return Cells[ x + y * CellsW ];
+    }
+
+    Cell@ GetCell( uint i )
+    {
+        if( i >= Cells.length() )
+            return null;
+        return Cells[ i ];
+    }
+
+    Cell@ GetCellByMap( uint id )
+    {
+        for( uint16 i = 0, j = Cells.length(); i < j; ++i )
+        {
+            if( Cells[ i ].Content !is null && Cells[ i ].Content.MapId.find( id ) != -1 )
+                return Cells[ i ];
+        }
+
+        return null;
+    }
+
+    void ShowCells( Critter& cr, Cell& cell )
+    {
+        int  acc = cr.GetAccess();
+        bool adm = acc == ACCESS_ADMIN;
+
+        bool showStatic = ( adm || cr.Param[ QST_GAMEMODE ] != GAME_ARCADE ),
+             showWildness = ( adm || ( cr.Param[ QST_GAMEMODE ] != GAME_ARCADE && cr.Param[ SK_OUTDOORSMAN ] >= 50 ) ),
+             showEncs = ( adm || cr.Param[ QST_GAMEMODE ] == GAME_ARCADE );
+
+        uint8 radius = 0;
+        int   vision = 0;
+
+        if( acc == ACCESS_ADMIN )
+        {
+            radius = 40;
+            vision = 255;
+        }
+        else if( cr.Param[ QST_GAMEMODE ] == GAME_ARCADE )
+        {
+            radius = 5;
+        }
+        else
+        {
+            radius = ( cr.Param[ SK_OUTDOORSMAN ] / 100 ) + 1;
+            vision = cr.Param[ SK_OUTDOORSMAN ] / 4;
+        }
+
+        Cell@[] cells = { cell };
+
+        uint len = GetCells( cells, cell.X, cell.Y, radius );
+
+        int  precision = ( ( vision / 256.0f ) * 5 );
+        precision = ( 5 - precision ) * 5;
+
+        int[] data_color( len*2 ),
+        data_number( len * 2 ),
+        data_char( len * 2 );
+
+        uint8        data_cellSize = 1;  // pm added
+
+        uint         dc = 0, dn = 0, dch = 0, wild = 0, color = 0, number = uint( -1 ), chr = uint( -1 ), r = 0, nr = 0, zx = 0, zy = 0;
+        Cell@        cell0 = null;
+        CellContent@ cont = null;
+        int          coord = 0;
+
+        for( uint i = 0; i < len; i++ )
+        {
+            if( i > nr )
+            {
+                r++;
+                nr += r * 8;
+            }
+
+            Cell@ cell0 = cells[ i ];
+            if( cell0 is null )
+                continue;
+            zx = cell0.X;
+            zy = cell0.Y;
+
+            color = 0;
+            number = uint( -1 );
+            chr = uint( -1 );
+            coord = int( ( zx & 0xFFFF ) | ( zy << 16 ) );
+
+            @cont = cell0.Content;
+            if( showStatic and cont !is null and ( cont.Type & 0x1F ) == CELLMAP_TYPE_STATIC and ( vision + cont.Visibility > int(r * 20) ) )
+            {
+                color = 0x442222DD;
+                chr = 0x0011FF11 | ( uint( 'С' ) << 24 );
+            }
+            else if( showWildness )
+            {
+                wild = cell0.Wildness;
+
+                if( wild < 45 || wild > 55 )
+                {
+                    color = ( wild / precision );
+                    color = 0xFF * ( 1.0f - color * precision / 100.0f );
+                    color = 0x44000000 | ( 0xFF - color ) << 16 | color << 8 | color;
+                }
+            }
+
+            if( color != 0 )
+            {
+                data_color[ dc++ ] = coord;
+                data_color[ dc++ ] = int(color);
+            }
+
+            if( chr != uint( -1 ) )
+            {
+                data_char[ dch++ ] = coord;
+                data_char[ dch++ ] = int(chr);
+            }
+
+            if( showEncs && cont !is null && chr == uint( -1 ) )
+            {
+                number = cont.GetCrittersCount( CELL_CRITTERS_SURVIVAL );
+                if( adm )
+                    number |= cont.GetCrittersCount( CELL_CRITTERS_ARCADE ) << 16;
+
+                if( number == 0 )
+                    number = uint( -1 );
+            }
+
+            if( number != uint( -1 ) )
+            {
+                data_number[ dn++ ] = coord;
+                data_number[ dn++ ] = int(number);
+            }
+            /*
+               if(cell0.SizeX != 1)
+               {
+                    data_cellSize = cell0.Size;
+               }*/
+
+        }
+
+        // if(dc>1)
+        // {
+        data_color.resize( dc );
+        cr.RunClientScript( "client_main@_dr", 1, 0, 0, null, data_color );
+        // }
+        // if(dn>1)
+        // {
+        data_number.resize( dn );
+        cr.RunClientScript( "client_main@_dr", 2, 0, 0, null, data_number );
+        // }
+        // if(dch>1)
+        // {
+        data_char.resize( dch );
+        cr.RunClientScript( "client_main@_dr", 3, 0, 0, null, data_char );
+
+        // pm added
+        // cr.RunClientScript("client_main@_dr", 3, 0, 0, null, data_char);
+        // }
+    }
+
+    // pm added
+    void CreateCell( uint16 x, uint16 y, uint mapId, uint8 type, int8 visibility )
+    {
+        // CreateContent(world.GetCell(x*0.1, y*0.1), mapId, type, visibility);
+
+        Cell@ cell = GetCell( x, y );
+        if( cell is null )
+        {
+            Log( "null cell" );
+            return;
+        }
+
+        @cell.Content = CellContent();
+        cell.Content.MapId[ CELL_LEVEL_DEFAULT ] = mapId;
+        cell.Content.Type = type;
+        cell.Content.Visibility = visibility;
+
+        cell.ParantX = cell.X;
+        cell.ParantY = cell.Y;
+
+        Map @ map = GetMap( mapId );
+        if( map is null )
+            return;
+
+        map.SetData( 56, 1 );
+        map.SetData( 57, 0 );
+        map.SetData( 58, 0 );
+
+
+        if( cell.Content == null )
+            Log( "null content" );
+    }
+
+    Cell@ PassCell( Critter& cr )
+    {
+        Cell@ cell = GetCell( cr );
+        if( cell is null )
+            return null;
+
+        int tt = ( ( int(cell.X) & 0xFFFF ) | ( int(cell.Y) << 16 ) );
+        if( cr.Param[ ST_VAR6 ] != tt )
+        {
+            cr.ParamBase[ ST_VAR6 ] = tt;
+
+            return cell;
+        }
+        return null;
+    }
+
+    void Init()
+    {
+        Map@[] maps;
+        uint mlen = GetAllMaps( 0, maps );
+        for( uint i = 0; i < mlen; i++ )
+        {
+            if( maps[ i ] is null )
+                continue;
+
+            Map@ map = maps[ i ];
+
+            map.SetData( 57, 0 );
+            map.SetData( 58, 0 );
+        }
+        // Log("Очищено "+mlen+" карт.");
+
+        Location@[] locations;
+        uint llen = GetAllLocations( 0, locations );
+        for( uint i = 0; i < llen; i++ )
+        {
+            if( locations[ i ] is null )
+                continue;
+
+            Location@ loc = locations[ i ];
+
+            Map@[] maps_;
+            loc.GetMaps( maps_ );
+
+            if( maps_.length() <= 0 )
+                continue;
+
+            // Map@ map = loc.GetMapByIndex(0);
+            Map@ map = maps[ 0 ];
+            if( map is null )
+                continue;
+
+            uint[] levels( CELL_LEVEL_MAX );
+
+
+            for( uint8 ii = 0, jj = maps_.length(); ii < jj; ++ii )
+            {
+                /*Map@ tempMap = maps(ii);
+                   if(tempMap is null) continue;*/
+
+                int level = GetMapLevelByPid( maps_[ ii ].GetProtoId() );
+                levels[ CELL_LEVEL_DEFAULT + level ] = maps_[ ii ].Id;
+
+                // Log("maps "+ii+" map ID "+maps_[ii].Id+" level "+level);
+            }
+
+
+
+            uint8 type = CELLMAP_TYPE_NULL;
+            int8  vis = 0;
+
+            bool  pop = false;
+            uint8 sizeX = 1, sizeY = 1;             // pm added
+
+            if( map.GetData( 56 ) == 0 )
+            {
+                uint16 pid = loc.GetProtoId();
+                if( LocIsCity( pid ) )
+                    vis = 50;
+                else if( LocIsMasked( pid ) )
+                    vis = 5;
+                else if( LocIsHidden( pid ) )
+                    vis = -100;
+                else
+                    continue;
+                type = CELLMAP_TYPE_STATIC;
+
+                pop = true;
+
+                switch( pid )
+                {
+                case LOCATION_Sutter_Center:
+                    sizeX = 2;
+                    sizeY = 2;
+                    break;
+                default:
+                    break;
+                }
+            }
+            else
+            {
+                type = CELLMAP_TYPE_ENCOUTER;
+            }
+
+            uint8 locWorldX = loc.WorldX * 0.1, locWorldY = loc.WorldY * 0.1;
+
+            Cell@ cell = GetCell( locWorldX, locWorldY );
+            if( cell is null )
+                continue;
+
+            @cell.Content = CellContent();
+            cell.Content.MapId.resize( CELL_LEVEL_MAX );
+            cell.Content.MapId[ CELL_LEVEL_DEFAULT ] = map.Id;
+            cell.Content.Type = type;
+            cell.Content.Visibility = vis;
+
+            cell.ParantX = locWorldX;
+            cell.ParantY = locWorldY;
+
+            cell.IsHavePopulation = pop;
+
+            cell.SetMapLevel( levels );
+
+            // Log("x "+cell.X+" lwx "+locWorldX+" y "+cell.Y+" lwy "+locWorldY);
+
+            if( sizeX > 1 || sizeY > 1 )
+            {
+                for( uint8 y = 0; y < sizeY; ++y )
+                {
+                    for( int x = 0; x < sizeX; ++x )                   // invert right to left
+                    {
+                        Cell@ cell = GetCell( locWorldX - x, locWorldY + y );
+                        if( cell is null )
+                            continue;
+
+                        @cell.Content = CellContent();
+                        cell.Content.MapId.resize( CELL_LEVEL_MAX );
+                        cell.Content.MapId[ CELL_LEVEL_DEFAULT ] = map.Id;
+                        cell.Content.Type = type;
+                        cell.Content.Visibility = vis;
+
+                        cell.SizeX = sizeX;
+                        cell.SizeY = sizeY;
+
+                        cell.ParantX = locWorldX;
+                        cell.ParantY = locWorldY;
+
+                        cell.SetMapLevel( levels );
+
+                        // Log("x "+cell.X+" lwx "+locWorldX+" y "+cell.Y+" lwy "+locWorldY);
+                    }
+                }
+            }
+        }
+
+        if( IsAnyData( "cells_v1" ) && IsAnyData( "cells_monsters_v1" ) )
+        {
+            int[] cells_data,
+            cells_monsters_data;
+            GetAnyData( "cells_v1", cells_data );
+            GetAnyData( "cells_monsters_v1", cells_monsters_data );
+
+            uint len = cells_data.length();
+
+            if( len <= Cells.length() )
+            {
+                for( uint i = 0; i < len; i++ )
+                {
+                    Cells[ i ].Wildness = uint8( cells_data[ i ] );
+
+                    Cells[ i ].MonsterCount = uint8( cells_monsters_data[ i ] );
+                    Cells[ i ].MonsterType = MonsterTypeTable( Cells[ i ].Wildness );               // pm added
+                }
+            }
+        }
+    }
+
+    bool global_world_save()
+    {
+        uint clen = Cells.length();
+
+        int[] cells_data( clen );
+        int[] cells_monsters_data( clen );
+
+        int          dur = 0;
+        Cell@        cell = null;
+        CellContent@ cont = null;
+        for( uint i = 0; i < clen; i++ )
+        {
+            if( Cells[ i ].Wildness < 100 )
+                Cells[ i ].Wildness += Random( 0, 5 - Cells[ i ].Wildness / 20 );
+
+            @cell = Cells[ i ];
+
+            cells_data[ i ] = cell.Wildness;
+            cells_monsters_data[ i ] = cell.MonsterCount;
+
+            @cont = cell.Content;
+
+            if( cont !is null and cont.Type == CELLMAP_TYPE_ENCOUTER )
+            {
+                dur = cont.Durability;
+                dur += ( cont.GetCrittersCount( CELL_CRITTERS_SURVIVAL ) * 2 - 1 );
+                if( dur < 1 )
+                {
+                    Map@ map = GetMap( cont.MapId[ CELL_LEVEL_DEFAULT ] );
+                    if( map !is null )
+                    {
+                        Location@ loc = map.GetLocation();
+                        if( loc !is null )
+                        {
+                            DeleteLocation( loc.Id );
+                        }
+                    }
+                    @cell.Content = null;
+                }
+                else
+                {
+                    dur = CLAMP( dur, 1, 255 );
+                    cont.Durability = uint8( dur );
+                }
+            }
+        }
+
+        SetAnyData( "cells_v1", cells_data );
+        SetAnyData( "cells_monsters_v1", cells_monsters_data );
+
+        return true;
+    }
+
+    bool global_map_critter_in( Map& map, Critter& cr )
+    {
+        cells_critter_shift( map, cr, false );
+        // if(cr.IsPlayer()) Log("shift in");
+
+        DypsneaCr( map, cr );
+        cr.StatBase[ ST_LOCALMAP_PID ] = map.GetProtoId();
+        cr.StatBase[ ST_LOCALMAP_DIR ] = -1;
+
+        return true;
+    }
+    bool global_map_critter_out( Map& map, Critter& cr )
+    {
+        cells_critter_shift( map, cr, true );
+        // if(cr.IsPlayer()) Log("shift out");
+
+        // DypsneaCr(map, cr);
+
+        return true;
+    }
+
+    void cells_critter_shift( Map& map, Critter& cr, bool quit )
+    {
+        Cell@ cell = GetCell( cr );
+        if( cell is null )
+            return;
+        CellContent@ cont = cell.Content;
+        if( cont is null )
+            return;
+
+        // int level = GetMapLevelByPid(map.GetProtoId());
+
+        if( cr.IsNpc() && cont.Type == CELLMAP_TYPE_ENCOUTER )
+        {
+            if( !cont.ShiftCritter( cr, CELL_CRITTERS_MOB, quit ) )
+            {
+                Log( "ShiftCritter mob fail" + ( quit ? ", quit." : "." ) + " Id: " + cr.Id );
+            }
+        }
+        else if( cr.IsPlayer() && cont.MapId[ CELL_LEVEL_DEFAULT /*+level*/ ] == map.Id )
+        {
+            if( !cont.ShiftCritter( cr, ( ( cr.Param[ QST_GAMEMODE ] != GAME_ARCADE ) ? CELL_CRITTERS_SURVIVAL : CELL_CRITTERS_ARCADE ), quit ) )
+            {
+                Log( "ShiftCritter player fail" + ( quit ? ", quit." : "." ) + " Id: " + cr.Id );
+            }
+        }
+        else
+            return;
+
+        Location@ loc = map.GetLocation();
+        if( cont.Type == CELLMAP_TYPE_ENCOUTER and loc !is null and loc.AutoGarbage )
+        {
+            loc.AutoGarbage = false;
+        }
+    }
+
+    void GlobalPopulation()
+    {
+        for( uint16 i = 0, j = Cells.length(); i < j; ++i )
+        {
+            if( Cells[ i ] is null || !Cells[ i ].IsHavePopulation )
+                continue;
+
+            // uint8 wildness = (Cells[i].Wildness > 0 ? Cells[i].Wildness : Random(1,100));
+
+            // uint8 spawnCount = /*29;//*/Random(1, 10);// /*/ wildness*/ * 0.01;
+            // if(spawnCount <= 0) spawnCount = 1;
+            // if(Cells[i].MonsterCount + spawnCount > Cells[i].PopulationMax) {continue;}
+            /*
+               Log("spawnCount "+spawnCount);
+
+               Cells[i].ChangeMonsterCount(spawnCount, true);
+             */
+            if( Cells[ i ].Content is null )
+                continue;
+
+            for( uint8 ii = 0, jj = Cells[ i ].Content.MapId.length(); ii < jj; ++ii )
+            {
+
+                Map @ map = GetMap( Cells[ i ].Content.MapId[ ii ] );
+                if( map is null )
+                    continue;
+
+                AddCritter( map );
+            }
+
+            // SpawMonstersCell(Cells[i], spawnCount);
+        }
+    }
+
+    void GlobalSpawnLo()
+    {
+        for( uint16 i = 0, j = Cells.length(); i < j; ++i )
+        {
+            if( Cells[ i ] is null || Cells[ i ].Content is null )
+                continue;
+
+            Cells[ i ].SpawnLo();
+        }
+    }
+
+}
+
+CellWorld world;
+
+// import void cells_init() from "globalmap_group";
+// import void cells_world_save() from "globalmap_group";
+// import void cells_critter_shift(Map& map, Critter& cr, bool out) from "globalmap_group";
+// import bool ChangeWildness(uint i, int delta) from "globalmap_group";
+// import bool ChangeWildness(uint16 x, uint16 y, int delta) from "globalmap_group";
+
+
+void start()
+{
+    iManagerModule@  module = world;
+    iManagerElement@ manager = manager_add_module( module, "CellWorld", 20 );   // чем выше значение приоритета - тем раньше будут вызываться обработчики ивэнтов
+    // if(manager is null) return;
+    // manager.TimeChangeCall() = TIME_NEW_<MINUTE/HOUR/DAY/MONTH/YEAR>;
+}
+
+bool ChangeWildness( uint i, int delta )                                  // Export
+{
+    Cell@ cell = world.GetCell( i );
+    if( cell is null )
+        return false;
+
+    cell.ChangeWildness( delta );
+    return true;
+}
+
+/*erlking
+   uint GetWildness(uint16 x, uint16 y)				//Export
+   {
+        Cell@ cell = world.GetCell(x, y);
+        if(cell is null) return false;
+        uint wild=cell.Wildness;
+        return wild;
+   }
+ */
+
+bool ChangeWildness( uint16 x, uint16 y, int delta )              // Export
+{
+    Cell@ cell = world.GetCell( x, y );
+    if( cell is null )
+        return false;
+
+    cell.ChangeWildness( delta );
+    return true;
+}
+
+
+void CellInfo( Critter& cr, int p0, int p1, int p2 )
+{
+    Cell@ cell = null;
+    if( p0 == 0 && p1 == 0 )
+    {
+        @cell = world.GetCell( cr );
+    }
+    else if( p0 > 0 && p1 > 0 )
+    {
+        @cell = world.GetCell( uint16( p0 ), uint16( p1 ) );
+    }
+
+    if( cell is null )
+        return;
+
+    cr.Say( SAY_NETMSG, "Cell: " + cell.X + ":" + cell.Y + " Wildness: " + cell.Wildness );
+    cr.Say( SAY_NETMSG, "Population: " + cell.MonsterCount + " Type: " + cell.MonsterType );
+
+    CellContent@ cont = cell.Content;
+
+    if( cont is null )
+        return;
+
+    cr.Say( SAY_NETMSG, "MapId: " + cont.MapId[ CELL_LEVEL_DEFAULT ] + " Type: " + cont.Type + " Index: " + cont.Index );
+    cr.Say( SAY_NETMSG, "Visibility: " + cont.Visibility + " Durability: " + cont.Durability );
+    cr.Say( SAY_NETMSG, "Online: " + cont.GetCrittersCount( CELL_CRITTERS_SURVIVAL ) + "/" + cont.GetCrittersCount( CELL_CRITTERS_ADVENTURE ) + "/" + cont.GetCrittersCount( CELL_CRITTERS_ARCADE ) + " Mobs: " + cont.GetCrittersCount( CELL_CRITTERS_MOB ) );
+}
+
+void CellMove( Critter& cr, int p0, int p1, int p2 )
+{
+    Cell @ cell = world.GetCell( cr );
+    Cell @ targetCell = world.GetCell( p0, p1 );
+
+    if( cell is null || targetCell is null )
+        return;
+
+    @targetCell = cell;
+    @cell = Cell();
+}
+
+void ChWild( Critter& cr, int p0, int p1, int p2 )
+{
+    uint16 x = p0,
+           y = p1;
+
+    if( p0 == -1 && p1 == -1 )
+    {
+        x = cr.WorldX / 10;
+        y = cr.WorldY / 10;
+    }
+
+    if( ChangeWildness( x, y, p2 ) )
+        Log( "Ok." );
+    else
+        Log( "Fail." );
+}
+
+
+// //////////////////////////////////////////////////////////////////////////////////////////////////
+// int processType    - see in Global map events in _defines.fos;
+// Critter& cr        - who called this function, in most times is leader of group;
+// Item@ car          - group car, can be null;
+// float& curX, &curY - current position;
+// float& toX, &toY   - destination position;
+// float& speed       - speed of group, must set in GLOBAL_PROCESS_SET_MOVE,
+//                      also you can type zero to stop group;
+// uint encounterDescriptor - if encounterDescriptor != 0 than global_invite calls;
+// bool waitForAnswer       - if waitForAnswer == false than global_invite calls after this function,
+//                            else call after leader confirm invite;
+void global_process( int processType, Critter& cr, Item@ car,
+                     float& curX, float& curY, float& toX, float& toY, float& speed,
+                     uint& encounterDescriptor, bool& waitForAnswer )
+{
+    int movementType = ( valid( car ) ? car.Proto.Car_MovementType : GM_WALK_GROUND );
+    int curXi = int(curX);
+    int curYi = int(curY);
+
+    if( processType == GLOBAL_PROCESS_MOVE )
+    {
+        // Save current distantion to compare in the end
+        float lastDist = DISTANCE( curX, curY, toX, toY );
+
+        // Calcuate speed
+        float speedPix = speed * float(__GlobalMapMoveTime) / 1000.0f;
+        float speedAngle = atan2( toY - curY, toX - curX );
+        float speedX = cos( speedAngle ) * speedPix;
+        float speedY = sin( speedAngle ) * speedPix;
+
+        float speedMod = 1.0f;
+        if( movementType == GM_WALK_GROUND )
+        {
+            // Speed modifiers
+            //  F   E   D   C   B   A   9    8   7    6   5    4   3    2   1    0
+            // 1.5 1.4 1.3 1.2 1.1 1.0 0.95 0.9 0.85 0.8 0.75 0.7 0.65 0.6 0.55 0.0
+            switch( GetGlobalMapRelief( curXi, curYi ) )
+            {
+            case 0x0:
+                speedMod = 1.00f;
+                break;
+            case 0x1:
+                speedMod = 0.55f;
+                break;
+            case 0x2:
+                speedMod = 0.60f;
+                break;
+            case 0x3:
+                speedMod = 0.65f;
+                break;
+            case 0x4:
+                speedMod = 0.70f;
+                break;
+            case 0x5:
+                speedMod = 0.75f;
+                break;
+            case 0x6:
+                speedMod = 0.80f;
+                break;
+            case 0x7:
+                speedMod = 0.85f;
+                break;
+            case 0x8:
+                speedMod = 0.90f;
+                break;
+            case 0x9:
+                speedMod = 0.95f;
+                break;
+            case 0xA:
+                speedMod = 1.00f;
+                break;
+            case 0xB:
+                speedMod = 1.10f;
+                break;
+            case 0xC:
+                speedMod = 1.20f;
+                break;
+            case 0xD:
+                speedMod = 1.30f;
+                break;
+            case 0xE:
+                speedMod = 1.40f;
+                break;
+            case 0xF:
+                speedMod = 1.50f;
+                break;
+            default:
+                break;
+            }
+        }
+
+        if( valid( car ) && speedMod != 1.0f )
+        {
+            float pass = float(car.Proto.Car_Passability);
+            if(     pass > 100.0f && speedMod < 1.0f )
+                speedMod += ( 1.0f - speedMod ) * ( pass - 100.0f ) / 100.0f;
+            else if( pass > 100.0f && speedMod > 1.0f )
+                speedMod -= ( speedMod - 1.0f ) * ( pass - 100.0f ) / 100.0f;
+            else if( pass < 100.0f && speedMod < 1.0f )
+                speedMod -= ( 1.0f - speedMod ) * ( 100.0f - pass ) / 100.0f;
+            else if( pass < 100.0f && speedMod > 1.0f )
+                speedMod += ( speedMod - 1.0f ) * ( 100.0f - pass ) / 100.0f;
+        }
+
+        // Apply step
+        curX += speedX * speedMod;
+        curY += speedY * speedMod;
+
+        int oldXi = curXi;
+        int oldYi = curYi;
+        curXi = int(curX);         // Round
+        curYi = int(curY);         // Round
+
+        // Check new position
+        if( oldXi != curXi || oldYi != curYi )
+        {
+            // Check borders
+            int gmWidth = __GlobalMapWidth * __GlobalMapZoneLength;
+            int gmHeight = __GlobalMapHeight * __GlobalMapZoneLength;
+            if( curXi < 0 || curYi < 0 || curXi >= gmWidth || curYi >= gmHeight )
+            {
+                if( curXi < 0 )
+                    curXi = 0;
+                if( curXi >= gmWidth )
+                    curXi = gmWidth - 1;
+                if( curYi < 0 )
+                    curYi = 0;
+                if( curYi >= gmHeight )
+                    curYi = gmHeight - 1;
+
+                // Stop group
+                curX = float(curXi);
+                curY = float(curYi);
+                speed = 0.0f;
+                return;
+            }
+
+            // Move from old to new and find last correct position
+            int relief = GetGlobalMapRelief( oldXi, oldYi );
+            int steps = MAX( ABS( curXi - oldXi ), ABS( curYi - oldYi ) );
+            int newXi = oldXi;
+            int newYi = oldYi;
+            if( steps > 0 )
+            {
+                float xx = float(oldXi);
+                float yy = float(oldYi);
+                float oxx = float(curXi - oldXi) / float(steps);
+                float oyy = float(curYi - oldYi) / float(steps);
+
+                for( int i = 0; i < steps; i++ )
+                {
+                    xx += oxx;
+                    yy += oyy;
+                    int xxi = int(xx >= 0.0f ? xx + 0.5f : xx - 0.5f);
+                    int yyi = int(yy >= 0.0f ? yy + 0.5f : yy - 0.5f);
+
+                    if( xxi == 350 || yyi == 600 )
+                        break;
+
+                    uint relief_ = GetGlobalMapRelief( xxi, yyi );
+                    if( movementType == GM_WALK_GROUND && relief != 0 && relief_ == 0 )
+                        break;
+                    if( movementType == GM_WALK_WATER && relief_ != 0 )
+                        break;
+
+                    newXi = xxi;
+                    newYi = yyi;
+                }
+            }
+
+            if( newXi != curXi || newYi != curYi )
+            {
+                // Stop group
+                curX = float(newXi);
+                curY = float(newYi);
+                speed = 0.0f;
+                return;
+            }
+
+            // Zone
+            int oldZoneX = oldXi / __GlobalMapZoneLength;
+            int oldZoneY = oldYi / __GlobalMapZoneLength;
+            int curZoneX = curXi / __GlobalMapZoneLength;
+            int curZoneY = curYi / __GlobalMapZoneLength;
+
+            // Change zone
+            if( oldZoneX != curZoneX || oldZoneY != curZoneY )
+            {
+                Critter@[] @ group = cr.GetGlobalGroup();
+                ScanZone( group, curZoneX, curZoneY );
+            }
+
+            // Check for complete travelling
+            float curDist = DISTANCE( curX, curY, toX, toY );
+            if( curDist <= 0.01f || curDist > lastDist )
+            {
+                curX = toX;
+                curY = toY;
+                speed = 0.0f;
+                return;
+            }
+        }
+
+        // Car processing
+        if( valid( car ) )
+        {
+            int fuel = car.Charge;
+            int deterioration = car.Deterioration;
+
+            if( fuel <= 0 || deterioration >= int(car.Proto.Car_MaxDeterioration) )
+            {
+                uint str = ( fuel <= 0 ? STR_CAR_FUEL_EMPTY : STR_CAR_BROKEN );
+                cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, str );
+                speed = 0.0f;
+                return;
+            }
+
+            // Car values created for the call every 500 ms
+            fuel -= car.Proto.Car_FuelConsumption * __GlobalMapMoveTime / 500;
+            deterioration += car.Proto.Car_DeteriorationRate * __GlobalMapMoveTime / 500;
+            if( fuel < 0 )
+                fuel = 0;
+            if( deterioration > int(car.Proto.Car_MaxDeterioration) )
+                deterioration = int(car.Proto.Car_MaxDeterioration);
+
+            if( fuel != car.Charge || deterioration != car.Deterioration )
+            {
+                car.Charge = fuel;
+                car.Deterioration = deterioration;
+                car.Update();
+            }
+        }
+
+        /*if(++cr.GlobalMapMoveCounter % (__EncounterTime / __GlobalMapMoveTime) == 0)
+           {
+                Critter@[]@ group = cr.GetGlobalGroup();
+
+                // Validate charisma
+                Critter@ leader = group[0];
+                if(int(group.length()) > leader.Stat[ST_CHARISMA] + leader.Perk[PE_MAGNETIC_PERSONALITY])
+                {
+                        leader.SayMsg(SAY_NETMSG, TEXTMSG_GAME, STR_CRIT_BAD_CHARISMA);
+                        speed = 0.0f; // Stop
+                        return;
+                }
+
+                // Try find encounter
+                if(GetVisibleLocations(curXi, curYi, 0, cr, null) == 0)
+                        FindEncounter(group, car, curXi, curYi, encounterDescriptor, waitForAnswer, false);
+           }*/
+
+        Cell@ cell = world.PassCell( cr );
+
+        if( cell !is null )
+        {
+            Critter@[] @ group = cr.GetGlobalGroup();
+
+            // Validate charisma
+            Critter@ leader = group[ 0 ];
+            if( int( group.length() ) > leader.Stat[ ST_CHARISMA ] + leader.Perk[ PE_MAGNETIC_PERSONALITY ] )
+            {
+                leader.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_CRIT_BAD_CHARISMA );
+                speed = 0.0f;                 // Stop
+                return;
+            }
+
+            uint8 wild = cell.ChangeWildness( ( cr.Param[ QST_GAMEMODE ] != GAME_ARCADE ) ? -1 : 1 );
+
+            world.ShowCells( cr, cell );
+
+            CellContent@ cont = cell.Content;
+            if( cont is null or ( cont.Type & 0x1F ) == CELLMAP_TYPE_ENCOUTER )
+            {
+                if( cont !is null and cont.MapId[ CELL_LEVEL_DEFAULT ] != 0 && GetMap( cont.MapId[ CELL_LEVEL_DEFAULT ] ) !is null )
+                {
+                    // cont.Index=uint(-1);
+                    int chance = 0;
+                    if( cr.Param[ QST_GAMEMODE ] != GAME_ARCADE )
+                    {
+                        if( cont.GetCrittersCount( CELL_CRITTERS_ARCADE ) > 0 || cont.GetCrittersCount( CELL_CRITTERS_MOB ) > 0 )
+                            chance = cr.Skill[ SK_OUTDOORSMAN ] / 2;
+                        else if( cont.GetCrittersCount( CELL_CRITTERS_SURVIVAL ) > 0 )
+                            chance = cr.Skill[ SK_OUTDOORSMAN ] / 3;
+                        else
+                            chance = -1;
+                    }
+                    else
+                    {
+                        if( cont.GetCrittersCount( CELL_CRITTERS_SURVIVAL ) > 0 )
+                            chance = 0;
+                        else
+                            chance = -1;
+                    }
+
+                    if( chance < 0 )
+                    {}
+                    else if( Random( 0, 100 ) > chance )
+                    {
+                        encounterDescriptor = uint( -1 );
+                    }
+                    else
+                    {
+                        encounterDescriptor = uint( -1 );
+                        waitForAnswer = true;
+                        cr.Say( SAY_ENCOUNTER_RT, "Вы видите нечто недалеко от вас" );
+                        cr.Say( SAY_FLASH_WINDOW, "" );
+                    }
+                }
+                else
+                {
+                    @cell.Content = null;
+
+                    FindEncounter( cr.GetGlobalGroup(), car, curXi, curYi, encounterDescriptor, waitForAnswer, false, wild );
+                }
+            }
+            else if( cont.Visibility > 0 )
+                ( encounterDescriptor = uint( -1 ) );
+        }
+    }
+    else if( processType == GLOBAL_PROCESS_ENTER )
+    {
+        // Enter to empty encounter
+        /*if(movementType == GM_WALK_WATER && GetGlobalMapRelief(curXi, curYi) == 0)
+           {
+                // Find land
+                bool landFounded = false;
+                const int maxx = __GlobalMapWidth * __GlobalMapZoneLength;
+                const int maxy = __GlobalMapHeight * __GlobalMapZoneLength;
+                for(int ox = -1; ox <= 1; ox++)
+                {
+                        for(int oy = -1; oy <= 1; oy++)
+                        {
+                                int xx = curXi + ox;
+                                int yy = curYi + oy;
+                                if(xx >= 0 && xx < maxx && yy >= 0 && yy < maxy && GetGlobalMapRelief(xx, yy) != 0)
+                                {
+                                        FindEncounter(cr.GetGlobalGroup(), car, xx, yy, encounterDescriptor, waitForAnswer, true);
+                                        ox = oy = 2; // Exit from loop
+                                        landFounded = true;
+                                }
+                        }
+                }
+
+                if(!landFounded) FindEncounter(cr.GetGlobalGroup(), car, curXi, curYi, encounterDescriptor, waitForAnswer, true);
+           }
+           else
+           {
+                FindEncounter(cr.GetGlobalGroup(), car, curXi, curYi, encounterDescriptor, waitForAnswer, true);
+           }*/
+
+        Cell@ cell = world.GetCell( cr );
+        if( cell !is null )
+        {
+            CellContent@ cont = cell.Content;
+            if( cont is null or ( cont.Type & 0x1F ) == CELLMAP_TYPE_ENCOUTER )
+            {
+                if( cont !is null and cont.MapId[ CELL_LEVEL_DEFAULT ] != 0 && GetMap( cont.MapId[ CELL_LEVEL_DEFAULT ] ) !is null )
+                {
+                    encounterDescriptor = uint( -1 );
+                    cont.Index = uint( -1 );
+                }
+                else
+                {
+                    @cell.Content = null;
+
+                    FindEncounter( cr.GetGlobalGroup(), car, curXi, curYi, encounterDescriptor, waitForAnswer, true, 0 );
+                }
+            }
+            else
+                ( encounterDescriptor = uint( -1 ) );
+        }
+    }
+    else if( processType == GLOBAL_PROCESS_SET_MOVE )
+    {
+
+        if( cr.StatBase[ ST_ARCADE_DEAD ] > 0 )
+        {
+            cr.Say( SAY_NETMSG, "Вы не можете передвигаться при выборе логова." );
+            return;
+        }
+        Critter@[] @ group = cr.GetGlobalGroup();
+
+        // Validate charisma
+        Critter@ leader = group[ 0 ];
+        if( int( group.length() ) > leader.Stat[ ST_CHARISMA ] + leader.Perk[ PE_MAGNETIC_PERSONALITY ] )
+        {
+            leader.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_CRIT_BAD_CHARISMA );
+            if( valid( car ) )
+                CheckForLocationWithoutParking( cr, car, curX, curY );
+            return;
+        }
+
+        // Calculate speed
+        speed = GLOBAL_MAP_BASE_SPEED;
+        // if(cr.GetAccess() >= ACCESS_TESTER) speed *= 20.0f; // All, exclude clients have highly speed
+
+        if( cr.GetAccess() > ACCESS_TESTER )
+            speed *= 4;
+        else if( cr.Param[ QST_GAMEMODE ] == GAME_ARCADE )
+            speed *= 2;
+
+        if( valid( car ) )
+        {
+            // Validate car
+            uint strNum = 0;
+            if( group.length() > car.Proto.Car_CrittersCapacity )
+                strNum = STR_CAR_CRIT_OVERLOAD;
+            else if( car.Charge == 0 )
+                strNum = STR_CAR_FUEL_EMPTY;
+            else if( car.Deterioration >= car.Proto.Car_MaxDeterioration )
+                strNum = STR_CAR_BROKEN;
+            if( strNum != 0 )
+            {
+                leader.SayMsg( SAY_NETMSG, TEXTMSG_GAME, strNum );
+                speed = 0.0f;
+                CheckForLocationWithoutParking( cr, car, curX, curY );
+                return;
+            }
+
+            speed = car.Proto.Car_Speed * GLOBAL_MAP_BASE_SPEED / 20.0f;
+
+            // Find near water for boats
+            // In radius of one zone (left, top, right, bottom)
+            if( car.Proto.Car_MovementType == GM_WALK_WATER )
+            {
+                if( GetGlobalMapRelief( curXi, curYi ) != 0 )
+                {
+                    const int   maxx = __GlobalMapWidth * __GlobalMapZoneLength;
+                    const int   maxy = __GlobalMapHeight * __GlobalMapZoneLength;
+                    const int[] ox = { -1,  0, 1, 0 };
+                    const int[] oy = { 0, -1, 0, 1 };
+                    for( int i = 1, ii = __GlobalMapZoneLength; i <= ii; i++ )
+                    {
+                        for( int j = 0; j < 4; j++ )
+                        {
+                            int xx = curXi + ox[ j ] * i;
+                            int yy = curYi + oy[ j ] * i;
+                            if( xx >= 0 && xx < maxx && yy >= 0 && yy < maxy && GetGlobalMapRelief( xx, yy ) == 0 )
+                            {
+                                curX = float(xx);
+                                curY = float(yy);
+                                // Exit from loop
+                                j = 4;
+                                i = ii;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        else
+        {
+            // Pathfinder perk bonus
+            int speedDiv = 100 - cr.Perk[ PE_PATHFINDER ] * 25;
+            if( speedDiv <= 0 )
+                speedDiv = 1;
+            speed = speed * 100.0f / float(speedDiv);
+        }
+    }
+    else if( processType == GLOBAL_PROCESS_START_FAST || processType == GLOBAL_PROCESS_STOPPED )
+    {
+        Cell@ cell = world.GetCell( cr );
+        if( cell !is null )
+            world.ShowCells( cr, cell );
+    }
+    else if( processType == GLOBAL_PROCESS_NPC_IDLE )
+    {
+        // Critter& cr - is npc who call idle
+        // Process npc group on global map
+        if( curX == toX && curY == toY )       // Stopped
+        {
+            // If you want enter to location under group than type
+            // encounterDescriptor = uint(-1);
+            // waitForAnswer = false;
+        }
+    }
+    else if( processType == GLOBAL_PROCESS_KICK )
+    {
+        if( GetGlobalMapRelief( curXi, curYi ) == 0 )
+        {
+            // Say to leader
+            Critter@[] @ group = cr.GetGlobalGroup();
+            group[ 0 ].SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_CANT_KICK_ON_WATER );
+            return;
+        }
+
+        cr.LeaveGlobalGroup();
+    }
+}
+
+// //////////////////////////////////////////////////////////////////////////////////////////////////
+// Call on invite to encaunter.
+// If mapId != 0 than group enter to it.
+void global_invite( Critter& leader, Item@ car, uint encounterDescriptor, int combatMode, uint& mapId, uint16& hexX, uint16& hexY, uint8& dir )
+{
+    // Enter to map under group
+    /*if(encounterDescriptor == uint(-1))
+       {
+            Location@[] locations;
+            if(GetLocations(leader.WorldX, leader.WorldY, 0, locations) != 0)
+            {
+                    Location@ loc = locations[0];
+                    Map@ map = loc.GetMapByIndex(0);
+                    if(valid(map) && map.GetEntireCoords(0, 0, hexX, hexY))
+                    {
+                            mapId = map.Id;
+                            dir = 0xFF;
+                    }
+            }
+            return;
+
+       // Find encounter
+       InviteToEncounter(leader.GetGlobalGroup(), car, encounterDescriptor, combatMode, mapId, hexX, hexY, dir);
+     */
+
+    Cell@ cell = world.GetCell( leader );
+    if( cell is null )
+        return;
+
+    CellContent@ cont = cell.Content;
+
+    if( encounterDescriptor != uint( -1 ) && cont is null )
+    {
+        @cell.Content = CellContent();
+        @cont = cell.Content;
+        cont.Type |= CELLMAP_TYPE_ENCOUTER;
+        cont.Durability = 5;
+    }
+
+    // pm added
+
+
+    uint8 type = ( cont.Type & 0x1f );
+
+    if( type == CELLMAP_TYPE_ENCOUTER )
+    {
+        // if(encounterDescriptor==uint(-1)) Log("enc, encounterDescriptor WTF?!");
+        if( cont.MapId[ CELL_LEVEL_DEFAULT ] != 0 )
+        {
+            Map@ map = GetMap( cont.MapId[ CELL_LEVEL_DEFAULT ] );
+            if( map !is null and map.GetEntireCoords( 0, 0, hexX, hexY, dir ) )
+            {
+                // pm added
+                GetEnterHexFromGlobal( leader, cell, hexX, hexY );
+                cont.Index = uint( -1 );
+                mapId = map.Id;
+            }
+        }
+        else
+        {
+            // leader.Say(SAY_NETMSG, "dir "+dir);
+
+            // pm added
+            GetEnterHexFromGlobal( leader, cell, hexX, hexY );
+
+
+            InviteToEncounter( leader.GetGlobalGroup(), car, encounterDescriptor, COMBAT_MODE_REAL_TIME /*combatMode*/, mapId, hexX, hexY, dir );
+            cont.Index = encounterDescriptor;
+            cont.MapId[ CELL_LEVEL_DEFAULT ] = mapId;
+        }
+    }
+    else if( type == CELLMAP_TYPE_STATIC )
+    {
+        if( encounterDescriptor != uint( -1 ) )
+            Log( "stat, encounterDescriptor WTF?!" );
+
+        Map@ map = GetMap( cont.MapId[ CELL_LEVEL_DEFAULT ] );
+        if( map !is null and map.GetEntireCoords( 0, 0, hexX, hexY, dir ) )
+        {
+            // pm added
+            GetEnterHexFromGlobal( leader, cell, hexX, hexY );
+            cont.Index = uint( -1 );
+            mapId = map.Id;
+        }
+    }
+
+}
+
+void ScanZone( Critter@[]& group, int zx, int zy )
+{
+    uint[] locIds1, locIds2;
+    bool locIds2Founded = false;
+
+    GetZoneLocationIds( zx, zy, 1, locIds1 );
+
+    for( uint i = 0; i < group.length(); i++ )
+    {
+        Critter@ cr = group[ i ];
+        if( !cr.IsPlayer() )
+            continue;
+
+        int lookLen = cr.PerkBase[ PE_SCOUT ] != 0 ? 2 : 1;
+
+        if( lookLen == 2 && !locIds2Founded )
+        {
+            GetZoneLocationIds( zx, zy, 2, locIds2 );
+            locIds2Founded = true;
+        }
+
+        // Open fog
+        int mapw = __GlobalMapWidth;
+        int maph = __GlobalMapHeight;
+        for( int x = -lookLen; x <= lookLen; x++ )
+        {
+            for( int y = -lookLen; y <= lookLen; y++ )
+            {
+                int zx_ = zx + x;
+                int zy_ = zy + y;
+                if( zx_ >= 0 && zx_ < mapw && zy_ >= 0 && zy_ < maph )
+                {
+                    int fog = ( zx == zx_ && zy == zy_ ? FOG_NONE : FOG_HALF );
+                    if( cr.GetFog( zx_, zy_ ) < fog )
+                        cr.SetFog( zx_, zy_, fog );
+                }
+            }
+        }
+
+        // Find new locations
+        /*uint[]@ locIds = lookLen == 1 ? locIds1 : locIds2;
+           for(uint j = 0; j < locIds.length(); j++)
+           {
+                uint locId = locIds[j];
+                if(!cr.IsKnownLoc(true, locId))
+                {
+                        Location@ loc = GetLocation(locId);
+                        if(valid(loc)) cr.SetKnownLoc(true, locId);
+                }
+           }*/
+    }
+}
+
+void CheckForLocationWithoutParking( Critter& cr, Item& car, float& curX, float& curY )
+{
+    Location@[] locations;
+    if( GetVisibleLocations( curX, curY, 0, cr, locations ) != 0 )
+    {
+        Location@ loc = locations[ 0 ];
+        Map@      map = loc.GetMapByIndex( 0 );
+
+        bool      placeFounded = false;
+        Entire[] entires;
+        ParseEntires( map, entires, car.Proto.Car_Entrance );
+        for( uint i = 0; i < entires.length(); i++ )
+        {
+            if( map.CheckPlaceForItem( entires[ i ].HexX, entires[ i ].HexY, car.GetProtoId() ) )
+            {
+                placeFounded = true;
+                break;
+            }
+        }
+
+        if( !placeFounded )
+        {
+            curX = loc.WorldX + int(loc.Radius) * ( Random( 0, 1 ) == 0 ? int(1) : int(-1) );
+            curY = loc.WorldY + int(loc.Radius) * ( Random( 0, 1 ) == 0 ? int(1) : int(-1) );
+        }
+    }
+}
+
+
+// pm added
+
+// #define MAP_WIDTH		(150)
+
+void TransitCritterToCell( Critter& cr, /*uint16 gridId*/ Scenery& grid ) // uint8 direction deprecated
+{
+    if( @world == null )
+    {
+        cr.Say( SAY_NETMSG, "world !valid" );
+        return;
+    }
+
+    // Item@ grid = GetItem(gridId);
+    if( @grid == null )
+    {
+        cr.Say( SAY_NETMSG, "grid !valid" );
+        return;
+    }
+
+    Cell @ cell = world.GetCell( cr ); // world.GetCellByMap(cr.GetMap().Id);//world.GetCell(cr);
+    /*
+       if(cell !is null)
+       {
+
+            string sayText = "x "+cell.X+"\ny "+cell.Y;
+            if(cell.Content !is null)
+            {
+                    sayText += "\ncont true\nindex "+cell.Content.Index+"\nmapId "+cell.Content.MapId;
+            }
+            cr.Say(SAY_NETMSG, sayText);
+       }*/
+
+    if( @cell == null )
+    {
+        cr.Say( SAY_NETMSG, "cell !valid" );
+        return;
+    }
+    if( @cell.Content == null )
+    {
+        cr.Say( SAY_NETMSG, "cont !valid" );
+        return;
+    }
+    /*
+       if(cell.X != cell.ParantX || cell.Y != cell.ParantY)
+       {
+            Log("parant != coords");
+            @ cell = world.GetCell(cell.ParantX, cell.ParantY);
+            if(cell is null || cell.Content is null) return;
+       }*/
+
+    Map @ map = cr.GetMap();
+    if( @map == null )
+    {
+        cr.Say( SAY_NETMSG, "map !valid" );
+        return;
+    }
+
+    int8   offsetCellX = 0, offsetCellY = 0;
+    uint8  direction = cr.GetMap().GetScenParam( grid.HexX, grid.HexY, grid.ProtoId, 0 );  // grid.Val1;
+    uint16 destCellX = /*cr.WorldX * 0.1*/ cell.X, destCellY = /*cr.WorldY * 0.1*/ cell.Y, oldHexX = 0, oldHexY = 0;
+
+    if( !map.GetEntireCoords( ENTIRE_NUM, 0, oldHexX, oldHexY ) )
+    {
+        cr.Say( SAY_NETMSG, "no ent" );
+        return;
+    }
+
+    offsetCellX = ( ( cr.HexX - oldHexX ) / MAP_SIZE );
+    offsetCellY = ( ( cr.HexY - oldHexY ) / MAP_SIZE );
+
+    SetMapDirection( direction, destCellX, destCellY, offsetCellX, offsetCellY );
+
+    // cr.Say(SAY_NETMSG, "offset "+offsetCellX+":"+offsetCellY);
+
+    uint16 tempX = 0, tempY = 0;
+    /*
+       switch(direction)
+       {
+            case 0 : tempX = cr.HexX; tempY = cr.HexY; break;
+            case 1 : tempX = grid.HexX; tempY = cr.HexY; break;
+            case 2 : tempX = cr.HexX; tempY = cr.HexY; break;
+            case 3 : tempX = cr.HexX; tempY = grid.HexY; break;
+            case 4 : tempX = cr.HexX; tempY = cr.HexY; break;
+            case 5 : tempX = grid.HexX; tempY = cr.HexY; break;
+            case 6 : tempX = cr.HexX; tempY = cr.HexY; break;
+            case 7 : tempX = cr.HexX; tempY = grid.HexY; break;
+       }*/
+
+    tempX = ( direction != 5 && direction != 1 ? cr.HexX : grid.HexX );
+    tempY = ( direction != 3 && direction != 7 ? cr.HexY : grid.HexY );
+
+    if( cell.SizeX > 1 || cell.SizeY > 1 )
+    {
+        uint8 tempHexX = ( ( cr.HexX - oldHexX ) / MAP_SIZE ),
+              tempHexY = ( ( cr.HexY - oldHexY ) / MAP_SIZE );
+
+        // destCellX -= (cell.ParantX - cell.X) - tempHexX;
+        // destCellX -= (cell.ParantY - cell.Y) - tempHexY;
+
+        if( tempX > 1 )
+        {
+            tempX -= ( tempHexX ) * MAP_SIZE;
+        }
+        if( tempY > 1 )
+        {
+            tempY -= ( tempHexY ) * MAP_SIZE;
+        }
+
+        // Log("tempX "+tempX+":"+tempY);
+
+    }
+
+    oldHexX = ABS( int(/*grid*cr.HexX*/ tempX - oldHexX) );  // cr.HexX deprecated
+    oldHexY = ABS( int(/*grid*cr.HexY*/ tempY - oldHexY) );  // cr.HexY deprecated
+
+    uint8 worldOffsetX = ( ( ( MAP_SIZE - oldHexX ) * 100 ) / MAP_SIZE ), worldOffsetY = ( ( ( MAP_SIZE - oldHexY ) * 100 ) / MAP_SIZE );
+
+
+    uint16 wX = cell.X * 10, wY = cell.Y * 10 + CELL_SIZE;
+    /*
+       if(cell.SizeX > 1 || cell.SizeY > 1)
+       {
+            SetOffSetNonStandartMaps(cell, direction, oldHexX, oldHexY, offsetCellX, offsetCellY, destCellX, destCellY);
+       }*/
+
+    Cell   @transitCell = world.GetCell( destCellX, destCellY );
+    uint16 mapId = 0;
+
+
+    // generator
+    if( transitCell is null || transitCell.Content is null )
+    {
+        // mapId = GenerateWasteland(cr, destCellX, destCellY);
+        // Log("create loc in "+destCellX+":"+destCellY);
+        
+		//cr.Say( SAY_NETMSG, "Только Саттер." );
+        
+		cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, MSG_ONLY_SUTTER);
+		return;
+    }
+
+    int level = GetMapLevelByPid( map.GetProtoId() );
+    /*for(uint8 i = 0; i < transitCell.Content.MapId.length(); ++i){
+            Log("TRANSIT CELL MAP "+i+" ID "+transitCell.Content.MapId[i]);
+       }*/
+    mapId = transitCell.Content.MapId[ CELL_LEVEL_DEFAULT + level ];
+
+
+    // cr.Say(SAY_NETMSG, "mid "+mapId+" level "+level);
+
+    @map = GetMap( mapId );
+    if( mapId == 0 || map is null )
+    {
+        cr.Say( SAY_NETMSG, "mapId !valid" ); /*cr.TransitToGlobal(false); use map gen */ /*GenerateWasteland(cr, transitCell.X, transitCell.Y);*/ return;
+    }
+    uint16 destHexX = 0, destHexY = 0;
+    if( !map.GetEntireCoords( ENTIRE_NUM, 0, destHexX, destHexY ) )
+    {
+        cr.Say( SAY_NETMSG, "no dest ent" );
+        return;
+    }
+    SetHexDirection( cell, transitCell, direction, oldHexX, oldHexY ); // , transitCell.SizeX, transitCell.SizeY);
+
+    // cr.Say(SAY_NETMSG, "hexx "+(destHexX+oldHexX)+" hexy "+(destHexY+oldHexY)+" x "+(oldHexX)+" y "+(oldHexY));
+    if( map.IsHexPassed( destHexX + oldHexX, destHexY + oldHexY ) )    // SearchForEmptyHex(map, destX, destY))
+    {
+	if(CheckMonsterTransitePlace(cr, map, destHexX + oldHexX, destHexY + oldHexY)){
+		cr.StatBase[ST_OBJECT_TYPE] = direction;
+		cr.StatBase[ST_ITEM_HEXX] = destHexX + oldHexX;
+		cr.StatBase[ST_ITEM_HEXY] = destHexY + oldHexY;
+		cr.StatBase[ST_ITEM_PID] = mapId;
+		
+		ShowAnswerScreen(cr);
+	}else{
+		cr.SetWorldPos( destCellX * 10, destCellY * 10 );
+		cr.TransitToMap( mapId, destHexX + oldHexX, destHexY + oldHexY, direction );
+	}
+
+        // testgen(cr, 0, 0, 0);
+
+        return;
+    }
+    cr.Say( SAY_NETMSG, "Вы не можете туда перейти. Гексы заняты." );
+    return;
+    // }//else {cr.Say(SAY_NETMSG, "cell !valid"); cr.TransitToGlobal(false); return;}
+    /*SetWorldDirection(direction, wX, wY, worldOffsetX, worldOffsetY);
+       cr.SetWorldPos(wX, wY);
+       //cr.Say(SAY_NETMSG, "dest cell !valid");
+       cr.TransitToGlobal(true);
+       return;*/
+}
+/*
+   bool SearchForEmptyHex(Map& map, uint16& hexX, uint16& hexY, uint8 direction)
+   {
+        switch(direction)
+        {
+                case 0 : break;
+                case 1 : hexY -= 1; break;
+                case 2 : break;
+                case 3 : hexX -= 1; break;
+                case 4 : break;
+                case 5 : hexY -= 1; break;
+                case 6 : break;
+                case 7 : hexX -= 1; break;
+                default: break;
+        }
+
+        0 == 2
+        1 == 2
+        2 == 3
+
+        uint16
+
+        if(direction == 1 || direction == 5)
+        {
+
+        }
+
+
+        MoveHexByDir    (       uint16&         hexX,
+                uint16&         hexY,
+                uint8   dir,
+                uint    steps
+        )
+
+        /*for(uint16 i = hexX, iCondition = hexX + SEARCH_HEX_COUNT; i < iCondition; ++i)
+        {
+                for(uint16 j = hexY, jCondition = hexY + SEARCH_HEX_COUNT; j < jCondition; ++j)
+                {
+                        //Log("x "+j+" y "+i);
+                        if(map.IsHexPassed(j, i))
+                        {
+                                hexX = j;
+                                hexY = i;
+                                return true;
+                        }
+   ++hexX;
+                }
+   ++hexY;
+        }*
+        return false;
+   }*/
+	
+	/*
+	#define ST_OBJECT_TYPE                           ( 133 )  direction
+	#define ST_ITEM_HEXX                             ( 134 )  hexX
+	#define ST_ITEM_HEXY                             ( 135 )  hexY
+	#define ST_ITEM_PID                              ( 136 )  mapId
+*/
+	
+	
+bool CheckMonsterTransitePlace(Critter& cr, Map& map, uint16 hexX, uint16 hexY){
+	//Map @ map = cr.GetMap();
+	if(!(map is null)){
+	
+		Critter@[] mobs;
+		//GetCrittersHex (uint16 hexX, uint16 hexY, uint radius, int findType, Critter@[]@+ critters)
+		uint8 radius = cr.Skill[SK_OUTDOORSMAN] / SKILL_OUTDORSMAN_MOD;
+		uint8 temp = map.GetCrittersHex(hexX, hexY, radius, FIND_LIFE, null);
+		//cr.Say(SAY_NETMSG, "temp "+temp+" hex "+hexX+":"+hexY+" rad "+radius+" mob "+mobs.length());
+		if(temp > 0){
+			return true;
+		}
+	}
+	return false;
+}
+
+void ShowAnswerScreen(Critter& cr){
+	cr.ShowScreen( SCREEN_DIALOGBOX, 1, "answer_Mob" );
+        cr.Say( SAY_DIALOGBOX_TEXT, "Вы чувствуете опасность. Перейти?" );
+        cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Да" );
+}
+
+void answer_Mob(Critter& cr, uint answerI, string& answerS)
+{
+	if(answerI == 0){
+		Map @ map = GetMap(cr.StatBase[ST_ITEM_PID]);
+		if(map is null) {cr.Say(SAY_NETMSG, "Mapid error.");return;}
+		
+		cr.SetWorldPos(map.GetLocation().WorldX, map.GetLocation().WorldY);
+		cr.TransitToMap(map.Id, cr.StatBase[ST_ITEM_HEXX], cr.StatBase[ST_ITEM_HEXY], cr.StatBase[ST_OBJECT_TYPE]);
+	}
+}
+
+bool GetEnterHexFromGlobal( Critter& leader, Cell& cell, uint16& hexX, uint16& hexY )
+{
+    // leader.Say(SAY_NETMSG, "wSX "+(leader.WorldX * 0.1)+" wSY "+(leader.WorldY * 0.1)+" cSX "+cell.X+" cSY "+cell.Y+" x "+(ABS(cell.X - (leader.WorldX * 0.1)))+" y "+(ABS(cell.Y - (leader.WorldY * 0.1))));
+    if( cell.Content == null )
+        return false;
+    Map @ map = GetMap( cell.Content.MapId[ CELL_LEVEL_DEFAULT ] );
+    if( map !is null )
+    {
+        uint16 placeMapHexX = 0, placeMapHexY = 0;
+        if( map.GetEntireCoords( ENTIRE_NUM, 0, placeMapHexX, placeMapHexY ) )
+        {
+            uint8 tempX = leader.WorldX - cell.X * 10;
+            uint8 tempY = leader.WorldY - cell.Y * 10;
+            int8  tempN = -1;
+
+            // uint8 placeCellX = (leader.WorldX - uint(leader.WorldX * 0.1)), placeCellY = (leader.WorldY - uint(leader.WorldY * 0.1));
+            uint8 placeCellX = ( ( MAP_SIZE * 0.1 ) * tempX ), placeCellY = ( ( MAP_SIZE * 0.1 ) * tempY );
+
+            if( tempY <= 3 && tempX >= 0 )
+                tempN = 0;
+            else if( tempY >= 0 && tempX >= 5 )
+                tempN = 1;
+            else if( tempY >= 5 && tempX >= 0 )
+                tempN = 2;
+            else if( tempY >= 0 && tempX <= 3 )
+                tempN = 3;
+
+
+
+            switch( tempN )
+            {
+            // case -1: map.GetEntireCoords(0, 0, placeMapHexX, placeMapHexY);
+            case 0:
+                placeMapHexX += placeCellX;
+                break;
+            case 1:
+                placeMapHexX += ADD_HEX_COUNT;
+                placeMapHexY += placeCellY;
+                break;
+            case 2:
+                placeMapHexX += placeCellX;
+                placeMapHexY += MAP_SIZE - ADD_HEX_COUNT;
+                break;
+            case 3:
+                placeMapHexX += MAP_SIZE;
+                placeMapHexY += placeCellY;
+                break;
+            default:
+                break;
+            }
+
+            // if(tempN == 0 || tempN == 2) placeMapHexX += placeCellX;
+            // else if(tempN == 1 || tempN == 3) placeMapHexY += placeCellY;
+
+
+
+            // float placeCellX = (cell.X - (leader.WorldX * 0.1)), placeCellY = cell.Y - (leader.WorldY * 0.1);
+
+
+            // leader.Say(SAY_NETMSG, "pX "+(placeCellX)+" pY "+(placeCellY)+" n "+tempN);
+            // if(placeCellX > 0) {hexX = placeMapHexX + (MAP_SIZE * (ABS(placeCellX))) - ADD_HEX_COUNT;}
+            // else if (placeCellX < 0) {hexX = placeMapHexX + (MAP_SIZE * (ABS(placeCellX))) + ADD_HEX_COUNT;}
+            // else if (placeCellX < 0) {hexX = placeMapHexX + (MAP_SIZE * (ABS(placeCellX))) + ADD_HEX_COUNT;}
+            // leader.Say(SAY_NETMSG, "old x"+hexX+" y "+hexY);
+            // hexX = placeMapHexX + (MAP_SIZE * ABS(placeCellX));
+            // hexY = placeMapHexY + (MAP_SIZE * ABS(placeCellY));
+            hexX = placeMapHexX;
+            hexY = placeMapHexY;
+            // leader.Say(SAY_NETMSG, "use new system x"+hexX+" y "+hexY+" pX "+placeCellX+" pY "+placeCellY);
+            return true;
+        }
+    }
+    return false;
+}
+
+bool SetMapDirection( uint8 direction, uint16& destCellX, uint16& destCellY, int8& offsetCellX, int8& offsetCellY )
+{
+    Cell @ cell = world.GetCell( destCellX, destCellY );
+    if( cell is null || cell.Content is null )
+        return false;
+
+    int tempX = 0, tempY = 0;
+
+    if( cell.X != cell.ParantX || cell.Y != cell.ParantY )
+    {
+        Cell @ parantCell = world.GetCell( cell.ParantX, cell.ParantY );
+        Log( "parant != coords" );
+        // @ cell =
+        if( parantCell is null || parantCell.Content is null )
+            return false;
+
+        tempX = cell.X - parantCell.X;
+        tempY = cell.X - parantCell.X;
+
+        destCellX = parantCell.X;
+        destCellY = parantCell.Y;
+    }
+
+    Cell @ targetCell = null;
+
+    uint sizeX = cell.SizeX,    // offsetCellX+1,
+         sizeY = cell.SizeY;    // offsetCellY+1;
+
+
+
+    // if(cell.SizeX > 1) sizeX++;
+    // if(cell.SizeY > 1) sizeY++;
+
+    // offsetCellX = 0;
+    // offsetCellY = 0;
+
+
+    // Log("size "+sizeX+":"+sizeY+" cell "+cell.X+":"+cell.Y);
+
+    // uint8 offsetCellX = (cell.SizeX * MAP_SIZE) / (oldHexX > 0 ? oldHexX : 1), offsetCellY = (cell.SizeY * MAP_SIZE) / (oldHexY > 0 ? oldHexY : 1);
+    // Log(""+offsetCellX+" "+offsetCellY);
+
+    // do{
+    // Log("x = "+destCellX+" y = "+destCellY);
+    /*switch(direction)
+       {
+            case 0 : destCellX++; destCellY--; offsetCellX++; offsetCellY--; break;
+            case 1 : destCellX++; offsetCellX++; break;
+            case 2 : destCellX++; destCellY++; offsetCellX++; offsetCellY++; break;
+            case 3 : destCellY++; offsetCellY++; break;
+            case 4 : destCellX--; destCellY++; offsetCellX--; offsetCellY++; break;
+       Log("size "+sizeX+":"+sizeY+" cell "+cell.X+":"+cell.Y);		case 5 : destCellX--; offsetCellX--; break;
+            case 6 : destCellX--; destCellY--; offsetCellX--; offsetCellY--; break;
+            case 7 : destCellY--; offsetCellY--; break;
+            default: return false;
+       }
+
+       switch(direction)
+       {
+            case 0 : destCellX++; destCellY--; offsetCellX++; offsetCellY--; break;
+            case 1 : destCellX++; offsetCellX++; break;
+            case 2 : destCellX++; destCellY+sizeY; offsetCellX++; offsetCellY+sizeY; break;
+            case 3 : destCellY+sizeY; offsetCellY+sizeY; break;
+            case 4 : destCellX-sizeX; destCellY+sizeY; offsetCellX-sizeX; offsetCellY+sizeY; break;
+            case 5 : destCellX-sizeX; offsetCellX-sizeX; break;
+            case 6 : destCellX-sizeX; destCellY-sizeX; offsetCellX-sizeX; offsetCellY--; break;
+            case 7 : destCellY--; offsetCellY--; break;
+            default: return false;
+       }*/
+
+    // Log("dest before "+destCellX+":"+destCellY);
+
+    switch( direction )
+    {
+    case 0:
+        destCellX++;
+        destCellY--;
+        break;
+    case 1:
+        destCellX++;
+        destCellY += offsetCellY;
+        break;
+    case 2:
+        destCellX++;
+        destCellY += sizeY;
+        break;
+    case 3:
+        destCellX -= offsetCellX;
+        destCellY += sizeY;
+        break;
+    case 4:
+        destCellX -= sizeX;
+        destCellY += sizeY;
+        break;
+    case 5:
+        destCellX -= sizeX;
+        destCellY += offsetCellY;
+        break;
+    case 6:
+        destCellX -= sizeX;
+        destCellY--;
+        break;
+    case 7:
+        destCellX -= offsetCellX;
+        destCellY--;
+        break;
+    default:
+        return false;
+    }
+
+    /*destCellX += offsetCellX;
+       destCellY += offsetCellY;*/
+
+    // Log("size "+sizeX+":"+sizeY+" cell "+cell.X+":"+cell.Y+"dest "+destCellX+":"+destCellY+" ofsset "+offsetCellX+":"+offsetCellY);
+
+    @targetCell = world.GetCell( destCellX, destCellY );
+    if( targetCell is null || targetCell.Content is null )
+    {
+        Log( "fail" );
+        return false;
+    }
+    // }while(cell.Content.MapId == targetCell.Content.MapId);
+
+    return true;
+}
+
+void SetHexDirection( Cell& cell, Cell& targetCell, uint8& direction, uint16& hexX, uint16& hexY ) // , uint8 sizeX, uint8 sizeY)
+{
+    // hexX = MAP_SIZE - hexX;
+    // hexY = MAP_SIZE - hexY;
+
+    /*int8	tempX = targetCell.ParantX - cell.X,
+            tempY = targetCell.ParantY - cell.Y;
+
+
+            Log(""+tempX+" "+tempY);*/
+    /*
+       switch(direction)
+       {
+            case 0 : tempX_ = mapSizeX - tempX_; tempY_ = mapSizeY - tempY_; direction = 0; break;
+            case 1 : tempX_ = mapSizeX - tempX_/* - ADD_HEX_COUNT; if(bigSizeY) {tempY_ = mapSizeY + tempY_;} direction = 1; break;
+            case 2 : tempX_ = mapSizeX - tempX_ - ADD_HEX_COUNT; tempY_ = mapSizeY - tempY_; direction = 2; break;
+            case 3 : if(bigSizeX) {tempX_ = mapSizeX + tempX_;} tempY_ = mapSizeY - tempY_; direction = Random(2,3); break;
+            case 4 : tempX_ = mapSizeX - tempX_; tempY_ = mapSizeY - tempY_; direction = 3; break;
+            case 5 : tempX_ = mapSizeX - tempX_; if(bigSizeY) {tempY_ = mapSizeY + tempY_;} direction = 4; break;
+            case 6 : tempX_ = mapSizeX - tempX_; tempY_ = mapSizeY - tempY_ - ADD_HEX_COUNT; direction = 5; break;
+            case 7 : if(bigSizeX) {tempX_ = mapSizeX + tempX_;} tempY_ = mapSizeY - tempY_ - ADD_HEX_COUNT; direction = (Random(0,1) > 0 ? 5 : 0); break;
+            default: return;
+       }*/
+
+    uint16 mapSizeX = MAP_SIZE,
+           mapSizeY = MAP_SIZE;     // + MAP_SIZE * ABS(tempY);
+
+    bool bigSizeX = false,
+         bigSizeY = false;
+
+    if( targetCell.SizeX > 1 || targetCell.SizeY > 1 )
+    {
+        // if(MAP_SIZE * ABS(tempX) > 0) {mapSizeX += MAP_SIZE * ABS(tempX); mapSizeX = CLAMP(mapSizeX, MAP_SIZE, MAP_SIZE * targetCell.SizeX);}
+        // if(MAP_SIZE * ABS(tempY) > 0) {mapSizeY += MAP_SIZE * ABS(tempY); mapSizeY = CLAMP(mapSizeY, MAP_SIZE, MAP_SIZE * targetCell.SizeY);}
+        // *if(ABS(tempY) > 1) *mapSizeY = ABS(mapSizeY + (MAP_SIZE * tempY));
+
+        int tempX = targetCell.ParantX - cell.ParantX,
+            tempY = targetCell.ParantY - cell.ParantY;
+
+        uint tempXX = ABS( tempX ),
+             tempYY = ABS( tempY );
+
+        // if(tempXX == 1) tempXX++;
+        // if(tempYY == 1) tempYY++;
+
+        if( tempX != 0 )
+        {
+            mapSizeX = ABS( MAP_SIZE * tempX );
+            bigSizeX = true;
+        }
+        if( tempY != 0 )
+        {
+            mapSizeY = ABS( MAP_SIZE * tempY );
+            bigSizeY = true;
+        }
+
+
+
+
+
+        // bigSize = true;
+        // Log("size x "+(MAP_SIZE * ABS(tempX)+" "+(MAP_SIZE * ABS(tempY))));
+
+
+
+    }
+
+    // Log(/*"size 123 "+tempX+":"+tempY+*/" mapsize "+mapSizeX+":"+mapSizeY);
+    /*if(targetCell.X != targetCell.ParantX || targetCell.Y != targetCell.ParantY)
+       {
+            targetCell = world.GetCell(targetCell.ParantX, targetCell.ParantY);
+            if(targetCell is null) return;
+       }*/
+
+    /*
+       if(targetCell.SizeX > 1 || targetCell.SizeY > 1)
+       {
+                    //cr.Say(SAY_NETMSG, "target is big 0 "+cr.HexX+" "+oldHexX+" "+cr.HexY+" "+oldHexY);
+
+                    //uint8 tempHexX = ((oldHexX) / MAP_SIZE),
+                    //      tempHexY = ((oldHexY) / MAP_SIZE);
+
+                    uint8 parantX = (targetCell.ParantX - targetCell.X),
+                          parantY = (targetCell.X - targetCell.ParantX);
+
+                    if(ABS(parantX) > 0) {mapSizeX += (ABS(parantX)+1) * MAP_SIZE;}
+                    if(ABS(parantY) > 0) {mapSizeY += (ABS(parantY)+1) * MAP_SIZE;}
+
+                    //cr.Say(SAY_NETMSG, "target is big "+tempHexX+" "+tempHexY+" "+destHexX+"+"+destHexY);
+       }*/
+    // Log("11111111111 "+hexX+":"+hexY);
+    switch( direction )
+    {
+    case 0:
+        hexX = mapSizeX - hexX;
+        hexY = mapSizeY - hexY;
+        direction = 0;
+        break;
+    case 1:
+        hexX = mapSizeX - hexX /* - ADD_HEX_COUNT*/;
+        if( bigSizeY )
+        {
+            hexY = mapSizeY + hexY;
+        }
+        direction = 1;
+        break;
+    case 2:
+        hexX = mapSizeX - hexX - ADD_HEX_COUNT;
+        hexY = mapSizeY - hexY;
+        direction = 2;
+        break;
+    case 3:
+        if( bigSizeX )
+        {
+            hexX = mapSizeX + hexX;
+        }
+        hexY = mapSizeY - hexY;
+        direction = Random( 2, 3 );
+        break;
+    case 4:
+        hexX = mapSizeX - hexX;
+        hexY = mapSizeY - hexY;
+        direction = 3;
+        break;
+    case 5:
+        hexX = mapSizeX - hexX;
+        if( bigSizeY )
+        {
+            hexY = mapSizeY + hexY;
+        }
+        direction = 4;
+        break;
+    case 6:
+        hexX = mapSizeX - hexX;
+        hexY = mapSizeY - hexY - ADD_HEX_COUNT;
+        direction = 5;
+        break;
+    case 7:
+        if( bigSizeX )
+        {
+            hexX = mapSizeX + hexX;
+        }
+        hexY = mapSizeY - hexY /* - ADD_HEX_COUNT*/;
+        direction = ( Random( 0, 1 ) > 0 ? 5 : 0 );
+        break;
+    default:
+        return;
+    }
+    // Log("22222111111 "+hexX+":"+hexY+" "+(mapSizeX - hexX));
+
+    /*
+       Map @ map = GetMap(cell.Content.MapId);
+       if(map !is null)
+       {
+
+       }*/
+    return;
+}
+
+void SetOffSetNonStandartMaps( Cell& cell, uint8 direction, uint16 hexX, uint16 hexY, int8 offsetCellX, int8 offsetCellY, uint16& destCellX, uint16& destCellY )
+{
+    uint16 tempX = hexX / MAP_SIZE,     // (MAP_SIZE * cell.SizeX) / hexX,
+           tempY = hexY / MAP_SIZE;     // (MAP_SIZE * cell.SizeY) / hexY;
+
+    // offsetCellX -= tempX;
+    // offsetCellY -= tempY;
+
+    // Log("tempX "+tempX+" tempY "+tempY);
+
+    switch( direction )
+    {
+    case 0:
+        destCellX + offsetCellX;
+        destCellY - offsetCellY;
+        break;
+    case 1:
+        destCellX + offsetCellX;
+        break;
+    case 2:
+        destCellX + offsetCellX;
+        destCellY + offsetCellY;
+        break;
+    case 3:
+        destCellY + offsetCellY;
+        break;
+    case 4:
+        destCellX - offsetCellX;
+        destCellY + offsetCellY;
+        break;
+    case 5:
+        destCellX - offsetCellX;
+        break;
+    case 6:
+        destCellX - offsetCellX;
+        destCellY - offsetCellY;
+        break;
+    case 7:
+        destCellY - offsetCellY;
+        break;
+    default:
+        break;
+    }
+
+    // Log("tempX "+tempX+" tempY "+tempY+" offsetX "+offsetCellX+" offsetCellY "+offsetCellY+" destX "+destCellX+" destY "+destCellY);
+}
+
+void SetWorldDirection( uint8 direction, uint16& wX, uint16& wY, uint8 worldOffsetX, uint8 worldOffsetY )
+{
+    // worldOffsetX /= uint(worldOffsetX * 0.1);
+    // worldOffsetY /= uint(worldOffsetY * 0.1);
+
+    // worldOffsetX = CLAMP(worldOffsetX, 0, 10);
+    // worldOffsetY = CLAMP(worldOffsetY, 0, 10);
+
+    wY -= worldOffsetY * 0.1;
+
+    switch( direction )
+    {
+    case 0:
+        wX += worldOffsetX * 0.1;
+        break;
+    case 1:
+        wX += worldOffsetX * 0.1;
+        break;
+    case 2:
+        wX += worldOffsetX * 0.1;
+        break;
+    case 3:
+        wY += worldOffsetY * 0.1;
+        break;
+    case 4:
+        wX -= worldOffsetX * 0.1;
+        break;
+    case 5:
+        wX -= worldOffsetX * 0.1;
+        break;
+    case 6:
+        wX -= worldOffsetX * 0.1;
+        break;
+    case 7:
+        wX += worldOffsetX * 0.1;
+        break;
+    default:
+        return;
+    }
+}
+/*
+   void SetHexDirection(uint8 direction, uint16 hexX, uint16 hexY, uint16& destHexX, uint16& destHexY)
+   {
+        switch(direction)
+        {
+                case 0 : destHexX += MAP_SIZE - hexX - ADD_HEX_COUNT; destHexY += MAP_SIZE - hexY - ADD_HEX_COUNT; break;
+                case 1 : destHexX += MAP_SIZE + hexX + ADD_HEX_COUNT; break;
+                case 2 : destHexX += MAP_SIZE + hexX - ADD_HEX_COUNT; destHexY += MAP_SIZE - hexY - ADD_HEX_COUNT; break;
+                case 3 : destHexY += MAP_SIZE - hexY - ADD_HEX_COUNT; break;
+                case 4 : destHexX += MAP_SIZE - hexX + ADD_HEX_COUNT; destHexY += MAP_SIZE - hexY + ADD_HEX_COUNT; break;
+                case 5 : destHexX += MAP_SIZE - hexX - ADD_HEX_COUNT; break;
+                case 6 : destHexX += MAP_SIZE - hexX - ADD_HEX_COUNT; destHexY += MAP_SIZE - hexY - ADD_HEX_COUNT; break;
+                case 7 : destHexY += MAP_SIZE + hexY - ADD_HEX_COUNT; break;
+                default: return;
+        }
+
+        //hexX -= ADD_HEX_COUNT;
+        //hexY -= ADD_HEX_COUNT;
+
+        return;
+   }*/
+
+/*
+   void GetEnterHex(Critter& cr, Cell& cell uint16& hexX, uint16& hexY)
+   {
+        Map @ map = GetMap(cell.Content.MapId);
+        if(@map == null) return;
+   }*/
+
+void RefrashCoords( Critter& cr )
+{
+    // pm edit
+    Cell @ cell = world.GetCell( cr );
+    if( @cell == null )
+        return;
+
+}
+/*
+   void Ttransit(Critter& cr, Scenery& trigger, bool entered, uint8 dir)
+   {
+        //cr.Say(SAY_NETMSG, ""+dir);
+        TransitCritterToCell(cr, dir);
+   }
+ */
+void Ttransit( Item& item, bool firstTime )
+{
+    // item.SetEvent(ITEM_EVENT_WALK, "e_WalkTrigger");
+    // item.SetEvent(ITEM_EVENT_SKILL, "e_Skill");
+}
+/*
+   void e_WalkTrigger(Item& item, Critter& cr, bool entered, uint8 dir)
+   {
+        TransitCritterToCell(cr, item.Val1);
+   }
+
+   bool e_Skill(Item& item, Critter& cr, int skill)
+   {
+        return true;
+   }
+ */
+void unsafe_ExitGridClick( Critter& cr, int hexX, int hexY, int protoId, string@ param3, int[] @ param4 )
+{
+    if( cr.IsKnockout() || cr.IsDead() )
+    {
+        cr.Say( SAY_NETMSG, "Вы не можете перейти." );
+        return;
+    }
+    if( cr.Timeout[ TO_TRANSFER ] > 0 )
+    {
+        cr.Say( SAY_NETMSG, "Таймаут на переходы. Ждите." );
+        return;
+    }
+    // Item @ grid = GetItem(itemId);
+    Scenery@ grid = cr.GetMap().GetScenery( hexX, hexY, protoId );
+    if( grid !is null )
+    {
+        uint8 length = cr.GetMap().GetPathLength( cr, grid.HexX, grid.HexY, 0 );
+        // cr.Say(SAY_NETMSG, ""+(ABS(int(cr.HexX - grid.HexX)))+" "+(ABS(int(cr.HexY - grid.HexY))));
+        if( ABS( int(cr.HexX - grid.HexX) ) <= EXIT_GRID_DISTATION && ABS( int(cr.HexY - grid.HexY) ) <= EXIT_GRID_DISTATION )
+        {
+            // if(length  <= EXIT_GRID_DISTATION)
+            // {
+            TransitCritterToCell( cr, grid );
+            return;
+            // }
+
+        }
+        cr.Say( SAY_NETMSG, "Вы слишком далеко от сетки выхода." );
+        // cr.Say(SAY_NETMSG, "Выход заблокирован.");
+    }
+
+}
+
+void unsafe_GetMapPid( Critter& cr, int hexX, int hexY, int protoId, string@ param3, int[] @ param4 )
+{
+    // Item @ grid = GetItem(gridId);
+    Scenery@ grid = cr.GetMap().GetScenery( hexX, hexY, protoId );
+    if( grid !is null )
+    {
+
+        Cell @ cell = world.GetCell( cr );
+        if( cell !is null && cell.Content !is null )
+        {
+            int8   offsetCellX = 0, offsetCellY = 0, level = GetMapLevelByPid( cr.GetMap().GetProtoId() );
+            uint8  direction = cr.GetMap().GetScenParam( hexX, hexY, protoId, 0 );          // grid.Val1;
+            uint16 destCellX = cell.X, destCellY = cell.Y, oldHexX = 0, oldHexY = 0;
+
+            if( !GetMap( cell.Content.MapId[ CELL_LEVEL_DEFAULT + level ] ).GetEntireCoords( ENTIRE_NUM, 0, oldHexX, oldHexY ) )
+            {
+                cr.Say( SAY_NETMSG, "no ent" );
+                return;
+            }
+
+            oldHexX = grid.HexX - oldHexX;             // cr.HexX deprecated
+            oldHexY = grid.HexY - oldHexY;             // cr.HexY deprecated
+
+            cr.StatBase[ ST_LOCALMAP_DIR ] = direction;
+            if( SetMapDirection( direction, destCellX, destCellY, offsetCellX, offsetCellY ) )
+            {
+                // Cell @ cell = GetCell(destCellX, destCellY);
+                // cr.Say(SAY_NETMSG, ""+destCellX+" "+destCellY);
+                // if(cell !is null && cell.Content !is null)
+                // {
+                /*
+                                      if(cell.SizeX > 1 || cell.SizeY > 1)
+                                      {
+                                              SetOffSetNonStandartMaps(cell, direction, oldHexX, oldHexY, offsetCellX, offsetCellY, destCellX, destCellY);
+                                      }*/
+
+                uint16 mapId = GetCellMap( destCellX * 10, destCellY * 10, level );
+                if( mapId != -1 )
+                {
+                    Map @ map = GetMap( mapId );                  // cell.Content.MapId); //
+                    if( map !is null )
+                    {
+                        cr.StatBase[ ST_LOCALMAP_PID ] = map.GetProtoId();
+                        // cr.Say(SAY_NETMSG, ""+map.GetProtoId());
+                        return;
+                    }
+                }
+
+
+                // cr.StatBase[ST_VAR8] = 0;
+                // cr.StatBase[ST_VAR8] |= direction;
+                // cr.StatBase[ST_VAR8] |= cell.Content.MapId<<3;
+                // cr.RunClientScript("client_screen_teach@SetMaxExp", studyTemp, 0, 0, "", null);
+            }
+        }
+    }
+    cr.StatBase[ ST_LOCALMAP_PID ] = 0;
+    return;
+}
+
+int GetCellMap( uint16 x, uint16 y )
+{
+    Cell @ cell = world.GetCell( x * 0.1, y * 0.1 );
+    if( @cell == null || cell.Content is null )
+        return -1;
+    return cell.Content.MapId[ CELL_LEVEL_DEFAULT ];
+}
+
+int GetCellMap( uint16 x, uint16 y, int level )
+{
+    Cell @ cell = world.GetCell( x * 0.1, y * 0.1 );
+    if( @cell == null || cell.Content is null )
+        return -1;
+    return cell.Content.MapId[ CELL_LEVEL_DEFAULT + level ];
+}
+
+/*
+   Cell@ GetCell(uint16 x, uint16 y)
+   {
+        return world.GetCell(x*0.1, y*0.1);
+   }*/
+
+CellContent@ CreateContent( Cell& cell, uint mapId, uint8 type, int8 visibility )
+{
+    @cell.Content = CellContent( mapId, type, visibility );
+    return cell.Content;
+}
+
+void CreateCell( uint16 x, uint16 y, uint mapId, uint8 type, int8 visibility )
+{
+    world.CreateCell( x, y, mapId, type, visibility );
+}
+
+void FindTransitHex( Map& map, uint16& hexX, uint16& hexY, uint8 radius, uint8& side )
+{
+    for( uint16 i = hexY - ( radius * 0.5 ), j = hexY + ( radius * 0.5 ); i < j; ++i )
+    {
+        for( uint16 ii = hexX - ( radius * 0.5 ), jj = hexX + ( radius * 0.5 ); ii < jj; ++ii )
+        {
+            Scenery @ scen = map.GetScenery( ii, i, EXIT_GRID_PID );
+            if( scen is null )
+                continue;
+
+            hexX = ii;
+            hexY = i;
+
+            side = map.GetScenParam( scen.HexX, scen.HexY, scen.ProtoId, 0 );
+
+            return;
+        }
+    }
+}
+
+void cellvisibleset( Critter& cr, int vis, int, int )
+{
+    Cell @ cell = world.GetCell( cr.WorldX * 0.1, cr.WorldY * 0.1 );
+    if( cell is null || cell.Content is null )
+        return;
+
+    if( vis == 100 )
+        vis *= -1;
+    cell.Content.Visibility = vis;
+
+}
+
+void ChangeMonsterCount( uint8 x, uint8 y, bool increase )
+{
+    Cell @ cell = world.GetCell( x * 0.1, y * 0.1 );
+    if( cell is null )
+        return;
+
+    cell.ChangeMonsterCount( increase );
+}
+
+
+void ChangeMonsterCount( Critter& cr, bool increase )
+{
+    Cell @ cell = world.GetCell( cr );
+    if( cell is null )
+        return;
+
+    cell.ChangeMonsterCount( increase );
+}
+
+void ChangeMonsterCount( Critter& cr, uint8 count, bool increase )
+{
+    Cell @ cell = world.GetCell( cr );
+    if( cell is null )
+        return;
+
+    cell.ChangeMonsterCount( count, increase );
+}
+
+
+// uint GetCellType(Critter& cr)
+
+const uint16[] wild_1 =
+{
+    311,
+    311,
+    312,
+    319
+};
+
+const uint16[] wild_2 =
+{
+    313,
+    314,
+    316,
+    318
+};
+
+const uint16[] wild_3 =
+{
+    315,
+    317,
+    318,
+    320
+};
+
+const uint16[] wild_5 =
+{
+    315,
+    317,
+    318,
+    320,
+    324,
+};
+
+const uint16[] wild_6 =
+{
+    324,
+    325
+};
+
+const uint16[] wild_7 =
+{
+    325,
+    327
+};
+
+const uint16[] wild_8 =
+{
+    328,
+    329
+};
+
+const uint16[] wild_10 = {      326     };
+
+uint16 MonsterTypeTable( uint8 wild )
+{
+    uint16 type = 0;
+
+    wild *= 0.1;
+
+    switch( wild )
+    {
+    case 1:
+        type = wild_1[ Random( 0, wild_1.length() - 1 ) ];
+        break;
+    case 2:
+        type = wild_2[ Random( 0, wild_2.length() - 1 ) ];
+        break;
+    case 3:
+        type = wild_3[ Random( 0, wild_3.length() - 1 ) ];
+        break;
+    case 4:
+        type = wild_3[ Random( 0, wild_3.length() - 1 ) ];
+        break;
+    case 5:
+        type = wild_3[ Random( 0, wild_3.length() - 1 ) ];
+        break;
+    case 6:
+        type = wild_6[ Random( 0, wild_6.length() - 1 ) ];
+        break;
+    case 7:
+        type = wild_7[ Random( 0, wild_7.length() - 1 ) ];
+        break;
+    case 8:
+        type = wild_8[ Random( 0, wild_8.length() - 1 ) ];
+        break;
+    case 9:
+        type = wild_8[ Random( 0, wild_8.length() - 1 ) ];
+        break;
+    case 10:
+        type = wild_10[ Random( 0, wild_10.length() - 1 ) ];
+        break;
+    default:
+        type = 311;
+        break;
+    }
+
+    return type;
+}
+
+/*
+   10 - крысы, мантисы, муравьи, малые скорпионы						+
+   20 - крысы2, мантисы2, муравьи2, свинокрысы, собаки, малые скорпионы2, гекко		+
+   30 - свинокрысы2, кротокрысы, большие скорпионы, гекко2, золотой гекко			+
+   40 - собаки2, кротокрысы2, большие скорпионы2, золотой гекко2				use wild_3
+   50 - собаки3, мутанты кротокрысы, малый коготь						+
+   60 - малый коготь2, огнегекко, большой коготь
+   70 - большой коготь2, огнегекко2
+   80 - кентавр, летун
+   90 - кентавр2, летун2 (с плюющимися атаками)
+   100 - серый коготь (бегает со скоростью 150% стандартной)
+ */
+
+void SpawMonstersCritter( Critter& cr )
+{
+    Cell @ cell = world.GetCell( cr );
+    if( cell is null || cell.Content is null )
+        return;
+
+    SpawMonstersCell( cell, cell.MonsterCount );
+}
+
+void SpawMonstersCell( Cell& cell, uint16 count )
+{
+    // if(count+cell.PopulationMax > cell.PopulationMax) {return;}
+    for( uint8 i = 0, j = cell.Content.MapId.length(); i < j; ++i )
+    {
+        Map @ map = GetMap( cell.Content.MapId[ i ] );    // CELL_LEVEL_DEFAULT
+        if( map is null )
+            continue;
+
+        int level = GetMapLevelByPid( map.GetProtoId() );
+        uint8[] tileGroups;
+
+        if( level < 0 )                         // underground
+        {
+            tileGroups.insertLast( 4 );
+            tileGroups.insertLast( 5 );
+            tileGroups.insertLast( 7 );
+        }
+        else                                    // ground maps
+        {
+            tileGroups.insertLast( 1 );
+            tileGroups.insertLast( 2 );
+            tileGroups.insertLast( 3 );
+        }
+
+        uint16 hexX = 0, hexY = 0, tempX = 0, tempY = 0;
+
+        map.GetEntireCoords( 255, 0, hexX, hexY );
+
+        // uint16 type = /*cell.MonsterType;*/MonsterTypeTable(cell.Wildness);
+        uint16 type = wild_1[ Random( 0, wild_1.length() - 1 ) ];
+        // if(cell.Content.Type == CELLMAP_TYPE_STATIC) type = 310; //rat
+
+        bool  condition = false;
+
+        uint8 sizeX = cell.SizeX, sizeY = cell.SizeY;
+        uint  hash = 0;
+
+        for( uint8 i = 0; i < count; ++i )
+        {
+            do
+            {
+                tempX = Random( hexX, hexX + ( sizeX * MAP_SIZE ) - 5 );
+                tempY = Random( hexY, hexY + ( sizeY * MAP_SIZE ) - 5 );
+
+                // if(!map.IsHexPassed(tempX, tempY)) break;/*continue;*/
+
+                // hash = map.GetTile(THX(tempX), THX(tempY));
+                /*
+                   for(uint8 ii = 0, jj = tileGroups.length(); ii < jj; ++ii){
+                        condition = (IsTileAvalible(hash, tileGroups[ii]));
+                        if(condition) break;
+                   }*/
+
+                // cr.Say(SAY_NORM, "SPAWN!");
+            }
+            while( /*!condition*/ /*||  || IsTileGround(hash)*/ !map.IsHexPassed( tempX, tempY ) );
+
+            Critter @ npc = map.AddNpc( type, tempX, tempY, 3, null, null, "mob@_MobInit" );
+
+            if( npc is null )
+                continue;
+            npc.StatBase[ ST_TEAM_ID ] = 24;
+
+            npc.StatBase[ ST_SPEED_MOD ] = 200;
+
+            Log( "npc added " + npc.HexX + ":" + npc.HexY );
+        }
+    }
+}
+
+void GlobalCellPopulation()
+{
+    world.GlobalPopulation();
+}
+
+void GlobalCellSpawnLo()
+{
+    world.GlobalSpawnLo();
+}
+
+void DropWild()
+{
+    for( uint16 i = 0, j = world.Cells.length(); i < j; ++i )
+    {
+        if( world.Cells[ i ] is null )
+            return;
+
+        world.Cells[ i ].DropWildness();
+    }
+
+    // EraseAnyData("cells_v1");
+}
+
+void ReduseWildByWildness( Critter& cr )
+{
+    Cell @ cell = world.GetCell( cr );
+    if( cell is null )
+        return;
+
+    cell.ChangeWildness( cell.Wildness / cell.MonsterCount );
+}
+
+void ForcePopulation( Critter& cr, int count, int type, int )
+{
+    if( count > 1 )
+        count = 1;
+
+    for( uint8 i = 0; i < count; ++i )
+    {
+        if( type > 0 )
+        {
+            SpawMonstersCritter( cr );
+        }
+        else
+        {
+            GlobalCellPopulation();
+        }
+    }
+}
+
+void ForceSpawnLo( Critter& cr, int count, int type, int )
+{
+    GlobalCellSpawnLo();
+}
+
+void CellWorldPop( Critter& cr, int count, int, int )
+{
+    for( uint16 i = 0, j = world.Cells.length(); i < j; ++i )
+    {
+        if( world.Cells[ i ].MonsterCount > 0 )
+        {
+            Log( "cell " + world.Cells[ i ].X + ":" + world.Cells[ i ].Y + " pop " + world.Cells[ i ].MonsterCount );
+        }
+    }
+}
+
+void CellAnyData( Critter& cr, int count, int, int )
+{
+    int[] monstersData;
+    if( IsAnyData( "cells_monsters_v1" ) )
+    {
+        GetAnyData( "cells_monsters_v1", monstersData );
+
+        for( uint16 i = 0, j = monstersData.length(); i < j; ++i )
+        {
+            Log( "cell " + i + " pop " + monstersData[ i ] );
+        }
+    }
+
+}
+
+void CellSetAnyData( Critter& cr, int min, int max, int add )
+{
+    if( max <= 0 )
+        max = 1;
+    if( min >= max )
+        min = max - 1;
+    int[] monstersData;
+    if( IsAnyData( "cells_monsters_v1" ) )
+    {
+        GetAnyData( "cells_monsters_v1", monstersData );
+
+        for( uint16 i = 0, j = monstersData.length(); i < j; ++i )
+        {
+            if( add > 0 )
+                monstersData[ i ] += Random( min, max );
+            else
+                monstersData[ i ] = Random( min, max );
+            // Log("cell "+i+" pop "+monstersData[i]);
+        }
+
+        SetAnyData( "cells_monsters_v1", monstersData );
+    }
+
+}
+
+int CellLocationCreate( int pid, int x, int y, int force )
+{
+    Cell @ cell = world.GetCell( x, y );
+    if( cell is null )
+        return -1;
+
+    return cell.CellCreate( pid, force > 0 ? true : false );
+}
+
+int CellLocationCreate( int pid, int x, int y, int wild, int livetime, int force )
+{
+    Cell @ cell = world.GetCell( x, y );
+    if( cell is null )
+        return -1;
+
+    return cell.CellCreate( pid, wild, livetime, force > 0 ? true : false );
+}
+
+int CellLocationMove( int x, int y, int x1, int y1 )
+{
+    Cell @ cell = world.GetCell( x, y );
+    if( cell is null )
+        return -1;
+
+    return cell.CellMove( x1, y1 );
+}
+
+int CellLocationDelete( int x, int y )
+{
+    Cell @ cell = world.GetCell( x, y );
+    if( cell is null )
+        return -1;
+
+    return cell.CellDelete();
+}
+
+int CellLocationSize( int x, int y, int sizeX, int sizeY )
+{
+    Cell @ cell = world.GetCell( x, y );
+    if( cell is null )
+        return -1;
+
+    return cell.CellSetSize( sizeX, sizeY );
+}
+
+int GetMapLevelByPid( uint pid )
+{
+    int level = 0;
+    switch( pid )
+    {
+    case MAP_SUTTER_11_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_12_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_13_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_14_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_21_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_24_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_31_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_34_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_41_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_42_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_43_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_44_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_CENTER_DN:
+        level = -1;
+        break;
+    case MAP_SUTTER_CENTER_DN_2:
+        level = -2;
+        break;
+    case MAP_SUTTER_CENTER_UP:
+        level =  1;
+        break;
+    case MAP_SUTTER_CENTER_UP_1:
+        level =  2;
+        break;
+    case MAP_PHOENIX_DN:
+        level =  -1;
+        break;
+    case MAP_SUTTER_TONNEL_DN_2:
+        level =  -2;
+        break;
+    case MAP_TONNEL_SOUTH_1:
+        level =  -2;
+        break;
+    case MAP_TONNEL_SOUTH_2:
+        level =  -2;
+        break;
+    case MAP_MARIP_1:
+        level =   2;
+        break;
+    case MAP_MARIP_2:
+        level =   2;
+        break;
+    case MAP_MARIP_3:
+        level =  2;
+        break;
+    case MAP_MARIP_4:
+        level =   2;
+        break;
+    default:
+        level =  0;
+        break;
+    }
+
+    return level;
+
+}
+
+void DypsneaCr( Map& map, Critter& cr )
+{
+	if ( map.GetProtoId()== MAP_SUTTER_CENTER_DN && (443 < cr.HexX) && (cr.HexX < 540) && (369 < cr.HexY) && (cr.HexY < 435) ) return;
+	
+    if( map.GetData( 25 ) > 0)
+    {
+        GameVar @ dyspnea = GetLocalVar( LMVAR_Dyspnea, map.Id );
+        if( !(dyspnea is null))
+        {
+            if( cr.GetTimeEvents( CTE_DYSPNEA, null, null, null ) < 1 )
+            {
+                cr.AddTimeEvent( "cte_Dyspnea", 5 * __TimeMultiplier, CTE_DYSPNEA, 1 );
+            }
+        }
+
+        cr.Say( SAY_NETMSG, "Вам тяжело дышать." );
+    }
+    else
+    {
+        if( cr.GetTimeEvents( CTE_DYSPNEA, null, null, null ) > 0 )
+        {
+            cr.EraseTimeEvents( CTE_DYSPNEA );
+        }
+        if( cr.StatBase[ ST_DYSPNEA ] < 100 )
+        {
+            cr.AddTimeEvent( "cte_Dyspnea", 5 * __TimeMultiplier, CTE_DYSPNEA, 0 );
+            cr.Say( SAY_NETMSG, "Здесь дышиться легче." );
+        }
+    }
+
+}
+
+uint cte_Dyspnea( Critter& cr, int identifier, uint& rate )
+{
+    Map @ map = cr.GetMap();
+    if( !(map is null) )
+    {
+        if( map.GetData( 25 ) > 0 )
+        {
+            GameVar @ dyspnea = GetLocalVar( LMVAR_Dyspnea, map.Id );
+            if( !(dyspnea is null) )
+            {
+
+                Item @ respirator = _CritGetItemHandExt( cr );
+                if( !(respirator is null) && respirator.GetProtoId() == PID_RESPIRATOR && respirator.Indicator > 0)
+                {
+                    uint8 ind = respirator.Indicator;
+                    if ( Random(0,15) == 0 )
+						{
+						ind--;
+						ind = CLAMP( ind, 0, 100 );
+						respirator.Indicator = ind;
+						respirator.Update();
+						}
+                    cr.StatBase[ ST_DYSPNEA ] --;					
+                }
+                else
+                {
+                    cr.StatBase[ ST_DYSPNEA ] -= 5;
+                }
+            }
+        }
+        else
+        {
+            cr.StatBase[ ST_DYSPNEA ] += cr.Stat[ ST_ENDURANCE ] * 5;
+			if ( cr.StatBase[ ST_DYSPNEA ] >= 100 ) return 0;
+        }
+    }
+
+    return 5 * __TimeMultiplier;
+}

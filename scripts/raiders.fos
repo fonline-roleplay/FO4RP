@@ -1,0 +1,545 @@
+/*
+   Рейдеры: система автоматических набегов на локации.
+
+   Задача: дать возможность запускать на локации группы агрессивных монстров или нпц, по команде Гейммастера.
+
+   ToDo:
+   - обработка входящих данных (локация, сложность, количество)
+   - выбор места появления группы монстров
+   - генерация группы монстров
+   - установка параметров и поведения
+   - инициализация нападения
+
+   За основу берём зомби - работают ведь и цель ровно такая же.
+
+   EntireHex:
+   70 - точки входа, по периметру города
+   71 - главные ворота
+   72 - центральная площадь
+   73 - бедный район
+   74 - арсенал
+
+   AIs:
+   #define   AIPACKET_FO1_GENERIC_RAIDER            (207)
+   #define   AIPACKET_FO1_RAIDER_GUARD              (208)
+   #define   AIPACKET_FO1_RAIDER_LEADER             (209)
+
+
+ */
+#include "_macros.fos"
+#include "entire.fos"
+#include "pids_groups.fos"
+#include "_npc_pids.fos"
+#include "_teams.fos"
+#include "_bags.fos"
+
+#define GuardPID        ( 128 )
+#define CRITTER_TEAM    ( 128 )
+
+import void GM_MobInit( Critter& npc ) from "mob";
+import void GM_MobBossInit( Critter& npc ) from "mob";
+import void GM_MobMinionInit( Critter& npc ) from "mob";
+import bool AddAttackPlane( Critter& npc, uint priority, Critter& target, bool run ) from "npc_planes";
+import bool AddWalkPlane( Critter& npc, uint priority, uint16 hexX, uint16 hexY, uint8 dir, bool run, uint cut ) from "npc_planes";
+import void GM_InitCommonGuard( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 ) from "guards";
+
+
+uint attackTarget = 0;
+// temp
+
+void AdvancedSpawnNPC( Critter& player, int type, int weapon, int AI_type, string@ param3, int[] @ param4 )
+{
+    if( !valid( player ) )
+        return;
+    Map @ map = player.GetMap();
+    AdvancedSpawn( player, map, type, weapon, AI_type, param4[ 0 ], param4[ 1 ] );
+}
+
+void _OnDeadEvent( Critter& dead, Critter@ killer )
+{
+    // Log("Raider: Critter is dead");
+    dead.AddTimeEvent( "cte_deleteCorpse", 40*60, 0 );
+    // e_deleteCorpse (dead, killer);
+}
+
+uint cte_deleteCorpse( Critter& dead, int identifier, uint& rate )
+{
+    // Log("Raider: Deleting!");
+    DeleteNpc( dead );
+    return 0;
+}
+
+void stopMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    for( uint i = param0 * 10, ii = 10 + param0 * 10; i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+
+        if( valid( player ) && valid( controlled ) && !controlled.IsPlayer() )
+        {
+            controlled.ErasePlane( -1, true );
+            controlled.ClearEnemyStack();
+            controlled.EraseTimeEvents( 9 );
+            controlled.SetDir( GetDirection( controlled.HexX, controlled.HexY, param1, param2 ) );
+        }
+    }
+}
+
+void controlMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+    player.RunClientScript( "client_gui@_SetControlCritters", param0, 0, 0, null, null );
+	Critter@ target = GetCritter( param0 );
+	if ( valid( target ) ) target.ParamBase[ MERC_MASTER_ID ] = player.Id;
+}
+
+void moveMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    for( uint i = param0 * 10, ii = 10 + param0 * 10; i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+
+        if( valid( player ) && valid( controlled ) && controlled.IsNpc() )
+        {
+            controlled.ModeBase[ MODE_NO_HOME ] = 1;
+            controlled.ErasePlane( -1, true );
+            AddWalkPlane( controlled, 1, param1, param2, GetDirection( controlled.HexX, controlled.HexY, param1, param2 ), ( param3 != null ), 0 );
+            if( param0 == 0 )
+                controlled.ClearEnemyStack();
+        }
+    }
+}
+
+void attackMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    Critter@ target = GetCritter( param0 );
+	
+    for( uint i = param2 * 10, ii = 10 + param2 * 10; i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+        if( valid( player ) && valid( controlled ) && valid( target ) && controlled.IsNpc() )
+        {
+            controlled.ModeBase[ MODE_NO_HOME ] = 1;
+            controlled.ErasePlane( -1, true );
+            AddAttackPlane( controlled, 0, target, __RunOnCombat );
+            controlled.AddEnemyInStack( target.Id );
+        }
+    }
+}
+
+void assaultMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    Critter@[] players, guards;
+    Critter@ target = GetCritter( param0 );
+    Map@     map = player.GetMap();
+
+    for( uint i = param2 * 10, ii = 10 + param2 * 10; i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+        if( valid( player ) && valid( controlled ) && valid( target ) && controlled.IsNpc() && map.GetCritters( 0, FIND_LIFE_AND_KO | FIND_ONLY_PLAYERS, players ) > 0 )
+        {
+            controlled.StatBase[ ST_VAR7 ] =  CRITTER_TEAM;
+            for( uint j = 0, jj = players.length(); j < jj; j++ )
+            {
+                if( players[ j ].StatBase[ ST_VAR7 ] != controlled.StatBase[ ST_VAR7 ] )
+                {
+                    AddAttackPlane( controlled, 0, players[ j ], __RunOnCombat );
+                    controlled.AddEnemyInStack( players[ j ].Id );
+                }
+            }
+        }
+    }
+}
+
+void deleteMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    for( uint i = param2 * 10, ii = 10 + (param2 * 10); i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+        if( valid( player ) && valid( controlled ) && controlled.IsNpc() && controlled.Stat[ ST_DIALOG_ID ] == 0 )
+            DeleteNpc( controlled );
+    }
+}
+
+void HomeMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    for( uint i = param2 * 10, ii = 10 + (param2 * 10); i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+        if( valid( player ) && valid( controlled ) && controlled.IsNpc() )
+        {
+            controlled.SetHomePos( controlled.HexX, controlled.HexY, player.Dir );
+            controlled.ModeBase[ MODE_NO_HOME ] = 0;
+            controlled.SetDir( player.Dir );
+        }
+    }
+}
+
+
+void MobHome( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    Critter@ target = GetCritter( param0 );
+    target.ModeBase[ MODE_NO_HOME ] = 0;
+}
+
+void chaseMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    Critter@ target = GetCritter( param0 );
+
+    for( uint i = param2 * 10, ii = 10 + param2 * 10; i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+        if( valid( player ) && valid( controlled ) && valid( target ) && controlled.IsNpc() )
+        {
+            controlled.ErasePlane( -1, true );
+            controlled.ModeBase[ MODE_NO_HOME ] = 1;
+            controlled.StatBase[ ST_KILLER_PERSON ] = target.Id;
+            controlled.AddTimeEvent( "follow", 30, 9 );
+        }
+    }
+}
+
+void GatherMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
+{
+    for( uint i = param2 * 10, ii = 10 + param2 * 10; i < ii; i++ )
+    {
+        Critter@ controlled = GetCritter( vals[ i ] );
+        if( valid( player ) && valid( controlled ) )
+        {
+            Map@ map = player.GetMap();
+            if( not valid( map ) )
+                return;
+            uint8 temp_dir = Random( 0, 5 );
+
+            for( uint i = 0; i < 6; i++ )
+            {
+                uint16 hexX = player.HexX, hexY = player.HexY;
+                map.MoveHexByDir( hexX, hexY, ( temp_dir + i ) % 6, 1 + param1 );
+                if( not map.IsHexPassed( hexX, hexY ) )
+                    continue;
+                controlled.TransitToMap( map.Id, hexX, hexY, 0 );
+                break;
+            }
+        }
+    }
+}
+
+uint follow( Critter& cr, int master, uint& rate )
+{
+    int8     y = 0;
+    cr.ClearEnemyStack();
+    Critter@ daddy = GetCritter( cr.Stat[ ST_KILLER_PERSON ] );
+    Map@     daddymap = null;
+    Map@     crmap = cr.GetMap();
+    if( valid( daddy ) )
+        @daddymap = daddy.GetMap();
+    else
+        return 0;
+    cr.ErasePlane( -1, true );
+
+    if( ( !valid( daddymap ) ) && ( valid( crmap ) ) )
+    {
+        cr.TransitToGlobalGroup( daddy.Id );
+    }
+    else if( ( valid( daddymap ) ) && ( valid( crmap ) ) && ( daddymap.Id == crmap.Id ) )
+    {
+        AddWalkPlane( cr, 0, daddy.HexX, daddy.HexY, GetDirection( cr.HexX, cr.HexY, daddy.HexX, daddy.HexY ), false, 1 );
+    }
+    else if( ( valid( daddymap ) ) && ( valid( crmap ) ) && ( crmap.Id != daddymap.Id ) )
+    {
+        uint8 findPos = 1;
+        while( findPos <= 10 )
+        {
+            if( daddymap.IsHexPassed( daddy.HexX + findPos, daddy.HexY + findPos ) )
+            {
+                cr.TransitToMap( daddymap.Id, daddy.HexX + findPos, daddy.HexY + findPos, Random( 0, 5 ) );
+                findPos = 10;
+            }
+            findPos++;
+        }
+    }
+    return 30;
+}
+
+void AdvancedSpawn( Critter& player, Map& map, int type, int weapon, int AI_type, uint16 hexX, uint16 hexY )
+{
+    if( type == 0 )
+    {
+        player.Say( SAY_NETMSG, " #spawn [тип] [оружие] [AI]" );	
+        player.Say( SAY_NETMSG, "Тип:" );
+        player.Say( SAY_NETMSG, "1 - крыса" );
+        player.Say( SAY_NETMSG, "2 - мантис" );
+        player.Say( SAY_NETMSG, "3 -  муравей" );
+        player.Say( SAY_NETMSG, "4 -  свинокрыс" );
+        player.Say( SAY_NETMSG, "5 -  кротокрыс" );
+        player.Say( SAY_NETMSG, "6 -  большой кротокрыс" );
+        player.Say( SAY_NETMSG, "7 -  гекко" );
+        player.Say( SAY_NETMSG, "8 -  золотой гекко" );
+        player.Say( SAY_NETMSG, "9 -  собака" );
+        player.Say( SAY_NETMSG, "10 -  малый скорпион" );
+        player.Say( SAY_NETMSG, "11 -  большой скорпион" );
+        player.Say( SAY_NETMSG, "12 -  брамин" );
+        player.Say( SAY_NETMSG, "13 -  чужой" );
+        player.Say( SAY_NETMSG, "14 -  малый коготь" );
+        player.Say( SAY_NETMSG, "15 -  большой коготь" );
+        player.Say( SAY_NETMSG, "16 -  кентавр" );
+        player.Say( SAY_NETMSG, "17 -  летун" );
+        player.Say( SAY_NETMSG, "18 -  огнегекко" );
+        player.Say( SAY_NETMSG, "19 -  кентавр2" );
+        player.Say( SAY_NETMSG, "20 -  каннибал" );
+        player.Say( SAY_NETMSG, "21 -  каннибал ж" );
+        player.Say( SAY_NETMSG, "22 -  рейдер" );
+        player.Say( SAY_NETMSG, "23 -  рейдер ж" );
+        player.Say( SAY_NETMSG, "24 -  работорг" );
+        player.Say( SAY_NETMSG, "25 -  работорг ж" );
+        player.Say( SAY_NETMSG, "26 -  мародер" );
+        player.Say( SAY_NETMSG, "27 -  мародер ж" );
+        player.Say( SAY_NETMSG, "28 -  гуль" );
+        player.Say( SAY_NETMSG, "29 -  супермутант" );
+        player.Say( SAY_NETMSG, "30 -  раб" );
+        player.Say( SAY_NETMSG, "31 -  раб ж" );
+        player.Say( SAY_NETMSG, "32 -  мальчик" );
+        player.Say( SAY_NETMSG, "33 -  девочка" );
+        player.Say( SAY_NETMSG, "34 -  путешественник" );
+        player.Say( SAY_NETMSG, "35 -  путешественница" );
+        player.Say( SAY_NETMSG, "Оружие:" );
+        player.Say( SAY_NETMSG, "1-без оружия" );		
+        player.Say( SAY_NETMSG, "1-нож" );
+        player.Say( SAY_NETMSG, "2-кастет" );
+        player.Say( SAY_NETMSG, "3-копье" );
+        player.Say( SAY_NETMSG, "10-лоу револьвер" );
+        player.Say( SAY_NETMSG, "14-самопал винт." );
+        player.Say( SAY_NETMSG, "18-лоу смг" );
+        player.Say( SAY_NETMSG, "19-большая пушка" );
+        player.Say( SAY_NETMSG, "20 - 10мм" );
+        player.Say( SAY_NETMSG, "21 -  маузер" );
+        player.Say( SAY_NETMSG, "22 -  дисерт игл" );
+        player.Say( SAY_NETMSG, "23 -  охотка" );
+        player.Say( SAY_NETMSG, "AI:" );
+        player.Say( SAY_NETMSG, "0-контроль" );
+        player.Say( SAY_NETMSG, "1-моб" );
+        player.Say( SAY_NETMSG, "2-гарнизонМодока" );
+        player.Say( SAY_NETMSG, "3-нейтрал" );
+        player.Say( SAY_NETMSG, "4-моб-Лидер" );
+        player.Say( SAY_NETMSG, "5-моб-миньон" );
+        return;
+    }
+    int NPC1 = NPC_PID_RegularRat + type;
+    if( type >= 36 )
+        NPC1 = type;
+    Critter@ cr = map.AddNpc( NPC1, hexX, hexY, Random( 0, 5 ), null, null, null );
+    if( valid( cr ) )
+    {
+        cr.SetEvent( CRITTER_EVENT_DEAD, "_OnDeadEvent" );
+        cr.StatBase[ ST_AI_ID ] = 207;
+        cr.StatBase[ ST_BAG_ID ] = BAG_Empty;
+		cr.StatBase[ ST_TEAM_ID ] = 30;
+        cr.StatBase[ ST_REPLICATION_TIME ] = __FullSecond + REAL_HOUR( 2 );
+        cr.ModeBase[ MODE_NO_HOME ] = 0;	
+        cr.ModeBase[ MODE_UNLIMITED_AMMO ] = 1;
+        if( type >= 20 )
+        {
+            int weapon2;
+            switch( weapon )
+            {
+            case 0:
+                weapon2 = 0;
+                break;
+            case 1:
+                weapon2 = PID_REVKNIFE1;
+                break;
+            case 2:
+                weapon2 = PID_REVFIST1;
+                break;
+            case 3:
+                weapon2 = PID_SPEAK_P;
+                break;
+            case 4:
+                weapon2 = PID_KNIFE;
+                break;
+            case 5:
+                weapon2 = PID_CHAIN;
+                break;
+            case 6:
+                weapon2 = PID_CROWBAR;
+                break;
+            case 7:
+                weapon2 = PID_SPEAR;
+                break;
+            case 8:
+                weapon2 = PID_SHIV;
+                break;
+            case 9:
+                weapon2 = PID_SWITCHBLADE;
+                break;
+            case 10:
+                weapon2 = PID_REVOLVER_LOW;
+                break;
+            case 11:
+                weapon2 = PID_PISTOL_LOW;
+                break;
+            case 12:
+                weapon2 = PID_SHOTPISTOL_LOW;
+                break;
+            case 13:
+                weapon2 = PID_REV_RIFLE_LOW;
+                break;
+            case 14:
+                weapon2 = PID_SPRINGER_RIFLE;
+                break;
+            case 15:
+                weapon2 = PID_ZIP_GUN;
+                break;
+            case 16:
+                weapon2 = PID_SNIPER_GUN_LOW;
+                break;
+            case 17:
+                weapon2 = PID_SMOKE_GUN_LOW;
+                break;
+            case 18:
+                weapon2 = PID_DRUM_GUN_LOW;
+                break;
+            case 19:
+                weapon2 = PID_BIGGUN_LOW;
+                break;
+            case 20:
+                weapon2 = PID_10MM_PISTOL;
+                break;
+            case 21:
+                weapon2 = PID_9MM_MAUSER;
+                break;
+            case 22:
+                weapon2 = PID_DESERT_EAGLE;
+                break;
+            case 23:
+                weapon2 = PID_HUNTING_RIFLE;
+                break;
+            }
+            if( weapon > 23 )
+                cr.AddItem( weapon, 1 );
+            else if( weapon2 > 0 )
+                cr.AddItem( weapon2, 1 );
+        }
+        if( AI_type == 0 && valid( player ) )
+        {
+            controlMob( player, cr.Id, 0, 0, null, null );
+        }
+        else if( AI_type == 1 )
+        {
+            GM_MobInit( cr);
+        }
+        else if( AI_type == 2 )
+        {
+            Critter@[] players, guards;
+            Map@ map = player.GetMap();
+            if( valid( player ) && valid( cr ) && map.GetCritters( 0, FIND_LIFE_AND_KO | FIND_ONLY_PLAYERS, players ) > 0 )
+            {
+                cr.StatBase[ ST_VAR7 ] =  CRITTER_TEAM;
+                for( uint j = 0, jj = players.length(); j < jj; j++ )
+                {
+                    if( players[ j ].StatBase[ ST_VAR7 ] != cr.StatBase[ ST_VAR7 ] )
+                    {
+                        AddAttackPlane( cr, 0, players[ j ], __RunOnCombat );
+                        cr.AddEnemyInStack( players[ j ].Id );
+                    }
+                }
+            }
+        }
+        else if( AI_type == 3 && valid( player ) )
+        {
+            GM_InitCommonGuard( player, cr.Id, 0, 0, null, null );
+        }
+		else if( AI_type == 4 )
+		{
+		GM_MobBossInit( cr );
+		}
+		else if( AI_type == 5 )
+		{
+		GM_MobMinionInit( cr );
+		}			
+    }
+}
+
+/*   old
+void sendWave( Map& map )
+{
+    Critter@[] raiders, players, guards;
+    if( map.GetCritters( 0, FIND_LIFE_AND_KO | FIND_ONLY_PLAYERS, players ) > 0 && ( map.GetCritters( NPC_PID_RaiderMale, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) + map.GetCritters( NPC_PID_RaiderFemale, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) + map.GetCritters( NPC_PID_MaleCannibal, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) + map.GetCritters( NPC_PID_FemaleCannibal, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) + map.GetCritters( NPC_PID_ToughGhoul, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) + map.GetCritters( NPC_PID_ToughNightkin, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) ) > 0 )
+    {
+        for( uint i = 0, ii = raiders.length(); i < ii; i++ )
+        {
+            Critter@ raider = raiders[ i ];
+            raider.StatBase[ ST_VAR7 ] =  CRITTER_TEAM;
+            for( uint j = 0, jj = players.length(); j < jj; j++ )
+            {
+                if( players[ j ].StatBase[ ST_VAR7 ] != raider.StatBase[ ST_VAR7 ] )         // add if for identificate sender or attacker player
+                {
+                    AddAttackPlane( raider, 0, players[ j ], __RunOnCombat );
+                    raider.AddEnemyInStack( players[ j ].Id );
+                }
+                // raider.AddWalkPlane(
+            }
+        }
+    }
+    if( map.GetCritters( GuardPID, FIND_LIFE_AND_KO | FIND_ONLY_NPC, guards ) > 0 )
+    {
+        for( uint i = 0, ii = guards.length(); i < ii; i++ )
+        {
+            Critter@ guard = guards[ i ];
+            for( uint j = 0, jj = raiders.length(); j < jj; j++ )
+            {
+                AddAttackPlane( guard, 0, raiders[ j ], __RunOnCombat );
+                guard.AddEnemyInStack( raiders[ j ].Id );
+            }
+        }
+
+        for( uint i = 0, ii = raiders.length(); i < ii; i++ )
+        {
+            Critter@ raider = raiders[ i ];
+            for( uint j = 0, jj = guards.length(); j < jj; j++ )
+            {
+                AddAttackPlane( raider, 0, guards[ j ], __RunOnCombat );
+                raider.AddEnemyInStack( guards[ j ].Id );
+            }
+        }
+    }
+}
+
+void sendWave2( Map& map )
+{
+    Critter@[] raiders, players, guards;
+    if( map.GetCritters( 0, FIND_LIFE_AND_KO | FIND_ONLY_PLAYERS, players ) > 0 && ( map.GetCritters( NPC_PID_Centaur, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) + map.GetCritters( NPC_PID_RegularRat, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) + map.GetCritters( NPC_PID_SmDeathclaw, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) + map.GetCritters( NPC_PID_Alien, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) + map.GetCritters( NPC_PID_Deathclaw, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) + map.GetCritters( NPC_PID_MirelurkWeak, FIND_LIFE_AND_KO | FIND_ONLY_NPC, raiders ) ) > 0 )
+    {
+        for( uint i = 0, ii = raiders.length(); i < ii; i++ )
+        {
+            Critter@ raider = raiders[ i ];
+            for( uint j = 0, jj = players.length(); j < jj; j++ )
+            {
+                AddAttackPlane( raider, 0, players[ j ], __RunOnCombat );
+                raider.AddEnemyInStack( players[ j ].Id );
+                // raider.AddWalkPlane(
+            }
+        }
+    }
+    if( map.GetCritters( GuardPID, FIND_LIFE_AND_KO | FIND_ONLY_NPC, guards ) > 0 )
+    {
+        for( uint i = 0, ii = guards.length(); i < ii; i++ )
+        {
+            Critter@ guard = guards[ i ];
+            for( uint j = 0, jj = raiders.length(); j < jj; j++ )
+            {
+                AddAttackPlane( guard, 0, raiders[ j ], __RunOnCombat );
+                guard.AddEnemyInStack( raiders[ j ].Id );
+            }
+        }
+
+        for( uint i = 0, ii = raiders.length(); i < ii; i++ )
+        {
+            Critter@ raider = raiders[ i ];
+            for( uint j = 0, jj = guards.length(); j < jj; j++ )
+            {
+                AddAttackPlane( raider, 0, guards[ j ], __RunOnCombat );
+                raider.AddEnemyInStack( guards[ j ].Id );
+            }
+        }
+    }
+}*/

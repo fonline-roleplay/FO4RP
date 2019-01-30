@@ -1,0 +1,526 @@
+#include "_macros.fos"
+#include "_msgstr.fos"
+
+#include "_ltp.fos"
+
+bool ltp_inited = false;
+void ltp_init()
+{
+    LTPREG( LTP_FISHING, process_fishing )
+    ltp_inited = true;
+}
+
+
+import uint8 checkSand( Map& map, uint16 tx, uint16 ty ) from "qmap_sand";
+import uint8 checkWaterAround( Map& map, uint16 tx, uint16 ty, uint8 coast_flags, uint8 radius, bool smartRadius ) from "qmap_water";
+import uint8 checkCoast( Map& map, uint16 tx, uint16 ty ) from "qmap_coast";
+
+string color_emote = "|0xFF00FF ";
+string color_femote = "|0xFF3366FF ";
+string color_fish = "|0xFFCC2233 ";
+string color_size = "|0xFF999999 ";
+
+void femote( Critter& cr, string& str )
+{
+    cr.Say( SAY_EMOTE_ON_HEAD, color_femote + str + color_emote );
+}
+
+#define FISH_SIZE_SMALLEST    ( 0 )
+#define FISH_SIZE_SMALL       ( 1 )
+#define FISH_SIZE_MID         ( 2 )
+#define FISH_SIZE_BIG         ( 3 )
+#define FISH_SIZE_BIGGEST     ( 4 )
+
+/*
+        В miscex есть 5 переменных: 3 видимых в редакторе и 2 скрытых
+
+        1 - длинна рыбы
+        2 - качество рыбы
+        3 - свежесть рыбы
+
+
+        Размер рыбы - длинна рыбы
+        0 - от 1 до 10 см
+        1 - от 11 до 20 см
+        2 - от 21 до 30 см
+        3 - от 31 до 40 см
+        4 - от 41 до 50 см
+ */
+
+void _InitFish( Item& item, bool firstTime )
+{
+    if( firstTime )
+    {
+        uint16 proto = item.GetProtoId();
+        if( proto < PID_FISH_SMALLEST || proto > PID_FISH_BIGGEST )
+            return;
+
+        uint size = proto - PID_FISH_SMALLEST,
+             length = size * 10 + Random( 1, 10 ),
+             quality = size * 5 + Random( 1, 10 ),
+             freshness = 0;
+
+        item.Val7 = length;
+        item.Val2 = quality;
+        item.Val3 = freshness;
+
+        item.Cost = ( 1 + size ) * length;
+    }
+    // else item.Cost=(1+(item.GetProtoId()-PID_FISH_SMALLEST))*item.Val7;
+}
+
+void _InitRod( Item& item, bool firstTime )
+{
+    item.SetEvent( ITEM_EVENT_USE, "_UseRod" );
+    item.SetEvent( ITEM_EVENT_SKILL, "_SkillRod" );
+    item.SetEvent( ITEM_EVENT_MOVE, "_MoveRod" );
+}
+
+bool _UseRod( Item& rod, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
+{
+    uint16 pid = rod.GetProtoId();
+    if( !IsRod( pid ) )
+        return true;
+
+    if( pid != PID_ROD_STRING_HOOK )
+    {
+        if( pid == PID_ROD )
+            cr.Say( SAY_NETMSG, "На удочке нет лески и крючка." );
+        else if( pid == PID_ROD_STRING )
+            cr.Say( SAY_NETMSG, "На удочке нет крючка." );
+    }
+    else
+    {
+        fish( cr );
+    }
+
+    return true;
+}
+
+bool _SkillRod( Item& rod, Critter& cr, int skill )
+{
+    uint16 pid = rod.GetProtoId();
+    if( !IsRod( pid ) )
+        return false;
+
+    if( skill != SK_REPAIR || pid == PID_ROD )
+        return false;
+
+    if( modifyRod( rod, PID_ROD ) )
+    {
+        cr.AddItem( PID_STRING, 1 );
+        if( pid == PID_ROD_STRING_HOOK )
+            cr.AddItem( PID_HOOK, 1 );
+        femote( cr, "снимает леску с удочки" );
+    }
+    return true;
+}
+
+void _MoveRod( Item& rod, Critter& cr, uint8 fromSlot )
+{
+    uint16 pid = rod.GetProtoId();
+    if( !IsRod( pid ) )
+        return;
+
+    if( rod.CritSlot != SLOT_HAND1 || fromSlot == SLOT_HAND1 )
+        return;
+
+    femote( cr, "достает удочку" );
+}
+
+void _InitHook( Item& item, bool firstTime )
+{
+    item.SetEvent( ITEM_EVENT_USE, "_UseHook" );
+}
+
+bool _UseHook( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
+{
+    Item@  rod = cr.GetItem( 0, SLOT_HAND1 );
+    uint16 pid = 0;
+    if( @rod != null )
+        pid = rod.GetProtoId();
+
+    // if(!IsRod(pid)) return true;
+
+    if( pid != PID_ROD_STRING )
+    {
+        if( pid == PID_ROD )
+            cr.Say( SAY_NETMSG, "На удочке нет лески." );
+        else if( pid == PID_ROD_STRING_HOOK )
+            cr.Say( SAY_NETMSG, "На удочке уже есть крючок." );
+        else
+            cr.Say( SAY_NETMSG, "Вы пытаетесь воткнуть крючок себе в глаз, но в последний момент передумываете." );
+    }
+    else
+    {
+        if( modifyRod( rod, PID_ROD_STRING_HOOK ) )
+        {
+            cr.Say( SAY_NETMSG, "Вы успешно закрепили крючок на конце лески." );
+            femote( cr, "привязывает крючок к леске" );
+            DeleteItem( item );
+        }
+    }
+
+    return true;
+}
+
+void _InitString( Item& item, bool firstTime )
+{
+    item.SetEvent( ITEM_EVENT_USE, "_UseString" );
+}
+
+bool _UseString( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
+{
+    Item@  rod = cr.GetItem( 0, SLOT_HAND1 );
+    uint16 pid = 0;
+    if( @rod != null )
+        pid = rod.GetProtoId();
+
+    // if(!IsRod(pid)) return true;
+
+    if( pid != PID_ROD )
+    {
+        if( pid == PID_ROD_STRING || pid == PID_ROD_STRING_HOOK )
+            cr.Say( SAY_NETMSG, "На удочке уже есть леска." );
+        else
+            cr.Say( SAY_NETMSG, "Вы пытаетесь вытащть леской застрявший между зубов кусок еды, но он не поддается." );
+    }
+    else
+    {
+        if( modifyRod( rod, PID_ROD_STRING ) )
+            cr.Say( SAY_NETMSG, "Вы успешно привязали леску." );
+        femote( cr, "привязывает леску к удочке" );
+        DeleteItem( item );
+    }
+
+    return true;
+}
+
+void _InitAlgae( Item& item, bool firstTime )
+{}
+
+
+// тестовая функция рыбалки
+void fish( Critter& player, int var, int con, int param2 )
+{
+    fishing_checkTiles( player );
+}
+
+void fish( Critter& player )
+{
+    fishing_checkTiles( player );
+}
+
+uint8[] dir = { 3, 5, 0, 2 };
+void fishing_checkTiles( Critter& player )
+{
+    Map@ map = player.GetMap();
+    if( map is null )
+        return;
+
+    if( !ltp_inited )
+        ltp_init();
+
+    if( checkTDH( player, LTP_FISHING ) && player.Param[ ST_LTP_MAP ] == map.Id )
+    {
+        // player.Say(SAY_NETMSG, "Рыбачим там же.");
+        // prepareToFishing(player);
+        femote( player, "закинул удочку" );
+        StartProcess( player, LTP_FISHING, Random( 5, 15 ) * 1000 );
+        return;
+    }
+
+    uint16   tx = H2T( player.HexX );
+    uint16   ty = H2T( player.HexY );
+
+    GameVar@ is_dock = GetLocalVar( LMVAR_is_dock, map.Id );
+    uint     is_dock_val = is_dock.GetValue();
+
+    uint8    coast_flags = 0,
+             water_flags = 0;
+    bool     aboveGround = false;
+
+//	if(is_dock_val==0) coast_flags=checkCoast(map, tx, ty);
+//	else if(checkSand(map, tx, ty)==0) coast_flags=0xF;
+
+    coast_flags = checkCoast( map, tx, ty );
+
+    if( is_dock_val != 0 && coast_flags == 0 && ( checkSand( map, tx, ty ) == 0 ) )
+    {
+        coast_flags = 0xF;
+        aboveGround = true;
+    }
+
+    if( coast_flags != 0 )
+    {
+        water_flags = checkWaterAround( map, tx, ty, coast_flags, 1 + ( aboveGround ? 1 : 0 ), aboveGround );
+        if( water_flags != 0 )
+        {
+            //	<==проверка на погоду и на время суток
+
+            for( uint i = 0; i < 4; i++ )
+            {
+                if( water_flags & ( 0x1 << i ) == 0 )
+                    continue;
+                player.SetDir( dir[ i ] );
+                break;
+            }
+
+            // setWaitHexCheck(player, aboveGround);
+
+            // player.SetEvent(CRITTER_EVENT_IDLE, "_processFishing");
+            // player.Wait(5000);
+
+            // prepareToFishing(player);
+
+            femote( player, "закинул удочку" );
+            StartProcess( player, LTP_FISHING, ( aboveGround ? 1 : 0 ), Random( 5, 15 ) * 1000 );
+        }
+        else
+            player.Say( SAY_NETMSG, "Рядом нет воды." );
+    }
+    else
+        player.Say( SAY_NETMSG, "Вы не на берегу." );
+
+}
+
+
+/*
+   void prepareToFishing(Critter& cr)
+   {
+        uint roll = Random(0, 100);
+
+        bool fh=true;
+
+        //if(roll==0) {cr.Say(SAY_NETMSG, color_fish+"Вы воткнули крючок себе в глаз."); cr.ParamBase[DAMAGE_EYE]=1; fh=false; femote(cr, "схватился за глаз");}
+        //else if(roll<3) {cr.Say(SAY_NETMSG, color_size+"Вы сломали удочку."); modifyRod(cr, 0); fh=false; femote(cr, "сломал удочку");}
+
+        if(fh)
+        {
+                cr.RunClientScript("client_main@_waiting", 1, 0, 0, null, null);
+                femote(cr, "закинул удочку");
+                cr.SetEvent(CRITTER_EVENT_IDLE, "_processFishing");
+                uint time=Random(5, 10)*1000;
+                cr.Wait(time);
+        }
+   }*/
+
+uint process_fishing( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESSD( LTP_FISHING )
+    if( fishing( cr, param0 != 0 ) )
+    {
+        return Random( 5, 15 ) * 1000;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+bool fishing( Critter& cr, bool aboveGround )
+{
+    uint  roll = Random( 0, 500 );
+
+    bool  fh = true;
+
+    Item@ catch = null;
+
+    if( roll < 300 )
+    {
+        cr.Say( SAY_NETMSG, color_size + "Не клюет." );
+    }
+    else if( roll == 300 && aboveGround )
+    {
+        cr.Say( SAY_NETMSG, color_size + "Вы утопили удочку." );
+        modifyRod( cr, 0 );
+        fh = false;
+        femote( cr, "утопил удочку" );
+    }
+    else if( roll < 310 )
+    {
+        cr.Say( SAY_NETMSG, color_size + "Вы порвали леску." );
+        modifyRod( cr, PID_ROD );
+        fh = false;
+        femote( cr, "порвал леску" );
+    }
+    else if( roll < 315 )
+    {
+        cr.Say( SAY_NETMSG, color_size + "Крючок оборвался с лески." );
+        modifyRod( cr, PID_ROD_STRING );
+        fh = false;
+        femote( cr, "потерял крючок" );
+    }
+    else if( roll < 330 )
+        cr.Say( SAY_NETMSG, color_size + "Приманка соскочила с крючка." );
+    else if( roll == 330 )
+    {
+        cr.Say( SAY_NETMSG, "Вы поймали: " + color_fish + "дырявый башмак" );
+        fh = false;
+        femote( cr, "выудил башмак" );
+    }
+    else if( roll < 350 )
+    {
+        cr.Say( SAY_NETMSG, "Вы поймали: " + color_fish + "полиэтиленовый пакет" );
+        fh = false;
+        femote( cr, "выудил кусок полиэтилена" );
+    }
+    else if( roll == 350 )
+    {
+        cr.Say( SAY_NETMSG, "Вы поймали: " + color_fish + "кастет" );
+        @catch
+                =
+                    cr.AddItem( PID_BRASS_KNUCKLES, 1 );
+        fh = false;
+        femote( cr, "выудил какую-то железку" );
+    }
+    else if( roll < 365 )
+    {
+        cr.Say( SAY_NETMSG, "Вы поймали: " + color_fish + "мусор" );
+        @catch
+                =
+                    cr.AddItem( PID_CRAFT_M_JUNK, 1 );
+        fh = false;
+        femote( cr, "выудил мусор" );
+    }
+    else if( roll == 365 )
+    {
+        cr.Say( SAY_NETMSG, "Вы поймали: " + color_fish + "бутылку Нюка-колы" );
+        @catch
+                =
+                    cr.AddItem( PID_NUKA_COLA, 1 );
+        fh = false;
+        femote( cr, "выудил бутылку" );
+    }
+    else if( roll < 390 )
+    {
+        cr.Say( SAY_NETMSG, "Вы поймали: " + color_fish + "плотоядные водоросли" );
+        @catch
+                =
+                    cr.AddItem( PID_ALGAE, 1 );
+        fh = false;
+        femote( cr, "выудил водоросли" );
+    }
+    else if( roll < 430 )
+    {
+        catch_fish( cr, FISH_SIZE_SMALLEST, 0 );
+        fh = false;
+    }
+    else if( roll < 460 )
+    {
+        catch_fish( cr, FISH_SIZE_SMALL, 0 );
+        fh = false;
+    }
+    else if( roll < 480 )
+    {
+        catch_fish( cr, FISH_SIZE_MID, ( aboveGround ? -10 : 0 ) );
+        fh = false;
+    }
+    else if( roll < 490 )
+    {
+        catch_fish( cr, FISH_SIZE_BIG, ( aboveGround ? -20 : 0 ) );
+        fh = false;
+    }
+    else if( roll < 500 )
+    {
+        catch_fish( cr, FISH_SIZE_BIGGEST, ( aboveGround ? -40 : 0 ) );
+        fh = false;
+    }
+    else if( roll == 500 )
+    {
+        if( aboveGround )
+            cr.Say( SAY_NETMSG, color_fish + "В вводе промелькнула огромная тень." );
+        else
+        {
+            cr.Say( SAY_NETMSG, color_fish + "Ваш улов поймал вас." );
+            cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( false ), 30, cr.HexX, cr.HexY );
+            cr.ParamBase[ ST_CURRENT_HP ] -= Random( 5, 10 );
+            if( Random( 0, 4 ) == 4 )
+                cr.ParamBase[ DAMAGE_RIGHT_ARM ] = 1;
+            fh = false;
+        }
+    }
+
+    if( fh )
+        femote( cr, "рыбачит" );
+
+    return fh;
+}
+
+string[] size_names_t = { "мелкую рыбешку", "рыбку", "рыбу", "рыбищу", "рыбу-гиганта" };
+Item@ catch_fish( Critter& cr, uint8 size, int16 roll_mod )
+{
+    if( size > FISH_SIZE_BIGGEST )
+        return null;
+
+    int   pull_roll = Random( 0, 100 );
+
+    Item@ catch = null;
+
+    // cr.Say(SAY_NETMSG, "Ролл: "+pull_roll+" модификатор: "+roll_mod+" шанс: "+((size+1)*10));
+
+    if( pull_roll + roll_mod > ( size + 1 ) * 10 )
+    {
+        @catch
+                =
+                    cr.AddItem( PID_FISH_SMALLEST + size, 1 );
+
+        if( catch is null )
+            return null;
+
+        cr.Say( SAY_NETMSG, "Вы поймали: " + color_fish + size_names_t[ size ] );
+
+        cr.Say( SAY_NETMSG, "Размер: " + color_size + ( catch.Val7 ) + " см" );
+
+        femote( cr, "поймал " + size_names_t[ size ] );
+    }
+    else
+    {
+        cr.Say( SAY_NETMSG, color_size + "Рыба сорвалась с крючка." );
+        femote( cr, "упустил рыбу" );
+    }
+
+    return catch;
+}
+
+bool IsRod( uint16 pid )
+{
+    return ( pid == PID_ROD || pid == PID_ROD_STRING || pid == PID_ROD_STRING_HOOK );
+}
+
+bool modifyRod( Critter& cr, uint16 toPid )
+{
+    Item@ rod = cr.GetItem( 0, SLOT_HAND1 );
+    if( rod is null )
+        return false;
+    return modifyRod( rod, toPid );
+}
+
+bool modifyRod( Item& rod, uint16 toPid )
+{
+    uint16 fromPid = rod.GetProtoId();
+
+    if( toPid != 0 )
+    {
+        if( fromPid == toPid )
+            return false;
+        if( !IsRod( fromPid ) )
+        {
+            Log( "modifyRod wtf with fromPid" );
+            return false;
+        }
+        if( !IsRod( toPid ) )
+        {
+            Log( "modifyRod wtf with toPid" );
+            return false;
+        }
+
+        rod.ChangeProto( toPid );
+    }
+    else
+    {
+        DeleteItem( rod );
+    }
+
+    return true;
+}

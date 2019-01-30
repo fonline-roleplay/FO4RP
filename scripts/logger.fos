@@ -1,0 +1,327 @@
+#include "_macros.fos"
+#include "_global_events.fos"
+#include "tools_ip.fos"
+
+#include "serializator.fos"
+
+#define LOG_UNIT_TYPE_NONE            ( 0 )
+#define LOG_UNIT_TYPE_DEAD            ( 1 )
+#define LOG_UNIT_TYPE_REGISTRATION    ( 2 )
+#define LOG_UNIT_TYPE_LOGIN           ( 3 )
+#define LOG_UNIT_MAX                  ( 4 )
+
+class LogUnit : Serializator
+{
+    string  Name;
+    string@ Date;
+    uint    Entries;
+
+    LogUnit( string & name, string & date )
+    {
+        Name = name;
+        @Date = date;
+        Entries = 0;
+    }
+
+    void Clear()
+    {
+        Entries = 0;
+        Serializator::Clear();
+    }
+
+    bool Save()
+    {
+        if( Entries < 1 )
+            return false;
+        Set( Entries );
+        return Serializator::Save( Name + "_" + Date );
+    }
+
+    bool Load()
+    {
+        bool check = Serializator::Load( Name + "_" + Date );
+        if( check )
+        {
+            SetCurPos( DataSize - 4 );
+            Get( Entries );
+        }
+        return check;
+    }
+
+    LogUnit@ SetTime()
+    {
+        Serializator::Set( __FullSecond );
+        Entries += 1;
+        return this;
+    }
+
+    bool ConvertToFile()
+    {
+        // Log("size "+DataSize+" ent "+Entries);
+
+        if( Entries < 1 || DataSize < 1 )
+            return false;
+
+        file f;
+        if( f.open( "logs\\" + Name + "_" + Date + ".txt", "w" ) >= 0 )
+        {
+            SetCurPos( 0 );
+            for( uint i = 0; i < Entries; i++ )
+            {
+                f.writeString( MakeString() + "\n" );
+            }
+            f.close();
+            SetCurPos( DataSize );
+            return true;
+        }
+        else
+            Log( "can't open!" );
+        return false;
+    }
+
+    string@ MakeTime( uint val )
+    {
+        uint t = val % 86400,       // 60*60*24
+             m = t / 60, mm = m % 60,
+             h = m / 60, s = t % 60;
+
+        return ( ( h < 10 ) ? "0" : "" ) + h + ( ( mm < 10 ) ? ":0" : ":" ) + ( mm ) + ( ( s < 10 ) ? ":0" : ":" ) + ( s ) + " Х ";
+    }
+
+    string@ MakeString()
+    {
+        return "ERROR!\n";
+    }
+}
+
+class LogUnit_Deads : LogUnit
+{
+    uint    time;
+    uint    id;
+    uint    killer;
+    string@ name_dead;
+    string@ name_killer;
+    LogUnit_Deads( string & name, string & date )
+    {
+        super( name, date );
+        time = 0;
+        id = 0;
+        killer = 0;
+    }
+    LogUnit_Deads@ Add( Critter& cr, Critter@ killer )
+    {
+        uint killerId = (killer is null) ? 0 : killer.Id;
+        SetTime().Set( cr.Id ).Set( killerId );
+        return this;
+    }
+
+    string@ MakeString()
+    {
+        Get( time ).Get( id ).Get( killer );
+        if( ( @name_dead = GetPlayerName( id ) ) is null )
+            @name_dead = "<ERROR>";
+
+        if( killer < 1 )
+            return MakeTime( time ) + name_dead + " (" + id + ") died.";
+        else if( killer >= 5000000 )
+            return MakeTime( time ) + " NPC #" + killer + " kills " + name_dead + " (" + id + ")";
+
+        if( ( @name_killer = GetPlayerName( killer ) ) is null )
+            @name_killer = "<ERROR>";
+
+        return MakeTime( time ) + name_killer + " (" + killer + ") kills " + name_dead + " (" + id + ")";
+    }
+}
+
+class LogUnit_Regs : LogUnit
+{
+    uint   time;
+    uint   ip;
+    string name;
+    LogUnit_Regs( string & name, string & date )
+    {
+        super( name, date );
+        time = 0;
+        ip = 0;
+    }
+    LogUnit_Regs@ Add( uint ip, string& name )
+    {
+        SetTime().Set( ip ).Set( name );
+        return this;
+    }
+
+    string@ MakeString()
+    {
+        Get( time ).Get( ip ).Get( name );
+        return MakeTime( time ) + name + " from " + GetIpFromUint( ip );
+    }
+}
+
+class LogUnit_Logins : LogUnit
+{
+    uint    time;
+    uint    ip;
+    uint    id;
+    string@ name;
+    LogUnit_Logins( string & name, string & date )
+    {
+        super( name, date );
+        time = 0;
+        ip = 0;
+        id = 0;
+    }
+    LogUnit_Logins@ Add( uint ip, uint id )
+    {
+        SetTime().Set( ip ).Set( id );
+        return this;
+    }
+
+    string@ MakeString()
+    {
+        Get( time ).Get( ip ).Get( id );
+        if( ( @name = GetPlayerName( id ) ) is null )
+            @name = "<ERROR>";
+        return MakeTime( time ) + GetPlayerName( id ) + " (" + id + ") from " + GetIpFromUint( ip );
+    }
+}
+
+class Logger : iManagerModule, iManager_critter_init, iManager_critter_dead, iManager_player_registration, iManager_player_login, iManager_world_save, iManager_time
+{
+    // uint ManagerId;
+
+    LogUnit@[] logUnits;
+
+    Logger()
+    {
+        // ManagerId=0;
+
+        AddStartCallback( "logger", "start" );
+    }
+
+    void LL( string& str )
+    {
+        Log( "Logger: " + str );
+    }
+
+    bool manager_init()
+    {
+        logUnits.resize( LOG_UNIT_MAX );
+
+        string@ date = GetDateString();
+
+        @logUnits[ LOG_UNIT_TYPE_DEAD ] = LogUnit_Deads( "deads", date );
+        @logUnits[ LOG_UNIT_TYPE_REGISTRATION ] = LogUnit_Regs( "regs", date );
+        @logUnits[ LOG_UNIT_TYPE_LOGIN ] = LogUnit_Logins( "logins", date );
+
+        for( uint i = 0, j = logUnits.length(); i < j; i++ )
+        {
+            if( logUnits[ i ] is null )
+                continue;
+            logUnits[ i ].Load();
+        }
+
+        return true;
+    }
+
+    bool SaveAll()
+    {
+        uint fails = 0;
+
+        for( uint i = 0, j = logUnits.length(); i < j; i++ )
+        {
+            if( logUnits[ i ] is null )
+                continue;
+            if( !logUnits[ i ].Save() )
+                fails += 1;
+        }
+
+        return fails == 0;
+    }
+
+    bool global_critter_init( Critter& cr, bool firstTime )
+    {
+        // if(cr.IsPlayer())
+        // {
+        // LL("Player "+cr.Id+" init"+(firstTime?" first time.":"."));
+        // }
+        return true;
+    }
+
+    bool global_critter_dead( Critter& cr, Critter@ killer )
+    {
+        if( cr.IsPlayer() )
+            cast< LogUnit_Deads >( logUnits[ LOG_UNIT_TYPE_DEAD ] ).Add( cr, killer );
+        return true;
+    }
+
+    bool global_player_registration( uint ip, string& name, uint& textMsg, uint& strNum )
+    {
+        // LL("Registration from ip "+GetIpFromUint(ip)+" with nick "+name);
+
+        cast< LogUnit_Regs >( logUnits[ LOG_UNIT_TYPE_REGISTRATION ] ).Add( ip, name );
+
+        return true;
+    }
+
+    bool global_player_login( uint ip, string& name, uint id, uint& textMsg, uint& strNum )
+    {
+        if( valid( GetCritter( id ) ) )
+            LL( "Login from ip " + GetIpFromUint( ip ) + " with nick " + name + " to Id " + id );
+
+        cast< LogUnit_Logins >( logUnits[ LOG_UNIT_TYPE_LOGIN ] ).Add( ip, id );
+
+        return true;
+    }
+
+    bool global_world_save()
+    {
+        SaveAll();
+
+        return true;
+    }
+
+    bool global_time( int8 type )
+    {
+        if( ( type & 0xF ) >= TIME_NEW_DAY )
+        {
+            string@ date = GetDateString(),
+                    limitday = GetDateString( GAME_DAY( -3 ) );
+
+            for( uint i = 0, j = logUnits.length(); i < j; i++ )
+            {
+                if( logUnits[ i ] is null )
+                    continue;
+
+                LogUnit@ unit = logUnits[ i ];
+
+                unit.ConvertToFile();
+                unit.Save();
+                unit.Clear();
+                @unit.Date = date;
+
+                if( IsAnyData( unit.Name + "_" + limitday ) )
+                {
+                    EraseAnyData( unit.Name + "_" + limitday );
+                }
+            }
+        }
+        return true;
+    }
+}
+
+Logger logger;
+
+void start()
+{
+    iManagerModule@  module = logger;
+    iManagerElement@ manager = manager_add_module( module, "Logger", 50 );   // чем выше значение приоритета - тем раньше будут вызыватьс€ обработчики ивэнтов
+    if( manager is null )
+        return;
+    manager.GetEventFlags() |= (
+        MANAGER_EVENT_CRITTER_INIT |
+        MANAGER_EVENT_CRITTER_DEAD |
+        MANAGER_EVENT_PLAYER_REGISTRATION |
+        MANAGER_EVENT_PLAYER_LOGIN |
+        MANAGER_EVENT_WORLD_SAVE |
+        MANAGER_EVENT_TIME );
+}
