@@ -3,7 +3,7 @@
 
 // import void AffectRadiation(Critter& cr, int value) from "radiation";
 // import void DropRadiation(Critter& cr) from "radiation";
-
+#include "_colors.fos"
 #include "_macros.fos"
 import bool IsHuman( Critter& cr ) from "races";
 import bool IsMutant( Critter& cr ) from "races";
@@ -237,6 +237,129 @@ void ChangeStage( Critter& cr, uint stage, bool gain )
     }
 }
 
+
+uint e_radFlow( uint[]@ values )
+{
+	if( values is null) { Log("radFlow error: values is null"); return 0; }
+    
+    Item@ item = GetItem( values[0] );
+
+    if( item is null || item.Accessory != ACCESSORY_HEX ) 
+		return 0;
+    
+    Map@ map = GetMap( item.MapId );
+    if( map is null ) { Log("radFlow error: map #"+item.MapId+" is null"); return 0; }
+    
+	
+	int dist = item.Val2;
+    /*
+	int dx = Random( -dist, dist );
+    int dy = Random( -dist, dist );
+    map.SetText( item.HexX + dx, item.HexY + dy, COLOR_GRAY, ":click:" );	
+	*/
+	
+	Critter@[] critters;
+    uint count = map.GetCrittersHex( item.HexX, item.HexY, dist, FIND_ALL, critters );
+
+    for( uint i = 0; i < count; i++ )
+    {
+		int step = GetDistantion( item.HexX, item.HexY, critters[i].HexX, critters[i].HexY );
+		int rad = item.Val0 - item.Val1 * step;
+		rad = CLAMP( rad, 0, rad ); //Защита от отрицательных значений.
+		rad = Random( rad * 0.8, rad ); //20% погрешность при локализации источника
+		
+		AffectRadiation( critters[i], rad ); //Чувствительность увеличена стократно ( 1.00 раньше == 100 рад теперь ).
+		
+		Item@ active = critters[i].GetItem( 0, SLOT_HAND1 );//critters[i].GetItem( PID_GEIGER_COUNTER, SLOT_HAND1 );
+
+		if( valid( active ) && active.GetProtoId() == PID_GEIGER_COUNTER && active.Val1 == 1 )
+		{
+			//map.SetTextMsg( geigers[i].HexX, geigers[i].HexY, COLOR_GRAY, TEXTMSG_GAME, 10354 /*STR_GEIGER_LOOP_CHECK*/, "$rem" + rad );
+			critters[i].SayMsg( SAY_WHISP_ON_HEAD, TEXTMSG_GAME, 10354 /*STR_GEIGER_LOOP_CHECK*/, "$rem" + rad );
+		}
+    }
+	
+	Item@[] geigers;
+	count = map.GetItems( PID_GEIGER_COUNTER, geigers );
+	for( uint i = 0; i < count; i++ )
+	{
+		if( geigers[i].Val1 != 1 ) continue; //Выключенные не ловят.
+		int step = GetDistantion( item.HexX, item.HexY, geigers[i].HexX, geigers[i].HexY );
+		int rad = item.Val0 - item.Val1 * step;
+		rad = CLAMP( rad, 0, rad ); //Защита от отрицательных значений.
+		rad = Random( rad * 0.8, rad ); //20% погрешность при локализации источника
+		map.SetTextMsg( geigers[i].HexX, geigers[i].HexY, COLOR_GRAY, TEXTMSG_GAME, 10354 /*STR_GEIGER_LOOP_CHECK*/, "$rem" + rad );
+	}
+	
+	return REAL_SECOND( item.Val3 );
+}
+
+void _showRadItem( Item& item, Critter& player, bool entered, uint8 dir ) 
+{
+	
+	Item@ active = player.GetItem( 0, SLOT_HAND1 );
+
+	if( valid( active ) && active.GetProtoId() == PID_GEIGER_COUNTER && active.Val1 == 1 )
+	{
+		if( entered )
+		{	
+			player.Say( SAY_NETMSG, "Вы обнаружили источник радиации." ); //И уж дальше сами думайте, что с ним делать))
+			if( player.GetAccess() > 0 )
+				UNSETFLAG( item.Flags, ITEM_HIDDEN ); //Делает объект видимым, нужно лишь тестерам да ГМам.
+		}
+		else
+		{
+			if( player.GetAccess() > 0 )
+				SETFLAG( item.Flags, ITEM_HIDDEN ); //Делает объект невидимым, нужно лишь тестерам да ГМам. Что бы не сбрасывать видимость - ТПшимся с него в сторону.
+		}
+	}
+}
+
+void radiate( Critter& cr, int VAL, int FADE, int DIST )
+{
+    Map@ map = cr.GetMap();
+    if( not valid( map ) ) {
+		cr.Say( SAY_NETMSG, "На глобале нельзя." );
+        return;
+	}
+
+	item_radiate( map.Id, cr.HexX, cr.HexY, VAL, FADE, DIST, 3, PID_URANIUM_ORE );
+}
+
+void GM_ItemRadiate( Critter& cr, int p0, int p1, int p2, string@ p3, int[]@ data )
+{
+    Map@ map = cr.GetMap();
+    if( not valid( map ) ) {
+		cr.Say( SAY_NETMSG, "На глобале нельзя." );
+        return;
+	}
+
+	if( !valid(data) || data.length() != 7 ) {
+		cr.Say( SAY_NETMSG, "Некорректные аргументы вызова!" );
+		return;
+	}
+	item_radiate( map.Id, data[0], data[1], data[2], data[3], data[4], data[5], data[6] );
+}
+
+void item_radiate( int mapID, int x, int y, int VAL, int FADE, int DIST, int TIME, int PID )
+{
+	if( VAL < 0 || FADE < 0 || DIST < 0 || TIME < 0 ) return;
+	
+	Map@ map = GetMap( mapID );
+	if( !valid( map ) ) return;
+
+	Item@ item = map.AddItem( x, y, PID, 1 );
+	SETFLAG( item.Flags, ITEM_HIDDEN ); //Делает объект невидимым.
+	item.SetEvent( ITEM_EVENT_WALK, "_showRadItem" ); //Позволяет найти объект с помощью счётчика гейгера, встав на нём.
+	
+	item.Val0 = VAL;
+	item.Val1 = FADE;
+	item.Val2 = DIST;
+	item.Val3 = TIME;
+
+    uint[] values = { item.Id };
+    CreateTimeEvent( __FullSecond, "e_radFlow", values, false );
+}
 
 
 
