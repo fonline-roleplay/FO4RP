@@ -47,94 +47,89 @@ void ChangeStatus( Critter& cr, uint16 status, uint8 value, bool set )          
 
 void BleedCritter( Critter& cr, int8 bleedValue )
 {
-
-    uint[] indexes;
-    uint[] rates;
-    uint[] durations;
+    //Находим все активные ивенты, отслеживающие кровотечения и дропаем их, стартуя новый:
+	uint[] indexes, durations, rates;
     int eventCount = cr.GetTimeEvents( CTE_BLEED, indexes, durations, rates );
-    uint  time = 60 * __TimeMultiplier;
-    int maxHP = cr.Stat [ST_MAX_LIFE];
-
-    if( eventCount > 0 ) {
-		cr.StatBase[ ST_BLEED ] += bleedValue/3;
-		if (cr.StatBase [ST_BLEED] > maxHP/5) {
-			cr.Say (SAY_NETMSG, "Из вас хлещет кровь");
-        	cr.Say (SAY_EMOTE, "Кровь бьет фонтаном");
-        	DropBleed (cr);
-        	cr.AddTimeEvent( "cte_bleed", 0, CTE_BLEED, 0 );
-        }
-	} else {
-	cr.StatBase[ ST_BLEED ] = bleedValue/3;
-        cr.AddTimeEvent( "cte_bleed", 0, CTE_BLEED, 0 );
-        if (bleedValue/3 < maxHP/10) cr.Say (SAY_NETMSG, "У Вас началось легкое кровотечение.");
-        else if (bleedValue/3 < maxHP/5) cr.Say( SAY_NETMSG, "У Вас началось кровотечение." );
-        else {
-        	cr.Say (SAY_NETMSG, "Из вас хлещет кровь");
-        	cr.Say (SAY_EMOTE, "Кровь бьет фонтаном");
-        }
-	}
+	if( eventCount > 0 ) cr.EraseTimeEvents( CTE_BLEED );
+    cr.AddTimeEvent( "cte_bleed", REAL_SECOND( 60 ), CTE_BLEED, 0 ); //Обновление таймера позволяет не откинуться от кровотечения посреди боя.
+	cr.StatBase[ ST_BLEED ] += bleedValue;
 }
+
+uint[][] bloods = { { PID_BLOOD_SMALL_1, PID_BLOOD_SMALL_2, PID_BLOOD_SMALL_3 }, { PID_BLOOD_BIG_1, PID_BLOOD_BIG_2, PID_BLOOD_BIG_3 } };
+uint spoil_Val = 3;
 
 uint cte_bleed( Critter& cr, int identifier, uint& rate )
 {
 	int maxHP = cr.Stat [ST_MAX_LIFE];
-    int bleed = cr.StatBase[ ST_BLEED ];
-    if( (bleed <= 0) || (cr.ParamBase [BP_BLOOD_LOSS] > maxHP - __DeadHitPoints))
-    {
-    	if (cr.ParamBase [BP_BLOOD_LOSS] > maxHP - __DeadHitPoints) cr.ParamBase [BP_BLOOD_LOSS] = maxHP - __DeadHitPoints;
-        UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLEED );
-        cr.Say( SAY_NETMSG, "Вы перестали истекать кровью." );
-        return 0;
-    }
-    int damage = Random( 2, 6 );
-    uint anim2Dead = 0;
+
+	//Нанесение урона от кровопотери:
+    int bleed = CLAMP( cr.StatBase[ ST_BLEED ] * 0.9 - 1, 0, maxHP ); //Падает на [10% + 1]
+	cr.StatBase[ ST_BLEED ] = bleed;
     
-    cr.StatBase[ ST_CURRENT_HP ] -= damage;
-    cr.ParamBase [BP_BLOOD_LOSS] += damage;
-    if (cr.ParamBase [BP_BLOOD_LOSS] >= maxHP - __DeadHitPoints) {
-    	if(cr.IsKnockout()) {
+    cr.StatBase[ ST_CURRENT_HP ] -= bleed / 2;
+    cr.ParamBase[ BP_BLOOD_LOSS ] += bleed / 2;
+
+    if( cr.ParamBase [BP_BLOOD_LOSS] > maxHP * 0.75 )
+		cr.Say( SAY_NETMSG, "Вы чувствуете слабость от обильной кровопотери." );
+	
+	if( cr.ParamBase [BP_BLOOD_LOSS] > maxHP - __DeadHitPoints ) //Смертельная кровопотеря. 
+    { //Пока что является конечной точкой для логики вытекания, хотя на деле ИРЛ тело ещё доооолго может кровоточить после преодоления "смертельного" рубежа кровопотери.
+		//Защита от "излишней" кровопотери, приводящей к невозможности реснуть и поднять на ноги умершего от неё.
+    	cr.ParamBase [BP_BLOOD_LOSS] = maxHP; 
+        UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLEED );
+		cr.StatBase[ ST_BLEED ] = 0;
+
+		//Падение обессиленного:
+		uint anim2Dead = Random( 0, 1 ) == 0 ? ANIM2_DEAD_FRONT : ANIM2_DEAD_PRONE_BACK;
+    	if( cr.IsKnockout() ) {
             if(cr.Anim2Knockout == ANIM2_IDLE_PRONE_FRONT)
                 anim2Dead = ANIM2_DEAD_PRONE_FRONT;
             else
                 anim2Dead = ANIM2_DEAD_PRONE_BACK;
-        } else {
-        	anim2Dead = ANIM2_DEAD_FRONT;
-        }
-		cr.Say( SAY_NETMSG, "Силы покидают вас, вы начинаете медленно умирать от нехватки крови.");
+        } 
         cr.ToDead (anim2Dead, cr);
-    }
-
-    if( bleed < maxHP/5 )
-	{
-    bleed --;
-    bleed = CLAMP( bleed, 0, 100 );
-    cr.StatBase[ ST_BLEED ] = bleed;
-	cr.Say( SAY_NETMSG, "Используйте тряпки или бинты, чтобы остановить кровотечение" );
-	cr.Say( SAY_EMOTE, "Истекает кровью" );
-
-	uint16 hx = cr.HexX, hy = cr.HexY;
-	Item@ blood = cr.GetMap().AddItem( hx, hy, Random( 3321, 3323 ), 1 ); //Раньше это были генерики с флагом: 33554462
-	uint[] values = { blood.Id };
-	blood.Val2 = CreateTimeEvent( __FullSecond + REAL_HOUR( 1 ), "e_dryup", values, false );
-	}
-	else
-	{
-    /*cr.Say( SAY_NETMSG, "Используйте тряпки или бинты, чтобы остановить кровотечение" );
-	cr.Say( SAY_EMOTE, "Истекает кровью" );*/
-	if (Random (0, 4) == 0) {
-		cr.StatBase[ ST_BLEED ] -= Random( 0, 1 );
-		cr.Say (SAY_NETMSG, "Кровь хлещет из Вас!");
-		cr.Say (SAY_EMOTE, "Быстро теряет кровь");
-
-		uint16 hx = cr.HexX, hy = cr.HexY;
-		Item@ blood = cr.GetMap().AddItem( hx, hy, Random( 3324, 3326 ), 1 ); //Раньше это были генерики с флагом: 33554462
-		uint[] values = { blood.Id };
-		blood.Val2 = CreateTimeEvent( __FullSecond + REAL_HOUR( 1 ), "e_dryup", values, false );
 		
+		cr.Say( SAY_NETMSG, "Силы покидают вас, вы начинаете медленно умирать от потери большого количества крови.");
+        return 0;
+    }
+    
+	//Кровь вытекает под существо:
+	uint16 hx = cr.HexX, hy = cr.HexY;
+	Map@ map = cr.GetMap();
+	Item@ blood; 
+	if( valid(map) )
+	{
+		//Ищем уже имеющуюся кровь под существом:
+		Item@[] dirt;
+		map.GetItems( hx, hy, dirt );
+		bool wasBlooded = false;
+		for( uint i = 0; i < dirt.length(); i ++ )
+		{
+			uint itempid = dirt[i].GetProtoId();
+			if( bloods[0].find( itempid ) != -1 ) //Если это малая лужа - увеличиваем её.
+			{
+				dirt[i].Val0++;
+				if( dirt[i].Val0 >= spoil_Val )
+					dirt[i].ChangeProto( bloods[1][Random( 0, bloods[1].length() )] );
+				wasBlooded = true;
+				break;
+			}
+			if( bloods[1].find( itempid ) != -1 ) //Если это большая лужа - просто "усиливаем" её.
+			{
+				dirt[i].Val0++;
+				wasBlooded = true;
+				break;
+			}
+		}
+		if( !wasBlooded )
+			@blood = map.AddItem( hx, hy, bloods[0][Random( 0, bloods[0].length() )], 1 );
 	}
-	return ( 12 * __TimeMultiplier );
+	if( valid(blood) )
+	{
+		uint[] values = { blood.Id };
+		blood.Val1 = CreateTimeEvent( __FullSecond + REAL_MINUTE( 15 * blood.Val0 ), "e_dryup", values, false );
 	}
-	return ( 60 * __TimeMultiplier );
+	return REAL_SECOND( 30 );
 }
 
 uint e_dryup( uint[]@ values )
@@ -156,9 +151,7 @@ void DropBleed( Critter& cr )
     uint8 eventCount = cr.GetTimeEvents( CTE_BLEED, indexes, durations, rates );
 
     if( eventCount > 0 )
-    {
         cr.EraseTimeEvents (CTE_BLEED);
-    }
 }
 
 void BloodToxicCritter( Critter& cr )
