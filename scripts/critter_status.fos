@@ -2,6 +2,7 @@
 // pm
 
 #include "_macros.fos"
+#include "_colors.fos"
 
 import int  GetDeteriorationProcent( Item& item ) from "repair";
 import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat"; // Export
@@ -45,14 +46,25 @@ void ChangeStatus( Critter& cr, uint16 status, uint8 value, bool set )          
     }
 }
 
+void BleedTest( Critter& cr, int bleed, int p1, int p2 ) 
+{
+	Critter@ target = ( p1 == 0 ? null : GetCritter( p1 ) );
+	if( !valid(target) ) @target = @cr;
+	target.ParamBase[ QST_GAMEMODE ] = GAME_TEST;
+	BleedCritter( target, bleed );
+}
+
 void BleedCritter( Critter& cr, int8 bleedValue )
 {
     //Находим все активные ивенты, отслеживающие кровотечения и дропаем их, стартуя новый:
 	uint[] indexes, durations, rates;
     int eventCount = cr.GetTimeEvents( CTE_BLEED, indexes, durations, rates );
 	if( eventCount > 0 ) cr.EraseTimeEvents( CTE_BLEED );
-    cr.AddTimeEvent( "cte_bleed", REAL_SECOND( 60 ), CTE_BLEED, 0 ); //Обновление таймера позволяет не откинуться от кровотечения посреди боя.
+	
+	uint time = ( cr.Param[ QST_GAMEMODE ] == GAME_TEST ? 1 : 60 ); //Для тестеров кровьь течёт ежесекундно.
+
 	cr.StatBase[ ST_BLEED ] += bleedValue;
+    cr.AddTimeEvent( "cte_bleed", REAL_SECOND( time ), CTE_BLEED, 0 ); //Обновление таймера позволяет не откинуться от кровотечения посреди боя.
 }
 
 uint[][] bloods = { { PID_BLOOD_SMALL_1, PID_BLOOD_SMALL_2, PID_BLOOD_SMALL_3 }, { PID_BLOOD_BIG_1, PID_BLOOD_BIG_2, PID_BLOOD_BIG_3 } };
@@ -60,16 +72,19 @@ uint spoil_Val = 3;
 
 uint cte_bleed( Critter& cr, int identifier, uint& rate )
 {
-	int maxHP = cr.Stat [ST_MAX_LIFE];
+	int maxHP = cr.Stat[ST_MAX_LIFE];
 
 	//Нанесение урона от кровопотери:
     int bleed = CLAMP( cr.StatBase[ ST_BLEED ] * 0.9 - 1, 0, maxHP ); //Падает на [10% + 1]
+	
+	if( bleed <= Random( 1, cr.Stat[ ST_ENDURANCE ] ) )
+		return 0;
+	
 	cr.StatBase[ ST_BLEED ] = bleed;
-    
     cr.StatBase[ ST_CURRENT_HP ] -= bleed / 2;
     cr.ParamBase[ BP_BLOOD_LOSS ] += bleed / 2;
 
-    if( cr.ParamBase [BP_BLOOD_LOSS] > maxHP * 0.75 )
+    if( cr.ParamBase[ BP_BLOOD_LOSS ] > maxHP * 0.75 && cr.IsPlayer() )
 		cr.Say( SAY_NETMSG, "Вы чувствуете слабость от обильной кровопотери." );
 	
 	if( cr.ParamBase [BP_BLOOD_LOSS] > maxHP - __DeadHitPoints ) //Смертельная кровопотеря. 
@@ -89,47 +104,81 @@ uint cte_bleed( Critter& cr, int identifier, uint& rate )
         } 
         cr.ToDead (anim2Dead, cr);
 		
-		cr.Say( SAY_NETMSG, "Силы покидают вас, вы начинаете медленно умирать от потери большого количества крови.");
+		if( cr.IsPlayer() )
+			cr.Say( SAY_NETMSG, "Силы покидают вас, вы начинаете медленно умирать от потери большого количества крови.");
         return 0;
     }
     
 	//Кровь вытекает под существо:
 	uint16 hx = cr.HexX, hy = cr.HexY;
 	Map@ map = cr.GetMap();
-	Item@ blood; 
 	if( valid(map) )
 	{
 		//Ищем уже имеющуюся кровь под существом:
+		bool wasBlooded = false;
+		
 		Item@[] dirt;
 		map.GetItems( hx, hy, dirt );
-		bool wasBlooded = false;
-		for( uint i = 0; i < dirt.length(); i ++ )
+		if( valid( dirt ) ) 
 		{
-			uint itempid = dirt[i].GetProtoId();
-			if( bloods[0].find( itempid ) != -1 ) //Если это малая лужа - увеличиваем её.
+			for( uint i = 0; i < dirt.length(); i ++ )
 			{
-				dirt[i].Val0++;
-				if( dirt[i].Val0 >= spoil_Val )
-					dirt[i].ChangeProto( bloods[1][Random( 0, bloods[1].length() )] );
-				wasBlooded = true;
-				break;
-			}
-			if( bloods[1].find( itempid ) != -1 ) //Если это большая лужа - просто "усиливаем" её.
-			{
-				dirt[i].Val0++;
-				wasBlooded = true;
-				break;
+				if(!valid(dirt[i])) continue; //hotfix
+				uint itempid = dirt[i].GetProtoId();
+				if( bloods[0].find( itempid ) != -1 ) //Если это малая лужа - увеличиваем её.
+				{
+					dirt[i].Val0++;
+					if( dirt[i].Val0 >= spoil_Val )
+						dirt[i].ChangeProto( bloods[1][Random( 0, bloods[1].length() - 1 )] );
+					wasBlooded = true;
+					break;
+				}
+				if( bloods[1].find( itempid ) != -1 ) //Если это большая лужа - просто "усиливаем" её.
+				{
+					dirt[i].Val0++;
+					wasBlooded = true;
+					break;
+				}
 			}
 		}
 		if( !wasBlooded )
-			@blood = map.AddItem( hx, hy, bloods[0][Random( 0, bloods[0].length() )], 1 );
+		{
+			AddFuckingBlood( map.Id, hx, hy, 0 ); //Ненавижу костыли, но ничего не поделаешь.
+		}
 	}
+	else
+		Log("!map");
+	
+	return REAL_SECOND( cr.Param[ QST_GAMEMODE ] == GAME_TEST ? 1 : 30 );
+}
+
+void AddFuckingBlood( uint MapId, uint16 hx, uint16 hy, uint size )
+{ //А всё потому, что конструкция Item@ blood = map.AddItem(); не работала! УЖАС! :cry:
+	Map@ map = GetMap( MapId );
+	if(!valid(map)) return;
+	
+	uint pid = bloods[size][Random( 0, bloods[size].length() - 1)];
+	map.AddItem( hx, hy, pid, 1 );
+	
+	Item@ blood;
+	Item@[] ground;
+	map.GetItems( hx, hy, ground );
+
+	if(!valid(ground))return;
+	for(uint i=0;i<ground.length();i++)
+		if( bloods[size].find( ground[i].GetProtoId() ) > -1 ) 
+		{
+			@blood = ground[i];
+			break;
+		}
+		
 	if( valid(blood) )
 	{
 		uint[] values = { blood.Id };
-		blood.Val1 = CreateTimeEvent( __FullSecond + REAL_MINUTE( 15 * blood.Val0 ), "e_dryup", values, false );
+		blood.Val1 = CreateTimeEvent( __FullSecond + REAL_MINUTE( 1 + 15 * blood.Val0 ), "e_dryup", values, false );
 	}
-	return REAL_SECOND( 30 );
+	else
+		map.SetText( hx, hy, COLOR_LGRAY, ":плюх:" );
 }
 
 uint e_dryup( uint[]@ values )
