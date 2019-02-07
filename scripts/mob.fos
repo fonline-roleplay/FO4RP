@@ -281,9 +281,12 @@ void _MyDeath( Critter& npc, Critter@ killer )
     //ChangeWildness(npc.WorldX/10, npc.WorldY/10, -5);
 }
 
-uint cte_rotten (Critter& cr, int identifier, uint& rate ) {
+uint cte_rotten (Critter& cr, int identifier, uint& rate ) 
+{
+	rate++;
+	
 	cr.StatBase[ ST_CURRENT_HP ]--;
-	if( cr.Stat[ ST_CURRENT_HP ] < -cr.Stat[ ST_MAX_LIFE ] ) //Превращается в останки.
+	if( cr.Stat[ ST_CURRENT_HP ] < __DeadHitPoints - cr.Stat[ ST_MAX_LIFE ]  ) //Превращается в останки.
 	{
 		Item@ bones;
 		Map@ map = cr.GetMap();
@@ -291,25 +294,28 @@ uint cte_rotten (Critter& cr, int identifier, uint& rate ) {
 			@bones = map.AddItem( cr.HexX, cr.HexY, Random( PID_BLOOD_BONES_1, PID_BLOOD_BONES_3 ), 1 );
 		if( valid( bones) )
 		{
-			uint[] data = { bones.Id };
+			uint[] data = { bones.Id, rate };
 			CreateTimeEvent( __FullSecond + REAL_SECOND( 60 ), "e_rotten_bones", data, true );
 		}
+		DeleteNpc( cr );
 		return 0;
 	}
 	if( cr.Stat[ ST_CURRENT_HP ] < __DeadHitPoints )
 	{
 		Map@ map = cr.GetMap();
 		if( valid(map) )
-			map.SetText( cr.HexX, cr.HexY, COLOR_LGRAY, ":запах разложения:" );
+			map.SetText( cr.HexX, cr.HexY, COLOR_LGRAY, ":запах " + ( rate < 10 ? "крови" : "разложения" ) + ":" );
 	}
 	return REAL_SECOND( cr.Stat[ ST_MAX_LIFE ] ); //Чем крупней, тем дольше гниёт.
 }
 
 uint e_rotten_bones( uint[] @ values )
 {
-	if( !valid(values) || values.length() != 1 || values[0] == 0 )return 0;
+	if( !valid(values) || values.length() != 2 || values[0] == 0 )return 0;
 	Item@ bones = GetItem( values[0] );
 	if( !valid(bones) )return 0;
+	
+	values[1]++;
 	
 	bones.Val0 += Random( 1, 3 );
 	if( bones.Val0 > 10 )
@@ -317,7 +323,7 @@ uint e_rotten_bones( uint[] @ values )
 	
 	Map@ map = GetMap( bones.MapId );
 	if( valid(map) && bones.Accessory == ACCESSORY_HEX )
-		map.SetText( bones.HexX, bones.HexY, COLOR_LGRAY, ":запах разложения:" );
+		map.SetText( bones.HexX, bones.HexY, COLOR_LGRAY, ":запах " + ( values[1] < 10 ? "крови" : "разложения" ) + ":" );
 	
 	return REAL_MINUTE( Random( 5, 15 ) );
 }
@@ -819,26 +825,68 @@ void _InitSkinningKnife( Item& item, bool firstTime )
 
 bool e_InitSkinningUse( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
 {
+	if( cr.GetTimeEvents( CTE_SKINNING, null, null, null ) > 0 || cr.TimeoutBase[ TO_BATTLE ] != 0)
+	{
+		cr.Say( SAY_NETMSG, "Вы итак заняты." );
+		return false;
+	}
+
+	cr.ParamBase[ CR_HEXX ] = cr.HexX;
+	cr.ParamBase[ CR_HEXY ] = cr.HexY;
+	cr.ParamBase[ CR_VAL0 ] = ( valid(onCritter) ? onCritter.Id : 0 );
+
+	cr.AddTimeEvent ( "cte_skinning", 0, CTE_SKINNING, 0 );
+	return true;
+}
+
+uint cte_skinning( Critter& cr, int identifier, uint& rate )
+{
+	if( cr.HexX != cr.ParamBase[ CR_HEXX ] || cr.HexY != cr.ParamBase[ CR_HEXY ] || cr.TimeoutBase[ TO_BATTLE ] != 0 )
+	{
+		cr.Say( SAY_NETMSG, "Вы отвлеклись от процесса свежевания." );
+		return 0;
+	}
+	
+	Critter@ onCritter = ( cr.ParamBase[ CR_VAL0 ] > 0 ? GetCritter( cr.ParamBase[ CR_VAL0 ] ) : null );
+	if( !valid(onCritter) ) { 
+		cr.Say( SAY_NETMSG, "Туша стала непригодна." );
+		return 0; 
+	}
+	
+	cr.Say( SAY_NETMSG, "Вы разделываете тушу." );
+	onCritter.ParamBase[ CR_VAL0 ] += cr.Skill[ SK_OUTDOORSMAN ] / 10; //Туша хранит в себе прогресс свежевания.
+	
+	if( onCritter.ParamBase[ CR_VAL0 ] < onCritter.Stat[ ST_MAX_LIFE ] )
+	{
+		if( Random( 0, 1 ) == 0 ) cr.Animate( 0, ANIM2_PICKUP, null, false, true );
+		if( Random( 0, 1 ) == 0 ) cr.Animate( 0, ANIM2_SWING_1H, null, false, true );
+		if( Random( 0, 1 ) == 0 ) cr.Animate( 0, ANIM2_PICKUP, null, false, true );
+		if( Random( 0, 1 ) == 0 ) cr.Animate( 0, ANIM2_USE, null, false, true );
+		uint time = cr.StatBase[ ST_AGILITY ] / 2;
+		time = Random( CLAMP( 5 - time, 1, 10 ), 5 ); //Т.е. рандом от (11-ЛОВ/2) до 5 секунд
+		return REAL_SECOND( time );
+	}
+	
 	bool skinned = false;
     uint16 Add1;
-		uint16 Add2;
-		uint16 Add3;
-		uint8  Sum1;
-		uint8  Sum2;
-		uint8  Sum3;
-		uint16 PAdd1;
-		uint16 PAdd2;
-		uint16 PAdd3;
-		uint8  PSum1;
-		uint8  PSum2;
-		uint8  PSum3;
-		string Str1;
-		string Str2;
-		string Str3;
-		int result = Random(0,cr.Skill[SK_OUTDOORSMAN]);
-
-		
-    if( onCritter.IsDead() && onCritter.IsNpc() )
+	uint16 Add2;
+	uint16 Add3;
+	uint8  Sum1;
+	uint8  Sum2;
+	uint8  Sum3;
+	uint16 PAdd1;
+	uint16 PAdd2;
+	uint16 PAdd3;
+	uint8  PSum1;
+	uint8  PSum2;
+	uint8  PSum3;
+	string Str1;
+	string Str2;
+	string Str3;
+	int result = Random( 80, 120) / 100 * cr.Skill[SK_OUTDOORSMAN]; //Т.е. +-20%
+	
+    // if( onCritter.IsDead() && onCritter.IsNpc() )
+    if( onCritter.StatBase[ ST_CURRENT_HP ] < 0 && onCritter.IsNpc() ) //Можно свежевать тяжело раненных, но ещё не умирающих мобов.
     {
 		Item @ darts = onCritter.GetItem(PID_DARTS_LOW, -1 );
         if( valid(darts) ) 
@@ -850,15 +898,12 @@ bool e_InitSkinningUse( Item& item, Critter& cr, Critter@ onCritter, Item@ onIte
         if( onCritter.Stat[ ST_DESEASE ] != 0 )
         {
             cr.Say( SAY_NETMSG, "Уже освежован." );
-            return true;
+            return 0;
         }
         
 		uint16 npcPid = onCritter.GetProtoId();
 		if( npcPid > 1000 ) npcPid = NewPidToDefault( npcPid );
 		if( npcPid == 10 ) npcPid = NPC_PID_Brahmin; //Дефолтные брамины.		
-		
-		
-
 		
         switch( npcPid )
         {
@@ -1268,16 +1313,13 @@ bool e_InitSkinningUse( Item& item, Critter& cr, Critter@ onCritter, Item@ onIte
 			}
 			break;
 		}
-		
-		
-
 	}
 	else if( onCritter.IsDead() && !onCritter.IsNpc() )
 	{
 		if( onCritter.Stat[ ST_DESEASE ] != 0 )
 		{
 			cr.Say( SAY_NETMSG, "Уже освежован." );
-			return true;
+			return 0;
 		}
 		if(cr.Karma[ KARMA_BERSERKER ] != 0)
 		{
@@ -1301,44 +1343,42 @@ bool e_InitSkinningUse( Item& item, Critter& cr, Critter@ onCritter, Item@ onIte
 		}
 	}
 	
-			if  (result > 180)
-			{
-				_CritAddItem(cr,Add3,Sum3);
-				cr.Say( SAY_NETMSG, Str3 );
-				skinned = true;
-				if (cr.Perk[PE_GECKO_SKINNING] !=0)		
-				{
-				_CritAddItem(cr,PAdd3,PSum3);
-				}
-			}
-		else 	if (result > 120)
-				{
-				_CritAddItem(cr,Add2,Sum2);
-				cr.Say( SAY_NETMSG, Str2 );
-				skinned = true;
-				if (cr.Perk[PE_GECKO_SKINNING] !=0)		
-					{
-					_CritAddItem(cr,PAdd2,PSum2);
-					}
-				}
-		else if (result > 60)
-			{
-				_CritAddItem(cr,Add1,Sum1);
-				cr.Say( SAY_NETMSG, Str1 );
-				skinned = true;
-				if (cr.Perk[PE_GECKO_SKINNING] !=0)		
-				{
-				_CritAddItem(cr,PAdd1,PSum1);
-				}
-			}
-		else 
-			{
-			cr.Say( SAY_NETMSG,"Вы задумались о своем, забыв про разделку" );
-			}
+	if( result > 180 )
+	{
+		_CritAddItem(cr,Add3,Sum3);
+		cr.Say( SAY_NETMSG, Str3 );
+		skinned = true;
+		if (cr.Perk[PE_GECKO_SKINNING] !=0)		
+			_CritAddItem(cr,PAdd3,PSum3);
+	}
+	else if( result > 120 )
+	{
+		_CritAddItem(cr,Add2,Sum2);
+		cr.Say( SAY_NETMSG, Str2 );
+		skinned = true;
+		if (cr.Perk[PE_GECKO_SKINNING] !=0)		
+			_CritAddItem(cr,PAdd2,PSum2);
+	}
+	else if( result > 60 )
+	{
+		_CritAddItem(cr,Add1,Sum1);
+		cr.Say( SAY_NETMSG, Str1 );
+		skinned = true;
+		if (cr.Perk[PE_GECKO_SKINNING] !=0)		
+			_CritAddItem(cr,PAdd1,PSum1);
+	}
+	else 
+	{
+		cr.Say( SAY_NETMSG,"Вы задумались о своем, забыв про разделку" );
+	}
 			
 	if( skinned )
 	{
 		onCritter.StatBase[ ST_DESEASE ] = 1;
+		onCritter.StatBase[ ST_CURRENT_HP ] += __DeadHitPoints; //ХП падает ниже некуда, скорей сгнивают останки.
+		onCritter.AddTimeEvent ("cte_rotten", 0, CTE_ROTTEN, 0);
 	}
-    return true;
+    return 0;
 }
+
+
