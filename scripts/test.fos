@@ -4,6 +4,277 @@
 #include "_macros.fos"
 #include "_colors.fos"
 
+import void DIALOG_MENU( Critter& cr, string[] data ) from "gm";
+import void GlobalCellSpawnLo() from "globalmap_group";
+import void lock( Critter& player, int itemId, int complexity, int lockId ) from "debug";
+
+void LootingTimelapse( Critter& player, int param0, int param1, int param2 )
+{
+	Map@ map = player.GetMap();
+	if(!valid(map)) 
+	{
+		player.Say( SAY_NETMSG, "На глобале нельзя." );
+		return;
+	}
+	
+	//Оружка:
+	Item@ storage = map.AddItem( player.HexX + 1, player.HexY, PID_ICE_CHEST_LEFT, 1 );
+	if(!valid(storage)) return; //Всё пошло по пизде.
+	lock( player, storage.Id, 0, 1 );
+	player.ParamBase[ CR_VAL0 ] = storage.Id;
+	storage.LockerOpen();
+	storage.LockerClose();
+	
+	//Наркота + патроны:
+	@storage = map.AddItem( player.HexX, player.HexY + 1, PID_ICE_CHEST_RIGHT, 1 );
+	if(!valid(storage)) return; //Всё пошло по пизде.
+	lock( player, storage.Id, 0, 2 );
+	player.ParamBase[ CR_VAL1 ] = storage.Id;
+	storage.LockerOpen();
+	storage.LockerClose();
+
+	//Остальное:
+	@storage = map.AddItem( player.HexX + 1, player.HexY + 1, PID_FOOTLOCKER_CLEAN_LEFT, 1 );
+	if(!valid(storage)) return; //Всё пошло по пизде.
+	lock( player, storage.Id, 0, 3 );
+	player.ParamBase[ CR_VAL2 ] = storage.Id;
+	storage.LockerOpen();
+	storage.LockerClose();
+	
+	player.ParamBase[ CR_VAL3 ] = 1; //Означает, что режим "лутать весь мир".
+
+	string[] data = { "test@answer_LootingTimelapse", 
+		" !!! ВНИМАНИЕ !!!\n !!! ДАННАЯ ФУНКЦИЯ ОПАСНА !!!\nВ ходе проверки дропа, лут во всём Саттере обновится 10 раз! Будут обобраны ВСЕ незапертые контейнеры!", "Стандарт", "ONLY Статик", "ONLY Динамик" };
+	DIALOG_MENU( player, data);
+}	
+
+void answer_LootingTimelapse( Critter& cr, uint answerI, string& answerS )
+{
+	GameVar@ style = GetGlobalVar( GVAR_LootingStyle );
+	if( valid(style) && style.GetValue() > 0 ) style.opAssign ( answerI );
+
+	cr.Say( SAY_EMOTE, "использует машину времени" );
+	for( uint time = 0; time < 10; time++ )
+	{
+		GlobalCellSpawnLo();
+		FastLoot( cr, cr.ParamBase[ CR_VAL0 ], cr.ParamBase[ CR_VAL1 ], cr.ParamBase[ CR_VAL2 ] );
+	}
+	cr.Say( SAY_NETMSG, "Итого, за 10 суток, т.е. 30 игровых часов, можно налутать следующее [экипировка, наркота, прочее]:" );
+	CheckLoot( cr, cr.ParamBase[ CR_VAL0 ], 0, 0 );
+	CheckLoot( cr, cr.ParamBase[ CR_VAL1 ], 0, 0 );
+	CheckLoot( cr, cr.ParamBase[ CR_VAL2 ], 0, 0 );
+	
+	Item@ storage = GetItem( cr.ParamBase[ CR_VAL0 ] );
+	if(valid(storage)) storage.LockerOpen();
+
+	@storage = GetItem( cr.ParamBase[ CR_VAL1 ] );
+	if(valid(storage)) storage.LockerOpen();
+
+	@storage = GetItem( cr.ParamBase[ CR_VAL2 ] );
+	if(valid(storage)) storage.LockerOpen();
+}
+
+void PlayerLooting( Critter& player, Map& map )
+{
+	Item@[] container, loot;
+	map.GetItemsByType( ITEM_TYPE_CONTAINER, container );
+	uint len = container.length();
+
+	int locked = 0;
+	for( uint i = 0; i < len; i++ )
+	{
+		if( !FLAG( container[i].LockerCondition, LOCKER_LOCKED ) )
+		{
+			container[i].GetItems( uint(-1), loot );
+			MoveItems( loot, player );
+			loot.resize(0);
+		}
+		else locked++;
+	}
+	player.Say( SAY_NETMSG, "Вы облутали " + len + " контейнеров, кроме " + locked + " приватных." );
+}
+	
+void FastLoot( Critter& player, int param0, int param1, int param2 )
+{
+    Map@ map = player.GetMap();
+	if( player.ParamBase[ CR_VAL3 ] != 0 )
+	{
+		Location@ loc;
+		for( uint i = 13; i < 26; i++ ) //Все карты Саттера
+		{
+			@loc = GetLocation( i );
+			if( !valid( loc ) ) continue;
+			@map = loc.GetMapByIndex( 0 );
+			if( !valid( map ) ) continue;
+			
+			PlayerLooting( player, map );
+		}
+	}
+	else
+	{
+		if( !valid(map) ) { player.Say( SAY_NETMSG, "На глобале нельзя!" ); return; }
+		PlayerLooting( player, map );
+	}
+
+	if( param0 != 0 && param1 != 0 && param2 != 0 )
+		DifferLoot( player, param0, param1, param2 );
+}
+
+void CountUnstackables( Critter& player, int param0, int param1, int param2 )
+{
+	Item@[] loot;
+	if( param0 != 0 ) 
+	{
+		Map@ map = player.GetMap();
+		if( !valid(map) ) { player.Say( SAY_NETMSG, "На глобале нельзя!" ); return; }
+		Item@ LootBox = map.GetItem( param0 );
+		if( !valid(LootBox) ) { player.Say( SAY_NETMSG, "Контейнер не найден!" ); return; }
+		LootBox.GetItems( uint( -1 ), loot );
+	}
+	else
+		player.GetItems( -1, loot );
+	
+	Item@ item = null;
+	uint allc = 0, allp = 0, price = 0;
+	uint[][] stackables = { {}, {}, {}, {} }; //pid, count, price, proto-price
+	
+	uint k = 0;
+	for( uint i = 0, iEnd = loot.length(); i < iEnd; i++ ) 
+	{
+		@item = @loot[i];
+		uint pid = item.GetProtoId();
+		
+		uint count = item.Proto.Stackable ? item.GetCount() : 1; 
+		if( !item.Proto.Stackable )
+		{
+			price = item.Proto.Cost;
+			count = 1;
+			
+			uint index = stackables[0].find( pid );
+			if( index > -1 )
+			{
+				stackables[1][index]++;
+				stackables[2][index] += price;
+			}
+			else
+			{
+				stackables[0].insertLast( pid );
+				stackables[1].insertLast( 1 );
+				stackables[2].insertLast( price );
+				stackables[3].insertLast( item.Proto.Cost );
+			}
+			
+		}
+		else
+		{
+			price = item.GetCost();
+			player.Say( SAY_NETMSG, k + ") " + pid + " x" + count + "(" + item.Proto.Cost + "$) " + price + "$" );
+			k++;
+		}
+		
+		allc += count;
+		allp += price;
+	}
+	
+	for( uint i = 0; i < stackables[0].length(); i++ )
+		player.Say( SAY_NETMSG, (k + i) + ") " + stackables[0][i] + " x" + stackables[1][i] + "(" + stackables[3][i] + "$) " + stackables[2][i] + "$" );
+	
+	player.Say( SAY_NETMSG, "Всего " + allc + " объектов общей стоимостью " + allp + "$" );
+}
+
+void CheckLoot( Critter& player, int param0, int param1, int param2 )
+{
+	Item@[] loot;
+	if( param0 != 0 ) 
+	{
+		Map@ map = player.GetMap();
+		if( !valid(map) ) { player.Say( SAY_NETMSG, "На глобале нельзя!" ); return; }
+		Item@ LootBox = map.GetItem( param0 );
+		if( !valid(LootBox) ) { player.Say( SAY_NETMSG, "Контейнер не найден!" ); return; }
+		LootBox.GetItems( uint( -1 ), loot );
+	}
+	else
+		player.GetItems( -1, loot );
+	Item@ item = null;
+	uint count = 0, allc = 0, allp = 0, price = 0, pid = 0;
+	for(uint i = 0, iEnd = loot.length(); i < iEnd; i++ ) 
+	{
+		@item = @loot[i];
+		pid = item.GetProtoId();
+		count = item.Proto.Stackable ? item.GetCount() : 1; 
+		price = item.GetCost();// * count;
+		player.Say( SAY_NETMSG, i + ") " + pid + " x" + count + "(" + item.Proto.Cost + "$) " + price + "$" );
+		allc += count;
+		allp += price;
+	}
+	player.Say( SAY_NETMSG, "Всего " + allc + " объектов общей стоимостью " + allp + "$" );
+}
+
+void DifferLoot( Critter& player, int param0, int param1, int param2 )
+{
+	if( param0 == 0 || param0 == 1 || param2 == 0 ) 
+	{ 
+		player.Say( SAY_NETMSG, "Укажите id для трёх целевых контейнеров сортировки:\n1) Оружие и броня.\n2) Ключи, наркотики и патроны.\n3) Остальное."); 
+		return; 
+	}
+	
+	Map@ map = player.GetMap();
+	
+	if( !valid(map) ) { player.Say( SAY_NETMSG, "На глобале нельзя!" ); return; }
+	
+	Item@ GearBox = map.GetItem(param0);
+	Item@ DrugBox = map.GetItem(param1);
+	Item@ StuffBox = map.GetItem(param2);
+	
+	if( !valid(GearBox) || !valid(StuffBox) || !valid(StuffBox) ) { player.Say( SAY_NETMSG, "Отсутствует один из контейнеров!" ); return; }
+
+    Item@ item;
+	Item@[] items;
+    player.GetItems( -1, items );
+
+	uint16 count, c1, c2, c3, allc, i, pid;
+	uint32 price, p1, p2, p3, allp;
+	count = c1 = c2 = c3 = allc = i = pid = price = p1 = p2 = p3 = allp = 0; //Очистка от мусора, а то хрень вылезала.
+	for( i = 0; i < items.length(); i++ ) 
+	{
+		@item = @items[i];
+		pid = item.GetProtoId();
+		count = GetProtoItem(pid).Stackable ? item.GetCount() : 1;
+		price = item.GetCost();
+		switch( items[i].GetType() )
+		{
+			case(ITEM_TYPE_ARMOR):
+			case(ITEM_TYPE_WEAPON):
+					c1 += count;
+					p1 += price;
+					MoveItem( item, count, GearBox, 0 );//StackId || SpecialId ?
+				break;
+			case(ITEM_TYPE_DRUG):
+			case(ITEM_TYPE_AMMO):
+			case(ITEM_TYPE_KEY):
+			case(ITEM_TYPE_FOOD):
+					c2 += count; 
+					p2 += price;
+					MoveItem( item, count, DrugBox, 0 );//StackId || SpecialId ?
+				break;
+			case(ITEM_TYPE_MISC):
+			//case(ITEM_TYPE_MISC2): //not declared!
+					c3 += count;
+					p3 += price;
+					MoveItem( item, count, StuffBox, 0 );//StackId || SpecialId ?
+				break;
+			default: continue;
+		}
+	}
+	allc = c1 + c2 + c3;
+	allp = p1 + p2 + p3;
+	player.Say( SAY_NETMSG, "Вы распределили " + i + " стэков по категориям:" + 
+						"\n1) Оружие и броня x" + c1 + " на " + p1 + "$" + 
+						"\n2) Ключи, наркотики и патроны x" + c2 + " на " + p2 + "$" +
+						"\n3) Остальное x" + c3 + " на " + p3 + "$" +
+						"\n Итого x" + allc + " объектов на сумму в " + allp + "$");
+}
+
 void unsafe_rolling( Critter& cr, int p0, int p1, int p2, string@, int[]@ )
 {
 	Roll( cr, p0, p1, p2 );
