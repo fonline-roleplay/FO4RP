@@ -748,12 +748,17 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
         return true;
     }
 
-    // unlock roped critter - pm add
-    if( valid( targetCr ) && targetCr.StatBase[ HANDCUFFS ] != 0 && ( targetCr.Id != cr.Id ) )
+    if( valid( targetCr ) && targetCr.StatBase[ HANDCUFFS ] != 0 )
     {
         if( unlock( cr, targetCr, pid ) )
             return true;
-    }    // end
+    }
+
+	if( useOnSelf && cr.StatBase[ HANDCUFFS ] != 0 )
+    {
+        if( unlock( cr, cr, pid ) )
+            return true;
+    }
 
     if( cr.IsPlayer() && useOnSelf && item.GetType() == ITEM_TYPE_CONTAINER )
     {
@@ -892,18 +897,27 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		{
 			if( useOnSelf )
 			{
+				bool success = false;
 				@targetItem = map.GetItem( cr.HexX, cr.HexY, PID_GRAPPLE_HOOK );
-				if( valid( targetItem ) )
+				if( valid( targetItem ) ) {
 					DeleteItem( targetItem );
+					success = true;
+				}
 				
 				@targetItem = map.GetItem( cr.HexX, cr.HexY, PID_REV_BALL1 );
 				if(!valid(targetItem))
 					@targetItem = map.GetItem( cr.HexX, cr.HexY, PID_REV_BALL2 );
-				if(valid(targetItem))
+				if(valid(targetItem)) {
 					_SubItem( targetItem, 1 );
+					success = true;
+				}
 
-				cr.Say( SAY_EMOTE, "Разрезает путы." );
-				cr.Animate( 0, ANIM2_SWING_1H, null, false, true );
+				if( success ) {
+					cr.Say( SAY_EMOTE, "Режет путы" );
+					cr.Animate( 0, ANIM2_SWING_1H, null, false, true );
+				}
+				else 
+					return false;
 			}
 			else
 			{
@@ -1472,12 +1486,18 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
             if( ( valid( targetCr ) ) && ( targetCr.Param[ HANDCUFFS ] != 0 ) )                         // TabaK. Проверка серийного номера наручников.
             {
                 uint KeyNumber = ( targetCr.Param[ HANDCUFFS ] >> 16 ) & 0x3FFF;
-                cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12954, "$number" + KeyNumber );
+				if( KeyNumber != 0 )
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12954, "$number" + KeyNumber );
+				else
+					cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
             }
             if( ( cr.Param[ HANDCUFFS ] != 0 ) && ( onSelf ) )
             {
                 uint KeyNumber = ( cr.Param[ HANDCUFFS ] >> 16 ) & 0x3FFF;
-                cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12954, "$number" + KeyNumber );
+				if( KeyNumber != 0 )
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12954, "$number" + KeyNumber );
+				else
+					cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
             }
             return true;
         }
@@ -1550,7 +1570,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
             if( cr.ParamBase[ QST_INVIS ] == 1 )
             {
                 cr.ParamBase[ QST_INVIS ] = 0;
-                cr.Say( SAY_NETMSG, "режим суперневидимости выключен" );
+                cr.Say( SAY_NETMSG, "Режим суперневидимости выключен." );
             }
             cr.ModeBase[ MODE_HIDE ] = 0;
         }
@@ -1563,7 +1583,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
             cr.ParamBase[ QST_INVIS ] = 1;
             cr.PerkBase[ PE_SILENT_RUNNING ] = 1;
             cr.ModeBase[ MODE_HIDE ] = 1;
-            cr.Say( SAY_NETMSG, "режим суперневидимости включен" );
+            cr.Say( SAY_NETMSG, "Режим суперневидимости включен." );
         }
         else
         {
@@ -1716,12 +1736,16 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
                         {
                             targetCr.ParamBase[ MODE_NO_HOME ] = nohome;
                         }
-                        targetCr.GetItems( SLOT_HAND1, items );
-                        targetCr.GetItems( SLOT_HAND2, items );
-                        DeleteItems( items );
-                        cr.AddItem( PID_BROKEN_CUFFS, 1 );
-                        targetCr.ParamBase[ HANDCUFFS ] = 0;
-                        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12953 );
+
+						bool isCuffs = targetCr.CountItem( PID_HANDCUFFS_USED ) > 0;
+						bool isRope =  targetCr.CountItem( PID_ROPE_USED ) > 0;
+						if( isCuffs || isRope )
+						{
+							targetCr.DeleteItem( isCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
+							cr.AddItem( isCuffs ? PID_BROKEN_CUFFS : PID_ROPE, 1 );
+							cr.Say( SAY_NETMSG, "Вы освободили цель." );
+						}
+						targetCr.StatBase[ HANDCUFFS ] = 0;
                     }
                     else
                         cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12944 );
@@ -1732,10 +1756,15 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
                     cr.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( cr );
                     if( ( cr.Param[ SK_LOCKPICK ] + Random( 0, 150 ) + (cr.Stat [ST_LUCK] - 5)*5) > 300 - Random( 0, 50 ) )
                     {
-                        cr.DeleteItem( PID_HANDCUFFS_USED, 2 );
-                        cr.AddItem( PID_BROKEN_CUFFS, 1 );
-                        cr.ParamBase[ HANDCUFFS ] = 0;
-                        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12953 );
+						bool isCuffs = cr.CountItem( PID_HANDCUFFS_USED ) > 0;
+						bool isRope =  cr.CountItem( PID_ROPE_USED ) > 0;
+						if( isCuffs || isRope )
+						{
+							cr.DeleteItem( isCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
+							cr.AddItem( isCuffs ? PID_BROKEN_CUFFS : PID_ROPE, 1 );
+							cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, isCuffs ? 12947 : 12988 );
+						}
+						cr.StatBase[ HANDCUFFS ] = 0;
                     }
                     else
                         cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12944 );
