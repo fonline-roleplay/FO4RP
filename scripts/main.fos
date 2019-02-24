@@ -1791,7 +1791,99 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
         }
     break; }
     case SK_TRAPS: {
-        if( valid( targetItem ) )
+        if( valid(targetCr) ) 
+		{
+			if( cr.Timeout[ TO_SK_STEAL ] > 0 && cr.GetAccess() < ACCESS_MODER ) 
+			{
+				if( !targetCr.IsDead() ) targetCr.Say(SAY_EMOTE,"Сопротивляется" );
+				cr.Say(SAY_EMOTE,"Пытается что-то отобрать" );
+				cr.Say(SAY_NETMSG, "Вы слишком устали, что бы успешно отобрать вещь.");
+				return true;
+			}
+			bool CanResist = true;
+			
+			Item@[] items;
+			Item@[] items0;
+			uint itemscount = cr.GetItems( SLOT_HAND1, items );
+			uint itemscount0 = cr.GetItems( SLOT_HAND2, items0 );
+
+			if( itemscount > 0 )
+			{
+				Item@ hand = items[0];
+				if(valid(hand)) {
+					int pid = hand.GetProtoId();
+					if( pid == PID_HANDCUFFS || pid == PID_ROPE_USED || pid == PID_COLLAR )
+						CanResist = false;
+					else
+						cr.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
+				}
+			}
+			if( itemscount0 > 0 )
+			{
+				Item@ hand = items0[0];
+				if(valid(hand)) {
+					int pid = hand.GetProtoId();
+					if( pid == PID_HANDCUFFS || pid == PID_ROPE_USED || pid == PID_COLLAR )
+						CanResist = false;
+					else
+						cr.MoveItem( items0[ 0 ].Id, itemscount0, SLOT_INV );
+				}
+			}
+			
+			if( targetCr.IsKnockout() || targetCr.IsDead() || targetCr.Stat[ HANDCUFFS ] != 0 || !CanResist || cr.GetAccess() >= ACCESS_MODER ) 
+			{
+				bool LootedRucksack = false;
+				Item@[] RuckSacks;
+				targetCr.GetItems( -1, RuckSacks );
+				for( uint i = 0, iEnd = RuckSacks.length(); i < iEnd; i++)
+				{
+					int pid = RuckSacks[i].GetProtoId();
+					bool isBag = (pid == PID_BAG);
+					bool isPack = (pid == PID_BACKPACK);
+					if( isBag || isPack ) {
+						if( cr.GetAccess() < ACCESS_MODER ) {
+							cr.Say(SAY_EMOTE,"Снимает " + (isPack ? "рюкзак" : "что-то" ));
+							MoveItem( RuckSacks[i], 1, cr.GetMap(), cr.HexX, cr.HexY );
+							targetCr.Say(SAY_NETMSG, "Вы не в силах сопротивляться, пока у вас отбирают " + (isPack ? "рюкзак" : "что-то" ) + "." );
+							cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
+						} else {
+							MoveItem( RuckSacks[i], 1, cr );
+							cr.Say( SAY_NETMSG, "Вы забрали " + (isPack ? "рюкзак" : "что-то" ) + " у игрока." );
+						}
+						LootedRucksack = true;
+						break;
+					}
+				}
+				if(!LootedRucksack) {
+					Item@[] armors;
+					uint count = targetCr.GetItems( SLOT_ARMOR, armors );
+					if( count == 0 || !valid(armors[0]) ) 
+					{
+						cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
+						return true;
+					}
+					
+					cr.Say( SAY_EMOTE, "пытается снять броню" );
+					cr.Say( SAY_NETMSG, "Вы снимаете с цели всё что можете." );
+					targetCr.Say( SAY_NETMSG, "Вашу броню пытаются снять!" );
+					if( uint( cr.Stat[ ST_LAST_STEAL_CR_ID ] ) == targetCr.Id ) {
+						cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
+						cr.StatBase[ ST_STEAL_COUNT ] ++;
+						TryToTakeArmor( cr, targetCr );
+					} else {
+						if( cr.GetAccess() >= ACCESS_MODER ) {
+							cr.Say( SAY_NETMSG, "Вы забрали у персонажа броню." );
+							cr.StatBase[ ST_STEAL_COUNT ] = 7;
+							TryToTakeArmor( cr, targetCr );
+						}
+						cr.StatBase[ ST_STEAL_COUNT ] = 0;
+						cr.StatBase[ ST_LAST_STEAL_CR_ID ] = targetCr.Id;
+					}
+				}
+				return true;
+			}
+		}        
+		if( valid( targetItem ) )
         {
             uint16 pid = targetItem.GetProtoId();
             if( ( pid == PID_ACTIVE_DYNAMITE || pid == PID_ACTIVE_PLASTIC_EXPLOSIVE || pid == PID_ACTIVE_MINE ) && OnUseExplode( cr, targetItem, null, null, null, 0 ) )
@@ -3989,3 +4081,35 @@ void MakeDescLex( Critter& player, uint answerI, string& answerS ) {
     }
     target.Update();
 }	
+
+int[][] armor_delay = {
+	{ PID_POWERED_ARMOR, PID_HARDENED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR_MK2 },
+	{ PID_PURPLE_ROBE, PID_KEEPBRIGE_ROBE, PID_BLACK_ROBE, PID_SANDROBE },
+	{ PID_LEATHER_JACKET, PID_CURED_LEATHER_ARMOR, PID_CURED_LEATHER_ARMOR_MK_II },
+	{ PID_LEATHER_ARMOR, PID_LEATHER_ARMOR_MK_II, PID_LEATHER_ARMOR_MK_III },
+	{ PID_METAL_ARMOR, PID_METAL_ARMOR_MK_II, PID_TESLA_ARMOR},
+};
+
+void TryToTakeArmor( Critter& cr, Critter& target ) {
+	bool success = false;
+	Item@[] armors;
+	uint count = target.GetItems( SLOT_ARMOR, armors );
+	if( count == 0 || !valid(armors[0]) ) return;
+	int armor = armors[0].GetProtoId();
+	if( armor_delay[0].find( armor ) != -1 ) return; //ПАшки неснимаемые.
+	uint delay = cr.Stat[ST_STEAL_COUNT],
+			i = 1, iEnd = armor_delay.length();
+	for( ;i < iEnd; i++ )
+		if( armor_delay[i].find( armor ) != -1 ) {
+			success = true;
+			break;
+		}
+	if( delay >= 6 ) success = true;
+	if( success && delay >= i) 
+	{
+		MoveItem( armors[0], 1, cr );
+		target.Say(SAY_NETMSG, "С вас сняли броню.");
+		cr.Say(SAY_NETMSG, "Вы сняли броню с жертвы.");
+	}
+	else cr.Say(SAY_NETMSG, "Итерация №" + delay + " из " +(i==5?6:i)+".");
+}
