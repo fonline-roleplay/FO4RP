@@ -4,6 +4,212 @@
 #include "_macros.fos"
 #include "_colors.fos"
 
+/* Печки:
+    Пока горит - преобразует рандомно 1 предмет в себе и тратит 1 бревно.
+    Когда печка горячая - взаимодействовать с ней можно лишь лопатой (совком).
+    Тикает раз в 10 секунд, но после розжига разогревается минуту. Разжигается зажигалкой.
+    Что бы потушить тратится бутылка воды. Если нет дров - тухнет сам. Остывает минуту. Дрова выгребаются монтировкой.
+ Тёплая печка имеет стандартный функционал "плиты для готовки". Использование науки на печку даёт подсказку.
+ Остальные навыки лишь показывают её состояние (греется-остывает) и температуру: обжигающая, тёплая или холодная.
+ Слитки: золотой (PID 1682), железный (PID 1474).
+*/
+
+void MakeFurnace( Critter& player, int id, int p1, int p2 )
+{
+	if( id == 0 || p1 != 0 || p2 != 0 )
+	{
+		player.Say( SAY_NETMSG, "Введите айди контейнера, который станет печкой, остальные 2 аргумента должны быть равны 0." );
+		return;
+	}
+	Item@ target = GetItem( id );
+	if(!valid(target))
+	{
+		player.Say( SAY_NETMSG, "Объект не обнаружен. Используйте #sinf 119 что бы видеть айди объектов!" );
+		return;
+	}
+	if( target.GetType() != ITEM_TYPE_CONTAINER )
+	{
+		player.Say( SAY_NETMSG, "Выбранный вами объект - не контейнер!" );
+		return;
+	}
+	FurnaceInit( target, true );
+	player.Say( SAY_NETMSG, "Вы активировали печку." );
+}
+
+void FurnaceInit(Item& item, bool firstTime){ //old flags were: 269226496
+    item.SetEvent( ITEM_EVENT_SKILL, "_FurnaceSkill" ); //нельзя трогать руками, если нагрета, впрочем можно на ней готовить
+    item.SetEvent( ITEM_EVENT_USE_ON_ME, "_FurnaceOnMe" ); //лом, вода, зажигалка, или лопата
+}
+
+import bool ShowMenu(Critter& cr) from "cooking";
+
+bool _FurnaceSkill( Item& item, Critter& cr, int skill )
+{
+	if( skill == SKILL_PICK_ON_GROUND )
+	{
+		if( item.Val1 == 0 )
+			cr.ShowContainer( null, item, TRANSFER_HEX_CONT_DOWN );
+		else
+			ShowMenu(cr);
+	}
+	else
+	{
+		if( skill == SK_SCIENCE )
+			cr.Say( SAY_NETMSG, "Нужо загрузить дров и использовать зажигалку, что бы растопить печку." );
+		else
+		{
+			string temp = ( item.Val1 > 0 ? ( item.Val1 > 1 ? "обжигающая" : "горячая" ) : "холодная" );
+			cr.Say( SAY_NETMSG, "Печка " + ( item.Val0 == 1 ? "греется" : "остывает" ) + ", она " + temp + "." );
+		}
+	}
+    return true;
+}
+
+bool _FurnaceOnMe( Item& item, Critter& cr, Item@ usedItem )
+{
+	//Т.к. внутри switch-case нельзя объявлять переменные, объявляем их здесь:
+	Item@ wood;
+	uint[] values = { item.Id };
+	
+	switch( usedItem.GetProtoId() )
+	{
+		case( PID_BOTTLE_FULL ):
+			if( item.Val0 == 0 ) return false;
+			cr.Say( SAY_EMOTE_ON_HEAD, "тушит огонь водой" );
+			_SubItem( usedItem, 1 );
+			cr.AddItem( PID_BOTTLE_EMPTY, 1 );
+			item.Val0 = 0; //Гасим огонь
+		break;
+		case( PID_GLASS_BOTTLE_FULL ):
+			if( item.Val0 == 0 ) return false;
+			cr.Say( SAY_EMOTE_ON_HEAD, "тушит огонь водой" );
+			_SubItem( usedItem, 1 );
+			cr.AddItem( PID_BOTTLE_GLASS, 1 );
+			item.Val0 = 0; //Гасим огонь
+		break;		
+		case( PID_LIGHTER ):
+			if( item.Val0 == 1 ) return false;
+			@wood = item.GetItem( PID_FIREWOOD, 0 );
+			if( !valid( wood ) )
+			{
+				cr.Say( SAY_NETMSG, "В печке нет дров для розжига." );
+				return false;
+			}
+			cr.Say( SAY_EMOTE_ON_HEAD, "разжигает огонь в печи" );
+			item.Val0 = 1; //разжигаем огонь в печи
+			EraseTimeEvent( item.Val2 ); //удаляет старый ивент, что бы печка одновременно не грелась-остужалась
+			item.Val2 = CreateTimeEvent( __FullSecond, "e_FurnaceBurn", values, false );
+		break;
+		case( PID_SHOVEL ):
+			cr.Say( SAY_EMOTE_ON_HEAD, "орудует совком" );
+			cr.ShowContainer( null, item, TRANSFER_HEX_CONT_DOWN );
+		break;
+		case( PID_CROWBAR ):
+			cr.Say( SAY_EMOTE_ON_HEAD, "выгребает дрова" );
+			@wood = item.GetItem( PID_FIREWOOD, 0 );
+			if( !valid( wood ) ) return false;
+			MoveItem( wood, wood.GetCount(), cr.GetMap(), cr.HexX, cr.HexY ); //выгребаем дрова под себя
+		break;
+		default:
+			cr.Say( SAY_EMOTE_ON_HEAD, "бросает что-то в печь" );
+			MoveItem( usedItem, 1, item, 0 );
+		break;
+	}
+    return true;
+}
+
+uint[][] FurnaceResourceTransfer = { //Таблица соответствий, что во что плавится/готовится:
+	//[RESOURCE] PID COUNT  == [RESULT] PID COUNT
+	{ PID_METAL_ORE, 1, PID_IRON_BAR, 2 },
+	{ PID_GOLD_NUGGET, 1, PID_GOLDEN_BAR, 2 }, //GOLD_BAR
+	
+	{ PID_MEAT, 1, PID_COOKED_MEAT, 1 },
+	{ PID_COOKED_MEAT, 1, PID_COOKED_MEAT, 0 },
+	
+	//Добавить: еду, плавку железяк, патронов, труб, оружия, крышек, денег и т.п.
+};
+
+uint e_FurnaceBurn( uint[]@ values )
+{
+	if( !valid(values) ) return 0;
+	
+	Item@ furnace = GetItem( values[0] );
+	if( !valid(furnace) ) return 0;
+	
+	Map@ map = GetMap( furnace.MapId );
+	if( !valid(map) ) return 0;
+	
+	Item@ wood = furnace.GetItem( PID_FIREWOOD, 0 );
+	if( furnace.Val0 == 1 ) //огонь горит
+	{
+		if( valid( wood ) )
+		{
+			_SubItem( wood, 1 ); //топливо горит
+		}
+		else
+		{
+			furnace.Val0 = 0; //гаснет от нехватки топлива
+		}
+	}		
+
+	
+	bool isOn = furnace.Val0 == 1; //нагревается или остывает)
+	int temp = furnace.Val1; //0 остыла, 1 - нагревается/остывает (нельзя трогать руками), 2 - нагрета (идёт процесс)
+	
+	if( !isOn ) {
+		if( temp == 2 ) {
+			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":печь затухла:" );
+			furnace.Val1 = 1;
+			return REAL_SECOND( 30 );
+		}
+		if( temp == 1 ) {
+			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":печь остывает:" );	
+			furnace.Val1 = 0;
+			return REAL_SECOND( 30 );
+		}
+		if( temp == 0 ) {
+			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":печь остыла:" );	
+			return 0;
+		}
+	}
+	else
+	{
+		if( temp == 0 ) {
+			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":огонь разгорается в печи:" );	
+			furnace.Val1 = 1;
+			return REAL_SECOND( 30 );
+		}
+		if( temp == 1 ) {
+			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":печь нагревается:" );	
+			furnace.Val1 = 2;
+			return REAL_SECOND( 30 );
+		}
+		if( temp == 2 ) {
+			string[] desc = { "громкий треск огня в печи", "от печи исходит жар", "мерцание пламени в печи", "из печи валит дым" };
+			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":" + desc[Random( 0, desc.length() - 1 )] + ":" );	
+			//Готовка происходит тут:
+			Item@[] resources;
+			int count = furnace.GetItems( 0, resources );
+			if( count > 0 ) 
+			{
+				int n = Random( 0, count - 1 );
+				for( uint i = 0; i < FurnaceResourceTransfer.length(); i++ )
+				{
+					if( valid(FurnaceResourceTransfer[i]) && FurnaceResourceTransfer[i].length() == 4
+						&& resources[n].GetProtoId() == FurnaceResourceTransfer[i][0] 
+						&& resources[n].GetCount() >= FurnaceResourceTransfer[i][1] )
+					{
+						_SubItem( resources[n], FurnaceResourceTransfer[i][1] );
+						furnace.AddItem( FurnaceResourceTransfer[i][2], FurnaceResourceTransfer[i][3], 0 );
+					}
+				}
+			}
+			return REAL_SECOND( 10 );
+		}
+	}
+	return 0;
+}
+
 import void DIALOG_MENU( Critter& cr, string[] data ) from "gm";
 import void GlobalCellSpawnLo() from "globalmap_group";
 import void lock( Critter& player, int itemId, int complexity, int lockId ) from "debug";
