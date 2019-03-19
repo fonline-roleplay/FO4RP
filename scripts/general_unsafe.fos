@@ -9,6 +9,31 @@ import bool AddAttackPlane( Critter& npc, uint priority, Critter& target, bool r
 import bool AddWalkPlane( Critter& npc, uint priority, uint16 hexX, uint16 hexY, uint8 dir, bool run, uint cut ) from "npc_planes";
 import void Actions( Critter& cr, uint8 actionType, uint16 pickType ) from "context_callback";
 
+void unsafe_GM_stop( Critter& player, int radius, int delay, int, string@, int[]@ coord )
+{
+	if( player.GetAccess() < ACCESS_MODER ) 
+		return;
+	
+	int x = coord[0];
+	int y = coord[1];
+	
+	radius = CLAMP( radius, 1, 40 );
+	delay = CLAMP( delay, 1, 50 );
+	
+	Map@ map = player.GetMap();
+	
+	Critter@[] crs;	
+	uint count = map.GetCrittersHex( x, y, radius, FIND_LIFE, crs );
+	
+	for( uint i = 0; i < count; i++ )
+	{
+		crs[i].StatBase[ ST_CURRENT_AP ] = -100 * delay;
+		crs[i].Wait( 1000 );
+	}
+	
+	player.Say( SAY_NETMSG, "Вы остановили " + count + " существ." );
+}
+
 void unsafe_radioHead( Critter& cr, int, int, int, string@, int[]@ ){
 	if( cr.CountItem( PID_RADIO ) > 0 )
 		cr.Say( SAY_EMOTE_ON_HEAD, "говорит в рацию" );
@@ -1262,30 +1287,52 @@ void unsafe_say( Critter& player, int param0, int param1, int param2, string@ pa
     say( player, param0, param1, 0 );
 }
 
-void unsafe_sleep( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string@ param3, int[] @ param4 )
 {
-    if( !valid( player ) )
-        return;
-    if( !player.IsDead() && !player.IsKnockout() && player.GetTimeEvents( CTE_WARNING, null, null, null ) == 0 )
+	if( player.IsBusy() && isRemote == 0 )
+	{
+		return;
+	}
+	
+	if( player.IsDead() )
+	{
+		player.ParamBase[ CR_SLEEPING_STATE ] = 0;
+		player.EraseTimeEvents( CTE_SLEEPING );
+		return;
+	}
+
+    if( player.IsKnockout() && player.GetTimeEvents( CTE_SLEEPING, null, null, null ) != 0 )
     {
-        player.StatBase[ ST_CURRENT_AP ] = -100000;
-        player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( param0 == 0 ) ), 5, player.HexX, player.HexY );
-        player.Say( SAY_NETMSG, "вы упали." );
-        player.AddTimeEvent( "cte_sleep", 0, CTE_WARNING, 0 );
-        return;
-    }
-    else if( !player.IsDead() && player.IsKnockout() && player.GetTimeEvents( CTE_WARNING, null, null, null ) != 0 )
-    {
+		if( player.Param[ CR_SLEEPING_STATE ] == 3 && isRemote == 0 )
+		{
+			player.Say( SAY_NETMSG, "Вы не в силах подняться." );
+			return;
+		}
+		player.ParamBase[ CR_SLEEPING_STATE ] = 0;
         player.StatBase[ ST_CURRENT_AP ] = 0;
-        player.EraseTimeEvents( CTE_WARNING );
-        player.Say( SAY_NETMSG, "вы поднимаетесь." );
-        return;
+        player.EraseTimeEvents( CTE_SLEEPING );
+        player.Say( SAY_NETMSG, "Вы поднимаетесь." );
+		return;
     }
 
+	if( !player.IsKnockout() && player.GetTimeEvents( CTE_SLEEPING, null, null, null ) == 0 )
+    {
+        player.StatBase[ ST_CURRENT_AP ] = -100000;
+        player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( isBack == 0 ) ), 5, player.HexX, player.HexY );
+        player.Say( SAY_NETMSG, "Вы упали." );
+        player.AddTimeEvent( "cte_sleep", 0, CTE_SLEEPING, 0 );
+		player.ParamBase[ CR_SLEEPING_STATE ] = 1 + isBack;
+		if( isRemote == 1 )
+			player.ParamBase[ CR_SLEEPING_STATE ] = 3;
+		return;
+    }
 }
 
 uint cte_sleep( Critter& player, int identifier, uint& rate )
 {
+	if( player.GetTimeEvents( CTE_WARNING, null, null, null ) != 0 )
+		player.EraseTimeEvents( CTE_WARNING ); //temporary
+	
     if( player.StatBase[ ST_CURRENT_AP ] >= -50000 )
         player.StatBase[ ST_CURRENT_AP ] = -100000;
     return 100;
