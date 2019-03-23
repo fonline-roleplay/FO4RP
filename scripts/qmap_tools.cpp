@@ -1,3 +1,6 @@
+#ifndef QMAP_TOOLS
+#define QMAP_TOOLS
+
 #include "qmap_tools.h"
 
 inline bool DMO64_ChechDataSize( ScriptArray* array, uint tile )
@@ -342,3 +345,5 @@ void RegisterQmapTools( asIScriptEngine* engine, bool compiler )
     if( compiler )
         return;
 }
+
+#endif

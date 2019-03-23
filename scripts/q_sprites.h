@@ -11,8 +11,20 @@
 #include "fonline.h"
 #pragma warning (pop)
 
-void ClearAllTiles();
 
-void RegisterNativeSprites( asIScriptEngine* engine, bool compiler );
+#ifdef Q_SPRITES
+	#include "revenge.h"
+	
+	void ClearAllTiles();
+
+	void RegisterNativeSprites( asIScriptEngine* engine, bool compiler );
+#endif
+
+#ifndef Q_SPRITES
+
+	extern 	void ClearAllTiles();
+	extern	void RegisterNativeSprites( asIScriptEngine* engine, bool compiler );
+	
+#endif
 
 #endif
