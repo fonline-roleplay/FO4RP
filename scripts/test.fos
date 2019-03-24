@@ -399,6 +399,8 @@ uint e_FurnaceBurn( uint[]@ values )
 
 import void DIALOG_MENU( Critter& cr, string[] data ) from "gm";
 import void GlobalCellSpawnLo() from "globalmap_group";
+import void GlobalCellGatherLo( Critter& player ) from "globalmap_group";
+import bool SpawnItemCell( uint mapId ) from "local_population";
 import void lock( Critter& player, int itemId, int complexity, int lockId ) from "debug";
 //import uint EraseAttackPlane( Critter& npc, Critter& target ) from "npc_planes"; //Вот хуй проссыт, где он откопал другое объявление..
 
@@ -725,7 +727,6 @@ bool _test_skin_talk( Critter& npc, Critter& player, bool attach, uint talkCount
 	return false;
 }
 
-
 void LootingTimelapse( Critter& player, int param0, int param1, int param2 )
 {
 	Map@ map = player.GetMap();
@@ -769,15 +770,28 @@ void LootingTimelapse( Critter& player, int param0, int param1, int param2 )
 void answer_LootingTimelapse( Critter& cr, uint answerI, string& answerS )
 {
 	GameVar@ style = GetGlobalVar( GVAR_LootingStyle );
-	if( valid(style) && style.GetValue() > 0 ) style.opAssign ( answerI );
+	if( valid(style) ) style.opAssign ( answerI );
 
 	cr.Say( SAY_EMOTE, "использует машину времени" );
 	for( uint time = 0; time < 10; time++ )
 	{
-		GlobalCellSpawnLo();
-		FastLoot( cr, cr.ParamBase[ CR_VAL0 ], cr.ParamBase[ CR_VAL1 ], cr.ParamBase[ CR_VAL2 ] );
+		uint[] data = { 0, cr.Id };
+		CreateTimeEvent( __FullSecond + REAL_SECOND(time*4), "e_GlobalRespawn", data, true );
 	}
-	cr.Say( SAY_NETMSG, "Итого, за 10 суток, т.е. 30 игровых часов, можно налутать следующее [экипировка, наркота, прочее]:" );
+
+	uint[] data = { cr.Id };
+	CreateTimeEvent( __FullSecond + REAL_SECOND(46), "e_GlobalResults", data, true );
+}
+
+uint e_GlobalResults( uint[] @ values )
+{
+	if( !valid(values) || values.length()!=1 || values[0]==0 )
+		return 0;
+	
+	Critter@ cr = GetCritter( values[0] );
+	if(!valid(cr)) return 0;
+	
+	cr.Say( SAY_NETMSG, "Итого, за 10 игровых суток, т.е. " + (10*24/__TimeMultiplier) + " ИРЛ часов, можно налутать следующее [экипировка, наркота, прочее]:" );
 	CheckLoot( cr, cr.ParamBase[ CR_VAL0 ], 0, 0 );
 	CheckLoot( cr, cr.ParamBase[ CR_VAL1 ], 0, 0 );
 	CheckLoot( cr, cr.ParamBase[ CR_VAL2 ], 0, 0 );
@@ -790,52 +804,32 @@ void answer_LootingTimelapse( Critter& cr, uint answerI, string& answerS )
 
 	@storage = GetItem( cr.ParamBase[ CR_VAL2 ] );
 	if(valid(storage)) storage.LockerOpen();
-}
-
-void PlayerLooting( Critter& player, Map& map )
-{
-	Item@[] container, loot;
-	map.GetItemsByType( ITEM_TYPE_CONTAINER, container );
-	uint len = container.length();
-
-	int locked = 0;
-	for( uint i = 0; i < len; i++ )
-	{
-		if( !FLAG( container[i].LockerCondition, LOCKER_LOCKED ) )
-		{
-			container[i].GetItems( uint(-1), loot );
-			MoveItems( loot, player );
-			loot.resize(0);
-		}
-		else locked++;
-	}
-	player.Say( SAY_NETMSG, "Вы облутали " + len + " контейнеров, кроме " + locked + " приватных." );
-}
 	
-void FastLoot( Critter& player, int param0, int param1, int param2 )
+	cr.ParamBase[ CR_VAL3 ] = 0; //Выключаем режим "Лутать весь мир"
+	
+	DifferLoot( cr, cr.ParamBase[ CR_VAL0 ], cr.ParamBase[ CR_VAL1 ], cr.ParamBase[ CR_VAL2 ] );
+	return 0;
+}
+
+uint e_GlobalRespawn( uint[] @ values )
 {
-    Map@ map = player.GetMap();
-	if( player.ParamBase[ CR_VAL3 ] != 0 )
+	if( valid(values) && values.length() == 2 && values[1] != 0 )
 	{
-		Location@ loc;
-		for( uint i = 13; i < 26; i++ ) //Все карты Саттера
+		if( values[0] < 1 )
 		{
-			@loc = GetLocation( i );
-			if( !valid( loc ) ) continue;
-			@map = loc.GetMapByIndex( 0 );
-			if( !valid( map ) ) continue;
-			
-			PlayerLooting( player, map );
+			GlobalCellSpawnLo();
+			values[0]++;
+			return REAL_SECOND(2);
+		}
+		if( values[0] == 1 )
+		{
+			Critter@ cr = GetCritter( values[1] );
+			if( valid( cr ) )
+				GlobalCellGatherLo( cr );
+			return 0;
 		}
 	}
-	else
-	{
-		if( !valid(map) ) { player.Say( SAY_NETMSG, "На глобале нельзя!" ); return; }
-		PlayerLooting( player, map );
-	}
-
-	if( param0 != 0 && param1 != 0 && param2 != 0 )
-		DifferLoot( player, param0, param1, param2 );
+    return 0;
 }
 
 void CountUnstackables( Critter& player, int param0, int param1, int param2 )
@@ -992,6 +986,116 @@ void DifferLoot( Critter& player, int param0, int param1, int param2 )
 						"\n3) Остальное x" + c3 + " на " + p3 + "$" +
 						"\n Итого x" + allc + " объектов на сумму в " + allp + "$");
 }
+
+//Сегмент с грязным ненужным кодом старой версии "машины времени":
+void PlayerLooting( Critter& player, Map& map )
+{
+	Item@[] container, loot;
+	map.GetItemsByType( ITEM_TYPE_CONTAINER, container );
+	uint len = container.length();
+
+	int locked = 0;
+	for( uint i = 0; i < len; i++ )
+	{
+		if( !FLAG( container[i].LockerCondition, LOCKER_LOCKED ) )
+		{
+			container[i].GetItems( uint(-1), loot );
+			MoveItems( loot, player );
+			loot.resize(0);
+		}
+		else locked++;
+	}
+	player.Say( SAY_NETMSG, "Вы облутали " + len + " контейнеров, кроме " + locked + " приватных." );
+}
+
+void FastRegen( Critter& player, int mode, int times, int style )
+{
+	Map@ map = player.GetMap();
+	if(!valid(map)) return;
+	
+	GameVar@ styleVar = GetGlobalVar( GVAR_LootingStyle );
+	if( valid(styleVar) ) styleVar.opAssign ( style );
+
+	if( times <= 0 )
+		times == 1;
+	
+	for( uint i = 0; i < times; i++ )
+	{
+		bool looting = ( mode % 100 ) / 10 == 1;
+		uint[] data = { map.Id, looting ? 0 : -1, player.Id };
+		CreateTimeEvent( __FullSecond + REAL_SECOND(i*2), "e_generateLoot", data, true );
+	}
+	
+	bool checking = ( mode % 10 ) == 1;
+	if( checking )
+	{
+		uint[] data = { player.Id };
+		CreateTimeEvent( __FullSecond + REAL_SECOND(times*2 + 2), "e_checkLoot", data, true );
+	}
+		
+	player.Say( SAY_NETMSG, "Fast regen done." );
+}
+
+uint e_checkLoot( uint[] @ values )
+{
+	if( valid(values) && values.length() == 1 && values[0] != 0 )
+	{
+		Critter@ player = GetCritter( values[0] );
+		if( valid( player ) )
+			CheckLoot( player, 0, 0, 0 );
+	}
+	return 0;
+}
+
+uint e_generateLoot( uint[] @ values )
+{
+	if( valid(values) && values.length() == 3 && values[0] != 0 && values[2] != 0 )
+	{
+		if( values[1] < 1 )
+		{
+			SpawnItemCell( values[0] );
+			values[1]++;
+			return REAL_SECOND(1);
+		}
+		if( values[1] == 1 )
+		{
+			Critter@ player = GetCritter( values[2] );
+			if( valid( player ) )
+				FastLoot( player, 0, 0, 0 );
+			return 0;
+		}
+	}
+    return 0;
+}
+	
+void FastLoot( Critter& player, int param0, int param1, int param2 )
+{
+    Map@ map = player.GetMap();
+	if( player.ParamBase[ CR_VAL3 ] != 0 )
+	{
+		Location@ loc;
+		for( uint i = 13; i < 26; i++ ) //Все карты Саттера
+		{
+			@loc = GetLocation( i );
+			if( !valid( loc ) ) continue;
+			@map = loc.GetMapByIndex( 0 );
+			if( !valid( map ) ) continue;
+			
+			player.Say( SAY_NETMSG, i +" ) Залутана карта №" + map.Id );
+			PlayerLooting( player, map );
+		}
+		player.Say( SAY_NETMSG, "Залутан мир." );
+	}
+	else
+	{
+		if( !valid(map) ) { player.Say( SAY_NETMSG, "На глобале нельзя!" ); return; }
+		PlayerLooting( player, map );
+	}
+
+	if( param0 != 0 && param1 != 0 && param2 != 0 )
+		DifferLoot( player, param0, param1, param2 );
+}
+//Конец сегмента с грязным ненужным кодом старой версии машины времени.
 
 void unsafe_rolling( Critter& cr, int p0, int p1, int p2, string@, int[]@ )
 {
