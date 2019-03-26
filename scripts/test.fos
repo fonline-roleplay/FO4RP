@@ -4,6 +4,217 @@
 #include "_macros.fos"
 #include "_colors.fos"
 
+import void GM_PANNEL_ITEM( Critter& player, int itemId, int param1, int param2, string@ param3, int[] @ param4 ) from "gm";
+
+void FindItem( Critter& player, int id, int action, int p2 )
+{
+	if( id == 0 || p2 != 0 )
+	{
+		player.Say( SAY_NETMSG, "Функция поиска предмета.\nСинтаксис вызова: id целевого объекта, action, 0.\nТипы action: 0 (вывести инфу), 1 (переместиться к объекту), 2 (взять объект), 3 (отГМить объект)." );
+		return;
+	}
+	Item@ target = GetItem( id );
+	if( !valid(target) )
+	{
+		player.Say( SAY_NETMSG, "Объект не найден!" );
+		return;
+	}
+	string info;
+	switch( action )
+	{
+		case( 0 ):
+			info = "Объкт №" + target.Id + ":" + target.GetProtoId() + " находится ";
+			switch( target.Accessory )
+			{
+				case( ACCESSORY_NONE ): info += "в нигде"; break;
+				case( ACCESSORY_CRITTER ): info += "у криттера №" + target.CritId + " в слоте №" + target.CritSlot; break;
+				case( ACCESSORY_HEX ): info += "на карте №" + target.MapId + " в позиции (" + target.HexX + ", " + target.HexY + ")"; break;
+				case( ACCESSORY_CONTAINER ): info += "внутри контейнера №" + target.ContainerId; break;
+				default: info += "в нигде"; break;
+			}
+			player.Say( SAY_NETMSG, info + "." );
+		break;
+		case( 1 ):
+			switch( target.Accessory )
+			{
+				case( ACCESSORY_CRITTER ): TeleToTarget( player, GetCritter( target.CritId ) ); break;
+				case( ACCESSORY_CONTAINER ): @target = GetItem( target.ContainerId );
+				case( ACCESSORY_HEX ): TeleToTarget( player, target ); break;
+				default: player.Say( SAY_NETMSG, "Из этого ничего не вышло." ); break;
+			}
+		break;
+		case( 2 ): MoveItem( target, target.GetCount(), player ); break;
+		case( 3 ): GM_PANNEL_ITEM( player, target.Id, 0, 0, null, null ); break;
+		default: player.Say( SAY_NETMSG, "Из этого ничего не вышло." );
+	}
+}
+
+void TeleToTarget( Critter& player, Critter@ target )
+{
+	Map@ map = target.GetMap();
+	if(!valid(map)) return;
+	TeleToTarget( player, map, target.HexX, target.HexY );
+}
+
+void TeleToTarget( Critter& player, Item@ target )
+{
+	Map@ map = GetMap( target.MapId );
+	if(!valid(map)) return;
+	TeleToTarget( player, map, target.HexX, target.HexY );
+}
+
+void TeleToTarget( Critter& player, Map@ map, uint16 x, uint16 y )
+{
+	bool success = false;
+
+	if(!valid(map))
+	{
+		player.Say( SAY_NETMSG, "Карта недоступна!" );
+		return;
+	}
+
+	for( int dx = -1; dx < 2; dx++ )
+		for( int dy = -1; dy < 2; dy++ )
+			if( map.IsHexPassed( x + dx, y + dy ) )
+			{
+				player.TransitToMap ( map.Id, x + dx, y + dy, player.Dir, false );
+				success = true;
+				break;
+			}
+	
+	if( success )
+		player.Say( SAY_NETMSG, "Вы переместились к цели." );
+	else
+		player.Say( SAY_NETMSG, "Вы не смогли переместиться к цели." );
+}
+
+void unsafe_shout_all( Critter& cr, int isGM, int, int, string@ message, int[]@ )
+{
+	uint dist = ( isGM == 1 ? 999 : cr.Stat[ ST_STRENGTH ] * 10 );
+
+	Map@ map = cr.GetMap();
+	if(!valid(map)) return;
+	
+	Critter@[] crs;
+	uint count = map.GetCrittersHex(cr.HexX, cr.HexY, dist, FIND_ALL, crs);
+
+    Critter@[] seeing;
+	Critter@[] source = { cr };
+	uint count2 = map.GetCrittersSeeing( source, true, FIND_ALL | FIND_ONLY_PLAYERS, seeing );
+
+	for( uint i = 0; i < count; i++ )
+	{
+		for( uint j = 0; j < count2; j++ )
+			if( crs[i].Id == seeing[j].Id )
+			{
+				i++;
+				break;
+			}
+			
+		uint dist = GetDistantion( cr.HexX, cr.HexY, crs[i].HexX, crs[i].HexY );
+		if( dist <= crs[i].Stat[ ST_PERCEPTION ] * 10 )
+			crs[i].Say( SAY_NETMSG, "???: |0x00FF0000 " + strupr( message ) );
+	}
+}
+
+void unsafe_setCombatState( Critter& cr, int state, int, int, string@, int[]@ )
+{
+	if( state == 1 && cr.GetTimeEvents( CTE_AGGRESSION, null, null, null ) == 0 ) {
+		cr.AddTimeEvent( "cte_aggression", REAL_SECOND( 3 ), CTE_AGGRESSION );
+		if ( cr.Stat[ ST_BODY_TYPE ] == BT_ROBOT || cr.Stat[ ST_BODY_TYPE ] == BT_PLANT )
+		{
+			//ничего
+		}
+		else if( cr.Stat[ ST_BODY_TYPE ] == BT_MANTI || cr.Stat[ ST_BODY_TYPE ] == BT_RADSCORPION || cr.Stat[ ST_BODY_TYPE ] == BT_GIANT_ANT ) 
+			cr.Say( SAY_EMOTE_ON_HEAD, "угрожающе стрекочет" ); 
+		else if( cr.Stat[ ST_BODY_TYPE ] >= BT_BRAHMIN && cr.Stat[ ST_BODY_TYPE ] <= MAX_BODY_TYPES ) 
+			cr.Say( SAY_EMOTE_ON_HEAD, "скалится" ); 
+		else
+			cr.Say( SAY_EMOTE_ON_HEAD, "прищурил" + ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? "ся" : "ась" ) );
+	
+	}
+	if( state == 0 ) {
+		if( cr.ParamBase[ CR_IS_AGGRESSIVE ] > 1 )
+			cr.Say( SAY_EMOTE_ON_HEAD, "успокаивается" );
+		cr.EraseTimeEvents( CTE_AGGRESSION );
+	}
+	cr.ParamBase[ CR_IS_AGGRESSIVE ] = state;
+}
+
+uint cte_aggression( Critter& cr, int identifier, uint& rate )
+{
+	cr.ParamBase[ CR_IS_AGGRESSIVE ] = 2;
+	
+	if( cr.Timeout[ TO_BATTLE ] > 0 ) return 0;
+	
+	string[][] emote = { //GENDER_MALE == 0 || GENDER_FEMALE == 1 
+		{ "напряжен", "напряжена" }, //40%
+		{ "выглядит угрожающе", "выглядит угрожающе"}, //30%
+		{ "озирается", "озирается" }, //20%
+		{ "хищно ухмыляется", "хищно ухмыляется"}, //3%
+		{ "ищет жертву взглядом", "ищет жертву взглядом" }, //3%
+		{ "скрипит зубами", "скрипит зубами" } //3%
+	};
+	
+	uint[] grade = { 40, 30, 20, 3, 3, 3 };
+	
+	if( grade.length() != emote.length() )
+		return 0;
+	
+	uint i, maxval = 0;
+	for( i = 0; i < grade.length(); i++ )
+		maxval += grade[i];
+		
+	uint roll = Random( 0, maxval );
+	for( i = 0; i < grade.length(); i++ )
+		if( roll <= grade[i] )
+			break;
+		else
+			roll -= grade[i];
+			
+	cr.Say( SAY_EMOTE, emote[CLAMP(i, 0, rate)][cr.Stat[ ST_GENDER ]] );
+	
+	if( rate < emote.length() ) rate++;
+	
+	return REAL_SECOND( Random( 3, 9 ) );
+}
+
+import uint GetAllPlayers( Critter@[]& crs ) from "manager";
+void unsafe_GM_Hear_Radio( Critter& cr, int, int, int, string@ message, int[]@ )
+{
+	if( cr.CountItem( PID_RADIO ) < 1 )
+		return;
+	
+    Critter@[] crs;
+    GetAllPlayers( crs );
+
+    string str = GetPlayerName(cr.Id) + ": |0xFFFFFFFF .." + message +  "..";
+
+    for( uint i = 0, j = crs.length(); i < j; i++ )
+    {
+        if( crs[ i ] is null or crs[ i ].GetAccess() < ACCESS_MODER )
+            continue;
+		if( crs[i].Id == cr.Id )
+			continue;
+        crs[ i ].Say( SAY_NETMSG, str );
+    }
+}
+
+void unsafe_GM_Hear_Whisper( Critter& cr, int, int, int, string@ message, int[]@ )
+{
+    Critter@[] crs;
+    GetAllPlayers( crs );
+
+    for( uint i = 0, j = crs.length(); i < j; i++ )
+    {
+        if( crs[ i ] is null or crs[ i ].GetAccess() < ACCESS_MODER )
+            continue;
+		if( crs[i].Id == cr.Id )
+			continue;
+        crs[ i ].RunClientScript( "rp_client@__HearWhisper", cr.HexX, cr.HexY, 0, GetPlayerName(cr.Id) + "@" + message, null );
+    }
+}
+
 uint[] _ItemFlags = 
 {
 	ITEM_HIDDEN								,// 0x00000001 )
@@ -272,6 +483,8 @@ uint e_FurnaceBurn( uint[]@ values )
 
 import void DIALOG_MENU( Critter& cr, string[] data ) from "gm";
 import void GlobalCellSpawnLo() from "globalmap_group";
+import void GlobalCellGatherLo( Critter& player ) from "globalmap_group";
+import bool SpawnItemCell( uint mapId ) from "local_population";
 import void lock( Critter& player, int itemId, int complexity, int lockId ) from "debug";
 //import uint EraseAttackPlane( Critter& npc, Critter& target ) from "npc_planes"; //Вот хуй проссыт, где он откопал другое объявление..
 
@@ -598,7 +811,6 @@ bool _test_skin_talk( Critter& npc, Critter& player, bool attach, uint talkCount
 	return false;
 }
 
-
 void LootingTimelapse( Critter& player, int param0, int param1, int param2 )
 {
 	Map@ map = player.GetMap();
@@ -642,15 +854,28 @@ void LootingTimelapse( Critter& player, int param0, int param1, int param2 )
 void answer_LootingTimelapse( Critter& cr, uint answerI, string& answerS )
 {
 	GameVar@ style = GetGlobalVar( GVAR_LootingStyle );
-	if( valid(style) && style.GetValue() > 0 ) style.opAssign ( answerI );
+	if( valid(style) ) style.opAssign ( answerI );
 
 	cr.Say( SAY_EMOTE, "использует машину времени" );
 	for( uint time = 0; time < 10; time++ )
 	{
-		GlobalCellSpawnLo();
-		FastLoot( cr, cr.ParamBase[ CR_VAL0 ], cr.ParamBase[ CR_VAL1 ], cr.ParamBase[ CR_VAL2 ] );
+		uint[] data = { 0, cr.Id };
+		CreateTimeEvent( __FullSecond + REAL_SECOND(time*4), "e_GlobalRespawn", data, true );
 	}
-	cr.Say( SAY_NETMSG, "Итого, за 10 суток, т.е. 30 игровых часов, можно налутать следующее [экипировка, наркота, прочее]:" );
+
+	uint[] data = { cr.Id };
+	CreateTimeEvent( __FullSecond + REAL_SECOND(46), "e_GlobalResults", data, true );
+}
+
+uint e_GlobalResults( uint[] @ values )
+{
+	if( !valid(values) || values.length()!=1 || values[0]==0 )
+		return 0;
+	
+	Critter@ cr = GetCritter( values[0] );
+	if(!valid(cr)) return 0;
+	
+	cr.Say( SAY_NETMSG, "Итого, за 10 игровых суток, т.е. " + (10*24/__TimeMultiplier) + " ИРЛ часов, можно налутать следующее [экипировка, наркота, прочее]:" );
 	CheckLoot( cr, cr.ParamBase[ CR_VAL0 ], 0, 0 );
 	CheckLoot( cr, cr.ParamBase[ CR_VAL1 ], 0, 0 );
 	CheckLoot( cr, cr.ParamBase[ CR_VAL2 ], 0, 0 );
@@ -663,52 +888,32 @@ void answer_LootingTimelapse( Critter& cr, uint answerI, string& answerS )
 
 	@storage = GetItem( cr.ParamBase[ CR_VAL2 ] );
 	if(valid(storage)) storage.LockerOpen();
-}
-
-void PlayerLooting( Critter& player, Map& map )
-{
-	Item@[] container, loot;
-	map.GetItemsByType( ITEM_TYPE_CONTAINER, container );
-	uint len = container.length();
-
-	int locked = 0;
-	for( uint i = 0; i < len; i++ )
-	{
-		if( !FLAG( container[i].LockerCondition, LOCKER_LOCKED ) )
-		{
-			container[i].GetItems( uint(-1), loot );
-			MoveItems( loot, player );
-			loot.resize(0);
-		}
-		else locked++;
-	}
-	player.Say( SAY_NETMSG, "Вы облутали " + len + " контейнеров, кроме " + locked + " приватных." );
-}
 	
-void FastLoot( Critter& player, int param0, int param1, int param2 )
+	cr.ParamBase[ CR_VAL3 ] = 0; //Выключаем режим "Лутать весь мир"
+	
+	DifferLoot( cr, cr.ParamBase[ CR_VAL0 ], cr.ParamBase[ CR_VAL1 ], cr.ParamBase[ CR_VAL2 ] );
+	return 0;
+}
+
+uint e_GlobalRespawn( uint[] @ values )
 {
-    Map@ map = player.GetMap();
-	if( player.ParamBase[ CR_VAL3 ] != 0 )
+	if( valid(values) && values.length() == 2 && values[1] != 0 )
 	{
-		Location@ loc;
-		for( uint i = 13; i < 26; i++ ) //Все карты Саттера
+		if( values[0] < 1 )
 		{
-			@loc = GetLocation( i );
-			if( !valid( loc ) ) continue;
-			@map = loc.GetMapByIndex( 0 );
-			if( !valid( map ) ) continue;
-			
-			PlayerLooting( player, map );
+			GlobalCellSpawnLo();
+			values[0]++;
+			return REAL_SECOND(2);
+		}
+		if( values[0] == 1 )
+		{
+			Critter@ cr = GetCritter( values[1] );
+			if( valid( cr ) )
+				GlobalCellGatherLo( cr );
+			return 0;
 		}
 	}
-	else
-	{
-		if( !valid(map) ) { player.Say( SAY_NETMSG, "На глобале нельзя!" ); return; }
-		PlayerLooting( player, map );
-	}
-
-	if( param0 != 0 && param1 != 0 && param2 != 0 )
-		DifferLoot( player, param0, param1, param2 );
+    return 0;
 }
 
 void CountUnstackables( Critter& player, int param0, int param1, int param2 )
@@ -866,9 +1071,130 @@ void DifferLoot( Critter& player, int param0, int param1, int param2 )
 						"\n Итого x" + allc + " объектов на сумму в " + allp + "$");
 }
 
+//Сегмент с грязным ненужным кодом старой версии "машины времени":
+void PlayerLooting( Critter& player, Map& map )
+{
+	Item@[] container, loot;
+	map.GetItemsByType( ITEM_TYPE_CONTAINER, container );
+	uint len = container.length();
+
+	int locked = 0;
+	for( uint i = 0; i < len; i++ )
+	{
+		if( !FLAG( container[i].LockerCondition, LOCKER_LOCKED ) )
+		{
+			container[i].GetItems( uint(-1), loot );
+			MoveItems( loot, player );
+			loot.resize(0);
+		}
+		else locked++;
+	}
+	player.Say( SAY_NETMSG, "Вы облутали " + len + " контейнеров, кроме " + locked + " приватных." );
+}
+
+void FastRegen( Critter& player, int mode, int times, int style )
+{
+	Map@ map = player.GetMap();
+	if(!valid(map)) return;
+	
+	GameVar@ styleVar = GetGlobalVar( GVAR_LootingStyle );
+	if( valid(styleVar) ) styleVar.opAssign ( style );
+
+	if( times <= 0 )
+		times == 1;
+	
+	for( uint i = 0; i < times; i++ )
+	{
+		bool looting = ( mode % 100 ) / 10 == 1;
+		uint[] data = { map.Id, looting ? 0 : -1, player.Id };
+		CreateTimeEvent( __FullSecond + REAL_SECOND(i*2), "e_generateLoot", data, true );
+	}
+	
+	bool checking = ( mode % 10 ) == 1;
+	if( checking )
+	{
+		uint[] data = { player.Id };
+		CreateTimeEvent( __FullSecond + REAL_SECOND(times*2 + 2), "e_checkLoot", data, true );
+	}
+		
+	player.Say( SAY_NETMSG, "Fast regen done." );
+}
+
+uint e_checkLoot( uint[] @ values )
+{
+	if( valid(values) && values.length() == 1 && values[0] != 0 )
+	{
+		Critter@ player = GetCritter( values[0] );
+		if( valid( player ) )
+			CheckLoot( player, 0, 0, 0 );
+	}
+	return 0;
+}
+
+uint e_generateLoot( uint[] @ values )
+{
+	if( valid(values) && values.length() == 3 && values[0] != 0 && values[2] != 0 )
+	{
+		if( values[1] < 1 )
+		{
+			SpawnItemCell( values[0] );
+			values[1]++;
+			return REAL_SECOND(1);
+		}
+		if( values[1] == 1 )
+		{
+			Critter@ player = GetCritter( values[2] );
+			if( valid( player ) )
+				FastLoot( player, 0, 0, 0 );
+			return 0;
+		}
+	}
+    return 0;
+}
+	
+void FastLoot( Critter& player, int param0, int param1, int param2 )
+{
+    Map@ map = player.GetMap();
+	if( player.ParamBase[ CR_VAL3 ] != 0 )
+	{
+		Location@ loc;
+		for( uint i = 13; i < 26; i++ ) //Все карты Саттера
+		{
+			@loc = GetLocation( i );
+			if( !valid( loc ) ) continue;
+			@map = loc.GetMapByIndex( 0 );
+			if( !valid( map ) ) continue;
+			
+			player.Say( SAY_NETMSG, i +" ) Залутана карта №" + map.Id );
+			PlayerLooting( player, map );
+		}
+		player.Say( SAY_NETMSG, "Залутан мир." );
+	}
+	else
+	{
+		if( !valid(map) ) { player.Say( SAY_NETMSG, "На глобале нельзя!" ); return; }
+		PlayerLooting( player, map );
+	}
+
+	if( param0 != 0 && param1 != 0 && param2 != 0 )
+		DifferLoot( player, param0, param1, param2 );
+}
+//Конец сегмента с грязным ненужным кодом старой версии машины времени.
+
 void unsafe_rolling( Critter& cr, int p0, int p1, int p2, string@, int[]@ )
 {
 	Roll( cr, p0, p1, p2 );
+}
+
+void unsafe_rolling_GM( Critter& gm, int p0, int p1, int p2, string@, int[]@ vals )
+{
+	if( !valid(vals) || vals.length() != 4 )
+		return;
+	
+	Critter@ cr = GetCritter( vals[3] );
+	if(!valid(cr)) return;
+	
+	Roll( cr, vals[0], vals[1], vals[2] );
 }
 
 void Roll( Critter& cr, int stat, int n, int val )
