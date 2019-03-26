@@ -1,3 +1,6 @@
+#ifndef MAIN
+#define MAIN
+
 #include "fonline_tnf.h"
 
 // Extern data definition
@@ -18,6 +21,7 @@ EXPORT int getParam_Hp( CritterMutual & cr, uint );
 EXPORT int getParam_MaxLife( CritterMutual & cr, uint );
 EXPORT int getParam_MaxAp( CritterMutual & cr, uint );
 EXPORT int getParam_Ap( CritterMutual & cr, uint );
+EXPORT int getParam_RegenAp( CritterMutual & cr, uint );
 EXPORT int getParam_MaxMoveAp( CritterMutual & cr, uint );
 EXPORT int getParam_MoveAp( CritterMutual & cr, uint );
 EXPORT int getParam_MaxWeight( CritterMutual & cr, uint );
@@ -76,9 +80,9 @@ EXPORT void Critter_GetIp( Critter& cr, ScriptArray* array );
 #include "revenge.h"
 
 #ifdef __CLIENT
-# include "q_sprites.h"
 
-# include <windows.h>
+
+#include <Windows.h>
 
 bool CBPaste( ScriptString& str )
 {
@@ -131,7 +135,7 @@ uint GetHardware()
 
 #endif
 
-#include "qmap_tools.h"
+
 
 #ifdef __SERVER
 void RunClientScript( Critter* cr, ScriptString* funcName, int p0, int p1, int p2, ScriptString* p3, ScriptArray* p4 )
@@ -226,10 +230,12 @@ void __attribute__( ( destructor ) )  DllUnload() {}
 FONLINE_DLL_ENTRY( isCompiler )
 {
     #ifdef __CLIENT
-    RegisterNativeSprites( ASEngine, isCompiler );
+   RegisterNativeSprites( ASEngine, isCompiler );
 
     ASEngine->RegisterGlobalFunction( "bool CBPaste(string&)", asFUNCTION( CBPaste ), asCALL_CDECL );
     ASEngine->RegisterGlobalFunction( "uint GetHardware()", asFUNCTION( GetHardware ), asCALL_CDECL );
+	ASEngine->RegisterGlobalFunction("uint GetUseApCost(CritterCl&, ItemCl&, uint8)", asFUNCTION(GetUseApCost), asCALL_CDECL);
+    ASEngine->RegisterGlobalFunction("uint GetAttackDistantion(CritterCl&, ItemCl&, uint8)", asFUNCTION(GetAttackDistantion), asCALL_CDECL);
     #endif
 
     RegisterQmapTools( ASEngine, isCompiler );
@@ -238,6 +244,8 @@ FONLINE_DLL_ENTRY( isCompiler )
     // ASEngine->RegisterObjectMethod("Critter", "void RunClientScript2(string& funcName, int p0, int p1, int p2, string@+ p3, int[]@+ p4)", asFUNCTION(RunClientScript), asCALL_CDECL_OBJFIRST);
     ASEngine->RegisterGlobalFunction( "void AddStartCallback(string&, string&)", asFUNCTION( AddStartCallback ), asCALL_CDECL );
     ASEngine->RegisterGlobalFunction( "void CallStartCallbacks()", asFUNCTION( CallStartCallbacks ), asCALL_CDECL );
+	ASEngine->RegisterGlobalFunction("uint GetUseApCost(Critter&, Item&, uint8)", asFUNCTION(GetUseApCost), asCALL_CDECL);
+    ASEngine->RegisterGlobalFunction("uint GetAttackDistantion(Critter&, Item&, uint8)", asFUNCTION(GetAttackDistantion), asCALL_CDECL);
     #endif
 
     if( isCompiler )
@@ -268,6 +276,13 @@ FONLINE_DLL_ENTRY( isCompiler )
         REGISTER_GLOBAL_VAR( uint, HitAimArms );
         REGISTER_GLOBAL_VAR( uint, HitAimLegs );
     }
+	
+	// #ifdef __CLIENT
+		// else
+		// if
+		// (!strcmp("__CurrentAim", name))
+			// ClientGlobals.__CurrentAim = (uint8*)ptr;
+	// #endif
 }
 
 /************************************************************************/
@@ -353,7 +368,7 @@ EXPORT int getParam_MaxLife( CritterMutual& cr, uint )
 
 EXPORT int getParam_MaxAp( CritterMutual& cr, uint )
 {
-    int val = cr.Params[ ST_ACTION_POINTS ] + cr.Params[ ST_ACTION_POINTS_EXT ] + getParam_Agility( cr, 0 ) / 2;
+    int val = cr.Params[ ST_ACTION_POINTS ] + cr.Params[ ST_ACTION_POINTS_EXT ]; // + getParam_Agility( cr, 0 ) / 2;
     return CLAMP( val, 1, 9999 );
 }
 
@@ -362,6 +377,12 @@ EXPORT int getParam_Ap( CritterMutual& cr, uint )
     int val = cr.Params[ ST_CURRENT_AP ];
     val /= AP_DIVIDER;
     return CLAMP( val, -9999, 9999 );
+}
+
+EXPORT int getParam_RegenAp( CritterMutual& cr, uint )
+{
+	float val = cr.Params[ST_APREGEN] + (cr.Params[ST_AGILITY] * APREGEN_PER_AGI) + APREGEN_BASE;
+    return val;
 }
 
 EXPORT int getParam_MaxMoveAp( CritterMutual& cr, uint )
@@ -695,46 +716,109 @@ uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode )
 {
     uint8 use = mode & 0xF;
     uint8 aim = mode >> 4;
-    int   apCost = 1;
+	
+	// #ifdef __CLIENT // We will need this if we ever get to autoaim feature.
+	// if(aim == 0 && item.Proto->Weapon_Aim[use])
+		// if(!cr.Params[TRAIT_FAST_SHOT])
+			// aim = *ClientGlobals.__CurrentAim;
+	// #endif
+    // int   apCost = 1; // Commended the line, because our AP is not default 1 anymoar.
+	float apCost = 1;
 
-    if( use == USE_USE )
-    {
-        if( TB_BATTLE_TIMEOUT_CHECK( getParam_Timeout( cr, TO_BATTLE ) ) )
-            apCost = FOnline->TbApCostUseItem;
-        else
-            apCost = FOnline->RtApCostUseItem;
-    }
-    else if( use == USE_RELOAD )
-    {
-        if( TB_BATTLE_TIMEOUT_CHECK( getParam_Timeout( cr, TO_BATTLE ) ) )
-            apCost = FOnline->TbApCostReloadWeapon;
-        else
-            apCost = FOnline->RtApCostReloadWeapon;
+	if(use == USE_USE)
+	{
+		apCost = (item.Proto->Item_UseAp == 0 ? FOnline->RtApCostUseItem : item.Proto->Item_UseAp);
+		// Character perks for Use actions
+		if(cr.Params[PE_QUICK_POCKETS]) apCost = apCost*QUICK_POCKETS_AP_MUL;
+	}
+	else if(use == USE_RELOAD)
+	{
+		apCost = (item.Proto->Weapon_ReloadAp == 0 ? FOnline->RtApCostReloadWeapon : item.Proto->Weapon_ReloadAp);
+		
+		// Character perks for Reload actions
+		if(item.IsWeapon() && cr.Params[PE_QUICK_POCKETS]) apCost = apCost*QUICK_POCKETS_AP_MUL;
+		// Item perks for Reload actions
+		if(item.IsWeapon() && item.Proto->Weapon_Perk == WEAPON_PERK_FAST_RELOAD) apCost = apCost*FAST_RELOAD_AP_MUL;
+	}
+	else if(use >= USE_PRIMARY && use <= USE_THIRD && item.IsWeapon())
+	{
+		int skill = item.Proto->Weapon_Skill[use];
+		bool hthAttack = Item_Weapon_IsHtHAttack(item, mode);
+		bool rangedAttack = Item_Weapon_IsRangedAttack(item, mode);
+		bool isBurst = (item.Proto->Weapon_Round[use] > 1);
 
-        if( item.IsWeapon() && item.Proto->Weapon_Perk == WEAPON_PERK_FAST_RELOAD )
-            apCost--;
-    }
-    else if( use >= USE_PRIMARY && use <= USE_THIRD && item.IsWeapon() )
-    {
-        int  skill = item.Proto->Weapon_Skill[ use ];
-        bool hthAttack = Item_Weapon_IsHtHAttack( item, mode );
-        bool rangedAttack = Item_Weapon_IsRangedAttack( item, mode );
+		apCost = item.Proto->Weapon_ApCost[use];
 
-        apCost = item.Proto->Weapon_ApCost[ use ];
-        if( aim )
-            apCost += GetAimApCost( aim );
-        if( hthAttack && cr.Params[ PE_BONUS_HTH_ATTACKS ] )
-            apCost--;
-        if( rangedAttack && cr.Params[ PE_BONUS_RATE_OF_FIRE ] )
-            apCost--;
-        if( cr.Params[ TRAIT_FAST_SHOT ] && !hthAttack )
-            apCost--;
-    }
+		if(aim)
+		{
+			apCost += (apCost*GetAimApCost(aim))/100;
+		}
 
-    if( apCost < 1 )
-        apCost = 1;
-    return apCost;
+		//if(hthAttack && cr.Params[PE_BONUS_HTH_ATTACKS]) apCost = apCost*BHTH_AP_MUL;
+
+		if(cr.Params[PE_BONUS_RATE_OF_FIRE]) apCost = apCost*BROF_AP_MUL;
+
+		if(rangedAttack)
+		{
+
+			if(cr.Params[TRAIT_FAST_SHOT] && !hthAttack) 
+			{
+				//if(item.WeapIsCanAim(use))
+				//{
+					apCost = apCost*FAST_SHOT_AP_MUL;
+				//	if(FLAG(item.Proto->Flags,ITEM_TWO_HANDS)) apCost -= apCost*0.15;
+				//}
+			}
+
+			// if(cr.Params[TRAIT_SNIPER])
+			// {
+
+				// if(isBurst) apCost = apCost*SNIPER_AP_MUL;
+				// else
+					// apCost += apCost*0.10;
+				// if(aim)
+					// apCost =+ apCost*0.10;
+			// }
+		}
+		// Handling -AP cost bonus for weapons
+		//if(checkBonus(item, BONUS_WEAPON_AP_COST)!=0) apCost--;
+	}
+
+	if(apCost < 1) apCost = 1;
+	return floor(apCost);
 }
+
+// Very limited function for calculating unarmed attack AP cost
+uint GetWeaponProtoApCost(CritterMutual& cr, ProtoItem& prot, uint8 mode)
+{
+	uint8 use = mode & 0xF;
+	uint8 aim = mode >> 4;
+
+// #ifdef __CLIENT
+	// if(aim == 0 && prot.Weapon_Aim[aim])
+		// if(!cr.Params[TRAIT_FAST_SHOT])
+			// aim = *ClientGlobals.__CurrentAim;
+// #endif
+	
+   	float apCost = 1;
+
+	if(use >= USE_PRIMARY && use <= USE_THIRD)
+	{
+		int skill = prot.Weapon_Skill[use];
+
+		apCost = prot.Weapon_ApCost[use];
+
+		if(aim)
+		{
+			apCost += (apCost*GetAimApCost(aim))/100;
+		}
+
+		//if(hthAttack && cr.Params[PE_BONUS_HTH_ATTACKS]) apCost = apCost*BHTH_AP_MUL;
+	}
+    if(apCost < 1) apCost = 1;
+    return floor(apCost);
+}
+
 
 uint GetAttackDistantion( CritterMutual& cr, Item& item, uint8 mode )
 {
@@ -1040,5 +1124,7 @@ EXPORT uint8 Item_GetDurability( Item& item )
 {
     return item.Data.Rate;
 }
+
+#endif // MAIN
 
 #endif // __CLIENT

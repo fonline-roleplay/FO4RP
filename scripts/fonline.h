@@ -737,7 +737,12 @@ struct ProtoItem
     const uint16 Food_Thirst;      // pm
     const uint16 Food_Restore;     // pm
     const uint   Food_Flags;       // pm
-    const uint8  UnusedEnd[ 176 ]; // 184
+	const uint16 Wait_Time_0;      // -> 324"
+	const uint16 Wait_Time_1;      // -> 326"
+	const uint16 Wait_Time_2;      // -> 328"
+	const uint16 Wait_Time_3;      // -> 330"
+	const uint16 Item_UseAp;
+    const uint8  UnusedEnd[ 166 ]; // SUKA
 
     // Type specific data
     const bool   Weapon_IsUnarmed;
