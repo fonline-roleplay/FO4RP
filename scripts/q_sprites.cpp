@@ -1,5 +1,8 @@
+#ifndef Q_SPRITES
+#define Q_SPRITES
+
 #include "q_sprites.h"
-#include "revenge.h"
+
 
 // #define DISABLE_NEW
 
@@ -968,3 +971,4 @@ void RegisterNativeSprites( asIScriptEngine* engine, bool compiler )
         ENGINE_PTR_METHOD_AnimLoad                      = (void*) ENGINE_PTR_METHOD_AnimLoad_OGL;
     }
 }
+#endif
