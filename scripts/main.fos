@@ -283,7 +283,7 @@ uint loop()
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on something critter attack another.
-import void hearshot( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weaponMode ) from "rp_combat"; //Выстрелы на карте
+import void hearshot( Critter& cr, ProtoItem& weapon, uint8 weaponMode ) from "rp_combat"; //Выстрелы на карте
 void 		critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo )
 {
 	
@@ -305,7 +305,7 @@ void 		critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 we
 	{
     // Critter@ trg = GetCritter(target.Id);
     // cr.TimeoutBase[ TO_AGGRESSOR ] = __FullSecond + REAL_MINUTE( 1 );
-	hearshot( cr, target, weapon, weaponMode);
+	//hearshot( cr, weapon, weaponMode);//перенёс в совершение атаки => combat.fos
     CombatAttack( cr, target, weapon, weaponMode, ammo, 0, 0 );
 	cr.Wait(GetProtoTime(weapon, weaponMode, cr));
 	}
@@ -2678,9 +2678,7 @@ uint cte_limb_management (Critter& cr, int identifier, uint& rate) {
 // Default start position for players is center of global map.
 void critter_init( Critter& cr, bool firstTime )
 {
-
-	
-    if( firstTime )
+   if( firstTime )
     {
 		SetCritterApRegen(cr);
 	
@@ -2888,6 +2886,9 @@ void critter_init( Critter& cr, bool firstTime )
     {
         cr.StatBase[ ST_STUDY_EXP_MAX ] = 10000;
     }
+	
+	if( cr.IsPlayer() )
+		cr.StatBase[ ST_UNSPENT_PERKS ] = 0; //Обнуляем, временная мера.
 
     ChangeCritterSpeed( cr );
 
@@ -4219,10 +4220,73 @@ void TryToTakeArmor( Critter& cr, Critter& target ) {
 	else cr.Say(SAY_NETMSG, "Итерация №" + delay + " из " +(i==5?6:i)+".");
 }
 
-void swap_invis( Critter& cr, int, int, int, string@, int[]@ )
+void unsafe_swap_invis( Critter& cr, int, int, int, string@, int[]@ )
 {
+    if( cr.GetAccess() < ACCESS_MODER )
+	{
+		if( !cr.IsBusy() )
+		{
+			cr.Say( SAY_EMOTE_ON_HEAD, "присаживается" );
+			cr.Animate( 0, ANIM2_PICKUP, null, false, true );
+			cr.Wait( 1500 );
+		}
+		return;
+	}
+		
 	cr.ParamBase[ QST_INVIS ] = CLAMP( 1 - cr.ParamBase[ QST_INVIS ], 0, 1 );
 	cr.ModeBase[ MODE_HIDE ] = cr.ParamBase[ QST_INVIS ];
 	cr.Say( SAY_NETMSG, "Режим суперневидимости " + ( cr.ParamBase[ QST_INVIS ] == 1 ? "в" : "вы" ) + "ключен." );
 	//cr.PerkBase[ PE_SILENT_RUNNING ] = cr.ParamBase[ QST_INVIS ];
+}
+
+#define WS_UNARMED                 ( 1 )
+#define WS_MELEE                   ( 2 )
+#define WS_THROWING                ( 3 )
+#define WS_GUN                     ( 4 )
+
+void unsafe_animation( Critter& cr, int type, int val, int, string@, int[]@ )
+{
+	if( cr.IsDead() || cr.IsKnockout() )
+		return;
+		
+	if( type == ACTION_WINDUP )
+	{
+		if( cr.IsBusy() )
+			return;
+			
+		cr.Wait( 1000 );
+			
+		string action_name = "";
+		Item@ realWeapon =  _CritGetItemHand(cr);
+		if( !valid( realWeapon ) )
+			action_name = " кулаки";
+		else if( realWeapon.GetType() == ITEM_TYPE_WEAPON )
+			action_name = " оружие";
+		else
+			action_name = " предмет";
+		
+		ProtoItem@ weapon = valid( realWeapon ) ? GetProtoItem( realWeapon.GetProtoId() ) : null;
+		int   skillNum = ( valid( weapon ) ? _WeaponSkill( weapon, 0 ) : ( valid( realWeapon ) ? SK_MELEE_WEAPONS : SK_UNARMED ) );
+		uint8 weaponSubtype = ( skillNum == SK_SMALL_GUNS || skillNum == SK_BIG_GUNS || skillNum == SK_ENERGY_WEAPONS ) ? WS_GUN : 
+							( ( skillNum == SK_THROWING ) ? WS_THROWING : ( skillNum == SK_MELEE_WEAPONS ) ? WS_MELEE : WS_UNARMED );		
+		
+		if( cr.ParamBase[ CR_IS_WINDUPED ] != 0 )
+		{
+			action_name = "опускает" + action_name;
+			cr.ParamBase[ CR_IS_WINDUPED ] = 0;
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+		}
+		else
+		{
+			action_name = "вскидывает" + action_name;
+			cr.ParamBase[ CR_IS_WINDUPED ] = 1;
+			if( weaponSubtype == WS_GUN )
+				cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
+		}
+		cr.Say( SAY_EMOTE_ON_HEAD, action_name );
+	}
+	else
+	{
+		cr.Action( type, val == 0 ? Random( 0, 1 ) : val - 1, null );
+	}
 }
