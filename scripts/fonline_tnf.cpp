@@ -368,7 +368,7 @@ EXPORT int getParam_MaxLife( CritterMutual& cr, uint )
 
 EXPORT int getParam_MaxAp( CritterMutual& cr, uint )
 {
-    int val = cr.Params[ ST_ACTION_POINTS ] + cr.Params[ ST_ACTION_POINTS_EXT ] * AP_DIVIDER; // + getParam_Agility( cr, 0 ) / 2;
+    int val = cr.Params[ ST_ACTION_POINTS ] + cr.Params[ ST_ACTION_POINTS_EXT ] + APPOINTS_BASE; // + getParam_Agility( cr, 0 ) / 2;
     return CLAMP( val, 1, 9999 );
 }
 
@@ -453,7 +453,7 @@ EXPORT int getParam_Sequence( CritterMutual& cr, uint )
 EXPORT int getParam_MeleeDmg( CritterMutual& cr, uint )
 {
     int strength = getParam_Strength( cr, 0 );
-    int val = cr.Params[ ST_MELEE_DAMAGE ] + cr.Params[ ST_MELEE_DAMAGE_EXT ] + ( strength > 6 ? strength - 5 : 1 );
+    int val = cr.Params[ ST_MELEE_DAMAGE ] + cr.Params[ ST_MELEE_DAMAGE_EXT ] + MELEE_DAMAGE_BASE + cr.Params[ ST_STRENGTH ] * MELEE_DAMAGE_PER_STR;// + cr.Params[TRAIT_HEAVY_HANDED] * HEAVY_HANDED_MELEE_DAMAGE_BONUS );
     return CLAMP( val, 1, 9999 );
 }
 

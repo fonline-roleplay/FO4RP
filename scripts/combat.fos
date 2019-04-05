@@ -23,6 +23,7 @@ import void HookAttack( Critter& cr, Critter@ target, uint8 force, uint8 pull ) 
 import void HookMeleeAttack( Critter& cr, Critter@ target )  from "handcuffs";                                             // ErlKing
 import void HookHoldAttack( Critter@ target, uint8 hardness )  from "handcuffs";                                           // ErlKing
 import void Log_Killings( Critter& player, int target, int param1, int param2, string@ param3, int[] @ param4 ) from "gm"; // ErlKing
+import void hearshot( Critter& cr, ProtoItem& weapon, uint8 weaponMode ) from "rp_combat"; //¬ыстрелы на карте
 
 import void ChangeCritterSpeed( Critter& cr ) from "speed";                                                                // pm added
 import bool FlareGunUse( Critter& cr, Item& item ) from "item";                                                            // pm added flare gun
@@ -219,6 +220,8 @@ int getFullSkill( Critter& cr, Critter@ target, int skillNum, uint8 weaponSubtyp
 
 void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16 hexX, uint16 hexY ) // Export
 {
+	int point = 0;
+	
     if( not valid( target ) && hexX == 0 && hexY == 0 )
         return;
 
@@ -351,6 +354,9 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 hitRandomly = FLAG( critfailFlags, MF_HIT_RANDOMLY );
 			}
 		}*/
+	if( aim == HIT_LOCATION_NONE )
+		aim = cr.ParamBase[CR_AUTO_AIM];
+		
     // now we randomise targeting of uncalled shots:  ErlKing рандомизатор неприцельных атак
     if(  ( dmgType != DAMAGE_FIRE && dmgType != DAMAGE_EXPLODE ) && //..не €вл€ющихс€ атаками взрывом и огнЄм..
 		( aim == HIT_LOCATION_NONE || cr.Param[ QST_GAMEMODE ] == GAME_ARCADE ) //..неприцельные или атаки аркад
@@ -481,7 +487,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
     // Ammo
     if( valid( ammo ) )
     {
-        attack.DRMod = ammo.Ammo_DRMod;
+        attack.DRMod = ammo.Ammo_DrMod;
         attack.DMMod = ammo.Ammo_DmgMult;
         attack.DDMod = ammo.Ammo_DmgDiv;
         if( attack.DMMod == 0 )
@@ -491,9 +497,9 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
     }
 
     if( valid( target ) ) // binyan - Hex attack - added
-
-        // to check if the target was hit:
         attack.TargetId = target.Id;
+        // to check if the target was hit:
+
 
     // here we're deciding the real toHit;
     int toHit = baseToHit;
@@ -544,7 +550,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
     {
         acmod = target.Stat[ ST_ARMOR_CLASS ];
         if( valid( ammo ) )
-            acmod += ammo.Ammo_ACMod;
+            acmod += ammo.Ammo_AcMod;
         if( acmod > 0 )
             toHit -= acmod;
 		
@@ -826,15 +832,19 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
         if( isHit )
         {
             int crDir = cr.Dir;
-            int tDir  = realTarget.Dir;
+            int tDir  = valid( realTarget) ? realTarget.Dir : cr.Dir;
             // if( isSneak && cr.Perk[ PE_SILENT_DEATH ] != 0 && ( crDir == tDir || ( ( crDir + 1 ) % 6 ) == tDir || ( ( crDir + 5 ) % 6 ) == tDir ) )
                 // attack.DmgMul *= 2;
-            ApplyDamage( attack, realTarget, 1, criticalHit, true, results );
+            if( valid( realTarget) )
+				ApplyDamage( attack, realTarget, 1, criticalHit, true, results );
         }
         else
         {
             if( changedTarget )
-                ApplyDamage( attack, realTarget, 1, false, false, results );
+			{
+				if( valid( realTarget ) )
+					ApplyDamage( attack, realTarget, 1, false, false, results );
+			}
             else
                 NotifyMiss( cr, results );
         }
@@ -845,7 +855,10 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
         // if(!isBurst)
         // {
         if( isHit || changedTarget )
-            ApplyDamage( attack, realTarget, 1, criticalHit, !changedTarget, results );
+		{
+			if( valid( realTarget ) )
+				ApplyDamage( attack, realTarget, 1, criticalHit, !changedTarget, results );
+		}
         else         // standard miss here
         {
             Critter@[] critsLine;
@@ -856,7 +869,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
             bool anyHit = false;
             for( int i = 0, j = critsLine.length(); ( i < j ) && !anyHit; i++ )
             {
-                if( critsLine[ i ].Id == realTarget.Id )
+                if( valid( realTarget ) && critsLine[ i ].Id == realTarget.Id )
                 {
                     bl++;
                     continue;
@@ -879,7 +892,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 toHit += acc;
                 acmod = critsLine[ i ].Stat[ ST_ARMOR_CLASS ];
                 if( valid( ammo ) )
-                    acmod += ammo.Ammo_ACMod;
+                    acmod += ammo.Ammo_AcMod;
                 if( acmod > 0 )
                     toHit -= acmod;
                 toHit -= 10 * bl;
@@ -893,7 +906,8 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 toHit /= 3;               // after clamp
                 if( Random( 1, 100 ) <= toHit )
                 {
-                    NotifyOops( cr, target, critsLine[ i ], results );
+                    if( valid( target ) )
+						NotifyOops( cr, target, critsLine[ i ], results );
                     @normalTarget = critsLine[ i ];
                     useNormal = true;
                     ApplyDamage( attack, normalTarget, 1, false, false, results );
@@ -924,17 +938,17 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 acc *= 3;
             acc *= -4;
             toHit += acc;
-            acmod = realTarget.Stat[ ST_ARMOR_CLASS ];
+            acmod = valid( realTarget ) ? realTarget.Stat[ ST_ARMOR_CLASS ] : 0;
             if( valid( ammo ) )
-                acmod += ammo.Ammo_ACMod;
+                acmod += ammo.Ammo_AcMod;
             if( acmod > 0 )
                 toHit -= acmod;
-            if( realTarget.IsKnockout() )
+            if( valid( realTarget ) && realTarget.IsKnockout() )
                 toHit += 40;
-            if( realTarget.GetMultihex() > 0 )
+            if( valid( realTarget ) && realTarget.GetMultihex() > 0 )
                 toHit += 15;
             int blockers = map.GetCrittersPath( hx, hy, tx, ty, 0.0f, dist, FIND_LIFE, null );
-            if( !realTarget.IsKnockout() )
+            if( valid( realTarget ) && !realTarget.IsKnockout() )
                 blockers--;
             toHit -= 10 * blockers;
             toHit = CLAMP( toHit, 5, 95 );
@@ -949,7 +963,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
         uint[]     critsHitBullets( 0 );
         int len_ = 0;
 
-        if( Random( 1, 100 ) <= toHit )
+        if( Random( 1, 100 ) <= toHit && valid( realTarget ) )
         {
             critsHit.resize( 1 );
             @critsHit[ 0 ] = realTarget;
@@ -989,7 +1003,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 toHit += acc;
                 acmod = lineCentral[ i ].Stat[ ST_ARMOR_CLASS ];
                 if( valid( ammo ) )
-                    acmod += ammo.Ammo_ACMod;
+                    acmod += ammo.Ammo_AcMod;
                 if( acmod > 0 )
                     toHit -= acmod;
                 if( lineCentral[ i ].IsKnockout() )
@@ -1057,7 +1071,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 toHit += acc;
                 acmod = lineLeft[ i ].Stat[ ST_ARMOR_CLASS ];
                 if( valid( ammo ) )
-                    acmod += ammo.Ammo_ACMod;
+                    acmod += ammo.Ammo_AcMod;
                 if( acmod > 0 )
                     toHit -= acmod;
                 if( lineLeft[ i ].IsKnockout() )
@@ -1115,7 +1129,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 toHit += acc;
                 acmod = lineRight[ i ].Stat[ ST_ARMOR_CLASS ];
                 if( valid( ammo ) )
-                    acmod += ammo.Ammo_ACMod;
+                    acmod += ammo.Ammo_AcMod;
                 if( acmod > 0 )
                     toHit -= acmod;
                 if( lineRight[ i ].IsKnockout() )
@@ -1139,8 +1153,8 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
             }             // right line
         }
 
-        for( int i = 0, j = len_; i < j; i++ )
-            ApplyDamage( attack, critsHit[ i ], 1, ( realTarget.Id == critsHit[ i ].Id ) && criticalHit, ( cr.IsPlayer() && !changedTarget ) || ( cr.IsNpc() && critsHit[ i ].Id == target.Id ), results );
+        for( int i = 0, j = critsHit.length(); i < j; i++ )
+            ApplyDamage( attack, critsHit[ i ], 1, ( valid( realTarget ) && realTarget.Id == critsHit[ i ].Id ) && criticalHit, ( cr.IsPlayer() && !changedTarget ) || ( cr.IsNpc() && critsHit[ i ].Id == target.Id ), results );
 
         if( !changedTarget && !attack.TargetHit )
             NotifyMiss( cr, results );
@@ -1164,17 +1178,17 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 acc *= 3;
             acc *= -4;
             toHit += acc;
-            acmod = realTarget.Stat[ ST_ARMOR_CLASS ];
+            acmod = valid( realTarget ) ? realTarget.Stat[ ST_ARMOR_CLASS ] : 0;
             if( valid( ammo ) )
-                acmod += ammo.Ammo_ACMod;
+                acmod += ammo.Ammo_AcMod;
             if( acmod > 0 )
                 toHit -= acmod;
-            if( realTarget.IsKnockout() )
+            if( valid( realTarget ) && realTarget.IsKnockout() )
                 toHit += 40;
-            if( realTarget.GetMultihex() > 0 )
+            if( valid( realTarget ) && realTarget.GetMultihex() > 0 )
                 toHit += 15;
             int blockers = map.GetCrittersPath( hx, hy, tx, ty, 0.0f, dist, FIND_LIFE, null );
-            if( !realTarget.IsKnockout() )
+            if( valid( realTarget ) && !realTarget.IsKnockout() )
                 blockers--;
             toHit -= 10 * blockers;
             toHit = CLAMP( toHit, 5, 95 );
@@ -1200,7 +1214,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
             if( (i+1)*Random( 1, 100 ) <= toHit )
                 curRounds++;
         }
-        if( curRounds != 0 )
+        if( curRounds != 0 && valid( realTarget ) )
         {
             critsHit.resize( 1 );
             critsHitBullets.resize( 1 );
@@ -1217,7 +1231,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
         curRounds = 0;
         for( int i = 0, j = lineCentral.length(); ( i < j ) && ( volleyRounds > 0 ); i++ )
         {
-            if( lineCentral[ i ].Id == realTarget.Id )
+            if( valid( realTarget ) && lineCentral[ i ].Id == realTarget.Id )
             {
                 bl++;
                 continue;
@@ -1239,7 +1253,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
             toHit += acc;
             acmod = lineCentral[ i ].Stat[ ST_ARMOR_CLASS ];
             if( valid( ammo ) )
-                acmod += ammo.Ammo_ACMod;
+                acmod += ammo.Ammo_AcMod;
             if( acmod > 0 )
                 toHit -= acmod;
             toHit = CLAMP( toHit, 5, 95 );
@@ -1273,9 +1287,14 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
             }
         }
 
+		
         // now we're shooting the rest of the bullets (=rounds-MAX(1,rounds/6))
-        bool threeLines = ( GetDistantion( hx, hy, lineCentral[ 0 ].HexX, lineCentral[ 0 ].HexY ) > 1 ) && ( ammoRound > 3 ); // target not adjacent and weapon not shotgun
-
+        bool threeLines = false;
+		if( lineCentral.length() > 0 && valid( lineCentral[0] ) )
+			threeLines = ( GetDistantion( hx, hy, lineCentral[ 0 ].HexX, lineCentral[ 0 ].HexY ) > 1 ) && ( ammoRound > 3 ); // target not adjacent and weapon not shotgun
+		else
+			threeLines = ( GetDistantion( hx, hy, tx, ty ) > 1 ) && ( ammoRound > 3 ); // target not adjacent and weapon not shotgun
+		
         // already shot: MAX(rounds/6,1);
 
         for( int lineCount = 0, lineMax = ( threeLines ? 1 : 3 ); lineCount < lineMax; lineCount++ )
@@ -1319,7 +1338,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 toHit += acc;
                 acmod = lineCentral[ i ].Stat[ ST_ARMOR_CLASS ];
                 if( valid( ammo ) )
-                    acmod += ammo.Ammo_ACMod;
+                    acmod += ammo.Ammo_AcMod;
                 if( acmod > 0 )
                     toHit -= acmod;
                 if( lineCentral[ i ].IsKnockout() )
@@ -1397,7 +1416,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                     toHit += acc;
                     acmod = lineLeft[ i ].Stat[ ST_ARMOR_CLASS ];
                     if( valid( ammo ) )
-                        acmod += ammo.Ammo_ACMod;
+                        acmod += ammo.Ammo_AcMod;
                     if( acmod > 0 )
                         toHit -= acmod;
                     if( lineLeft[ i ].IsKnockout() )
@@ -1472,7 +1491,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                     toHit += acc;
                     acmod = lineRight[ i ].Stat[ ST_ARMOR_CLASS ];
                     if( valid( ammo ) )
-                        acmod += ammo.Ammo_ACMod;
+                        acmod += ammo.Ammo_AcMod;
                     if( acmod > 0 )
                         toHit -= acmod;
                     if( lineRight[ i ].IsKnockout() )
@@ -1507,7 +1526,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
         }
 
         for( int i = 0, j = len_; i < j; i++ )
-            ApplyDamage( attack, critsHit[ i ], critsHitBullets [i], ( realTarget.Id == critsHit[ i ].Id ) && criticalHit, ( cr.IsPlayer() && !changedTarget ) || ( cr.IsNpc() && critsHit[ i ].Id == target.Id ), results );
+            ApplyDamage( attack, critsHit[ i ], critsHitBullets [i], ( valid( realTarget ) && realTarget.Id == critsHit[ i ].Id ) && criticalHit, ( cr.IsPlayer() && !changedTarget ) || ( cr.IsNpc() && critsHit[ i ].Id == target.Id ), results );
 
         if( !changedTarget && !attack.TargetHit )
             NotifyMiss( cr, results );
@@ -1566,7 +1585,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 toHit += acc;
                 acmod = critsLine[ i ].Stat[ ST_ARMOR_CLASS ];
                 if( valid( ammo ) )
-                    acmod += ammo.Ammo_ACMod;
+                    acmod += ammo.Ammo_AcMod;
                 if( acmod > 0 )
                     toHit -= acmod;
                 toHit -= 10 * bl;
@@ -1589,7 +1608,8 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
 
             if( anyHit )
             {
-                NotifyOops( cr, target, normalTarget, results );
+				if( valid( target ) )
+					NotifyOops( cr, target, normalTarget, results );
                 useNormal = true;
                 if( weapPid != PID_BALL )                                                                                                                    // binyan - учитывем м€ч
                 {
@@ -1657,9 +1677,31 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
     // stuff like animations, effects
 
     // Shoot
+	hearshot( cr, weapon, weaponMode );
     if( _WeaponEffect( weapon, use ) != 0 )
     {
-        if( useHex || not valid( realTarget ) )                                          // binyan - Hex attack - added
+		string sfx = "";
+		switch( dmgType )
+		{
+			case( DAMAGE_NORMAL ): 
+				if( weaponSubtype == WS_THROWING )
+					sfx = "стук"; 
+				if( weaponSubtype == WS_GUN )
+					sfx = "стук"; 
+				if( valid( realTarget ) )
+					sfx = "удар";
+				break;
+			case( DAMAGE_LASER ): sfx = "шипение"; break;
+			case( DAMAGE_FIRE ): sfx = "треск"; break;
+			case( DAMAGE_PLASMA ): sfx = "щипение"; break;
+			case( DAMAGE_ELECTR ): sfx = "треск"; break;
+			case( DAMAGE_EMP ): sfx = "треск"; break;
+			//case( DAMAGE_EXPLODE ): sfx = ""; break;
+		}
+		if( sfx.length() > 0 )
+			map.SetText( tx - 1, ty - 1, COLOR_LGRAY, ":" + sfx + ":" );
+
+		if( useHex || not valid( realTarget ) )                                          // binyan - Hex attack - added
             map.RunFlyEffect( _WeaponEffect( weapon, use ), cr, null, hx, hy, tx, ty );  // yeah, the target can be null (see: grenades, rocket launcher)
         else
             map.RunFlyEffect( _WeaponEffect( weapon, use ), cr, ( useNormal ? normalTarget : realTarget ), hx, hy, tx, ty );
@@ -2541,7 +2583,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
         if( knockDown && !( target.IsKnockout() && map.IsTurnBased() ) )
             targetAp -= 3;
             // targetAp -= ( target.Perk[ PE_QUICK_RECOVERY ] != 0 ? 1 : 3 );
-        if( ( isBelow || knockOut || knockDown || dmgType == DAMAGE_EXPLODE ) && !target.IsKnockout() && target.Mode[ MODE_NO_KNOCK ] == 0 )
+        if( ( isBelow || knockOut || knockDown || dmgType == DAMAGE_EXPLODE ) && !target.IsKnockout() && !target.IsDead() && target.Mode[ MODE_NO_KNOCK ] == 0 )
         {
             int knockDist = knockDmg;
             if( ( dmgType == DAMAGE_EXPLODE || attack.WeaponSubtype == WS_MELEE ) && target.IsCanWalk() )
@@ -2578,11 +2620,8 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     // Damage
     else if( not target.IsKnockout() )
     {
-        // Animate hit
-        if( attack.ShowHitAnimForce )
-            target.Action( ACTION_DAMAGE_FORCE, attackFront ? 0 : 1, null );
-        else
-            target.Action( ACTION_DAMAGE, attackFront ? 0 : 1, null );
+		target.Wait(GetActionTime(ACTION_DAMAGE, target));
+		target.Action( ACTION_DAMAGE_FORCE, attackFront ? 0 : 1, null );
 
         // Npc hit message
         if( isCombatText && dmgType != DAMAGE_UNCALLED && !targetIsPlayer )
@@ -2751,7 +2790,8 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     if( attacker.CountItem( PID_COLLAR ) >= 1 && target.Karma[ KARMA_SLAVER ] != 0 )
     {
         attacker.StatBase[ ST_CURRENT_HP ] -= Random( 1, 4 );
-        attacker.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 100, attacker.HexX, attacker.HexY );
+        if( !attacker.IsDead() )
+			attacker.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 100, attacker.HexX, attacker.HexY );
     }                                                                                                                                                                                                             // проверка на атаку рабом работорговца
     if( target.CountItem( PID_PACKAGE ) >= 1 && ( !target.IsDead() || !target.IsKnockout() ) )
     {
@@ -2759,11 +2799,13 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
         MoveItem( package, 0, map, target.HexX, target.HexY );
         target.ModeBase[ MODE_NO_WALK ] = 0;
         target.ModeBase[ MODE_NO_RUN ] = 0;
-        target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), 2, target.HexX, target.HexY );
+        if( !target.IsDead() )
+			target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), 2, target.HexX, target.HexY );
     }     // выбивание груза из цели
     if( valid( realWeapon ) && realWeapon.Val5 == 10 )
     {
-        attacker.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 10, attacker.HexX, attacker.HexY );
+        if( !attacker.IsDead() )
+			attacker.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 10, attacker.HexX, attacker.HexY );
         attacker.Say( SAY_EMOTE_ON_HEAD, "оружие взрываетс€" );
         DeleteItem( realWeapon );
     }                                                                                                                                             // проверка на оружие-мул€ж
@@ -2805,7 +2847,8 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             int8 roll = Random( 10, 60 ) - target.Stat[ ST_ENDURANCE ];
             if( roll > 0 )
             {
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll, target.HexX, target.HexY );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll, target.HexX, target.HexY );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 30 );
             }
         }
@@ -2820,7 +2863,8 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             int8 roll = Random( 0, 25 ) - target.Stat[ ST_ENDURANCE ];
             if( roll > 0 )
             {
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll, target.HexX, target.HexY );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll, target.HexX, target.HexY );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_SECOND( 10 );
             }
             target.StatBase[ ST_BLOCK ] = 0;
@@ -2834,7 +2878,8 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             int8 roll = Random( 13, 50 ) - target.Stat[ ST_ENDURANCE ];
             if( roll > 0 )
             {
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll, target.HexX, target.HexY );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll, target.HexX, target.HexY );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 15 );
             }
         }
@@ -2866,7 +2911,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
                     target.DamageBase[ DAMAGE_RIGHT_LEG ] = 1;
                 else if( aim == HIT_LOCATION_LEFT_LEG )
                     target.DamageBase[ DAMAGE_LEFT_LEG ] = 1;
-                if( Random( 0, 10 ) - target.Stat[ ST_STRENGTH ] > 0 )
+                if( Random( 0, 10 ) - target.Stat[ ST_STRENGTH ] > 0 && !target.IsDead() )
                     target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 10, target.HexX, target.HexY );
             }
         }
@@ -2936,12 +2981,14 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
                 aimmod += 40;
             if( target.IsRuning && target.Stat[ ST_CURRENT_HP ] < Random( aimmod, 30 + totalDmg * 5 + aimmod * 2 ) )
             {
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 1, 3 ), target.HexX, target.HexY );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 1, 3 ), target.HexX, target.HexY );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 5 );
             }
             else if( target.Stat[ ST_CURRENT_HP ] < Random( 0, 50 + totalDmg * 2 + aimmod ) && dist <= 2 )
             {
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 4, 10 ), target.HexX, target.HexY );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 4, 10 ), target.HexX, target.HexY );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 15 );
             }
         }
@@ -2962,14 +3009,16 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             {
                 uint16 hx = target.HexX, hy = target.HexY;
                 map.MoveHexByDir( hx, hy, attacker.Dir, 1 );
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 4, 10 ), hx, hy );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 4, 10 ), hx, hy );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 25 );
             }
             else if( target.Stat[ ST_CURRENT_HP ] < Random( aimmod, 50 + totalDmg * 4 + aimmod ) && dist <= 3 )
             {
                 uint16 hx = target.HexX, hy = target.HexY;
                 map.MoveHexByDir( hx, hy, attacker.Dir, 1 );
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 6, 12 ), hx, hy );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 6, 12 ), hx, hy );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 25 );
             }
         }
@@ -2990,12 +3039,14 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             {
                 uint16 hx = target.HexX, hy = target.HexY;
                 map.MoveHexByDir( hx, hy, attacker.Dir, 1 );
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 10, 12 ), hx, hy );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 10, 12 ), hx, hy );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 30 );
             }
             else if( target.Stat[ ST_CURRENT_HP ] < Random( aimmod, 70 + totalDmg * 4 + aimmod ) && dist <= 4 )
             {
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 10, 20 ), target.HexX, target.HexY );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 10, 20 ), target.HexX, target.HexY );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 30 );
             }
         }
@@ -3019,19 +3070,22 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             if( target.IsRuning && target.Stat[ ST_CURRENT_HP ] < Random( aimmod, totalDmg * 4 + aimmod * 2 ) && dist >= 3 )
             {
 				target.Say( SAY_EMOTE, "ѕадает от столкновени€ с кувалдой" );
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 18, 25 ), target.HexX, target.HexY );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 18, 25 ), target.HexX, target.HexY );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 5 );
             }
             else if( target.Stat[ ST_CURRENT_HP ] < Random( aimmod, totalDmg * 2 + aimmod ) && dist >= 3 )
             {
 				target.Say( SAY_EMOTE, "ѕадает от столкновени€ с кувалдой" );
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 18, 25 ), target.HexX, target.HexY );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 18, 25 ), target.HexX, target.HexY );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 5 );
             }
             else if( target.Stat[ ST_CURRENT_HP ] < Random( aimmod, totalDmg*2 + aimmod ) && dist <= 2 )
             {
 				target.Say( SAY_EMOTE, "ѕадает от мощного удара" );
-                target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 11, 18 ), target.HexX, target.HexY );
+				if( !target.IsDead() )
+					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 11, 18 ), target.HexX, target.HexY );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 15 );
             }
         }
@@ -3073,12 +3127,14 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             hitmod += 40;
         if( target.IsRuning && target.Stat[ ST_CURRENT_HP ] < Random( hitmod, 50 + totalDmg * 8 + hitmod * 2 ) )
         {
-            target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 5, 10 ), target.HexX, target.HexY );
+			if( !target.IsDead() )
+				target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 5, 10 ), target.HexX, target.HexY );
             target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 10 );
         }
         else if( target.Stat[ ST_CURRENT_HP ] < Random( hitmod, 50 + totalDmg * 2 + hitmod ) )
         {
-            target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 2, 6 ), target.HexX, target.HexY );
+			if( !target.IsDead() )
+				target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 2, 6 ), target.HexX, target.HexY );
             target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 10 );
         }
     }
@@ -3086,7 +3142,8 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     {
         if( !target.IsDead() || !target.IsKnockout() )
         {
-            target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 30, target.HexX, target.HexY );
+			if( !target.IsDead() )
+				target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 30, target.HexX, target.HexY );
         }
     }
 }
@@ -3188,7 +3245,7 @@ void CriticalFailure( Critter& cr, ProtoItem& weapon, uint8 weaponUse, ProtoItem
             targetDT /= 5;
 
         targetDR += ( cr.Trait[ TRAIT_FINESSE ] != 0 ? 30 : 0 );
-        targetDR += validAmmo ? ammo.Ammo_DRMod : 0;
+        targetDR += validAmmo ? ammo.Ammo_DrMod : 0;
         targetDR = CLAMP( targetDR, 0, 100 );
         int dmgMin = _WeaponDmgMin( weapon, weaponUse );
         int dmgMax = _WeaponDmgMax( weapon, weaponUse );
@@ -3634,7 +3691,7 @@ int RawToHit( Critter& cr, Critter& target, ProtoItem@ weapon, uint8 weaponUse, 
 
     int acmod = target.Stat[ ST_ARMOR_CLASS ];
     if( valid( ammo ) )
-        acmod += ammo.Ammo_ACMod;
+        acmod += ammo.Ammo_AcMod;
     if( acmod > 0 )
         toHit -= acmod;
 
