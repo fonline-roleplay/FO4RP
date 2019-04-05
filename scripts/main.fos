@@ -204,7 +204,9 @@ bool start()
 	SetSendParameter( CR_IS_AGGRESSIVE, true ); //Агрессивность чара видно всем.
 	SetSendParameter( TRAIT_GOOD_NATURED, true );
 	SetSendParameter( TRAIT_BLOODY_MESS, true );
-	
+
+	SetSendParameter( ST_CURRENT_AP, true );
+	SetSendParameter( ST_ACTION_POINTS, true );
 
     // Send item data masks
     // Look fields in fonline.h 'struct Item::ItemData'
@@ -4268,39 +4270,7 @@ void unsafe_animation( Critter& cr, int type, int val, int, string@, int[]@ )
 		
 	if( type == ACTION_WINDUP )
 	{
-		if( cr.IsBusy() )
-			return;
-			
-		cr.Wait( 1000 );
-			
-		string action_name = "";
-		Item@ realWeapon =  _CritGetItemHand(cr);
-		if( !valid( realWeapon ) )
-			action_name = " кулаки";
-		else if( realWeapon.GetType() == ITEM_TYPE_WEAPON )
-			action_name = " оружие";
-		else
-			action_name = " предмет";
-		
-		ProtoItem@ weapon = valid( realWeapon ) ? GetProtoItem( realWeapon.GetProtoId() ) : null;
-		int   skillNum = ( valid( weapon ) ? _WeaponSkill( weapon, 0 ) : ( valid( realWeapon ) ? SK_MELEE_WEAPONS : SK_UNARMED ) );
-		uint8 weaponSubtype = ( skillNum == SK_SMALL_GUNS || skillNum == SK_BIG_GUNS || skillNum == SK_ENERGY_WEAPONS ) ? WS_GUN : 
-							( ( skillNum == SK_THROWING ) ? WS_THROWING : ( skillNum == SK_MELEE_WEAPONS ) ? WS_MELEE : WS_UNARMED );		
-		
-		if( cr.ParamBase[ CR_IS_WINDUPED ] != 0 )
-		{
-			action_name = "опускает" + action_name;
-			cr.ParamBase[ CR_IS_WINDUPED ] = 0;
-			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
-		}
-		else
-		{
-			action_name = "вскидывает" + action_name;
-			cr.ParamBase[ CR_IS_WINDUPED ] = 1;
-			if( weaponSubtype == WS_GUN )
-				cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
-		}
-		cr.Say( SAY_EMOTE_ON_HEAD, action_name );
+		ChangeWindup( cr, false );
 	}
 	else
 	{
@@ -4308,8 +4278,92 @@ void unsafe_animation( Critter& cr, int type, int val, int, string@, int[]@ )
 	}
 }
 
+//import void ChangeWindup( Critter& cr, bool ignore_bussy ) from "main";
+void ChangeWindup( Critter& cr, bool ignore_bussy )
+{
+	if( !ignore_bussy && cr.IsBusy() )
+		return;
+		
+	cr.Wait( 1000 );
+		
+	string action_name = "";
+	Item@ realWeapon =  _CritGetItemHand(cr);
+	if( !valid( realWeapon ) )
+		action_name = " кулаки";
+	else if( realWeapon.GetType() == ITEM_TYPE_WEAPON )
+		action_name = " оружие";
+	else
+		action_name = " предмет";
+	
+	ProtoItem@ weapon = valid( realWeapon ) ? GetProtoItem( realWeapon.GetProtoId() ) : null;
+	int   skillNum = ( valid( weapon ) ? _WeaponSkill( weapon, 0 ) : ( valid( realWeapon ) ? SK_MELEE_WEAPONS : SK_UNARMED ) );
+	uint8 weaponSubtype = ( skillNum == SK_SMALL_GUNS || skillNum == SK_BIG_GUNS || skillNum == SK_ENERGY_WEAPONS ) ? WS_GUN : 
+						( ( skillNum == SK_THROWING ) ? WS_THROWING : ( skillNum == SK_MELEE_WEAPONS ) ? WS_MELEE : WS_UNARMED );		
+	
+	if( cr.ParamBase[ CR_IS_WINDUPED ] != 0 )
+	{
+		cr.ParamBase[ CR_IS_WINDUPED ] = 0;
+		if(cr.Anim2Life == ANIM2_WINDUP)
+		{
+			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+			action_name = "опускает" + action_name;
+		}
+		else
+			return;
+	}
+	else
+	{
+		action_name = "вскидывает" + action_name;
+		cr.ParamBase[ CR_IS_WINDUPED ] = 1;
+		if( weaponSubtype == WS_GUN )
+			cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
+	}
+	if( !ignore_bussy )
+		cr.Say( SAY_EMOTE_ON_HEAD, action_name );
+}
 
 void unsafe_set_aim( Critter& cr, int aim, int, int, string@, int[]@ )
 {
     cr.ParamBase[CR_AUTO_AIM] = aim;
+}
+
+void checkTime( Critter& cr, int delta, int style, int )
+{
+	getIngameTime( cr, style, delta );
+}
+
+void unsafe_getIngameTime( Critter& cr, int style, int delta, int, string@, int[]@ )
+{
+	getIngameTime( cr, style, delta );
+}
+
+import string CurrentDateTime( uint gameTime, int delta_time, int style ) from "time";
+void getIngameTime( Critter& cr, int style, int delta )
+{
+	if( cr.GetAccess() < ACCESS_MODER )
+	{
+		style = -1;
+		delta = GetLocationTimeDelta( cr );
+	}
+	else
+		style = 8;
+	
+	if( style == -1 )
+		style = CLAMP( ( cr.Stat[ ST_INTELLECT ] * 20 + cr.Skill[ SK_OUTDOORSMAN ] + cr.Skill[ SK_SCIENCE ] * 2 ) / 100, 0, 7 );
+	
+	if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
+	{
+		cr.Say ( SAY_NETMSG, "Ваш индекс равен: " + style + "." );
+		for( style = 0; style < 10; style++ )
+			cr.Say( SAY_NETMSG, CurrentDateTime( __FullSecond, delta, style ) );
+		return;
+	}
+	
+	cr.Say( SAY_NETMSG, CurrentDateTime( __FullSecond, delta, style ) );
+}
+
+//Ф-я будет возвращать уникальные дельты времени для отдельных регионов мира.
+int GetLocationTimeDelta( Critter& cr )
+{
+	return 0;
 }
