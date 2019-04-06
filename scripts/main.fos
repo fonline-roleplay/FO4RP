@@ -113,6 +113,7 @@ import void FlushScreen( Critter& cr, uint fromColor, uint toColor, uint timeMs 
 
 import bool AddWalkPlane( Critter& npc, uint priority, uint16 hexX, uint16 hexY, uint8 dir, bool run, uint cut ) from "npc_planes";
 
+import void DebugLog( string text ) from "debug";
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Called before world generation.
@@ -207,6 +208,7 @@ bool start()
 
 	SetSendParameter( ST_CURRENT_AP, true );
 	SetSendParameter( ST_ACTION_POINTS, true );
+	//SetSendParameter( CR_DIRTINESS, true );
 
     // Send item data masks
     // Look fields in fonline.h 'struct Item::ItemData'
@@ -585,15 +587,12 @@ import bool SetTrapOnItem( Critter& cr, Item& trap, Item& onItem ) from "trap";
 // Call on something critter use item.
 bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param )
 {
-	if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
-	{	
-		string exception_catcher = cr.Id + "# in " + (valid(cr.GetMap())?"@"+cr.GetMap().Id:"global") + " used "
-			+ (valid(item)?item.Id:0) + ":" + (valid(item)?item.GetProtoId():0) + " on [" 
-			+ (valid(targetCr)?targetCr.Id:0) + ", " 
-			+ (valid(targetItem)?targetItem.Id:0) + ":" + (valid(targetItem)?targetItem.GetProtoId():0) + ", " 
-			+ (valid(targetScen)?targetScen.ProtoId:0) + "] with param " + param + ".";
-		Log( exception_catcher );
-	}
+	string exception_catcher = cr.Id + "# in " + (valid(cr.GetMap())?"@"+cr.GetMap().Id:"global") + " used "
+		+ (valid(item)?item.Id:0) + ":" + (valid(item)?item.GetProtoId():0) + " on [" 
+		+ (valid(targetCr)?targetCr.Id:0) + ", " 
+		+ (valid(targetItem)?targetItem.Id:0) + ":" + (valid(targetItem)?targetItem.GetProtoId():0) + ", " 
+		+ (valid(targetScen)?targetScen.ProtoId:0) + "] with param " + param + ".";
+	DebugLog( exception_catcher );
 
     bool   isPlayer = cr.IsPlayer();
     uint16 pid = item.GetProtoId();
@@ -601,6 +600,49 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 	
 	cr.Wait(GetProtoTime(item.Proto, 0, cr));
 
+	if( useOnSelf )
+	{
+		Item@ water = cr.GetItem( PID_BOTTLE_FULL, -1 );
+		if( !valid(water) )
+			@water = cr.GetItem( PID_GLASS_BOTTLE_FULL, -1 );
+		
+		if( !valid(water) )
+		{
+			cr.Say( SAY_NETMSG, "Что бы помыться мылом, вам нужна чистая вода." );
+			return true;
+		}
+		
+		if( pid == PID_itsoap01 )
+		{
+			cr.Say( SAY_EMOTE_ON_HEAD, "Моется хозяйственным мылом" );
+		}
+		if( pid == PID_FPSHL6 )
+		{
+			cr.Say( SAY_EMOTE_ON_HEAD, "Моется душистым мылом" );
+            if( cr.ParamBase[ CR_DIRTINESS ] <= 0 )
+				cr.AddTimeEvent( "cte_aroma", REAL_SECOND(15), CTE_ROTTEN, 0 );
+		}
+
+		cr.ParamBase[ CR_DIRTINESS ] = ( cr.ParamBase[ CR_DIRTINESS ] * 0.8 ) - 5;
+		if( water.GetProtoId() == PID_BOTTLE_FULL )
+			cr.AddItem (PID_BOTTLE_EMPTY, 1);
+		else
+			cr.AddItem (PID_BOTTLE_GLASS, 1);
+
+		_SubItem( water, 1 );
+		if( Random( 0, 100 ) < 10 )
+			_SubItem( item, 1 );
+
+		int chance = cr.StatBase[ ST_AGILITY ] + cr.StatBase[ ST_LUCK ];
+		if( Random( 0, 100 ) > Random( chance, chance * 10 ) - 1 )
+		{
+			cr.Say( SAY_EMOTE, "Роняет мыло" );
+			MoveItem( item, 1, cr.GetMap(), cr.HexX + Random( -1, 1 ), cr.HexY + Random( -1, 1 ) );
+		}
+		
+		return true;
+	}
+		
 	if( valid( targetItem) && SetTrapOnItem( cr, item, targetItem ) )
 		return true;
 	
@@ -1079,6 +1121,12 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 
         switch(pid)
            {
+				case PID_FORSAGE_GUM:
+				case PID_CARAMEL2:
+				case PID_itcandy:
+					cr.Say( SAY_EMOTE_ON_HEAD, "Ест конфетку" );
+					cr.StatBase[ST_EXPERIENCE] += Random( 100, 500 );
+				break;
                 case PID_STIMPAK: cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, 10310 ); break;
                 case PID_RADAWAY: cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, 10311	); break;
                 case PID_ANTIDOTE: cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, 10312 ); break;
@@ -1337,20 +1385,15 @@ import bool UseSkillOnTrappedItem( Item& trappedItem, Critter& cr, int skill ) f
 // Call on something critter use skill.
 bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen )
 {
-	if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
-	{
-		string exception_catcher = cr.Id + "# in " + (valid(cr.GetMap())?"@"+cr.GetMap().Id:"global") + " used " + skill + " on [" 
-			+ (valid(targetCr)?targetCr.Id:0) + ", " 
-			+ (valid(targetItem)?targetItem.Id:0) + ":" + (valid(targetItem)?targetItem.GetProtoId():0) + ", " 
-			+ (valid(targetScen)?targetScen.ProtoId:0) + "].";
-		Log( exception_catcher );
-	}
+	string exception_catcher = cr.Id + "# in " + (valid(cr.GetMap())?"@"+cr.GetMap().Id:"global") + " used " + skill + " on [" 
+		+ (valid(targetCr)?targetCr.Id:0) + ", " 
+		+ (valid(targetItem)?targetItem.Id:0) + ":" + (valid(targetItem)?targetItem.GetProtoId():0) + ", " 
+		+ (valid(targetScen)?targetScen.ProtoId:0) + "].";
+	DebugLog( exception_catcher );
 	
     bool isPlayer = cr.IsPlayer();
     bool onSelf = ( ( !valid( targetCr ) ) && ( !valid( targetItem ) ) && ( !valid( targetScen ) ) ); // TabaK
 
-    bool isAidKitScience = ( @targetItem != null && ( targetItem.GetProtoId() == PID_FIRST_AID_KIT || targetItem.GetProtoId() == PID_DOCTORS_BAG ) && skill == SK_SCIENCE );
-	
 	cr.Wait(GetSkillTime(skill, cr));
 
 	if( valid(targetItem) && UseSkillOnTrappedItem( targetItem, cr, skill ) )
@@ -1448,73 +1491,24 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		return true;
     break; }
     case SKILL_PUT_CONT: {
+	
 		if( cr.ParamBase[ ST_LAST_CONT_ID ] == 0 )
 			return false;
 
 		Item@ cont = GetItem( cr.ParamBase[ ST_LAST_CONT_ID ] );
-		if( !valid( cont ) )
-			return false;
+
+		if( !canPutItemInContainer( targetItem, cont ) )
+		{
+			cr.Say( SAY_NETMSG, "Не удалось впихнуть предмет в контейнер." );
+			return true;
+		}			
 		
-		uint16 targetPid = targetItem.GetProtoId();
-		if( cont.GetProtoId() == PID_FIRST_AID_KIT )
-		{
-			bool isAidSupply = ( targetPid == PID_STIMPAK            ||
-								 targetPid == PID_HEALING_POWDER     ||
-								 targetPid == PID_BANDAGE            ||
-								 targetPid == PID_CRAFT_L_RAGS       ||
-								 targetPid == PID_ANTISEPTIC         ||
-								 targetPid == PID_BOOZE              );
-			if( !isAidSupply )
-			{
-				cr.Say( SAY_NETMSG, "Это нельзя положить в аптечку." );
-				return true;
-			}
-			else
-				return false;
-		}
-		if( cont.GetProtoId() == PID_DOCTORS_BAG )
-		{
-			bool isDocSupply = ( targetPid == PID_STIMPAK            ||
-								 targetPid == PID_HEALING_POWDER     ||
-								 targetPid == PID_BANDAGE            ||
-								 targetPid == PID_CRAFT_L_RAGS       ||
-								 targetPid == PID_MULTI_TOOL ||
-								 targetPid == PID_MEDCLIP    ||
-								 targetPid == PID_PLANK      ||
-								 targetPid == PID_MEDSPLINT  ||
-								 targetPid == PID_ANTISEPTIC ||
-								 targetPid == PID_BOOZE      ||
-								 targetPid == PID_STRING     ||
-								 targetPid == PID_MEDTHREAD  ||
-								 targetPid == PID_MEDNEEDLE  ||
-								 targetPid == PID_ANESTETIC  );
-			if( !isDocSupply )
-			{
-				cr.Say( SAY_NETMSG, "Это нельзя положить в сумку доктора." );
-				return true;
-			}
-			else
-				return false;
-		}
-		if( cont.GetProtoId() == PID_KEY_BUNCH )
-		{
-			if( targetItem.GetType() != ITEM_TYPE_KEY )
-			{
-				cr.Say( SAY_NETMSG, "Это нельзя прицепить на связку ключей." );
-				return true;
-			}
-			else
-				return false;
-		}
 		if( cont.Accessory == ACCESSORY_CRITTER && cont.CritId == cr.Id )
 		{	
 			cr.ParamBase[ ST_CARRY_WEIGHT_EXT ] -= int( targetItem.Proto.Weight * cr.GetItemTransferCount() );
 			ChangeCritterSpeed( cr );  
 		}
 		return false;
-
-		cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
-		return true;
     break; }
     case SKILL_TAKE_CONT: {
 		if( cr.Timeout[ TO_SK_STEAL ] > REAL_SECOND(1) && cr.GetAccess() < ACCESS_MODER )
@@ -2114,7 +2108,52 @@ void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo )
     {
 		//if (cr.GetTimeEvents( CTE_SLOWRELOAD, null, null, null ) > 0) cr.EraseTimeEvents( CTE_SLOWRELOAD );
 	 
-        uint16 weapPid = weapon.GetProtoId(), skill = 1, reloadBaseTime = 0;
+		if( !valid( ammo ) )
+		{
+			@ammo = cr.GetItem( weapon.AmmoPid, -1 );
+			int need_ammo = weapon.Proto.Weapon_MaxAmmoCount - weapon.AmmoCount;
+			if( !valid( ammo ) )
+			{
+				if( need_ammo > 0 )
+				{
+					if( cr.CountItem( PID_AMMO_BELT ) > 0 )
+					{
+						cr.Say( SAY_EMOTE_ON_HEAD, "Заряжается из патронташа" );
+						Item@[] inventory;
+						Item@[] belts; belts.resize(0);
+						uint count = cr.GetItems( -1, inventory );
+						for( uint i = 0; i < count; i++ )
+							if( inventory[i].GetProtoId() == PID_AMMO_BELT )
+								belts.insertLast( inventory[i] );
+						
+						Item@ finded;
+						int local_max = 0;
+						for( uint i = 0; i < belts.length(); i++ )
+						{
+							@finded = belts[i].GetItem( weapon.AmmoPid, 0 );
+							if( valid( finded ) && finded.GetCount() >= local_max )
+							{
+								local_max = finded.GetCount();
+								@ammo = @finded;
+							}
+						}
+					}
+					else
+					{
+						cr.Say( SAY_EMOTE_ON_HEAD, "Разряжает оружие" );
+					}
+				}
+				else
+				{
+					cr.Say( SAY_EMOTE_ON_HEAD, "Разряжает оружие" );
+				}
+			}
+			else
+				if( need_ammo > 0 )
+					cr.Say( SAY_EMOTE_ON_HEAD, "Перезаряжается" );
+		}
+	 
+		uint16 weapPid = weapon.GetProtoId(), skill = 1, reloadBaseTime = 0;
 
         switch( weapPid )
         {
@@ -2336,9 +2375,9 @@ void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo )
             }
             weapon.AmmoCount = 0;
 			weapon.Update();
-		return;
+			return;
         }
-
+		
         int reloadTime = ( RELOAD_BASE + reloadBaseTime ) - ( ( cr.StatBase[ ST_AGILITY ] * 200 ) + ( skill * 40 ) );
         reloadTime = CLAMP( reloadTime, 1000, 10000 );
 		if( valid( ammo ) ) weapon.Val1 = ammo.Id;
@@ -2389,16 +2428,24 @@ void e_ReloadInterrupt( Item& item, Critter& crit, uint8 fromSlot )
     }
 }
 
+uint cte_aroma( Critter& cr, int identifier, uint& rate )
+{
+	if( cr.ParamBase[ CR_DIRTINESS ] <= 0 ) {
+		cr.Say( SAY_EMOTE_ON_HEAD, "приятно пахнет" );
+		return REAL_MINUTE( 1 );
+	}
+	return 0;
+}
 
 uint cte_slowReload_one( Critter& cr, int identifier, uint& rate )
 {
-    Item@ weapon = cr.GetItemById( rate );
+    Item@ weapon = GetItem( rate );
     if( !valid( weapon ) ) {ChangeCritterSpeed( cr ); return 0;}
 	if( weapon.Id != _CritGetItemHand( cr ).Id ) {ChangeCritterSpeed( cr ); return 0;}
 	if ( weapon.AmmoCount >= weapon.Proto.Weapon_MaxAmmoCount ) {ChangeCritterSpeed( cr ); return 0;}
 
 	Item @ ammo;
-	if ( weapon.Val1 > 0 ) @ammo =  cr.GetItemById( weapon.Val1 );
+	if ( weapon.Val1 > 0 ) @ammo =  GetItem( weapon.Val1 );
 	
 	if( valid( ammo ) )
     {
@@ -2415,12 +2462,12 @@ uint cte_slowReload_one( Critter& cr, int identifier, uint& rate )
 
 uint cte_slowReload( Critter& cr, int identifier, uint& rate )
 {
-    Item@ weapon = cr.GetItemById( rate );
+    Item@ weapon = GetItem( rate );
     if( !valid( weapon ) ) {ChangeCritterSpeed( cr ); return 0;}
 	if( weapon.Id != _CritGetItemHand( cr ).Id ) {ChangeCritterSpeed( cr ); return 0;}
 	
 	Item @ ammo;
-	if ( weapon.Val1 > 0 ) @ammo = cr.GetItemById( weapon.Val1 );
+	if ( weapon.Val1 > 0 ) @ammo = GetItem( weapon.Val1 );
 	
 	if( valid( ammo ) )
     {
@@ -4396,4 +4443,37 @@ int GetLocationTimeDeltaYears( Map@ map )
 
 	GameVar@ DELTA_YEARS = GetLocalVar( LMVAR_DELTA_YEARS, map.Id );
 	return DELTA_YEARS.GetValue();
+}
+
+bool canPutItemInContainer( Item@ item, Item@ container )
+{
+	if( !valid( item ) || !valid( container ) )
+		return false;
+	
+	uint container_pid = container.GetProtoId();
+	uint pid = item.GetProtoId();
+	uint type = item.GetType();
+	
+	uint[] regular_container_pids = {
+		PID_BAG, PID_BACKPACK, PID_AMMO_BELT,
+		PID_SUPER_TOOL_KIT, PID_repkit3i, PID_repkit2i, PID_repkit1i, 
+		PID_BRIEFCASE, PID_KEIS, PID_FIRST_AID_KIT, PID_FIELD_MEDIC_KIT, PID_DOCTORS_BAG, PID_PARAMEDICS_BAG, 
+	};
+	if( regular_container_pids.find( container_pid ) != -1 )
+		return true;
+	
+	uint[] paper_container_pids = {
+		PID_HANDWRITINGS, PID_PORTMONE, PID_CRAFT_RECIPES, PID_PASSPORT, PID_LETTER, PID_POSTMAN_LETTER, PID_PAPERS_JAMMED,
+		PID_ELRON_FIELD_REP, PID_CLIPBOARD, PID_FLIST08, PID_FLIST09, PID_StrpBlt, PID_mgzn01
+	};
+	if( pid == PID_HOLODISK && paper_container_pids.find( container_pid ) != -1 )
+		return true;
+
+	uint[] key_container_pids = {
+		PID_KEY_BUNCH
+	};
+	if( type == ITEM_TYPE_KEY && key_container_pids.find( container_pid ) != -1 )
+		return true;
+	
+	return false;
 }
