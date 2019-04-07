@@ -4,11 +4,220 @@
 
 
 #include "_macros.fos"
+class CraftData
+{
+	uint owner;
+	CraftItem@ data;
+	
+	CraftData( uint _owner, CraftItem@ _data )
+	{
+		owner = _owner;
+		@data = _data;
+	}
+	
+	void set( CraftData@ source )
+	{
+		if( !valid( source ) ) return;
+		owner = source.owner;
+		@data = source.data;
+	}
+	
+	string toString()
+	{
+		string result = "[" + owner + "]";
+		if( !valid( data ) )
+			return result + " is null;";
+		
+		uint16[] pids;
+		uint[] values;
+		uint count = data.GetOutItems( pids, values );
+		
+		for( uint i = 0; i < count; i++ )
+			result += " #" + pids[i] + "x" + values[i];
+		
+		return result;
+	}
+}
+
+class DataHolder
+{
+	CraftData[] list;
+	
+	DataHolder()
+	{
+		list.resize(0);
+	}
+	
+	CraftItem@ item( uint owner )
+	{
+		CraftData@ craft = get( owner );
+		return( valid( craft ) ? craft.data : null );
+	}
+	
+	CraftData@ get( uint owner )
+	{
+		int index = get_index( owner );
+		return( index == -1 ? null : list[index] );
+	}
+	
+	int get_index( uint owner )
+	{
+		if( valid( list ) && list.length() > 0 )
+			for( uint i = 0; i < list.length(); i++ )
+				if( valid( list[i] ) && list[i].owner == owner )
+					return i;
+		return -1;
+	}
+	
+	CraftData@ set( uint index, CraftData@ data )
+	{
+		if( index >= list.length() ) return null;
+		
+		list[index].set( data );
+		return list[index];
+	}
+	
+	int add( CraftData@ data )
+	{
+		if( !valid( data ) ) return -1;
+		int index = get_index( data.owner );
+		if( index == -1 ) 
+		{
+			list.insertLast( data );
+			return list.length() - 1;
+		}
+		list[index].set( data );
+		return index;
+	}
+	
+	string toString()
+	{
+		string result = "Data holder contains " + list.length() + " items:";
+		for( uint i = 0; i < list.length(); i++ )
+			result += "\n" + i + ") " +  list[i].toString() + ";";
+		return result;
+	}
+}
+DataHolder@ crafts;
+
+void elistCrafts( Critter& cr, int, int, int )
+{
+	if( !valid( crafts ) )
+		return;
+	
+	cr.Say( SAY_NETMSG, crafts.toString() );
+	//showCraftInfo( cr, GetCraftItem( cr ) );
+}
+
+void assignCraft( Critter& cr, CraftItem& craft )
+{
+	if( !valid( crafts ) )
+		@crafts = DataHolder();
+	
+	cr.Say( SAY_NETMSG, "Вам привязан №" + crafts.add( CraftData( cr.Id, craft ) ) );
+}
+
+CraftItem@ GetCraftItem( Critter& cr )
+{
+	if( !valid( crafts ) )
+		return null;
+	
+	return crafts.item( cr.Id );
+}
+
+void GetCraftItems( Critter& cr, int state, CraftItem& craft )
+{
+	if( state != FIXBOY_BUTTON || cr.GetAccess() < ACCESS_TESTER )
+		return;
+	
+	assignCraft( cr, craft );
+	ask_GetCraftItems( cr );
+}
+
+void showCraftInfo( Critter& cr, CraftItem@ craft )
+{
+	if( !valid( craft ) )
+	{
+		cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
+		return;
+	}
+	uint16[] pids;
+	uint[] values;
+	uint count = craft.GetOutItems( pids, values );
+	for( uint i = 0; i < count; i++ )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_ITEM, 100 * pids[i] );
+		cr.Say( SAY_NETMSG, values[i] + " шт." );
+		cr.AddItem( pids[i], values[i] );
+	}
+	
+	cr.Say( SAY_NETMSG, "Вы заспаунили результат крафта: " + count + " предметов." );
+}
+
+void ask_GetCraftItems( Critter& cr )
+{
+	cr.ShowScreen( SCREEN_DIALOGBOX, 8, "answer_GetCraftItems" );
+	cr.Say( SAY_DIALOGBOX_TEXT, "Выберите, что вы хотите получить:" );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Инструменты" );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "Инструменты х5" );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "Расходники" );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), "Расходники х5" );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 4 ), "Расходники х25" );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 5 ), "Результат" );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 6 ), "Результат х5" );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 7 ), "Результат х25" );
+}
+
+void answer_GetCraftItems( Critter& cr, uint answerI, string& answerS )
+{
+	cr.Say( SAY_NETMSG, "Вы выбрали №" + answerI );
+	CraftItem@ craft = GetCraftItem( cr );
+	if( !valid( craft ) ) {
+		cr.Say( SAY_NETMSG, "Что-то пошло не так." );
+		return;
+	}
+	
+	uint16[] pids;
+	uint[] amount;
+	bool[] ores;
+	uint mult;
+
+	switch( answerI )
+	{
+		case(0): if( craft.GetNeedTools( pids, amount, ores ) == 0 ) return;
+			mult = 1; break;
+		case(1): if( craft.GetNeedTools( pids, amount, ores ) == 0 ) return;
+			mult = 5; break;
+		case(2): if( craft.GetNeedItems( pids, amount, ores ) == 0 ) return;
+			mult = 1; break;
+		case(3): if( craft.GetNeedItems( pids, amount, ores ) == 0 ) return;
+			mult = 5; break;
+		case(4): if( craft.GetNeedItems( pids, amount, ores ) == 0 ) return;
+			mult = 25; break;
+		case(5): if( craft.GetOutItems( pids, amount ) == 0 ) return;
+			mult = 1; break;
+		case(6): if( craft.GetOutItems( pids, amount ) == 0 ) return;
+			mult = 5; break;
+		case(7): if( craft.GetOutItems( pids, amount ) == 0 ) return;
+			mult = 25; break;
+		default: return;
+	}
+	spawnItems( cr, mult, pids, amount );
+}
+
+void spawnItems( Critter& cr, uint mult, uint16[] pids, uint[] amount )
+{
+	if( mult == 0 ) return;
+	for( uint i = 0, count = pids.length(); i < count; i++ )
+		cr.AddItem( pids[i], amount[i] * mult );
+}
 
 import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat";
 int fix_Smithing( Critter& cr, int state, CraftItem& craft )
 {
-    if( state == FIXBOY_CRAFT ) 
+ 	GetCraftItems( cr, state, craft );
+	
+   if( state == FIXBOY_CRAFT ) 
 	{
 		if( cr.TimeoutBase[ TO_TIREDNESS ] <= __FullSecond + REAL_SECOND( 60 ) )
 		{
@@ -33,8 +242,24 @@ int fix_Smithing( Critter& cr, int state, CraftItem& craft )
     return FIXBOY_DEFAULT; 
 }
 
+
+int fix_Delayed( Critter& cr, int state, CraftItem& craft )
+{
+	GetCraftItems( cr, state, craft );
+	
+    if( state == FIXBOY_CRAFT ) 
+	{
+		cr.TimeoutBase[ TO_SK_REPAIR ] = __FullSecond + REAL_SECOND( 60 );
+		cr.TimeoutBase[ TO_SK_SCIENCE ] = __FullSecond + REAL_SECOND( 60 );
+		return FIX_TIMEOUT; 
+	}
+    return FIXBOY_DEFAULT; 
+}
+
 int fix_Tribal( Critter& cr, int state, CraftItem& craft )
 {
+	GetCraftItems( cr, state, craft );
+
     if( state == FIXBOY_CRAFT ) 
 	{
 		if( cr.TimeoutBase[ TO_TIREDNESS ] <= __FullSecond + REAL_SECOND( 60 ) )
@@ -59,11 +284,14 @@ int fix_Tribal( Critter& cr, int state, CraftItem& craft )
 
 int fix_Ozher( Critter& cr, int state, CraftItem& craft )
 {
+	GetCraftItems( cr, state, craft );
+	
     if( state == FIXBOY_CRAFT ) 
 	{
 		cr.Say( SAY_EMOTE_ON_HEAD, "Что-то мастерит" );
 		uint count = cr.CountItem( PID_KLK );
-		cr.DeleteItem( PID_KLK, count );
+		if( count > 0 )
+			cr.DeleteItem( PID_KLK, count );
 		cr.StatBase[ST_EXPERIENCE] += 100 * count;
 		cr.Say( SAY_NETMSG, "Вы использовали все имеющиеся клыки." );
 		//TODO: 
@@ -76,6 +304,8 @@ int fix_Ozher( Critter& cr, int state, CraftItem& craft )
 
 int fix_Workbench( Critter& cr, int state, CraftItem& craft )
 {
+	GetCraftItems( cr, state, craft );
+	
     if( state == FIXBOY_CRAFT ) 
 	{
 		cr.Say( SAY_EMOTE_ON_HEAD, "Что-то делает" );
@@ -87,6 +317,8 @@ int fix_Workbench( Critter& cr, int state, CraftItem& craft )
 
 int fix_FreeHands( Critter& cr, int state, CraftItem& craft )
 {
+	GetCraftItems( cr, state, craft );
+	
     if( state == FIXBOY_CRAFT ) 
 	{
 		cr.Say( SAY_EMOTE_ON_HEAD, "Что-то делает" );
@@ -98,6 +330,8 @@ int fix_FreeHands( Critter& cr, int state, CraftItem& craft )
 
 int fix_None( Critter& cr, int state, CraftItem& craft )
 {
+	GetCraftItems( cr, state, craft );
+	
     if( state == FIXBOY_CRAFT ) 
 	{
 		cr.Say( SAY_EMOTE_ON_HEAD, "Что-то делает" );
@@ -109,6 +343,8 @@ int fix_None( Critter& cr, int state, CraftItem& craft )
 
 int fix_LowTier( Critter& cr, int state, CraftItem& craft )
 {
+	GetCraftItems( cr, state, craft );
+	
     if( state == FIXBOY_CRAFT ) 
 	{
 		cr.StatBase[ST_EXPERIENCE] += 500;
@@ -120,6 +356,8 @@ int fix_LowTier( Critter& cr, int state, CraftItem& craft )
 
 int fix_MidTier( Critter& cr, int state, CraftItem& craft )
 {
+	GetCraftItems( cr, state, craft );
+	
     if( state == FIXBOY_CRAFT ) 
 	{
 		cr.StatBase[ST_EXPERIENCE] += 1000;
@@ -131,6 +369,8 @@ int fix_MidTier( Critter& cr, int state, CraftItem& craft )
 
 int fix_HiTier( Critter& cr, int state, CraftItem& craft )
 {
+	GetCraftItems( cr, state, craft );
+	
     if( state == FIXBOY_CRAFT ) 
 	{
 		cr.StatBase[ST_EXPERIENCE] += 5000;
