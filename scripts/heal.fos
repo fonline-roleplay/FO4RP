@@ -111,7 +111,7 @@ void answer_ProccessFirstAidSkill( Critter& targetCr, uint answerI, string& answ
 	        return;
 		}
 
-	state += "\n Шанс заражения крови: " + targetCr.ParamBase[ CR_DIRTINESS ];
+	state += "\n Шанс заражения крови: " + CLAMP( targetCr.ParamBase[ CR_DIRTINESS ], 0, 100 );
 		
 	cr.StatBase[ ST_VAR0 ] = targetCr.Id;
 	cr.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_FIRSTAID_1" );
@@ -211,6 +211,10 @@ void answer_FIRSTAID_3( Critter& player, uint answerI, string& answerS )
         return;
 
 	int sk = player.Skill[ SK_FIRST_AID ];
+	if( FLAG( targetCr.StatBase[ ST_CRSTATUS ], CR_STATUS_BULLET_OVER ) )
+		sk /= 2;
+	if( FLAG( targetCr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG ) )
+		sk /= 2;
 
 	bool booze = (_CritCountItem( player, PID_BOOZE )>0);
 	bool anti = (_CritCountItem( player, PID_ANTISEPTIC )>0);
@@ -252,7 +256,6 @@ void answer_FIRSTAID_3( Critter& player, uint answerI, string& answerS )
 		{
 		Item@ item = player.GetItem( PID_STIMPAK, -1 );
 		ItemStimpackUse( targetCr, item);
-		_DecItem (item, 1);//Возможно, тут тратится 2 стимпака.
 		sk+= 30;
 		}
 
@@ -296,6 +299,11 @@ void answer_FIRSTAID_3( Critter& player, uint answerI, string& answerS )
 			ChangeStatus( targetCr, CR_STATUS_BLOOD_TOXIC, 0, true );
 		}
 	}
+	if( FLAG( targetCr.StatBase[ ST_CRSTATUS ], CR_STATUS_BULLET_OVER ) || FLAG( targetCr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG ) )
+	{
+		targetCr.Say( SAY_NETMSG, "Вы занесли грязь в раны." );
+		ChangeStatus( targetCr, CR_STATUS_BLOOD_TOXIC, 0, true );
+	}
 }
 
 void answer_FIRSTAID_TO_DOCTOR( Critter& player, uint answerI, string& answerS )
@@ -317,7 +325,6 @@ void answer_FIRSTAID_TO_DOCTOR( Critter& player, uint answerI, string& answerS )
     {
 	Item@ item = player.GetItem( PID_STIMPAK, -1 );
 	ItemStimpackUse( targetCr, item);
-	_DecItem (item, 1);
     }
     if( answerI == 3 && (_CritCountItem( player, PID_SUPER_STIMPAK )>0))
     {
@@ -340,15 +347,13 @@ void answer_FIRSTAID_TO_UNBANDAGE( Critter& player, uint answerI, string& answer
     }
     if( answerI == 1 && (_CritCountItem( player, PID_HEALING_POWDER )>0))
     {
-	Item@ item = null;
+	Item@ item = player.GetItem( PID_HEALING_POWDER, -1 );
 	ItemPowderUse( targetCr, item);
-	player.DeleteItem( PID_HEALING_POWDER, 1 );
     }
     if( answerI == 2 && (_CritCountItem( player, PID_STIMPAK )>0))
     {
-	Item@ item = null;
+	Item@ item = player.GetItem( PID_STIMPAK, -1 );
 	ItemStimpackUse( targetCr, item);
-	player.DeleteItem( PID_STIMPAK, 1 );
     }
 	ProccessFirstAidSkill( player, targetCr, true);
 }
@@ -359,13 +364,43 @@ void ProccessDoctorSkill( Critter& cr, Critter& targetCr, bool alreadyAllowed )
 	cr.StatBase[ST_VAR0] = targetCr.Id;
 	
 	if(targetCr.Id != cr.Id && !targetCr.IsKnockout() && targetCr.Stat[ST_CURRENT_HP] > 0 && !alreadyAllowed && targetCr.IsPlayer ()){
-		targetCr.ShowScreen( SCREEN_DIALOGBOX, 1, "answer_ProccessDoctorSkill" );
-		targetCr.Say( SAY_DIALOGBOX_TEXT, "Вас хотят оперировать, согласиться?");
+		targetCr.ShowScreen( SCREEN_DIALOGBOX, 1, "answer_SelectAction" );
+		targetCr.Say( SAY_DIALOGBOX_TEXT, "Вас хотят осмотреть, согласиться?");
 		targetCr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Да" );
 		targetCr.Say( SAY_NETMSG, "Вас хотят осмотреть." );
 		cr.Say( SAY_NETMSG, "Вы ждёте согласия пациента." );
 	}else{
-		answer_ProccessDoctorSkill(targetCr, 0, "");
+		answer_SelectAction(targetCr, 0, "");
+	}
+}
+
+void answer_SelectAction(Critter& targetCr, uint answerI, string& answerS)
+{
+	if(answerI != 0) return;
+	
+	Critter@ cr = GetCritter(targetCr.StatBase[ST_VAR0]);
+	if(cr is null) return;
+
+	cr.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_SelectActionResult" );//"answer_DOCTOR_TO_FIRSTAID" );
+	cr.Say( SAY_DIALOGBOX_TEXT, "Выберите действие:\n[ Шанс заражения крови: " + CLAMP( targetCr.ParamBase[ CR_DIRTINESS ], 0, 100 ) + "% ]" );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "перевязка" );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "медосмотр" );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "промыть раны" );
+}
+
+void answer_SelectActionResult(Critter& cr, uint answerI, string& answerS)
+{
+	switch( answerI )
+	{
+		case(0):
+			answer_DOCTOR_TO_FIRSTAID( cr, 0, "" );
+			break;
+		case(1):
+			answer_ProccessDoctorSkill( cr, 0, "" );
+			break;
+		case(2):
+			answer_DOCTOR_TO_FIRSTAID( cr, 1, "" );
+			break;
 	}
 }
 
@@ -451,9 +486,10 @@ void answer_ProccessDoctorSkill(Critter& targetCr, uint answerI, string& answerS
 	}
 	else
 	{
-		cr.ShowScreen( SCREEN_DIALOGBOX, 1, "answer_DOCTOR_TO_FIRSTAID" );
-		cr.Say( SAY_DIALOGBOX_TEXT, "" + state + ", дальше может потребоваться только перевязка.\n Шанс заражения крови: " + targetCr.ParamBase[ CR_DIRTINESS ] );
+		cr.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_DOCTOR_TO_FIRSTAID" );
+		cr.Say( SAY_DIALOGBOX_TEXT, "" + state + ", дальше может потребоваться только перевязка.\n Шанс заражения крови: " + CLAMP( targetCr.ParamBase[ CR_DIRTINESS ], 0, 100 ) );
 		cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "перевязка" );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "промыть раны" );
 	}
 	return;
 }
@@ -636,6 +672,65 @@ void answer_DOCTOR_TO_FIRSTAID( Critter& player, uint answerI, string& answerS )
     {
 		ProccessFirstAidSkill( player, targetCr, true);
     }
+    if( answerI == 1 )
+    {
+		Critter@ target = valid(targetCr) ? @targetCr : @player;
+		if( valid( target ) )
+		{
+			Item@ water = player.GetItem( PID_BOTTLE_FULL, -1 );
+			if( !valid(water) )
+				@water = player.GetItem( PID_GLASS_BOTTLE_FULL, -1 );
+			
+			Item@ soap =  player.GetItem( PID_itsoap01, -1 );
+			if( !valid(soap) )
+				@soap = player.GetItem( PID_FPSHL6, -1 );
+				
+			int pid = valid(soap) ? soap.GetProtoId() : 0;
+			
+			if( !valid(water) )
+			{
+				player.Say( SAY_NETMSG, "Вам нужна чистая вода для этого." );
+				return;
+			}
+
+			if( pid == PID_itsoap01 )
+			{
+				target.Say( SAY_EMOTE_ON_HEAD, "Моется хозяйственным мылом" );
+				target.ParamBase[ CR_DIRTINESS ] = ( target.ParamBase[ CR_DIRTINESS ] * 0.8 ) - 5;
+			}
+			else if( pid == PID_FPSHL6 )
+			{
+				target.Say( SAY_EMOTE_ON_HEAD, "Моется душистым мылом" );
+				target.ParamBase[ CR_DIRTINESS ] = ( target.ParamBase[ CR_DIRTINESS ] * 0.6 ) - 10;
+				
+				if( target.ParamBase[ CR_DIRTINESS ] <= 0 )
+					target.AddTimeEvent( "cte_aroma", REAL_SECOND(15), CTE_ROTTEN, 0 );
+			} 
+			else if( pid == 0 )
+			{
+				target.Say( SAY_EMOTE_ON_HEAD, "Моется" );//"Промывает раны водой" );				
+				target.ParamBase[ CR_DIRTINESS ] -= Random( 0, target.ParamBase[ CR_DIRTINESS ] / 5 );
+			}
+			
+			if( water.GetProtoId() == PID_BOTTLE_FULL )
+				player.AddItem (PID_BOTTLE_EMPTY, 1);
+			else
+				player.AddItem (PID_BOTTLE_GLASS, 1);
+
+			_SubItem( water, 1 );
+			if( pid !=0 && Random( 0, 100 ) < 10 )
+				_SubItem( soap, 1 );
+
+			int chance = player.StatBase[ ST_AGILITY ] + player.StatBase[ ST_LUCK ];
+			if( pid !=0 && Random( 0, 100 ) > Random( chance, chance * 10 ) - 1 )
+			{
+				player.Say( SAY_EMOTE, "Роняет мыло" );
+				MoveItem( soap, 1, player.GetMap(), player.HexX + Random( -1, 1 ), player.HexY + Random( -1, 1 ) );
+			}
+			
+			answer_SelectAction( player, 0, "" );
+		}
+	}
 }
 
 void answer_DOCTOR_HEAVY( Critter& player, uint answerI, string& answerS )
@@ -744,7 +839,7 @@ void answer_DOCTOR_HEAVY_3( Critter& player, uint answerI, string& answerS )
 	if ( player.StatBase[ ST_VAR2 ] == 1) {chance = 10; player.DeleteItem( PID_BOOZE, 1 ); player.AddItem( PID_BOTTLE_GLASS, 1 );}
 	else if ( player.StatBase[ ST_VAR2 ] == 2) {chance = 5; player.DeleteItem( PID_ANTISEPTIC, 1 );}
 	
-	if ( chance + ( 5 - targetCr.Stat[ST_LUCK] ) >= Random( 0, 100 ) - targetCr.ParamBase[ CR_DIRTINESS ] ) 
+	if ( chance + ( 5 - targetCr.Stat[ST_LUCK] ) >= Random( 0, 100 ) - ( targetCr.ParamBase[ CR_DIRTINESS ] / ( player.StatBase[ ST_VAR1 ] == 1 ? 2 : 1 ) ) ) 
 		ChangeStatus( targetCr, CR_STATUS_BLOOD_TOXIC, 0, true );
 	
 	if ( player.StatBase[ ST_VAR3 ] == 1) player.DeleteItem( PID_ANESTETIC, 1 );
@@ -931,6 +1026,10 @@ void answer_DOCTOR_BULLET_3( Critter& player, uint answerI, string& answerS )
 
 bool ItemStimpackUse( Critter& cr, Item& item )
 {
+	if( !valid( item ) ) return false;
+	_SubItem( item, 1 );
+	cr.AddItem( PID_HYPODERMIC_NEEDLE, 1 );
+	
     int16  hpCurrent = cr.Stat[ ST_CURRENT_HP ];
     int16 hpMax = ( cr.Stat[ ST_MAX_LIFE ] + cr.Stat[ ST_STRENGTH ] * 4 + cr.Stat[ ST_ENDURANCE ] * 8 );
     int8  hpHealRate = cr.Stat[ ST_HEALING_RATE ];
