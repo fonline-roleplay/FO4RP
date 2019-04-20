@@ -1006,7 +1006,8 @@ void unsafe_hotkey_command( Critter& player, int param0, int param1, int param2,
             if( weapon.length() < 1 || !valid( weapon[ 0 ] ) )
                 return;
 
-			player.ParamBase[ ST_CURRENT_AP ] -= 20 * 100; //Там какие-то дробные, поэтому доп.множитель на 100 сверх VVish-евского скалирования
+			player.ParamBase[ ST_CURRENT_AP ] -= weapon[ 0 ].Proto.Weapon_ReloadAp * 100; //Там какие-то дробные, поэтому доп.множитель на 100 сверх VVish-евского скалирования
+			player.Wait(GetProtoTime(weapon[ 0 ].Proto, USE_RELOAD, player));
 			player.Action( ACTION_RELOAD_WEAPON, 0, weapon[ 0 ] );
 			int need_ammo = weapon[ 0 ].Proto.Weapon_MaxAmmoCount - weapon[ 0 ].AmmoCount;
 			if( need_ammo > 0 )
@@ -1031,7 +1032,7 @@ void unsafe_hotkey_command( Critter& player, int param0, int param1, int param2,
 
 void unsafe_hex_attack( Critter& player, int hexX, int hexY, int wpn_pid, string@ command, int[] @ param4 )
 {
-	if( player.IsBusy() )
+	if( player.IsBusy() || player.ParamBase[ QST_GAMEMODE ] == GAME_START )
 		return;
 	
     Map@ map = player.GetMap();
@@ -1294,7 +1295,7 @@ void unsafe_say( Critter& player, int param0, int param1, int param2, string@ pa
 
 void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string@ param3, int[] @ param4 )
 {
-	if( player.IsBusy() && isRemote == 0 )
+	if( ( player.IsBusy() && !player.IsKnockout() ) && isRemote == 0 )
 	{
 		return;
 	}
@@ -1314,7 +1315,7 @@ void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string
 			return;
 		}
 		player.ParamBase[ CR_SLEEPING_STATE ] = 0;
-        player.StatBase[ ST_CURRENT_AP ] = 0;
+        player.StatBase[ ST_CURRENT_AP ] += 100 * 100;
         player.EraseTimeEvents( CTE_SLEEPING );
         player.Say( SAY_NETMSG, "Вы поднимаетесь." );
 		return;
@@ -1322,8 +1323,7 @@ void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string
 
 	if( !player.IsKnockout() && player.GetTimeEvents( CTE_SLEEPING, null, null, null ) == 0 )
     {
-        player.StatBase[ ST_CURRENT_AP ] = -100000;
-        player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( isBack == 0 ) ), 500, player.HexX, player.HexY );
+        player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( isBack == 0 ) ), 100, player.HexX, player.HexY );
         player.Say( SAY_NETMSG, "Вы упали." );
         player.AddTimeEvent( "cte_sleep", 0, CTE_SLEEPING, 0 );
 		player.ParamBase[ CR_SLEEPING_STATE ] = 1 + isBack;
@@ -1335,16 +1335,18 @@ void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string
 
 uint cte_sleep( Critter& player, int identifier, uint& rate )
 {
-	if( player.GetTimeEvents( CTE_WARNING, null, null, null ) != 0 )
-		player.EraseTimeEvents( CTE_WARNING ); //temporary
+	if( !player.IsKnockout() )
+		return 0;
+		
+    if( player.StatBase[ ST_CURRENT_AP ] >= -5000 )
+        player.StatBase[ ST_CURRENT_AP ] = -5000;
 	
-    if( player.StatBase[ ST_CURRENT_AP ] >= -50000 )
-        player.StatBase[ ST_CURRENT_AP ] = -100000;
-    return 100;
+	player.Wait ( 1000 );
+    return REAL_SECOND(1);
 }
 
 import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat";
-
+import bool UseSkillOnLocker( Critter& cr, Item& locker, int skill ) from "lockers";
 import void DragAndDrop( Critter& cr, Critter@ target ) from "handcuffs";
 
 void unsafe_itemhit2( Critter& player, int itemId, int x, int y, string@ param3, int[] @ param4 )
@@ -1359,7 +1361,22 @@ void unsafe_itemhit2( Critter& player, int itemId, int x, int y, string@ param3,
 	if( ABS( int(x - player.HexX) ) <= 1 && ABS( int(y - player.HexY) ) <= 1 )
 	{
 		player.SetDir( GetDirection( player.HexX, player.HexY, x, y ) );
-		player.GetMap().SetText( x, y, COLOR_GRAY, "cтук" );
+		Map@ map = player.GetMap();
+		if( !valid( map ) ) return;
+		map.SetText( x, y, COLOR_GRAY, "стук" );
+		
+        Item@[] items;
+		
+		for( uint i = 0; i < 6; i++ ) {
+			uint16 hexX = player.HexX, hexY = player.HexY;
+			map.MoveHexByDir( hexX, hexY, i, 1 );
+			map.GetItems( hexX, hexY, items );
+		}
+		
+		for( uint i = 0, len = items.length(); i < len; i++ )
+			if( items[i].GetType() == ITEM_TYPE_DOOR && FLAG( items[i].LockerCondition, LOCKER_ISOPEN ) )
+				UseSkillOnLocker( player, items[i], SKILL_PICK_ON_GROUND );
+		
 		player.Say( SAY_NETMSG, "Вы постучали." );
 		player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
 		return;
@@ -1394,12 +1411,13 @@ void unsafe_itemhit( Critter& player, int id, int itemId, int param2, string@ pa
                 uint16 weight = weapon.Proto.Weight;
 				weight = CLAMP( weight, 2000, 8000 );
                 uint8  ap = weight * 0.001;
-				ap = CLAMP( ap, 2, 8 );
+				ap = CLAMP( ap, 20, 80 );
                 if( ap <= player.Stat[ ST_CURRENT_AP ] )
                 {
                     player.SetDir( GetDirection( player.HexX, player.HexY, target.HexX, target.HexY ) );
                     _CritAnimateThrow( player );
-                    player.StatBase[ ST_CURRENT_AP ] = 0;
+					player.Wait ( 1000 );
+                    player.StatBase[ ST_CURRENT_AP ] -= ap * 100;
 					
 					if ( player.Skill[ SK_MELEE_WEAPONS ] - target.Stat[ ST_ARMOR_CLASS ] - ( weight * 0.002 ) - target.Stat[ ST_BLOCK ]*50 < Random( 0, 100) )
 						{
@@ -1423,11 +1441,12 @@ void unsafe_itemhit( Critter& player, int id, int itemId, int param2, string@ pa
                 player.Say( SAY_NETMSG, "Недостаточно очков действия." );
                 return;
             }
-			else if( 4 <= player.Stat[ ST_CURRENT_AP ] )
+			else if( 40 <= player.Stat[ ST_CURRENT_AP ] )
                 {
                     player.SetDir( GetDirection( player.HexX, player.HexY, target.HexX, target.HexY ) );
                     _CritAnimateThrow( player );
-                    player.StatBase[ ST_CURRENT_AP ] = 0;
+					player.Wait ( 1000 );
+                    player.StatBase[ ST_CURRENT_AP ] -= 40 * 100;
 					
 					if ( player.Skill[ SK_UNARMED ] - target.Stat[ ST_ARMOR_CLASS ] - target.Stat[ ST_BLOCK ]*50 < Random( 0, 100) )
 						{
@@ -1456,7 +1475,7 @@ void unsafe_itemhit( Critter& player, int id, int itemId, int param2, string@ pa
 }
 
 void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ param3, int[] @ param4 ) {
-	if( player.IsBusy() || player.Stat[ ST_CURRENT_AP ] < 5 )
+	if( player.IsBusy() || player.Stat[ ST_CURRENT_AP ] < 50 )
 	{
 		return;
 	}
@@ -1502,7 +1521,7 @@ void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ par
 		currentMap.RunFlyEffect( _WeaponEffect( GetProtoItem(PID_FRAG_GRENADE), _WeaponModeUse (0)), player, target, player.HexX, player.HexY, tx, ty );
 		_CritAnimateThrow (player);
 		player.Wait (200 * 5 );
-		player.ParamBase[ ST_CURRENT_AP ] -= 5 * 100;
+		player.ParamBase[ ST_CURRENT_AP ] -= 50 * 100;
 	} else {
 		player.Say (SAY_NETMSG, "Вы не в состоянии кидать так далеко");
 	}
