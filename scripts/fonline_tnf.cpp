@@ -397,18 +397,25 @@ EXPORT int getParam_MoveAp( CritterMutual& cr, uint )
     return CLAMP( val, 0, 9999 );
 }
 
-/* from TLA
-   EXPORT int getParam_MaxWeight(CritterMutual& cr, uint)
-   {
-        int val = max(cr.Params[ST_CARRY_WEIGHT] + cr.Params[ST_CARRY_WEIGHT_EXT], 0);
-        val += CONVERT_GRAMM(25 + getParam_Strength(cr, 0) * (25 - cr.Params[TRAIT_SMALL_FRAME] * 10));
-        return CLAMP(val, 0, 2000000000);
-   }*/
 
-EXPORT int getParam_MaxWeight( CritterMutual& cr, uint )
+EXPORT int getParam_MaxWeight(CritterMutual& cr, uint)
 {
-    int val = cr.Params[ ST_CARRY_WEIGHT ] + cr.Params[ ST_CARRY_WEIGHT_EXT ];
-    val +=  ( getParam_Strength( cr, 0 ) * 10 + ( cr.Params[ TRAIT_SMALL_FRAME ] ? 0 : 20 ) ) * 1000;
+	
+	int val = max( cr.Params[ ST_CARRY_WEIGHT ] + cr.Params[ ST_CARRY_WEIGHT_EXT ], 0 );
+    val += 1000 * ( CW_BASE + (cr.Params[ ST_STRENGTH ] * ( CW_PER_STR - cr.Params[ TRAIT_SMALL_FRAME ] * SMALL_FRAME_CW_MALUS_DIV ) ) );
+	
+	// Old Tla
+    // int val = max(cr.Params[ST_CARRY_WEIGHT] + cr.Params[ST_CARRY_WEIGHT_EXT], 0);
+    // val += CONVERT_GRAMM(25 + getParam_Strength(cr, 0) * (25 - cr.Params[TRAIT_SMALL_FRAME] * 10));
+	
+	// Old TNF
+	// int val = cr.Params[ ST_CARRY_WEIGHT ] + cr.Params[ ST_CARRY_WEIGHT_EXT ];
+    // val +=  ( getParam_Strength( cr, 0 ) * 10 + ( cr.Params[ TRAIT_SMALL_FRAME ] ? 0 : 20 ) ) * 1000;
+	
+    return CLAMP(val, 0, 2000000000);
+}
+
+
 
 /*	//Рассчет скоростей на ходу.
    #ifdef __SERVER
@@ -441,8 +448,6 @@ EXPORT int getParam_MaxWeight( CritterMutual& cr, uint )
         }
    #endif
  */
-    return CLAMP( val, 0, 2000000000 );
-}
 
 EXPORT int getParam_Sequence( CritterMutual& cr, uint )
 {
