@@ -73,7 +73,7 @@ jQuery(function($){
             case "!":
             case "+" :
                 //term.pause()
-                $.get(args[1]+"/",function(html){
+                $.get(args[1],function(html){
                     var el = document.createElement( 'html' );
                     el.innerHTML = html;
                     var ns = el.getElementsByTagName("noscript");
