@@ -49,7 +49,7 @@ if (createjs) {
     createjs.Sound.registerSound("assets/sfx/select.mp3", "select");
     createjs.Sound.registerSound("assets/sfx/select2.mp3", "select2");
 
-    createjs.Sound.volume = 0.5
+    createjs.Sound.volume = 0.32
 
     createjs.Sound.play("login")
     $(window).bind('beforeunload', function(){
