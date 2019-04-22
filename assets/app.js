@@ -48,10 +48,23 @@ if (createjs) {
     createjs.Sound.registerSound("assets/sfx/scroll.mp3", "scroll");
     createjs.Sound.registerSound("assets/sfx/select.mp3", "select");
     createjs.Sound.registerSound("assets/sfx/select2.mp3", "select2");
+
+    createjs.Sound.volume = 0.5
+
+    createjs.Sound.play("login")
+    $(window).bind('beforeunload', function(){
+        createjs.Sound.play("logout")
+    });
 }
 
 jQuery(function($){
     $("body").append("<div id='terminal' class='tbody'></div>");
+
+    if (createjs) {
+        $("#terminal").on('scroll',function(){
+            createjs.Sound.play("scroll")
+        })
+    }
 
     $(document).on('click', 'a', function(e){
         e.preventDefault()
