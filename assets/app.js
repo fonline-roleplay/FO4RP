@@ -42,6 +42,14 @@ setInterval( function(){
     if (speed < 0 ) speed = 0
 },0)
 
+if (createjs) {
+    createjs.Sound.registerSound("assets/sfx/login.mp3", "login");
+    createjs.Sound.registerSound("assets/sfx/logout.mp3", "logout");
+    createjs.Sound.registerSound("assets/sfx/scroll.mp3", "scroll");
+    createjs.Sound.registerSound("assets/sfx/select.mp3", "select");
+    createjs.Sound.registerSound("assets/sfx/select2.mp3", "select2");
+}
+
 jQuery(function($){
     $("body").append("<div id='terminal' class='tbody'></div>");
 
@@ -126,6 +134,9 @@ jQuery(function($){
         name: 'terminal',
         prompt: 'guest@poseidon:net/> ',
         scrollOnEcho: false,
+        onAfterCommand : function(){
+            createjs.Sound.play(Math.random() > 0.5 ? "select" : "select2")
+        },
         onInit: function(term) {
             exTerminal = term
             
