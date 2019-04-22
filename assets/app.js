@@ -74,7 +74,16 @@ jQuery(function($){
             case "+" :
                 //term.pause()
                 $.get(args[1],function(html){
-                    term.echo(html,{raw:true})
+                    var el = document.createElement( 'html' );
+                    el.innerHTML = html;
+                    var ns = el.getElementsByTagName("noscript");
+                    if (ns.length > 0) {
+                        el.innerHTML = [0].innerHTML;
+                        el = $("#main",el);
+                        term.echo(el.html(),{raw:true});
+                    } else {
+                        window.open(args[1])
+                    }
                 }).fail(function(){
                     window.open(args[1])
                 })
