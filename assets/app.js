@@ -26,9 +26,9 @@ function typeIn(el) {
 setInterval( function(){ 
     if (anims.length) {
         anims.shift()() 
-        //if (exTerminal) exTerminal.pause()
+        if (exTerminal) exTerminal.pause()
     } else {
-        //if (exTerminal) exTerminal.resume()
+        if (exTerminal) exTerminal.resume()
     }
     speed -= 10
     if (speed < 0 ) speed = 0
@@ -72,7 +72,7 @@ jQuery(function($){
             case "открыть":
             case "!":
             case "+" :
-                //term.pause()
+                term.pause()
                 $.get(args[1],function(html){
                     var el = document.createElement( 'html' );
                     el.innerHTML = html;
