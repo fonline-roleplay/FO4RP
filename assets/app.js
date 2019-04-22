@@ -172,6 +172,6 @@ jQuery(function($){
         })
         setTimeout(function(){
             createjs.Sound.play("login")
-        },100)
+        },50)
     }
 })
