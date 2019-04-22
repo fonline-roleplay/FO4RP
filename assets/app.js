@@ -59,13 +59,6 @@ if (createjs) {
 jQuery(function($){
     $("body").append("<div id='terminal' class='tbody'></div>");
 
-    if (createjs) {
-        $(document).on('scroll','#terminal',function(){
-            createjs.Sound.play("scroll")
-        })
-        createjs.Sound.play("login")
-    }
-
     $(document).on('click', 'a', function(e){
         e.preventDefault()
         var href = $(this).attr('href')
@@ -172,4 +165,13 @@ jQuery(function($){
             $('#terminal').unbind('scroll')
         }
     })
+
+    if (createjs) {
+        $('#terminal').on('scroll',function(){
+            createjs.Sound.play("scroll")
+        })
+        setTimeout(function(){
+            createjs.Sound.play("login")
+        },100)
+    }
 })
