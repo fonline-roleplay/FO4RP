@@ -34,6 +34,7 @@ function typeIn(el) {
 setInterval( function(){ 
     if (anims.length) {
         anims.shift()() 
+        if (Math.random() < 0.3) createjs.Sound.play("scroll")
         //if (exTerminal) exTerminal.pause()
     } else {
         //if (exTerminal) exTerminal.resume()
@@ -172,6 +173,6 @@ jQuery(function($){
         })
         setTimeout(function(){
             createjs.Sound.play("login")
-        },120)
+        },200)
     }
 })
