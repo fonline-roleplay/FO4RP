@@ -34,7 +34,7 @@ function typeIn(el) {
 setInterval( function(){ 
     if (anims.length) {
         anims.shift()() 
-        if (Math.random() < 0.3) createjs.Sound.play("scroll")
+        if (Math.random() < 0.2) createjs.Sound.play("scroll")
         //if (exTerminal) exTerminal.pause()
     } else {
         //if (exTerminal) exTerminal.resume()
