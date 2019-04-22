@@ -7,6 +7,14 @@ function textNodesUnder(node){
     return all;
 }
 
+$.fn.isInViewport = function() {
+    var elementTop = $(this).offset().top;
+    var elementBottom = elementTop + $(this).outerHeight();
+    var viewportTop = $(window).scrollTop();
+    var viewportBottom = viewportTop + $(window).height();
+    return elementBottom > viewportTop && elementTop < viewportBottom;
+};
+
 var exTerminal = undefined
 var anims = []
 var speed = 1
@@ -51,6 +59,9 @@ jQuery(function($){
 
     $(document).on("mouseover","a",function(e){
         e.preventDefault()
+        //
+        if(!$('.cmd').isInViewport()) return;
+        //
         var href = $(this).attr('href')
         if (href.startsWith("#")) {
             if (href.startsWith("#!")) {
