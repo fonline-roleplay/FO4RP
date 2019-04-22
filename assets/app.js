@@ -89,6 +89,7 @@ jQuery(function($){
             case "гит": 
             case "лог": 
             $.get("https://api.github.com/repos/fonline-roleplay/FO4RP/commits", function(result) {
+                result = result.reverse();
                 for (var i in result) {
                     term.echo("<div><a href='"+result[i].html_url+"'>"+(new Date(result[i].commit.author.date).toLocaleDateString().replace(/\./g,'/'))+" - "+result[i].author.login+"</a>: "+result[i].commit.message.replace(/\n+/g,"<br>")+"</div>", {raw:true})
                 }
