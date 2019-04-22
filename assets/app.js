@@ -92,6 +92,7 @@ jQuery(function($){
                         el.innerHTML = ns[0].innerHTML;
                         el = $("#main",el);
                         term.echo(el.html(),{raw:true});
+                        term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
                     } else {
                         window.open(args[1])
                     }
@@ -103,18 +104,20 @@ jQuery(function($){
             case "git": 
             case "гит": 
             case "лог": 
-            $.get("https://api.github.com/repos/fonline-roleplay/FO4RP/commits", function(result) {
-                result = result.reverse();
-                for (var i in result) {
-                    term.echo("<div><a href='"+result[i].html_url+"'>"+(new Date(result[i].commit.author.date).toLocaleDateString().replace(/\./g,'/'))+" - "+result[i].author.login+"</a>: "+result[i].commit.message.replace(/\n+/g,"<br>")+"</div>", {raw:true})
-                }
-            })
+                $.get("https://api.github.com/repos/fonline-roleplay/FO4RP/commits", function(result) {
+                    result = result.reverse();
+                    for (var i in result) {
+                        term.echo("<div><a href='"+result[i].html_url+"'>"+(new Date(result[i].commit.author.date).toLocaleDateString().replace(/\./g,'/'))+" - "+result[i].author.login+"</a>: "+result[i].commit.message.replace(/\n+/g,"<br>")+"</div>", {raw:true})
+                    }
+                    term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
+                })
             break
             case "echo":
-                term.echo(cmd)
+                term.echo(cmd,{raw:true})
                 break
             default: 
                 term.echo("ОШИБКА: Неизвестная команда <"+args[0]+">")
+                term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
             break
         }
     }, {
