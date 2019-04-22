@@ -49,7 +49,7 @@ if (createjs) {
     createjs.Sound.registerSound("assets/sfx/select.mp3", "select");
     createjs.Sound.registerSound("assets/sfx/select2.mp3", "select2");
 
-    createjs.Sound.volume = 0.32
+    createjs.Sound.volume = 0.25
 
     $(window).bind('beforeunload', function(){
         createjs.Sound.play("logout")
@@ -60,7 +60,7 @@ jQuery(function($){
     $("body").append("<div id='terminal' class='tbody'></div>");
 
     if (createjs) {
-        $("#terminal").on('scroll',function(){
+        $(document).on('scroll','#terminal',function(){
             createjs.Sound.play("scroll")
         })
         createjs.Sound.play("login")
