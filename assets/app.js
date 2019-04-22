@@ -74,12 +74,7 @@ jQuery(function($){
             case "+" :
                 //term.pause()
                 $.get(args[1],function(html){
-                    $source = $('#source',html);
-                    if ($source) {
-                        term.echo($source.html(),{raw:true})
-                    } else {
-                        window.open(args[1])    
-                    }                    
+                    term.echo(html,{raw:true})
                 }).fail(function(){
                     window.open(args[1])
                 })
