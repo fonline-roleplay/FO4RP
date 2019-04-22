@@ -73,12 +73,12 @@ jQuery(function($){
             case "!":
             case "+" :
                 //term.pause()
-                $.get(args[1],function(html){
+                $.get(args[1]+"/",function(html){
                     var el = document.createElement( 'html' );
                     el.innerHTML = html;
                     var ns = el.getElementsByTagName("noscript");
                     if (ns.length > 0) {
-                        el.innerHTML = [0].innerHTML;
+                        el.innerHTML = ns[0].innerHTML;
                         el = $("#main",el);
                         term.echo(el.html(),{raw:true});
                     } else {
