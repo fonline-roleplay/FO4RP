@@ -46,7 +46,7 @@ jQuery(function($){
                 return
             } else return
         }
-        if (exTerminal) exTerminal.exec("! " + href,true)
+        if (exTerminal) exTerminal.exec("show " + href,true)
     })
 
     $(document).on("mouseover","a",function(e){
@@ -58,7 +58,7 @@ jQuery(function($){
                 return
             } else return
         }
-        if (exTerminal) exTerminal.set_command("! " + href,true)
+        if (exTerminal) exTerminal.set_command("show " + href,true)
     })
 
     $("#terminal").terminal(function(cmd,term){
@@ -67,13 +67,19 @@ jQuery(function($){
             case "": return
             case "go":
             case "run":
+            case "show":
             case "load":
             case "открыть":
             case "!":
             case "+" :
                 //term.pause()
-                $.get(args[1]+" #source",function(html){
-                    term.echo(html,{raw:true})
+                $.get(args[1],function(html){
+                    $source = $('#source',html);
+                    if ($source) {
+                        term.echo($source.html(),{raw:true})
+                    } else {
+                        window.open(args[1])    
+                    }                    
                 }).fail(function(){
                     window.open(args[1])
                 })
