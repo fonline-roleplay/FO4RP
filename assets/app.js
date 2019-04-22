@@ -51,7 +51,6 @@ if (createjs) {
 
     createjs.Sound.volume = 0.32
 
-    createjs.Sound.play("login")
     $(window).bind('beforeunload', function(){
         createjs.Sound.play("logout")
     });
@@ -64,6 +63,7 @@ jQuery(function($){
         $("#terminal").on('scroll',function(){
             createjs.Sound.play("scroll")
         })
+        createjs.Sound.play("login")
     }
 
     $(document).on('click', 'a', function(e){
