@@ -1,0 +1,225 @@
+#include "_macros.fos"
+
+#define PID_LIFT 2000
+#define FOTEXT_LIFT    # (__FOTEXT_LIFT_group, __FOTEXT_LIFT_floor)   ( 20000 + ( __FOTEXT_LIFT_group )*100 + ( __FOTEXT_LIFT_floor ) )
+
+bool lifts_initialized = false;
+uint[][] lifts_ids;
+
+void _LiftInit( Item& item, bool firstTime ) {
+    //item.SetEvent( ITEM_EVENT_WALK, "e_LiftWalk" );
+    SETFLAG(item.Flags, ITEM_CAN_USE);
+    item.SetEvent( ITEM_EVENT_SKILL, "e_LiftSkill" );
+    CreateTimeEvent( __FullSecond + REAL_SECOND(3), "e_LiftAutoInit", item.Id, false );
+}
+
+uint e_LiftAutoInit( uint[] @ val ) {
+    if( !lifts_initialized ) {
+        InitializeLifts();
+    }
+    return 0;
+}
+
+void resetLifts( Critter& cr, int p1, int p2, int param2 ) {
+    lifts_initialized = false;
+    InitializeLifts();
+}
+
+uint GetLift(uint group, uint floor) {
+    if (lifts_ids.length() < group) {
+        return 0;
+    }
+    uint[]@ group_ids = lifts_ids[group-1];
+    if (group_ids.length() < floor) {
+        return 0;
+    }
+    return group_ids[floor-1];
+}
+
+void SetLift(uint group, uint floor, uint value) {
+    if (lifts_ids.length() < group) {
+        lifts_ids.resize(group);
+    }
+    uint[]@ group_ids = lifts_ids[group-1];
+    uint group_ids_len = group_ids.length();
+    if (group_ids.length() < floor) {
+        group_ids.resize(floor);
+        for(uint i=group_ids_len; i<floor-1; ++i) {
+            group_ids[i] = 0;
+        }
+    }
+    group_ids[floor-1] = value;
+}
+
+bool IsSettingsValid(uint group, uint floor) {
+    if( group == 0 || group > 99 ) {
+        Log("Invalid lifts' group: "+group);
+        return false;
+    }
+    if( floor == 0 || floor > 99 ) {
+        Log("Invalid lifts' floor: "+floor);
+        return false;
+    }
+    return true;
+}
+
+void InitializeLifts() {
+    lifts_initialized = true;
+    Item@[] items;
+    uint count = GetAllItems (PID_LIFT, items);
+    lifts_ids.resize(0);
+    uint count_ok = 0;
+    for(uint i=0, l=items.length(); i<l; ++i) {
+        Item@ item = items[i];
+        uint group = item.Val1;
+        uint floor = item.Val2;
+        if (!IsSettingsValid(group, floor)) {
+            continue;
+        }
+        uint prev_lift = GetLift(group, floor);
+        if( prev_lift != 0 ) {
+            LiftDebug("Collision of lifts' settings, previous value: "+prev_lift, item);
+            continue;
+        }
+        SetLift(group, floor, item.Id);
+        count_ok += 1;
+    }
+    Log("Lifts initialized: "+count_ok);
+}
+
+void LiftDebug(string@& message, Item& item) {
+    uint16 hexX = 0, hexY = 0;
+    Map@ map = item.GetMapPosition (hexX, hexY);
+    if(map is null) {
+        Log(message+"; item.Id: "+item.Id+", group: "+item.Val1+", floor: "+item.Val2+", map is null");
+    } else {
+        Log(message+"; item.Id: "+item.Id+", group: "+item.Val1+", floor: "+item.Val2+
+            ", map.Id: "+map.Id+", hexX: "+hexX+", hexY: "+hexY);
+    }    
+}
+
+bool e_LiftSkill( Item& item, Critter& cr, int skill ) {
+    if( skill == SKILL_PICK_ON_GROUND ) {
+        LiftActivate(item, cr);
+        return true;
+    }
+    return false;
+}
+
+void e_LiftWalk( Item& item, Critter& cr, bool entered, uint8 dir ) {
+    if( entered ) {
+        LiftActivate(item, cr);
+    }
+}
+
+void LiftActivate(Item& item, Critter& cr) {
+    if( !lifts_initialized ) {
+        InitializeLifts();
+    }
+
+    if (cr.IsNpc()) {
+        //npc can't ride on lift
+        return;
+    }
+    uint16 item_hexX = 0, item_hexY = 0;
+    Map@ item_map = item.GetMapPosition (item_hexX, item_hexY);
+    if (item_map is null) {
+        LiftDebug("Player "+cr.Id+" is activating lift which is not on the map", item);
+        return;
+    }
+
+    Map@ map = cr.GetMap();
+    if (map is null) {
+        LiftDebug("Player "+cr.Id+" is activating lift while on global", item);
+        return;
+    }
+
+    if (item_map.Id != map.Id) {
+        LiftDebug("Player "+cr.Id+" is activating lift which is on the other map", item);
+        return;
+    }
+
+    uint group = item.Val1;
+    uint floor = item.Val2;
+    cr.Say(SAY_NETMSG, "group: "+group+", floor: "+floor);
+    if (!IsSettingsValid(group, floor)) {
+        return;
+    }
+    uint lift_id = GetLift(group, floor);
+    if (lift_id == 0 || lift_id != item.Id) {
+        LiftDebug("Player is activating lift that's not registered correctly", item);
+        return;
+    }
+
+    if (item_hexX != cr.HexX || item_hexY != cr.HexY-1) {
+        cr.Say(SAY_NETMSG, "Перед тем, как воспользоваться лифтом - нужно в него зайти.");
+        return;
+    }
+
+    uint[]@ group_ids = lifts_ids[group-1];
+    uint floors_in_group = group_ids.length();
+
+    cr.ShowScreen( SCREEN_DIALOGBOX, floors_in_group-1, "answer_LiftMenuHandler" );
+    cr.SayMsg( SAY_DIALOGBOX_TEXT, TEXTMSG_TEXT, FOTEXT_LIFT(group, floor) );
+    for(uint i=0, j=1; j<=floors_in_group; ++j) {
+        if(j==floor) {
+            continue;
+        }
+        cr.SayMsg( SAY_DIALOGBOX_BUTTON( i ), TEXTMSG_TEXT, FOTEXT_LIFT(group, j));
+        i+=1;
+    }
+}
+
+void answer_LiftMenuHandler( Critter& player, uint answerI, string& answerS ){
+    Map@ map = player.GetMap();
+    if(map is null) {
+        Log("Player "+player.Id+" answers lift menu while on global");
+        return;
+    }
+    Item@ item = map.GetItem(player.HexX, player.HexY-1, PID_LIFT);
+    if(item is null) {
+        Log("Player "+player.Id+" answers lift menu but there is no lift item under him");
+        return;
+    }
+    uint group = item.Val1;
+    uint floor = item.Val2;
+    //player.Say(SAY_NETMSG, "group: "+group+", floor: "+floor);
+    if (!IsSettingsValid(group, floor)) {
+        return;
+    }
+    
+    uint[]@ group_ids = lifts_ids[group-1];
+    uint floors_in_group = group_ids.length();
+
+    uint next_floor_number = answerI+1;
+    if( floor<=next_floor_number ) {
+        next_floor_number += 1;
+    }
+    //player.Say(SAY_NETMSG, "floor in group: "+floors_in_group+", answerI: "+answerI+", next_floor_number: "+next_floor_number);
+    if( next_floor_number > floors_in_group || next_floor_number == floor) {
+        //WIP: Should we do something here?
+        return;
+    }
+
+    uint next_floor = group_ids[next_floor_number-1];
+
+    if(next_floor == 0) {
+        LiftDebug("Gap in floors", item);
+        return;
+    }
+
+    Item@ next_lift = GetItem(next_floor);
+    if(next_lift is null) {
+        LiftDebug("Next lift with item.Id "+next_floor+" is invalid", item);
+        return;
+    }
+    uint16 hexX = 0, hexY = 0;
+    Map@ next_map = next_lift.GetMapPosition (hexX, hexY);
+    if(map is null) {
+        LiftDebug("Next lift with item.Id "+next_floor+" isn't on map", item);
+        return;
+    }
+    hexY+=1;
+    //player.Say(SAY_NETMSG, "hexX: "+hexX+", hexY: "+hexY);
+    player.TransitToMap(next_map.Id, hexX, hexY, 2);
+}
