@@ -239,24 +239,6 @@ jQuery(function($){
                 term.exec("nav");
             })
 
-            if (window.Hammer) {
-                var mc = new Hammer(document.body);
-                mc.get('swipe').set({ direction: Hammer.DIRECTION_ALL });
-                mc.on("swipeleft", function (e) { 
-                    $("#terminal").scrollTop( $("#terminal").scrollTop() + window.innerHeight )
-                });               
-                mc.on("swiperight", function (e) { 
-                    $("#terminal").scrollTop( $("#terminal").scrollTop() - window.innerHeight )
-                });
-                mc.on("swipeup", function (e) { 
-                    if (Math.abs(e.deltaY) > window.innerHeight * 0.6) $("#terminal").scrollTop(0)
-                }); 
-                mc.on("swipedown", function () { 
-                    if (Math.abs(e.deltaY) > window.innerHeight * 0.6) $("#terminal").scrollTop($("#terminal")[0].scrollHeight + window.innerHeight)
-                });
-            }
-
-            if (isMobile) $("#terminal").css("overflow-y","scroll")
         }
     })
 
@@ -282,4 +264,16 @@ jQuery(function($){
         e.preventDefault()
         $("#terminal").scrollTop($("#terminal")[0].scrollHeight + window.innerHeight)
     })
+
+    var test = document.createElement("div")
+    var isChrome = !!window.chrome && (!!window.chrome.webstore || !!window.chrome.runtime);
+    var isFirefox = typeof InstallTrigger !== 'undefined';
+    var isOpera = (!!window.opr && !!opr.addons) || !!window.opera || navigator.userAgent.indexOf(' OPR/') >= 0;
+    test.style['mix-blend-mode'] = "overlay"
+    test.style['pointer-events'] = "none"
+    if (test.style['mix-blend-mode'] === 'overlay' && test.style['pointer-events'] === 'none' && (isChrome || isFirefox || isOpera)){
+        document.documentElement.classList.add("with-effects")
+    }
+
+    if (isMobile && !isChrome && !isFirefox && !isOpera) $("#terminal").css("overflow-y","scroll")
 })
