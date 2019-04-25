@@ -113,6 +113,7 @@ jQuery(function($){
                         window.open(args[1])
                     }
                 }).fail(function(){
+                    console.log(arguments)
                     window.open(args[1])
                 })
             break 
