@@ -236,7 +236,7 @@ jQuery(function($){
             if (window.Hammer) {
                 var hammertime = new Hammer(document.body);
                 hammertime.on('swipe', function(ev) {
-                    term.echo("<pre>"+JSON.stringify(ev,null,2) + "</pre>",{raw:true})
+                    term.echo("<pre>"+ev.deltaX + ":" + ev.deltaY + "</pre>",{raw:true})
                 });
             }
         }
