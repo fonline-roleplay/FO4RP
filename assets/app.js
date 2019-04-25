@@ -180,4 +180,14 @@ jQuery(function($){
             }            
         },200)
     }
+
+    $(document).on('click','.scroll-up',function(e){
+        e.preventDefault()
+        $("#terminal").scrollTop(0)
+    })
+
+    $(document).on('click','.scroll-dn',function(e){
+        e.preventDefault()
+        $("#terminal").scrollTop($("#terminal").height())
+    })
 })
