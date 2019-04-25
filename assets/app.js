@@ -114,7 +114,11 @@ jQuery(function($){
                     if (ns.length > 0) {
                         el.innerHTML = ns[0].innerHTML;
                         el = $("#main",el);
-                        term.echo(el.html(),{raw:true});
+                        if (noscriptSwap) {
+                            term.echo(el.text(),{raw:true});
+                        } else {
+                            term.echo(el.html(),{raw:true});
+                        }
                         term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
                         if (history) {
                             if (args[1].startsWith("/")) {
