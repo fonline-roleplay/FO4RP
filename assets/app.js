@@ -228,6 +228,13 @@ jQuery(function($){
             $(".prompt").on('click',function(e){
                 term.exec("nav");
             })
+
+            if (window.Hammer) {
+                var hammertime = new Hammer($("#terminal")[0],{});
+                hammertime.on('swipe', function(ev) {
+                    term.echo(JSON.stringify(ev))
+                });
+            }
         }
     })
 
