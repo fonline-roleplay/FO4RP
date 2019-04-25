@@ -96,6 +96,7 @@ jQuery(function($){
             case "show":
             case "load":
             case "открыть":
+            case "cat":
             case "!":
             case "+" :
                 //term.pause()
@@ -145,6 +146,17 @@ jQuery(function($){
             default: 
                 term.echo("ОШИБКА: Неизвестная команда <"+args[0]+">")
                 term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
+            break
+            case "/?":
+            case "?":
+            case "man":
+            case "help":
+                term.echo("go | run | show | load | открыть | cat <filename>")
+                term.echo("echo <html>")
+                term.echo("log | git | гит | лог")
+                term.echo("up | return")
+                term.echo("nav | menu")
+                term.echo("clear")
             break
         }
     }, {
