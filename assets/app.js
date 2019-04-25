@@ -113,6 +113,7 @@ jQuery(function($){
                         el = $("#main",el);
                         term.echo(el.html(),{raw:true});
                         term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
+                        if (history) history.pushState(null, html, args[1]);
                     } else {
                         window.open(args[1])
                     }
