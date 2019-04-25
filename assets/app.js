@@ -162,6 +162,7 @@ jQuery(function($){
             }
 
             term.echo($("#source").html(),{raw:true})
+            $("#source").remove()
 
             $('#terminal').unbind('scroll')
         }
@@ -173,6 +174,10 @@ jQuery(function($){
         })
         setTimeout(function(){
             createjs.Sound.play("login")
+            if ($("#source").length > 0) {
+                $("#terminal").html( $("#source").html() );
+                $("#source").remove()
+            }            
         },200)
     }
 })
