@@ -275,5 +275,5 @@ jQuery(function($){
         document.documentElement.classList.add("with-effects")
     }
 
-    if (isMobile && !isChrome && !isFirefox && !isOpera) $("#terminal").css("overflow-y","scroll")
+    if (isMobile && !isChrome && !isFirefox && !isOpera && navigator.vendor != "") $("#terminal").css("overflow-y","scroll")
 })
