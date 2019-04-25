@@ -139,7 +139,12 @@ jQuery(function($){
             break
             case "menu":
             case "nav":
-                term.echo("<nav>"+$("header nav").html()+"</nav>", {raw:true});
+                var menu = $("header nav").html();
+                if (!menu) {
+                    term.echo("ОШИБКА: Меню не найдено");
+                    return
+                }
+                term.echo("<nav>"+menu+"</nav>", {raw:true});
                 term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
             break
             case "return":
