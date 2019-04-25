@@ -131,6 +131,14 @@ jQuery(function($){
                 term.echo(cmd,{raw:true})
                 term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
             break
+            case "nav":
+                term.echo("<nav>"+$("header nav").html()+"</nav>", {raw:true});
+                term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
+            break
+            case "return":
+            case "up":
+                $("#terminal").scrollTop(0)
+            break
             default: 
                 term.echo("ОШИБКА: Неизвестная команда <"+args[0]+">")
                 term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
