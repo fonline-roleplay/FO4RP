@@ -150,7 +150,7 @@ jQuery(function($){
             break
             case "eval":
                 var rr= cmd.substr(4)
-                term.echo(eval(rr ? rr : "Complete"))
+                term.echo(eval(!!rr ? rr : "Complete"))
             break
             default: 
                 term.echo("ОШИБКА: Неизвестная команда <"+args[0]+">")
