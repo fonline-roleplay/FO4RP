@@ -238,15 +238,19 @@ jQuery(function($){
                 mc.get('swipe').set({ direction: Hammer.DIRECTION_ALL });
                 mc.on("swipeleft", function (e) { 
                     $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaX )
+                    term.echo($("#terminal").scrollTop() + eval.deltaX)
                 });               
                 mc.on("swiperight", function (e) { 
                     $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaX )
+                    term.echo($("#terminal").scrollTop() + eval.deltaX)
                 });
                 mc.on("swipeup", function (e) { 
                     $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaY )
+                    term.echo($("#terminal").scrollTop() + eval.deltaY)
                 });                 
                 mc.on("swipedown", function (e) { 
                     $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaY )
+                    term.echo($("#terminal").scrollTop() + eval.deltaY)
                 });
             }
         }
