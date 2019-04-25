@@ -188,6 +188,6 @@ jQuery(function($){
 
     $(document).on('click','.scroll-dn',function(e){
         e.preventDefault()
-        $("#terminal").scrollTop($("#terminal").height())
+        $("#terminal").scrollTop($("#terminal").innerHeight()*2)
     })
 })
