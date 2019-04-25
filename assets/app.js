@@ -234,9 +234,19 @@ jQuery(function($){
             })
 
             if (window.Hammer) {
-                var hammertime = new Hammer(document.body);
-                hammertime.on('swipe', function(ev) {
-                    term.echo("<pre>"+ev.deltaX + ":" + ev.deltaY + "</pre>",{raw:true})
+                var mc = new Hammer(document.body);
+                mc.get('swipe').set({ direction: Hammer.DIRECTION_ALL });
+                mc.on("swipeleft", function (e) { 
+                    $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaX )
+                });               
+                mc.on("swiperight", function (e) { 
+                    $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaX )
+                });
+                mc.on("swipeup", function (e) { 
+                    $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaY )
+                });                 
+                mc.on("swipedown", function (e) { 
+                    $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaY )
                 });
             }
         }
