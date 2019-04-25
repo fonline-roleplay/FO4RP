@@ -241,11 +241,18 @@ jQuery(function($){
 
             if (window.Hammer) {
                 var mc = new Hammer(document.body);
+                mc.get('swipe').set({ direction: Hammer.DIRECTION_ALL });
                 mc.on("swipeleft", function (e) { 
                     $("#terminal").scrollTop( $("#terminal").scrollTop() + window.innerHeight )
                 });               
                 mc.on("swiperight", function (e) { 
                     $("#terminal").scrollTop( $("#terminal").scrollTop() - window.innerHeight )
+                });
+                mc.on("swipeup", function (e) { 
+                    if (Math.abs(e.deltaY) > window.innerHeight * 0.6) $("#terminal").scrollTop(0)
+                }); 
+                mc.on("swipedown", function () { 
+                    if (Math.abs(e.deltaY) > window.innerHeight * 0.6) $("#terminal").scrollTop($("#terminal")[0].scrollHeight + window.innerHeight)
                 });
             }
 
@@ -273,6 +280,6 @@ jQuery(function($){
 
     $(document).on('click','.scroll-dn',function(e){
         e.preventDefault()
-        $("#terminal").scrollTop($("#terminal").innerHeight()*2)
+        $("#terminal").scrollTop($("#terminal")[0].scrollHeight + window.innerHeight)
     })
 })
