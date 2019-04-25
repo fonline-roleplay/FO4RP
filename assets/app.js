@@ -7,6 +7,9 @@ function textNodesUnder(node){
     return all;
 }
 
+// IE and some browsers tend to escape all html inside of noscript tag so .text() should be used instead of .html()
+var noscriptSwap = ($("<noscript><div>OK</div></noscript>").html().indexOf("&gt;") == 7)
+
 $.fn.isInViewport = function() {
     var elementTop = $(this).offset().top;
     var elementBottom = elementTop + $(this).outerHeight();
@@ -209,7 +212,12 @@ jQuery(function($){
                 return res
             }
 
-            term.echo($("#source").html(),{raw:true})
+            if (noscriptSwap) {
+                term.echo($("#source").text(),{raw:true})
+            } else {
+                term.echo($("#source").html(),{raw:true})
+            }
+            
             $("#source").remove()
 
             $('#terminal').unbind('scroll')
