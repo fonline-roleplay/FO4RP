@@ -237,20 +237,16 @@ jQuery(function($){
                 var mc = new Hammer(document.body);
                 mc.get('swipe').set({ direction: Hammer.DIRECTION_ALL });
                 mc.on("swipeleft", function (e) { 
-                    $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaX )
-                    term.echo($("#terminal").scrollTop() + eval.deltaX)
+                    $("#terminal").scrollTop( $("#terminal").scrollTop() + e.deltaX )
                 });               
                 mc.on("swiperight", function (e) { 
-                    $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaX )
-                    term.echo($("#terminal").scrollTop() + eval.deltaX)
+                    $("#terminal").scrollTop( $("#terminal").scrollTop() + e.deltaX )
                 });
                 mc.on("swipeup", function (e) { 
-                    $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaY )
-                    term.echo($("#terminal").scrollTop() + eval.deltaY)
+                    $("#terminal").scrollTop( $("#terminal").scrollTop() + e.deltaY )
                 });                 
                 mc.on("swipedown", function (e) { 
-                    $("#terminal").scrollTop( $("#terminal").scrollTop() + eval.deltaY )
-                    term.echo($("#terminal").scrollTop() + eval.deltaY)
+                    $("#terminal").scrollTop( $("#terminal").scrollTop() + e.deltaY )
                 });
             }
         }
