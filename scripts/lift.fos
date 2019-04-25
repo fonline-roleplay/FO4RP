@@ -1,19 +1,48 @@
 #include "_macros.fos"
 
+
 #define PID_LIFT_1 2000
-#define PID_LIFT_2 3605
-#define FOTEXT_LIFT    # (__FOTEXT_LIFT_group, __FOTEXT_LIFT_floor)   ( 20000 + ( __FOTEXT_LIFT_group )*100 + ( __FOTEXT_LIFT_floor ) )
+//#define PID_LIFT_2 3605
+
+int[][] lifts_hexes = {
+//  Lift item           Door hex    KO hex    Critter hexes
+//  ProtoId             X   Y       X   Y     X   Y   X   Y   X   Y   X   Y   X   Y
+    {PID_LIFT_1,        0,  2,      0,  4,    0,  0,  0,  1, -1,  1,  1,  1, -1,  2}
+};
 
 bool lifts_initialized = false;
 uint[][] lifts_ids;
 
-uint[][] lifts_hexes = {
-    {PID_LIFT_1, 0, 1}
-};
+#define FOTEXT_LIFT    # (__FOTEXT_LIFT_group, __FOTEXT_LIFT_floor)   ( 20000 + ( __FOTEXT_LIFT_group )*100 + ( __FOTEXT_LIFT_floor ) )
 
-void _LiftInit( Item& item, bool firstTime ) {
+#define GROUP_INDEX_PID 0
+#define GROUP_INDEX_CURRENT 1
+#define GROUP_INDEX_FIRST 2
+#define GROUP_LEN # (__GROUP_LEN_group) (__GROUP_LEN_group.length()-GROUP_INDEX_FIRST)
+#define GROUP_GET_FLOOR # (__GROUP_GET_FLOOR_group, __GROUP_GET_FLOOR_floor) (__GROUP_GET_FLOOR_group[GROUP_INDEX_FIRST-1+__GROUP_GET_FLOOR_floor])
+
+#define FRAME_VACANT 0
+#define FRAME_ARRIVED 1
+
+#define HEXES_INDEX_DOOR 1
+#define HEXES_INDEX_KO 3
+#define HEXES_INDEX_FIRST 5
+
+
+void ChangeFrame( Item& item, uint8 frame )
+{
+    item.AnimStayBegin      = frame;
+    item.AnimStayEnd        = frame;
+    item.AnimShowBegin      = frame;
+    item.AnimShowEnd        = frame;
+    item.AnimHideBegin      = frame;
+    item.AnimHideEnd        = frame;
+    item.Update();
+}
+
+void _LiftInit( Item& item, bool firstTime ) {    
     //item.SetEvent( ITEM_EVENT_WALK, "e_LiftWalk" );
-    SETFLAG(item.Flags, ITEM_CAN_USE);
+    lifts_initialized = false;
     item.SetEvent( ITEM_EVENT_SKILL, "e_LiftSkill" );
     CreateTimeEvent( __FullSecond + REAL_SECOND(3), "e_LiftAutoInit", item.Id, false );
 }
@@ -30,14 +59,36 @@ void resetLifts( Critter& cr, int p1, int p2, int param2 ) {
     InitializeLifts();
 }
 
-uint[]@ GetLiftHexes(uint16 pid) {
+void menu( Critter& cr, int group, int floor, int safe ) {
+    if( group == 0 || group > 99 ) {
+        cr.Say(SAY_NETMSG, "Invalid lifts' group: "+group);
+        return;
+    }
+    if(floor == 0) {
+        floor = GetGroupCurrentFloor(group);
+    }
+    if( floor == 0 || floor > 99 ) {
+        cr.Say(SAY_NETMSG, "Invalid lifts' group: "+floor);
+        return;
+    }
+    uint item_id = GetLift(group, floor);
+    Item@ item = GetItem(item_id);
+    if(item is null) {
+        cr.Say(SAY_NETMSG, "Item is null");
+    } else {
+        LiftActivate(item, cr, safe==1);
+    }
+}
+
+int[]@ GetLiftHexes(uint16 pid) {
     for(uint i=0, len=lifts_hexes.length(); i<len; i++) {
-        uint[]@ hexes = lifts_hexes[i];
+        int[]@ hexes = lifts_hexes[i];
         uint hexes_length = hexes.length();
         if(hexes_length == 0 || hexes[0] != pid) {
             continue;
         }
-        if(hexes_length < 3 || hexes_length%2==0) {
+        if(hexes_length < HEXES_INDEX_FIRST+2 || hexes_length%2==0) {
+            Log("Invalid lift hexes settings: "+i+" pid "+pid);
             return null;
         }
         return hexes;
@@ -50,10 +101,18 @@ uint GetLift(uint group, uint floor) {
         return 0;
     }
     uint[]@ group_ids = lifts_ids[group-1];
-    if (group_ids.length() < floor) {
+    if (GROUP_LEN(group_ids) < floor) {
         return 0;
     }
-    return group_ids[floor];
+    return GROUP_GET_FLOOR(group_ids, floor);
+}
+
+Item@ GetLiftItem(uint group, uint floor) {
+    uint id = GetLift(group, floor);
+    if(id != 0) {
+        return GetItem(id);
+    }
+    return null;
 }
 
 uint GetGroupType(uint group) {
@@ -61,26 +120,69 @@ uint GetGroupType(uint group) {
         return 0;
     }
     uint[]@ group_ids = lifts_ids[group-1];
-    if (group_ids.length() == 0) {
+    if (group_ids.length() <= GROUP_INDEX_PID) {
         return 0;
     }
-    return group_ids[0];
+    return group_ids[GROUP_INDEX_PID];
 }
+uint GetGroupCurrentFloor(uint group) {
+    if (lifts_ids.length() < group) {
+        return 0;
+    }
+    uint[]@ group_ids = lifts_ids[group-1];
+    if (group_ids.length() <= GROUP_INDEX_CURRENT) {
+        return 0;
+    }
+    return group_ids[GROUP_INDEX_CURRENT];
+}
+Item@ GetGroupCurrentItem(uint group) {
+    uint floor = GetGroupCurrentFloor(group);
+    if(floor == 0) {
+        return null;
+    }
+    return GetLiftItem(group, floor);
+}
+/*
+void PrintGroup(group) {
+    if (lifts_ids.length() < group) {
+        return;
+    }
+    uint[]@ group_ids = lifts_ids[group-1];
+    for(uint i=0, len=group_ids.length(); i<len; ++i){
 
-void SetLift(uint group, uint floor, uint value, uint pid) {
+    }
+}*/
+
+bool SetLift(uint16 pid, uint group, uint floor, uint item_id, bool arrived) {
     if (lifts_ids.length() < group) {
         lifts_ids.resize(group);
     }
     uint[]@ group_ids = lifts_ids[group-1];
+    if (group_ids.length() == 0) {
+        group_ids.resize(GROUP_INDEX_FIRST);
+        group_ids[GROUP_INDEX_PID] = pid;
+        group_ids[GROUP_INDEX_CURRENT] = 0;
+    }
+    if (arrived) {
+        if(group_ids[GROUP_INDEX_CURRENT] == 0) {
+            Log("Group "+group+" lift arrived at floor "+floor);
+            group_ids[GROUP_INDEX_CURRENT] = floor;
+        } else {
+            Log("Two arrived lifts per group "+group+", "+group_ids[GROUP_INDEX_CURRENT]+" and "+floor+", fixing...");
+            arrived = false;
+        }
+    }
+    
     uint group_ids_len = group_ids.length();
-    if (group_ids.length() <= floor) {
-        group_ids.resize(floor+1);
-        for(uint i=MAX(group_ids_len, 1); i<floor; ++i) {
+    if (GROUP_LEN(group_ids) < floor) {
+        uint len = GROUP_INDEX_FIRST+floor;
+        group_ids.resize(len);
+        for(uint i=group_ids_len; i<len; ++i) {
             group_ids[i] = 0;
         }
-        group_ids[0] = pid;
     }
-    group_ids[floor] = value;
+    GROUP_GET_FLOOR(group_ids, floor) = item_id;
+    return arrived;
 }
 
 bool IsSettingsValid(uint group, uint floor) {
@@ -96,6 +198,12 @@ bool IsSettingsValid(uint group, uint floor) {
 }
 
 uint InitializeLiftsFor(uint16 pid) {
+    int[]@ hexes = GetLiftHexes(pid);
+    if(hexes is null) {
+        Log("Unsupported lift proto: "+pid);
+        return 0;
+    }
+
     Item@[] items;
     uint _count = GetAllItems (pid, items);
     uint count_ok = 0;
@@ -117,18 +225,86 @@ uint InitializeLiftsFor(uint16 pid) {
             LiftDebug("Collision of lifts' settings, previous value: "+prev_lift, item);
             continue;
         }
-        SetLift(group, floor, item.Id, pid);
+        uint16 item_hexX = 0, item_hexY = 0;
+        Map@ item_map = item.GetMapPosition (item_hexX, item_hexY);
+        if(item_map is null) {
+            LiftDebug("Lift item isn't on map", item);
+            continue;
+        }
+
+        Item@ door = FindDoor(item_map, item, hexes);
+        if(door is null) {
+            LiftDebug("Lift has no door", item);
+            continue;
+        }
+        door.Val1 = group;
+        door.Val2 = floor;
+        door.SetEvent( ITEM_EVENT_SKILL, "e_DoorSkill" );
+
+        bool arrived = SetLift(pid, group, floor, item.Id, item.AnimShowBegin==FRAME_ARRIVED);
+        ChangeLift(item_map, item, hexes, door, arrived, arrived);
         count_ok += 1;
     }
     return count_ok;
+}
+
+Item@ FindDoor(Map& map, Item& lift, int[]& hexes) {
+    int door_shift_x = hexes[HEXES_INDEX_DOOR];
+    int door_shift_y = hexes[HEXES_INDEX_DOOR+1];
+    return map.GetDoor(lift.HexX+door_shift_x, lift.HexY+door_shift_y);
+}
+
+bool ChangeLift(Map& map, Item& lift, int[]& hexes, Item& door, bool arrived, bool opened) {
+    int ko_shiftX = hexes[HEXES_INDEX_KO];
+    int ko_shiftY = hexes[HEXES_INDEX_KO+1];
+
+    if(arrived) {
+        ChangeFrame(lift, FRAME_ARRIVED);
+    } else {
+        ChangeFrame(lift, FRAME_VACANT);
+    }
+
+    if(opened) {
+        door.LockerOpen();
+    } else {
+        Critter@ cr = map.GetCritter(door.HexX, door.HexY);
+        if(cr !is null) {
+            uint16 nex_hexX = lift.HexX+ko_shiftX;
+            uint16 nex_hexY = lift.HexY+ko_shiftY;
+            //if(map.IsHexPassed(nex_hexX, nex_hexY)) {
+            //    cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT(true), 100, nex_hexX, nex_hexY );
+            //} else {
+            if(!cr.TransitToHex(nex_hexX, nex_hexY, 6)) {
+                return false;
+            }
+            cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT(true), 100, cr.HexX, cr.HexY );
+        }
+        if(!door.LockerClose()) {
+            Log("Can't close prev lift door");
+            return false;
+        }
+    }
+
+    return true;
 }
 
 void InitializeLifts() {
     lifts_initialized = true;
     lifts_ids.resize(0);
     uint count_ok = 0;
-    count_ok += InitializeLiftsFor(PID_LIFT_1);
-    count_ok += InitializeLiftsFor(PID_LIFT_2);
+    for(uint i=0, len=lifts_hexes.length(); i<len; i++) {
+        int[]@ hexes = lifts_hexes[i];
+        uint hexes_length = hexes.length();
+        if(hexes_length == 0) {
+            continue;
+        }
+        uint16 pid = hexes[0];
+        if(hexes_length < HEXES_INDEX_FIRST+2 || hexes_length%2==0) {
+            Log("Invalid lift hexes settings: "+i+" pid "+pid);
+            continue;
+        }
+        count_ok += InitializeLiftsFor(pid);
+    }
     Log("Lifts initialized: "+count_ok);
 }
 
@@ -143,21 +319,55 @@ void LiftDebug(string@& message, Item& item) {
     }    
 }
 
+bool e_DoorSkill( Item& door, Critter& cr, int skill ) {
+    if( skill != SKILL_PICK_ON_GROUND ) {
+        return false;
+    }
+    if(_LockerIsOpen(door)) {
+        return false;
+    }
+
+    uint group = door.Val1;
+    uint floor = door.Val2;
+    Log("e_DoorSkill "+group+" "+floor);
+    if (!IsSettingsValid(group, floor)) {
+        return false;
+    }
+    uint parent_lift_id = GetLift(group, floor);
+    if( parent_lift_id == 0 ) {
+        LiftDebug("Can't find parent lift of the door", door);
+        return false;
+    }
+    Item@ parent_lift = GetItem(parent_lift_id);
+    if(parent_lift is null) {
+        LiftDebug("Can't find parent lift of the door", door);
+        return false;
+    }
+
+    Item@ current_lift_item = GetGroupCurrentItem(group);
+    if(current_lift_item is null) {
+        LiftDebug("No current floor", door);
+        return false;
+    }
+
+    return true;
+}
+
 bool e_LiftSkill( Item& item, Critter& cr, int skill ) {
     if( skill == SKILL_PICK_ON_GROUND ) {
-        LiftActivate(item, cr);
+        LiftActivate(item, cr, true);
         return true;
     }
     return false;
 }
-
+/*
 void e_LiftWalk( Item& item, Critter& cr, bool entered, uint8 dir ) {
     if( entered ) {
-        LiftActivate(item, cr);
+        LiftActivate(item, cr, true);
     }
 }
-
-void LiftActivate(Item& item, Critter& cr) {
+*/
+void LiftActivate(Item& item, Critter& cr, bool safe) {
     if( !lifts_initialized ) {
         InitializeLifts();
     }
@@ -173,20 +383,21 @@ void LiftActivate(Item& item, Critter& cr) {
         return;
     }
 
-    Map@ map = cr.GetMap();
-    if (map is null) {
-        LiftDebug("Player "+cr.Id+" is activating lift while on global", item);
-        return;
-    }
+    if( safe ) {
+        Map@ map = cr.GetMap();
+        if (map is null) {
+            LiftDebug("Player "+cr.Id+" is activating lift while on global", item);
+            return;
+        }
 
-    if (item_map.Id != map.Id) {
-        LiftDebug("Player "+cr.Id+" is activating lift which is on the other map", item);
-        return;
-    }
+        if (item_map.Id != map.Id) {
+            LiftDebug("Player "+cr.Id+" is activating lift which is on the other map", item);
+            return;
+        }
+    }    
 
     uint group = item.Val1;
     uint floor = item.Val2;
-    cr.Say(SAY_NETMSG, "group: "+group+", floor: "+floor);
     if (!IsSettingsValid(group, floor)) {
         return;
     }
@@ -195,16 +406,17 @@ void LiftActivate(Item& item, Critter& cr) {
         LiftDebug("Player is activating lift that's not registered correctly", item);
         return;
     }
-/*
-    if (item_hexX != cr.HexX || item_hexY != cr.HexY-1) {
-        cr.Say(SAY_NETMSG, "Перед тем, как воспользоваться лифтом - нужно в него зайти.");
+    uint[]@ group_ids = lifts_ids[group-1];
+    uint floors_in_group = GROUP_LEN(group_ids);
+
+    GameVar@ var_item_id = GetLocalVar(LVAR_menu_lift_id, cr.Id);
+    if(var_item_id is null) {
+        Log("LVAR_menu_lift_id is null for player "+cr.Id);
         return;
     }
-*/
-    uint[]@ group_ids = lifts_ids[group-1];
-    uint floors_in_group = group_ids.length()-1;
+    var_item_id = item.Id;
 
-    cr.ShowScreen( SCREEN_DIALOGBOX, floors_in_group-1, "answer_LiftMenuHandler" );
+    cr.ShowScreen( SCREEN_DIALOGBOX, floors_in_group-1, safe ? "answer_LiftMenuHandler" : "answer_LiftMenuHandler_unsafe" );
     cr.SayMsg( SAY_DIALOGBOX_TEXT, TEXTMSG_TEXT, FOTEXT_LIFT(group, floor) );
     for(uint i=0, j=1; j<=floors_in_group; ++j) {
         if(j==floor) {
@@ -215,25 +427,60 @@ void LiftActivate(Item& item, Critter& cr) {
     }
 }
 
-Item@ FindLiftItem(Map& map, uint16 hexX, uint16 hexY) {
-    Item@ item = map.GetItem(hexX, hexY-1, PID_LIFT_1);
-    if(item is null) {
-        return map.GetItem(hexX, hexY-1, PID_LIFT_2);
-    }
-    return item;
+void answer_LiftMenuHandler( Critter& player, uint answerI, string& answerS ){
+    LiftMenuHandler(player, answerI, true);
 }
 
-void answer_LiftMenuHandler( Critter& player, uint answerI, string& answerS ){
-    Map@ player_map = player.GetMap();
-    if(player_map is null) {
-        Log("Player "+player.Id+" answers lift menu while on global");
+void answer_LiftMenuHandler_unsafe( Critter& player, uint answerI, string& answerS ){
+    LiftMenuHandler(player, answerI, false);
+}
+
+void LiftMenuHandler( Critter& player, uint answerI, bool safe ){
+    GameVar@ var_item_id = GetLocalVar(LVAR_menu_lift_id, player.Id);
+    if(var_item_id is null) {
+        Log("LVAR_menu_lift_id is null for player "+player.Id);
         return;
     }
-    Item@ item = FindLiftItem(player_map, player.HexX, player.HexY);
+    uint item_id = var_item_id.GetValue();
+    if(item_id == 0) {
+        Log("Player "+player.Id+" answers lift menu but menu_lift_id game var holds 0 value");
+        return;
+    }
+    Item@ item;
+    if(safe) {
+        Map@ player_map = player.GetMap();
+        if(player_map is null) {
+            Log("Player "+player.Id+" answers lift menu while on global");
+            return;
+        }
+        @item = player_map.GetItem(item_id);
+    } else {
+        @item = GetItem(item_id);
+    }
+    
+    //Item@ item = FindLiftItem(player_map, player.HexX, player.HexY);
+    //var_item_id = item.Id;
+
     if(item is null) {
-        Log("Player "+player.Id+" answers lift menu but there is no lift item under him");
+        Log("Player "+player.Id+" answers lift menu but there is no lift with Id "+item_id);
         return;
     }
+
+    if(safe) {
+        if( item.MapId == 0 ) {
+            LiftDebug("Lift isn't on the map", item);
+            return;
+        }
+        if( item.MapId != player.GetMapId() ) {
+            LiftDebug("Player "+player.Id+" is on the different map than lift", item);
+            return;
+        }
+        if( GetDistantion(player.HexX, player.HexY, item.HexX, item.HexY) > 1 ) {
+            LiftDebug("Player "+player.Id+" is too far away from lift", item);
+            return;
+        }
+    }
+
     //uint group = item.Val1;
     uint floor = item.Val2;
 
@@ -241,16 +488,13 @@ void answer_LiftMenuHandler( Critter& player, uint answerI, string& answerS ){
     if( floor<=next_floor ) {
         next_floor += 1;
     }
-    //player.Say(SAY_NETMSG, "floor in group: "+floors_in_group+", answerI: "+answerI+", next_floor: "+next_floor);
     MoveLiftTo( item, next_floor );
 }
 
 void MoveLiftTo( Item& item, uint next_floor) {
     uint group = item.Val1;
     uint floor = item.Val2;
-    //player.Say(SAY_NETMSG, "group: "+group+", floor: "+floor);
-
-    if (!IsSettingsValid(group, floor)) {
+    if (!IsSettingsValid(group, floor) || GetLift(group, floor) != item.Id) {
         return;
     }
 
@@ -262,7 +506,7 @@ void MoveLiftTo( Item& item, uint next_floor) {
     }
     
     uint[]@ group_ids = lifts_ids[group-1];
-    uint floors_in_group = group_ids.length()-1;
+    uint floors_in_group = GROUP_LEN(group_ids);
     
     if(next_floor == floor) {
         //we are already on this floor
@@ -273,7 +517,12 @@ void MoveLiftTo( Item& item, uint next_floor) {
         return;
     }
 
-    uint next_floor_item_id = group_ids[next_floor];
+    if( group_ids[GROUP_INDEX_CURRENT] != floor ) {
+        LiftDebug("Lift shaft is vacant", item);
+        return;
+    }
+
+    uint next_floor_item_id = GROUP_GET_FLOOR(group_ids, next_floor);
 
     if(next_floor_item_id == 0) {
         LiftDebug("Gap in floors", item);
@@ -291,23 +540,53 @@ void MoveLiftTo( Item& item, uint next_floor) {
         LiftDebug("Next lift with item.Id "+next_floor_item_id+" isn't on map", item);
         return;
     }
-    //player.Say(SAY_NETMSG, "hexX: "+hexX+", hexY: "+hexY);
-    //player.TransitToMap(next_map.Id, hexX, hexY, 2);
-    uint[]@ hexes = GetLiftHexes(group_ids[0]);
+    int[]@ hexes = GetLiftHexes(group_ids[0]);
     if(hexes is null) {
-        //hexY+=1;
-        //player.TransitToMap(next_map.Id, hexX, hexY, 2);
         LiftDebug("No hex settings for this lift item prototype", item);
         return;
-    } else {
-        for(uint i=1, len=hexes.length(); i<len; i+=2) {
-            uint diff_hexX = hexes[i];
-            uint diff_hexY = hexes[i+1];
-            Critter@ cr = prev_map.GetCritter(prev_hexX+diff_hexX, prev_hexY+diff_hexY);
-            if( cr is null ) {
-                continue;
-            }
-            cr.TransitToMap(next_map.Id, next_hexX+diff_hexX, next_hexY+diff_hexY, 6);
+    }
+
+    Item@ prev_door = FindDoor(prev_map, item, hexes);
+    if(prev_door is null) {
+        LiftDebug("Lift has no door", item);
+        return;
+    }
+
+    Item@ next_door = FindDoor(next_map, next_lift, hexes);
+    if(next_door is null) {
+        LiftDebug("Lift has no door", next_lift);
+        return;
+    }
+
+    if(_LockerIsOpen(next_door)) {
+        Log("Next lift door is open, can't move");
+        return;
+    }
+    
+    //ChangeLift(next_map, next_lift, next_door, true, false);
+
+    if(_LockerIsOpen(prev_door)) {
+        if( !ChangeLift(prev_map, item, hexes, prev_door, true, false) ) {
+            return;
         }
     }
+
+    for(uint i=HEXES_INDEX_FIRST, len=hexes.length(); i<len; i+=2) {
+        int diff_hexX = hexes[i];
+        int diff_hexY = hexes[i+1];
+        Critter@ cr = prev_map.GetCritter(prev_hexX+diff_hexX, prev_hexY+diff_hexY);
+        if( cr is null ) {
+            continue;
+        }
+        cr.TransitToMap(next_map.Id, next_hexX+diff_hexX, next_hexY+diff_hexY, 6);
+    }
+    
+    group_ids[GROUP_INDEX_CURRENT] = next_floor;
+
+    ChangeLift(prev_map, item, hexes, prev_door, false, false);
+    ChangeLift(next_map, next_lift, hexes, next_door, true, true);
+
+    //ChangeFrame(item, FRAME_VACANT);
+    //ChangeFrame(next_lift, FRAME_ARRIVED);
+    //next_door.LockerOpen();
 }
