@@ -113,7 +113,15 @@ jQuery(function($){
                         el = $("#main",el);
                         term.echo(el.html(),{raw:true});
                         term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
-                        if (history) history.pushState(null, html, args[1]);
+                        if (history) {
+                            if (args[1].startsWith("/")) {
+                                history.pushState(null, html, args[1]);
+                            } else if (args[1].startsWith("http")) {
+                                history.pushState(null, html, args[1]);
+                            } else {
+                                history.pushState(null, html, "/" + args[1]);
+                            }
+                        }
                     } else {
                         window.open(args[1])
                     }
