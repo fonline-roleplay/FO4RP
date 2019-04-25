@@ -173,6 +173,10 @@ jQuery(function($){
             $("#source").remove()
 
             $('#terminal').unbind('scroll')
+
+            $(".prompt").on('click',function(e){
+                term.exec("up");
+            })
         }
     })
 
