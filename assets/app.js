@@ -138,7 +138,9 @@ jQuery(function($){
             break
             case "return":
             case "up":
-                term.exec("nav")
+                setTimeout(function(){
+                    $("#terminal").scrollTop(0)
+                },300)
             break
             default: 
                 term.echo("ОШИБКА: Неизвестная команда <"+args[0]+">")
@@ -176,7 +178,7 @@ jQuery(function($){
             $('#terminal').unbind('scroll')
 
             $(".prompt").on('click',function(e){
-                term.exec("up");
+                term.exec("nav");
             })
         }
     })
