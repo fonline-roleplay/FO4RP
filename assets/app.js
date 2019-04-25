@@ -196,6 +196,7 @@ jQuery(function($){
             
             var fn = term.echo
             term.echo = function() {
+                console.log(arguments)
                 var res = fn.apply(term, arguments)
                 if (arguments[0].indexOf(term.get_prompt()) < 0) {
                     speed += 10
