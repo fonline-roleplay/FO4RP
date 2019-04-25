@@ -131,6 +131,7 @@ jQuery(function($){
                 term.echo(cmd,{raw:true})
                 term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
             break
+            case "menu":
             case "nav":
                 term.echo("<nav>"+$("header nav").html()+"</nav>", {raw:true});
                 term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
