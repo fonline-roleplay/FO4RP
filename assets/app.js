@@ -149,7 +149,7 @@ jQuery(function($){
                 },300)
             break
             case "eval":
-                var rr= cmd.substr(4)) 
+                var rr= cmd.substr(4)
                 term.echo(eval(rr ? rr : "Complete"))
             break
             default: 
