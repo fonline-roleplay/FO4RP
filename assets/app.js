@@ -234,7 +234,7 @@ jQuery(function($){
             })
 
             if (window.Hammer) {
-                var hammertime = new Hammer($("#terminal")[0]);
+                var hammertime = new Hammer(document.body);
                 hammertime.on('swipe', function(ev) {
                     term.echo("<pre>"+JSON.stringify(ev,null,2) + "</pre>",{raw:true})
                 });
