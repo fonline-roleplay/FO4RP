@@ -169,6 +169,9 @@ jQuery(function($){
                     $("#terminal").scrollTop(0)
                 },300)
             break
+            case "reboot":
+                window.location.reload(true)
+            break;
             case "eval":
                 var rr= cmd.substr(4)
                 term.echo(eval(!!rr ? rr : "Complete"))
@@ -187,6 +190,7 @@ jQuery(function($){
                 term.echo("log | git | гит | лог")
                 term.echo("up | return")
                 term.echo("nav | menu")
+                term.echo("reboot")
                 term.echo("clear")
             break
         }
@@ -232,7 +236,7 @@ jQuery(function($){
             if (window.Hammer) {
                 var hammertime = new Hammer($("#terminal")[0],{});
                 hammertime.on('swipe', function(ev) {
-                    term.echo(JSON.stringify(ev))
+                    term.echo("<pre>"+JSON.stringify(ev,null,2) + "</pre>",{raw:true})
                 });
             }
         }
