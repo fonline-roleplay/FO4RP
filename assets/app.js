@@ -249,7 +249,7 @@ jQuery(function($){
                 });
             }
 
-            if (isMobile) $("#terminal").style["overflow-y"] = "scroll";
+            if (isMobile) $("#terminal").css("overflow-y","scroll")
         }
     })
 
