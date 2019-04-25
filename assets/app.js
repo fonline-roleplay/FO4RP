@@ -112,7 +112,11 @@ jQuery(function($){
                     el.innerHTML = html;
                     var ns = el.getElementsByTagName("noscript");
                     if (ns.length > 0) {
-                        el.innerHTML = ns[0].innerHTML;
+                        if (noscriptSwap) {
+                            el.innerText = ns[0].innerText;
+                        } else {
+                            el.innerHTML = ns[0].innerHTML;
+                        }
                         el = $("#main",el);
                         if (noscriptSwap) {
                             term.echo(el.text(),{raw:true});
@@ -203,7 +207,6 @@ jQuery(function($){
             
             var fn = term.echo
             term.echo = function() {
-                console.log(arguments)
                 var res = fn.apply(term, arguments)
                 if (arguments[0].indexOf(term.get_prompt()) < 0) {
                     speed += 10
