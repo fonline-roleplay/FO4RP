@@ -137,7 +137,9 @@ jQuery(function($){
             break
             case "return":
             case "up":
-                $("#terminal").scrollTop(0)
+                setTimeout(function(){
+                    $("#terminal").scrollTop(0)
+                },200)
             break
             default: 
                 term.echo("ОШИБКА: Неизвестная команда <"+args[0]+">")
