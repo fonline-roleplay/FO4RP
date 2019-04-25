@@ -113,8 +113,8 @@ jQuery(function($){
                         window.open(args[1])
                     }
                 }).fail(function(){
-                    console.log(arguments)
-                    window.open(args[1])
+                    if (arguments[0].status !== 404) window.open(args[1])
+                    else term.echo("ОШИБКА: Файл не найден")
                 })
             break 
             case "log": 
