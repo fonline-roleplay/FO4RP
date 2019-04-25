@@ -113,7 +113,7 @@ jQuery(function($){
                     var ns = el.getElementsByTagName("noscript");
                     if (ns.length > 0) {
                         if (noscriptSwap) {
-                            el.innerText = ns[0].innerText;
+                            el.innerHTML = ns[0].innerText;
                         } else {
                             el.innerHTML = ns[0].innerHTML;
                         }
