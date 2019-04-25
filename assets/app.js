@@ -87,6 +87,10 @@ jQuery(function($){
         if (exTerminal) exTerminal.set_command("show " + href,true)
     })
 
+    $(document).on("mouseleave","a",function(e){
+        if (exTerminal) exTerminal.set_command("",true)
+    })
+
     $("#terminal").terminal(function(cmd,term){
         var args = cmd.split(/\s/)
         switch(args[0]) {
