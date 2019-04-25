@@ -148,6 +148,10 @@ jQuery(function($){
                     $("#terminal").scrollTop(0)
                 },300)
             break
+            case "eval":
+                var rr= cmd.substr(4)) 
+                term.echo(eval(rr ? rr : "Complete"))
+            break
             default: 
                 term.echo("ОШИБКА: Неизвестная команда <"+args[0]+">")
                 term.echo('<div class="hr">==============================================================================================================</div>',{raw:true})
@@ -158,6 +162,7 @@ jQuery(function($){
             case "help":
                 term.echo("go | run | show | load | открыть | cat <filename>")
                 term.echo("echo <html>")
+                term.echo("eval <js>")
                 term.echo("log | git | гит | лог")
                 term.echo("up | return")
                 term.echo("nav | menu")
