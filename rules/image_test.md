@@ -2,10 +2,12 @@
 
 Some random text
 
-![Ищображение](//i.piccy.info/i9/aa2e9c322c4044cb671f307fab31f867/1459106840/310098/931946/screen_2016_03_27_21_13_56.jpg)
+![Ищображение](https://res.cloudinary.com/drpez49fp/image/upload/v1536956292/shooter_mode2.gif)
 
 И больше текста
 
-![Image](//fo.rplay.ru/FONews/2/5.jpg)
+![Image](https://res.cloudinary.com/drpez49fp/image/upload/v1535045772/moreExperiments.gif)
 
-![Image](//i.piccy.info/i9/f649e359f670b57b854a21ac4413e815/1459106693/372314/931946/screen_2016_03_27_21_02_44.jpg)
+![Image](https://res.cloudinary.com/drpez49fp/image/upload/v1535014213/quickbar.gif)
+
+![Image](https://res.cloudinary.com/drpez49fp/image/upload/v1534137800/screen_2018.05.01_02-53-34.png)
