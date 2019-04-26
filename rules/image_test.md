@@ -1,9 +1,6 @@
 # Some random header
 
-|  ![Изображение](https://res.cloudinary.com/drpez49fp/image/upload/v1536956292/shooter_mode2.gif) | Some random text
-|  | More random text
-
-И больше текста
+![Изображение](https://res.cloudinary.com/drpez49fp/image/upload/v1536956292/shooter_mode2.gif){: .left}
 
 ![Image](https://res.cloudinary.com/drpez49fp/image/upload/v1535045772/moreExperiments.gif)
 
