@@ -1,6 +1,11 @@
 # Some random header
 
+Some test text
+
 ![Изображение](https://res.cloudinary.com/drpez49fp/image/upload/v1536956292/shooter_mode2.gif){: .left}
+Joined text
+
+Some text
 
 ![Image](https://res.cloudinary.com/drpez49fp/image/upload/v1535045772/moreExperiments.gif)
 
