@@ -265,6 +265,11 @@ jQuery(function($){
         $("#terminal").scrollTop($("#terminal")[0].scrollHeight + window.innerHeight)
     })
 
+    $(document).on('click','.terminal img',function(e){
+        e.preventDefault()
+        window.open($(this).attr('src'))
+    })
+
     var test = document.createElement("div")
     var isChrome = !!window.chrome && (!!window.chrome.webstore || !!window.chrome.runtime);
     var isFirefox = typeof InstallTrigger !== 'undefined';
