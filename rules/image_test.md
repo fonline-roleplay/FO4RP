@@ -2,8 +2,10 @@
 
 Some test text
 
-![Изображение](https://res.cloudinary.com/drpez49fp/image/upload/v1536956292/shooter_mode2.gif){: .left}
-Joined text
+![Изображение](https://res.cloudinary.com/drpez49fp/image/upload/v1536956292/shooter_mode2.gif){: .right}
+Joined text \\
+New row \\
+End
 
 Some text
 
