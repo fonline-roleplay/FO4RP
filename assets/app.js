@@ -140,7 +140,8 @@ jQuery(function($){
                     }
                 }).fail(function(){
                     if (arguments[0].status !== 404) window.open(args[1])
-                    else term.echo("ОШИБКА: Файл не найден")
+                    else if (args[1].startsWith("/")) term.echo("ОШИБКА: Файл не найден. <a href='https://github.com/fonline-roleplay/FO4RP/new/gh-pages/?filename="+args[1]+"'>Создать его</a>?",{raw:true})
+                    else term.echo("ОШИБКА: Файл не найден.")
                 })
             break 
             case "log": 
