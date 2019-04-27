@@ -1,1 +1,1 @@
-- [S.P.E.C.I.A.L.](/info/start/special)
+- [S.P.E.C.I.A.L.](/info/start/special/)
