@@ -15,9 +15,11 @@ uint[][] lifts_ids;
 
 #define FOTEXT_LIFT    # (__FOTEXT_LIFT_group, __FOTEXT_LIFT_floor)   ( 20000 + ( __FOTEXT_LIFT_group )*100 + ( __FOTEXT_LIFT_floor ) )
 
-#define GROUP_INDEX_PID 0
-#define GROUP_INDEX_CURRENT 1
-#define GROUP_INDEX_FIRST 2
+#define GROUP_INDEX_PID       0
+#define GROUP_INDEX_CURRENT   1
+#define GROUP_INDEX_GOING_TO  2
+#define GROUP_INDEX_COOLDOWN  3
+#define GROUP_INDEX_FIRST     4
 #define GROUP_GET_FLOOR # (__GROUP_GET_FLOOR_group, __GROUP_GET_FLOOR_floor) (__GROUP_GET_FLOOR_group[GROUP_INDEX_FIRST-1+__GROUP_GET_FLOOR_floor])
 
 #define FRAME_VACANT 0
@@ -169,6 +171,8 @@ bool SetLift(uint16 pid, uint group, uint floor, uint item_id, bool arrived) {
         group_ids.resize(GROUP_INDEX_FIRST);
         group_ids[GROUP_INDEX_PID] = pid;
         group_ids[GROUP_INDEX_CURRENT] = 0;
+        group_ids[GROUP_INDEX_GOING_TO] = 0;
+        group_ids[GROUP_INDEX_COOLDOWN] = 0;
     }
     if (arrived) {
         if(group_ids[GROUP_INDEX_CURRENT] == 0) {
@@ -360,7 +364,7 @@ bool DoorActivate( Item& door, Critter& cr ) {
         LiftDebug("No current floor", door);
         return false;
     }
-    MoveLiftTo(current_lift_item, floor);
+    MoveLiftTo(current_lift_item, floor, true);
     return true;
 }
 
@@ -419,6 +423,22 @@ void LiftActivate(Item& item, Critter& cr, bool safe) {
     }
     uint[]@ group_ids = lifts_ids[group-1];
     uint floors_in_group = GroupLength(group_ids);
+    if( floors_in_group == 0) {
+        //empty group
+        return;
+    }
+    uint cooldown = group_ids[GROUP_INDEX_COOLDOWN];
+    if( cooldown > __FullSecond ) {
+        //lift is on cooldown
+        cr.Say(SAY_NETMSG, "Лифт перезаряжается.");
+        return;
+    }
+    uint going_to = group_ids[GROUP_INDEX_GOING_TO];
+    if( going_to != 0) {
+        //alrady moving, can't interfere
+        cr.Say(SAY_NETMSG, "Лифт занят.");
+        return;
+    }
 
     GameVar@ var_item_id = GetLocalVar(LVAR_menu_lift_id, cr.Id);
     if(var_item_id is null) {
@@ -499,10 +519,10 @@ void LiftMenuHandler( Critter& player, uint answerI, bool safe ){
     if( floor<=next_floor ) {
         next_floor += 1;
     }
-    MoveLiftTo( item, next_floor );
+    MoveLiftTo(item, next_floor, true);
 }
 
-void MoveLiftTo( Item& item, uint next_floor) {
+void MoveLiftTo( Item& item, uint next_floor, bool initial) {
     uint group = item.Val1;
     uint floor = item.Val2;
     if (!IsSettingsValid(group, floor) || GetLift(group, floor) != item.Id) {
@@ -518,7 +538,38 @@ void MoveLiftTo( Item& item, uint next_floor) {
     
     uint[]@ group_ids = lifts_ids[group-1];
     uint floors_in_group = GroupLength(group_ids);
-    
+
+    if(floors_in_group == 0) {
+        //empty group
+        return;
+    }
+    uint cooldown = group_ids[GROUP_INDEX_COOLDOWN];
+    if( cooldown > __FullSecond ) {
+        //lift is on cooldown
+        return;
+    }
+    uint going_to = group_ids[GROUP_INDEX_GOING_TO];
+    if(initial) {
+        if(going_to != 0) {
+            //already moving, can't interfere
+            return;
+        }
+        if (next_floor == 0) {
+            //should be known
+            return;
+        }
+    } else {
+        if (going_to == 0) {
+            //already stopped, can't move
+            return;
+        }
+        if (next_floor != 0) {
+            //should be unknown
+            return;
+        }
+        next_floor = going_to;
+    }
+
     if(next_floor == floor) {
         //we are already on this floor
         return;
@@ -582,6 +633,14 @@ void MoveLiftTo( Item& item, uint next_floor) {
         }
     }
 
+    if(initial) {
+        group_ids[GROUP_INDEX_GOING_TO] = next_floor;
+        uint floor_diff = uint(abs(int(next_floor) - int(floor)));
+        prev_map.PlaySound("ELEVATO1.ACM", prev_hexX, prev_hexY, 10);
+        CreateTimeEvent( __FullSecond + REAL_SECOND(3)*floor_diff, "e_LiftMoving", item.Id, false );
+        return;
+    }
+
     for(uint i=HEXES_INDEX_FIRST, len=hexes.length(); i<len; i+=2) {
         int diff_hexX = hexes[i];
         int diff_hexY = hexes[i+1];
@@ -592,7 +651,10 @@ void MoveLiftTo( Item& item, uint next_floor) {
         cr.TransitToMap(next_map.Id, next_hexX+diff_hexX, next_hexY+diff_hexY, 6);
     }
     
+    next_map.PlaySound("ELEVATOR.ACM", next_hexX, next_hexY, 10);
     group_ids[GROUP_INDEX_CURRENT] = next_floor;
+    group_ids[GROUP_INDEX_GOING_TO] = 0;
+    group_ids[GROUP_INDEX_COOLDOWN] = __FullSecond+REAL_SECOND(10);
 
     ChangeLift(prev_map, item, hexes, prev_door, false, false);
     ChangeLift(next_map, next_lift, hexes, next_door, true, true);
@@ -600,4 +662,19 @@ void MoveLiftTo( Item& item, uint next_floor) {
     //ChangeFrame(item, FRAME_VACANT);
     //ChangeFrame(next_lift, FRAME_ARRIVED);
     //next_door.LockerOpen();
+}
+
+uint e_LiftMoving( uint[] @ val ) {
+    if( !lifts_initialized ) {
+        return 0;
+    }
+    if(val.length()==0) {
+        return 0;
+    }
+    Item@ item = GetItem(val[0]);
+    if(item is null) {
+        return 0;
+    }
+    MoveLiftTo(item, 0, false);
+    return 0;
 }
