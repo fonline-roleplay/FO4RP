@@ -1,1 +1,2 @@
-- [S.P.E.C.I.A.L.](/info/start/special/)
+- [S.P.E.C.I.A.L.](/info/start/special/) — ролевая система, разработанная в 1996 году специально для компьютерной игры Fallout.
+- [Очки жизни, реанимация](/info/start/hp)
