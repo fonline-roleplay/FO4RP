@@ -3,7 +3,7 @@ S.P.E.C.I.A.L. — ролевая система, разработанная в 
 Система основана на четырех ключевых понятиях:
 
 - [1. Основные характеристики (Attributes)](/info/start/special/attributes)
-- [2. производные характеристики (англ. derived statistics)](/info/start/special/ds)
+- [2. Производные характеристики (англ. derived statistics)](/info/start/special/ds)
 - [3. Навыки (Skills)](/info/start/special/skills)
 - [4. Перки (Perks)](/info/start/special/perks)
 
