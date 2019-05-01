@@ -104,9 +104,9 @@ jQuery(function($){
     
     function terminator(term) {
         if (sIndex > 0) {
-            term.echo('<div id="term_'+sIndex+'" class="hr">====<a href="#!prev"> Назад </a>==================================================================================================</div>',{raw:true})
+            term.echo('<div style="min-height:2em" id="term_'+sIndex+'" class="hr">====<a href="#term_'+(sIndex - 1)+'"> Назад </a>==================================================================================================</div>',{raw:true})
         } else {
-            term.echo('<div id="term_'+sIndex+'" class="hr">==============================================================================================================</div>',{raw:true})
+            term.echo('<div style="min-height:2em" id="term_'+sIndex+'" class="hr">==============================================================================================================</div>',{raw:true})
         }
         sIndex++;
     }
@@ -187,12 +187,6 @@ jQuery(function($){
                     $("#terminal").scrollTop(0)
                 },300)
             break
-            case "prev":
-                setTimeout(function(){
-                    var id = "#term_" + (sIndex - 1);
-                    console.log( $(id).offset() );
-                },300)
-                break
             case "reboot":
                 window.location.reload(true)
             break;
