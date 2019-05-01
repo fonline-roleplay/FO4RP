@@ -192,11 +192,13 @@ jQuery(function($){
             break
             case "return":
             case "up":
+            case "вверх":
                 setTimeout(function(){
                     $("#terminal").scrollTop(0)
                 },300)
             break
             case "reboot":
+            case "рестарт":
                 window.location.reload(true)
             break;
             case "eval":
@@ -211,14 +213,15 @@ jQuery(function($){
             case "?":
             case "man":
             case "help":
-                term.echo("go | run | show | load | открыть | cat <filename>")
-                term.echo("echo <html>")
-                term.echo("eval <js>")
-                term.echo("log | git | гит | лог")
-                term.echo("up | return")
-                term.echo("nav | menu")
-                term.echo("reboot")
-                term.echo("clear")
+            case "помощь":
+            case "справка":
+                term.echo("go | run | show | load | открыть | cat <filename> - загружает страницу с адресом <filename>")
+                term.echo("echo <html> - отображает введенный HTML")
+                term.echo("log | git | гит | лог - отображает лог изменений игрового сервера")
+                term.echo("up | return | вверх - прокручивает терминал в начало")
+                term.echo("nav | menu | меню - отображает меню (если есть)")
+                term.echo("reboot | рестарт - перезагружает терминал")
+                term.echo("clear - очищает окно вывода (включая сохранённые меню)")
                 terminator(term);
             break
         }
