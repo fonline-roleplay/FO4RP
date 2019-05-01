@@ -102,7 +102,7 @@ jQuery(function($){
         if (exTerminal) exTerminal.set_command("",true)
     })
     
-    func terminator(term) {
+    function terminator(term) {
         if (sIndex > 0) {
             term.echo('<div id="term_'+sIndex+'" class="hr">====<a href="#!prev"> Назад </a>==================================================================================================</div>',{raw:true})
         } else {
