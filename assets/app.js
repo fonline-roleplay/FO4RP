@@ -79,7 +79,8 @@ jQuery(function($){
                 if (exTerminal) exTerminal.exec(href.substr(2))
                 return
             } else {
-                $("#terminal").scrollTop( $(href).offset().y )
+                $("#terminal").scrollTop( $(href).offset().top )
+                console.log(href,$(href).offset().top)
                 return
             }
         }
