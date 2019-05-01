@@ -72,13 +72,15 @@ jQuery(function($){
     $("body").append("<div id='terminal' class='tbody'></div>");
 
     $(document).on('click', 'a', function(e){
-        e.preventDefault()
+        e.preventDefault(); e.stopPropagation()
         var href = $(this).attr('href')
         if (href.startsWith("#")) {
             if (href.startsWith("#!")) {
                 if (exTerminal) exTerminal.exec(href.substr(2))
                 return
-            } else return
+            } else {
+                $("#terminal").scrollTop( $(href).offset().y )
+            }
         }
         if (exTerminal) exTerminal.exec("show " + href,true)
     })
