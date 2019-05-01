@@ -79,6 +79,8 @@ jQuery(function($){
                 if (exTerminal) exTerminal.exec(href.substr(2))
                 return
             } else {
+                if ($(href).length < 1) return $("#terminal").scrollTop(0) 
+                
                 var off = $("#terminal").scrollTop() + $(href).offset().top
                 console.log(href,off)
                 setTimeout(function(){
@@ -111,7 +113,7 @@ jQuery(function($){
     
     function terminator(term) {
         if (sIndex > 0) {
-            term.echo('<div style="min-height:2em" id="term_'+sIndex+'" class="hr">====<a href="#term_'+(sIndex - 1)+'"> Назад </a>==================================================================================================</div>',{raw:true})
+            term.echo('<div style="min-height:2em" id="term_'+sIndex+'" class="hr">====<a href="#term_'+(sIndex - 2)+'"> Назад </a>==================================================================================================</div>',{raw:true})
         } else {
             term.echo('<div style="min-height:2em" id="term_'+sIndex+'" class="hr">==============================================================================================================</div>',{raw:true})
         }
