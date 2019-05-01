@@ -215,13 +215,12 @@ jQuery(function($){
             case "help":
             case "помощь":
             case "справка":
-                term.echo("go | run | show | load | открыть | cat <filename> - загружает страницу с адресом <filename>")
+                term.echo("go | run | show | load | открыть | cat <filename> - загружает страницу <filename>")
                 term.echo("echo <html> - отображает введенный HTML")
                 term.echo("log | git | гит | лог - отображает лог изменений игрового сервера")
                 term.echo("up | return | вверх - прокручивает терминал в начало")
                 term.echo("nav | menu | меню - отображает меню (если есть)")
                 term.echo("reboot | рестарт - перезагружает терминал")
-                term.echo("clear - очищает окно вывода (включая сохранённые меню)")
                 terminator(term);
             break
         }
