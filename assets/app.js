@@ -80,6 +80,7 @@ jQuery(function($){
                 return
             } else {
                 $("#terminal").scrollTop( $(href).offset().y )
+                return
             }
         }
         if (exTerminal) exTerminal.exec("show " + href,true)
