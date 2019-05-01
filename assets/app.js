@@ -115,7 +115,7 @@ jQuery(function($){
         if (sIndex > 0) {
             term.echo('<div style="min-height:2em" id="term_'+sIndex+'" class="hr">====<a href="#term_'+(sIndex - 2)+'"> Назад </a>==================================================================<a href="#term_top"> Вверх </a>=========================</div>',{raw:true})
         } else {
-            term.echo('<div style="min-height:2em" id="term_'+sIndex+'" class="hr">=========================================================================<a href="#term_top"> Вверх </a>==============================</div>',{raw:true})
+            term.echo('<div style="min-height:2em" id="term_'+sIndex+'" class="hr">=============================================================================<a href="#term_top"> Вверх </a>==========================</div>',{raw:true})
         }
         sIndex++;
     }
