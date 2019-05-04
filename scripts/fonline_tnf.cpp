@@ -2,6 +2,7 @@
 #define MAIN
 
 #include "fonline_tnf.h"
+#include "AngelScript/scriptfilesystem.cpp"
 
 // Extern data definition
 _GlobalVars GlobalVars;
@@ -239,6 +240,7 @@ FONLINE_DLL_ENTRY( isCompiler )
     #endif
 
     RegisterQmapTools( ASEngine, isCompiler );
+	RegisterScriptFileSystem( );
 
     #ifdef __SERVER
     // ASEngine->RegisterObjectMethod("Critter", "void RunClientScript2(string& funcName, int p0, int p1, int p2, string@+ p3, int[]@+ p4)", asFUNCTION(RunClientScript), asCALL_CDECL_OBJFIRST);
