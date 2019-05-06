@@ -38,7 +38,7 @@ void RegisterScriptFileSystem_Native()
 	r = ASEngine->RegisterObjectMethod("filesystem", "bool changeCurrentPath(const string &in)", asMETHOD(ScriptFileSystem, ChangeCurrentPath), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "string@+ getCurrentPath() const", asMETHOD(ScriptFileSystem, GetCurrentPath), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "array<string@> @getDirs() const", asMETHOD(ScriptFileSystem, GetDirs), asCALL_THISCALL); assert( r >= 0 );
-	r = ASEngine->RegisterObjectMethod("filesystem", "array<string@> @getFiles() const", asMETHOD(ScriptFileSystem, GetFiles), asCALL_THISCALL); assert( r >= 0 );
+	r = ASEngine->RegisterObjectMethod("filesystem", "uint getFiles( string& out ) const", asMETHOD(ScriptFileSystem, GetFiles), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "bool isDir(const string &in) const", asMETHOD(ScriptFileSystem, IsDir), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "bool isLink(const string &in) const", asMETHOD(ScriptFileSystem, IsLink), asCALL_THISCALL); assert(r >= 0);
 	r = ASEngine->RegisterObjectMethod("filesystem", "int64 getSize(const string &in) const", asMETHOD(ScriptFileSystem, GetSize), asCALL_THISCALL); assert(r >= 0);

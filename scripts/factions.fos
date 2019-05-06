@@ -1,15 +1,49 @@
 # include "_macros.fos"
 # define __MODULE_Fractions__
 # include "Fractions.fosh"
+# include "_global_events.fos"
 
 import uint GetAllPlayers( Critter@[]& crs ) from "manager";
+import uint16 GetVersionWorldSave( ::string@ time ) from "main";
 
-dictionary Library;
-array<Fraction@> List = {};
+_Manager manager;
 
-class Manager
+class _Manager : iManagerModule, iManager_world_save
 {
+	_Manager()
+	{
+		AddStartCallback( "factions", "ModuleInit" );
+	}
 
+	bool manager_init() override
+	{
+		uint16 version = GetVersionWorldSave( null );
+		
+		if( version == 0 )
+			NpcFractionGeneration( );
+		else LoadFractions();
+		return true;
+	}
+	
+	bool global_world_save() override
+	{
+		SaveFractions();
+		return true;
+	}
+	
+	dictionary Library;
+	array<Fraction@> List;
+}
+
+void AddNpc( Critter& critter, int x, int y, int pid )
+{
+	int[] params = {ST_FACTION, GetStrHash( "Template" ) };
+	critter.GetMap().AddNpc( pid, x, y, 0, params, null, null );
+}
+
+void ModuleInit( )
+{
+	manager_add_module( manager, "factions", 0);
 }
 
 void RestartFactions( )
@@ -49,7 +83,7 @@ void CheckFaction( Critter& cr, bool join )
 
 int GetCritterColor( uint , Critter& fromCr, Critter& toCr )
 {
-	Fraction@ fromf=Get(fromCr.Stat[ST_FACTION]);
+	Fraction@ fromf=GetFraction(fromCr.Stat[ST_FACTION]);
 	if( @fromf != null )
 	{
 		for( uint n = 0, nMax = fromf.ColorList.length( ); n < nMax; n += 2 )
@@ -66,17 +100,17 @@ int GetCritterColor( uint , Critter& fromCr, Critter& toCr )
 
 uint GetId(string& name)
 {
-	if(!Library.exists(name)) return 0;
+	if(!manager.Library.exists(name)) return 0;
 	return GetStrHash( name );
 }
 
 array<string@> GetList(uint exclude)
 {
 	array<string@> list;
-	for( uint n=0, nMax=List.length(); n<nMax; n++ )
+	for( uint n=0, nMax=manager.List.length(); n<nMax; n++ )
 	{
-		if(List[n].Id!=exclude)
-			list.insertLast(@List[n].Name);
+		if(manager.List[n].Id!=exclude)
+			list.insertLast(@manager.List[n].Name);
 	}
 	return list;
 }
@@ -84,24 +118,24 @@ array<string@> GetList(uint exclude)
 array<string@> GetList()
 {
 	array<string@> list = {};
-	Library.keys(list);
+	manager.Library.keys(list);
 	return list;
 }
 
 array<string@> GetUnrelatedOrgList(uint id)
 {
 	array<string@> list;
-	Fraction@ fr=Get(id);
+	Fraction@ fr=GetFraction(id);
 	if(!valid(fr)) return list;
 	uint enemyLength=fr.Enemies.length(),
 		 friendsLength= fr.Allies.length();
-	for(uint n=0, nMax=List.length(); n<nMax; n++)
+	for(uint n=0, nMax=manager.List.length(); n<nMax; n++)
 	{
-		if(id==List[n].Id) continue;
+		if(id==manager.List[n].Id) continue;
 		bool skip=false;
 		for(uint m=0; m<FR_MAX_REQUESTS; m++)
 		{
-			if(fr.Requests[m]==List[n].Id)
+			if(fr.Requests[m]==manager.List[n].Id)
 			{
 				skip=true;
 				break;
@@ -110,7 +144,7 @@ array<string@> GetUnrelatedOrgList(uint id)
 		if(skip) continue;
 		for(uint m=0; m<enemyLength; m++)
 		{
-			if(fr.Enemies[m]==List[n].Id)
+			if(fr.Enemies[m]==manager.List[n].Id)
 			{
 				skip=true;
 				break;
@@ -119,44 +153,45 @@ array<string@> GetUnrelatedOrgList(uint id)
 		if(skip) continue;
 		for(uint m=0; m<friendsLength; m++)
 		{
-			if(fr.Allies[m]==List[n].Id)
+			if(fr.Allies[m]==manager.List[n].Id)
 			{
 				skip=true;
 				break;
 			}
 		}
 		if(skip) continue;
-		list.insertLast(@List[n].Name);
+		list.insertLast(@manager.List[n].Name);
 	}
 	return list;
 }
 
-Fraction@ Get(uint id)
+Fraction@ GetFraction( Critter& critter )
 {
-	for(uint n=0; n<List.length(); n++)
-	{
-		if(List[n].Id==id) return @List[n];
-	}
+	return GetFraction( critter.Stat[ST_FACTION]);
+}
+
+Fraction@ GetFraction(uint id)
+{
+	for(uint n=0; n<manager.List.length(); n++)
+		if(manager.List[n].Id==id) return @manager.List[n];
 	return null;
 }
 
-Fraction@ Get(string& name)
+Fraction@ GetFraction(string& name)
 {
-	for(uint n=0; n<List.length(); n++)
-	{
-		if(List[n].Name==name) return List[n];
-	}
-	return null;
+	Fraction@ result;
+	manager.Library.get( name, @result );
+	return result;
 }
 
 string@ GetName(uint id)
 {
-	Fraction@ fr=Get(id);
+	Fraction@ fr=GetFraction(id);
 	if(!valid(fr)) return "";
 	return fr.Name;
 }
 
-bool Exist( string& name) { return Library.exists(name); }
+bool Exist( string& name) { return manager.Library.exists(name); }
 
 bool SaveFractions()
 {
@@ -165,15 +200,15 @@ bool SaveFractions()
 	fs.deleteFile(".\\save\\fractions.bak");
 	fs.move(".\\save\\fractions.fo", ".\\save\\fractions.bak");
 	if(f.open("./save/fractions.fo", "w")!=0) return false;
-	for(uint n=0; n<List.length(); n++)
-		List[n].Serialize(f);
+	for(uint n=0; n<manager.List.length(); n++)
+		manager.List[n].Serialize(f);
 	f.close();
 	return true;
 }
 
 void CorruptFaction( Critter& admin, int, int, int)
 {
-	Fraction@ fraction=Get(admin.Stat[ST_FACTION]);
+	Fraction@ fraction=GetFraction(admin.Stat[ST_FACTION]);
 	fraction.Stats.resize(1);
 }
 
@@ -199,12 +234,12 @@ string@ LoadFile(string@ fileName)
 void LoadFractions()
 {
 	uint start=GetTick();
-	List.resize(0);
-	Library.deleteAll();
+	manager.List.resize(0);
+	manager.Library.deleteAll();
 	string@ txt = LoadFile("./save/fractions.fo" );
 	if( txt is null ) return;
 	LoadFractions( txt );
-	Log("Loaded "+List.length()+" fractions in "+(GetTick()-start)+" miliseconds.");
+	Log("Loaded "+manager.List.length()+" fractions in "+(GetTick()-start)+" miliseconds.");
 }
 
 void AddFraction( string& name, uint leaderId)
@@ -218,24 +253,24 @@ void AddFraction( string& name, uint leaderId)
 	}
 	else return;
 	Fraction fraction(name);
-	List.insertLast(@fraction);
+	manager.List.insertLast(@fraction);
 	fraction.AddPlayer( leaderId );
 	fraction.InitProccess = false;
 	fraction.Stats[FR_POPULATION]++;
-	Library.set(name, leaderId);
+	manager.Library.set(name, leaderId);
 }
 
 void DeleteFraction(uint id)
 {
-	Fraction@ fraction = Get(id);
+	Fraction@ fraction = GetFraction(id);
 	if( fraction is null ) return;
-	Library.delete( fraction.Name );
+	manager.Library.delete( fraction.Name );
 	fraction.Delete();
 	uint index=0;
 	int m = 0;
-	for(uint n=0, nMax=List.length(); n<nMax; n++)
+	for(uint n=0, nMax=manager.List.length(); n<nMax; n++)
 	{
-		@fraction = List[n];
+		@fraction = manager.List[n];
 		if(fraction.Id==id)
 		{
 			index=n;
@@ -251,31 +286,31 @@ void DeleteFraction(uint id)
 		if( m != -1 )
 			fraction.Requests.removeAt( m );
 	}
-	List.removeAt(index);
+	manager.List.removeAt(index);
 }
 
 void SortFractions(uint low, uint high) //TabaK. QuickSort
 {
 	uint i=low;
 	uint j=high;
-	Fraction middle=List[(low+high)/2];
+	Fraction middle=manager.List[(low+high)/2];
 	while(i<j)
 	{
-		while(List[i].Stats[FR_RATING]>middle.Stats[FR_RATING] && i<high)
+		while(manager.List[i].Stats[FR_RATING]>middle.Stats[FR_RATING] && i<high)
 		{
-		//	Log(List[i].Stats[FR_RATING]+">"+middle.Stats[FR_RATING]+"; i="+i+". Increasing");
+		//	Log(manager.List[i].Stats[FR_RATING]+">"+middle.Stats[FR_RATING]+"; i="+i+". Increasing");
 			i++;
 		}
-		while(List[j].Stats[FR_RATING]<middle.Stats[FR_RATING] && j>low)
+		while(manager.List[j].Stats[FR_RATING]<middle.Stats[FR_RATING] && j>low)
 		{
-		//	Log(List[j].Stats[FR_RATING]+"<"+middle.Stats[FR_RATING]+"; j="+j+". Decreasing");
+		//	Log(manager.List[j].Stats[FR_RATING]+"<"+middle.Stats[FR_RATING]+"; j="+j+". Decreasing");
 			j--;
 		}
 		if(i<=j)
 		{
-			Fraction temp=List[j];
-			List[j]=List[i];
-			List[i]=temp;
+			Fraction temp=manager.List[j];
+			manager.List[j]=manager.List[i];
+			manager.List[i]=temp;
 			if(i!=high) i++;
 			if(j!=low) j--;
 		}
@@ -288,7 +323,7 @@ void SortFractions(uint low, uint high) //TabaK. QuickSort
 array<uint>@ GetPlayersByFraction(uint orgId)
 {
 	array<uint> retArr;
-	Fraction@ fraction = Get(orgId);
+	Fraction@ fraction = GetFraction(orgId);
 	if( fraction is null ) retArr;
 	retArr=fraction.GetPlayers( );
 	retArr.insertLast(orgId);
@@ -297,11 +332,11 @@ array<uint>@ GetPlayersByFraction(uint orgId)
 
 uint e_FractionOrder_Update(array<uint>@ values)
 {
-	uint lng=List.length();
+	uint lng=manager.List.length();
 	if(lng<2) return REAL_MINUTE(30);
 	else if(lng==2)
 	{
-		if(List[1].Stats[FR_RATING]>List[0].Stats[FR_RATING]) List.reverse();
+		if(manager.List[1].Stats[FR_RATING]>manager.List[0].Stats[FR_RATING]) manager.List.reverse();
 		return REAL_MINUTE(30);
 	}
 	SortFractions(0, lng-1);
@@ -316,7 +351,7 @@ uint e_DeleteFraction(array<uint>@ values)
 
 bool IdentifyPlayerFraction(Critter& critter )
 {
-	Fraction @fraction = Get(critter.Stat[ST_FACTION]);
+	Fraction @fraction = GetFraction(critter.Stat[ST_FACTION]);
 	if( fraction is null )
 	{
 		Dismiss( critter.Id );
@@ -330,13 +365,13 @@ bool IdentifyPlayerFraction(Critter& critter )
 
 void DrapRatingsAll()
 {
-	for( uint n = 0, nEnd = List.length(); n < nEnd; n++ )
-		List[n].Stats[FR_RATING]=0;
+	for( uint n = 0, nEnd = manager.List.length(); n < nEnd; n++ )
+		manager.List[n].Stats[FR_RATING]=0;
 }
 
 bool AddFactionRating(int index, int val)
 {
-	Fraction@ fraction = Get( index );
+	Fraction@ fraction = GetFraction( index );
 	if( fraction is null ) return false;
 	fraction.Stats[FR_RATING] += val;
 	return true;
@@ -381,8 +416,8 @@ void LoadFractions( string@ txt )
 			{
 				if( fraction !is null )
 				{
-					Library.set( fraction.Name, fraction );
-					List.insertLast(fraction);
+					manager.Library.set( fraction.Name, fraction );
+					manager.List.insertLast(fraction);
 					fraction.InitProccess = false;
 				}
 				@fraction = Fraction( clearstr( data[1] ) );
@@ -478,26 +513,25 @@ void LoadFractions( string@ txt )
 	}
 	if( fraction !is null )
 	{
-		Library.set( fraction.Name, fraction );
-		List.insertLast(fraction);
+		manager.Library.set( fraction.Name, fraction );
+		manager.List.insertLast(fraction);
 		fraction.InitProccess = false;
 	}
 }
-
 
 void NpcFractionGeneration( )
 {
 	const string ex_fraction_files = "fofraction";
 	filesystem fs;
-	fs.changeCurrentPath( fs.getCurrentPath() + "/data/NpcFractions/" );
-	//GetFolderFiles( "./data/NpcFractions/" + "*.fofraction", code );
-	string@[] files = fs.getFiles();
+	fs.changeCurrentPath( fs.getCurrentPath() + "\\data\\NpcFractions\\" );
 	string code = "";
+	fs.getFiles( code );
+	
+	string@[] files = ::splitEx( code, "\n" );
+	code = "";
 	for( uint i = 0, iEnd = files.length(); i < iEnd; i++ )
-	{
 		if( files[i].length() > ex_fraction_files.length() && substring( files[i], files[i].length() - ex_fraction_files.length(), ex_fraction_files.length() ) == ex_fraction_files ) //.fofraction
 			code += LoadFile( "./data/NpcFractions/" + files[i] ); 
-	}
 	LoadFractions( code );
 }
 
