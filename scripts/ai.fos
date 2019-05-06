@@ -1,0 +1,221 @@
+
+# define __MAIN_AI
+# include "Ai.fosh"
+# include "_global_events.fos"
+# include "_macros.fos"
+# include "Fractions.fosh"
+
+import bool AddAttackPlane( Critter& critter, uint priority, Critter& target ) from "npc_planes";
+import bool AddAttackPlane( Critter& critter, uint priority, Critter& target, int minHp ) from "npc_planes";
+
+class _AiManager : iManagerModule, iAiManager, iManager_critter_init, iManager_critter_finish, iManager_critter_attacked, iManager_critter_idle
+{
+	_AiManager()
+	{
+		AddStartCallback( "ai", "Start" );
+	}
+
+	bool manager_init() override
+	{
+		Set( BaseAi() );
+		return true;
+	}
+	
+	bool global_critter_init( Critter& critter, bool firstTime ) override
+	{
+		if( critter.IsNpc() )
+		{
+			iAI@ result = BaseAi( critter );
+			Collector.set( "" + critter.Id, @result );
+		}
+		return true;
+	}
+	
+	bool global_critter_finish( Critter& critter, bool toDelete ) override
+	{
+		if( critter.IsNpc() )
+			Collector.delete( "" + critter.Id );
+		return true;
+	}
+	
+	bool global_critter_attacked( Critter& critter, Critter& attacker ) override
+	{
+		Critter@[] critters;
+		for( uint i = 0, j = critter.GetCritters( true, FIND_LIFE_AND_KO | FIND_ONLY_NPC, critters ); i < j; i++ )
+			npc_look_attack( critters[i], critter, attacker );
+		
+		return true;
+	}
+	
+	void npc_look_attack( Critter& npc, Critter& critter, Critter& attacker )
+	{
+		iAI@ ai = Get(npc);
+		if( ai !is null )
+		{
+			int critterPrior = ai.IsProtected( critter );
+			if( critterPrior < 0 )
+				return;
+				
+			int attackerPrior = ai.IsProtected( attacker );
+			if( critterPrior <= attackerPrior )
+				return;
+		}
+		
+		npc_look_enemy( npc, attacker, ai );
+	}
+	
+	bool global_critter_idle( Critter& critter ) override
+	{
+		iAI@ ai = Get(critter);
+		Critter@[] critters;
+		for( uint i = 0, j = critter.GetCritters( false, FIND_LIFE_AND_KO, critters ); i < j; i++ )
+			npc_look_critter( critter, critters[i], ai );
+		return true;
+	}
+	
+	void npc_look_critter( Critter& npc, Critter& critter, iAI@ ai )
+	{
+		if( ai !is null && !ai.IsEnemy( npc ) )
+			return;
+		
+		npc_look_enemy( npc, critter, ai );
+	}
+	
+	void npc_look_enemy( Critter& npc, Critter& enemy, iAI@ ai )
+	{
+		if( ai !is null )
+			ai.AddAttackPlane( npc, enemy );
+	}
+	
+	iAI@ Get( Critter& critter ) override
+	{
+		if( critter.IsPlayer() ) return null;
+		
+		iAI@ result;
+		Collector.get( "" + critter.Id, @result );
+		return result;
+	}
+	
+	void Set( iAI@ ai ) override
+	{
+		Collector.set( "ai_" + GetStrHash ( string( ai.Name ) ), @ai );
+		Collector.set( "ai_" + ai.Name, @ai );
+		List.insertLast( @ai );
+	}
+	
+	void Set( Critter& critter, iAI@ ai )
+	{
+		
+	}
+	
+	iAI@ Get( const string&in name ) override
+	{
+		iAI@ result;
+		Collector.get( "ai_" + name, @result );
+		return result;
+	}
+	
+	iAI@ Get( uint nameHash ) override
+	{
+		iAI@ result;
+		Collector.get( "ai_" + nameHash, @result );
+		return result;
+	}
+	
+	private iAI@[] List;
+	private dictionary Collector;
+}
+
+_AiManager master;
+iAiManager@ get_AiManager()
+{
+	return @master;
+}
+
+class BaseAi : iAI
+{
+	BaseAi( Critter& critter )
+	{
+		Initialize( critter );
+	}
+
+	bool IsEnemy( Critter& target )	// if target is enemy return true else return false 
+	{
+		if( @fraction is null )
+			return false;
+		return fraction.IsEnemy( target );
+	}
+	
+	int IsProtected( Critter& target )		// return priority protection for target
+	{
+		if( @fraction is null )
+			return 0;
+		if( fraction.IsAlly( target ) )
+			return 1;
+		if( IsEnemy( target ) )
+			return -1;
+		if( npc.Stat[ST_FACTION] == target.Stat[ST_FACTION] )
+			return 2;
+		return 0;
+	}
+	
+	void Initialize( Critter& critter )
+	{
+		@npc = critter;
+		get_fraction();
+	}
+	
+	uint GetWorkCritters( Critter@[] @critters, Critter& critter )	// get critters for further worked, return count critters
+	{
+		return 0;
+	}
+	
+	uint GetTeamCritters( Critter& critter, Critter@[]@ critters )
+	{
+		return 0;
+	}
+	
+	bool AddAttackPlane( Critter& critter, Critter& target )
+	{
+		return ::AddAttackPlane( critter, 0, target );
+	}
+	
+	bool get_IsIdleWalk( )
+	{
+		return true;
+	}
+	
+	bool get_IsControllerEnemy( )
+	{
+		return false;
+	}
+	
+	const string get_Name( )
+	{
+		return "0";
+	}
+	
+	iAI @Copy( Critter& critter )			// return copy ai
+	{
+		return BaseAi( critter );
+	}
+	
+	Fraction@ get_fraction( )
+	{
+		if( npc.Stat[ST_FACTION] != tempfractionname )
+		{
+			tempfractionname = npc.Stat[ST_FACTION];
+			@_fraction = GetFraction( npc );
+		}
+		return _fraction;
+	}
+	
+	int tempfractionname;
+	Fraction@ _fraction; //( target );
+	Critter@ npc;
+}
+
+void Start( )
+{
+	manager_add_module( master, "Ai", 0);
+}
