@@ -1,6 +1,6 @@
 # Голод и жажда являются одной из ключевых потребностей персонажей в игре
 
-- [1. Статусы](/info/hunger/status)
+- [1. Статусы](/info/hunger/hstatus)
 - [2. Охота](/info/hunger/hunting)
 - [3. Рыболовство](/info/hunger/fishing)
 - [4. Фермерство](/info/hunger/farming)
