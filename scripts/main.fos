@@ -117,6 +117,8 @@ import void DebugLog( string text ) from "debug";
 import bool isGM( Critter& player ) from "gm";
 import void DIALOG_MENU( Critter& cr, string[] data ) from "gm";
 
+uint[] water_sources = { 2615, 2619, 2621, 2623, 2895 };
+
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Called before world generation.
 void init()
@@ -623,45 +625,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		Critter@ target = useOnSelf ? @cr : @targetCr;
 		if( valid( target ) )
 		{
-			Item@ water = cr.GetItem( PID_BOTTLE_FULL, -1 );
-			if( !valid(water) )
-				@water = cr.GetItem( PID_GLASS_BOTTLE_FULL, -1 );
-			
-			if( !valid(water) )
-			{
-				cr.Say( SAY_NETMSG, "Что бы помыться мылом, вам нужна чистая вода." );
-				return true;
-			}
-
-			if( pid == PID_itsoap01 )
-			{
-				target.Say( SAY_EMOTE_ON_HEAD, "Моется хозяйственным мылом" );
-			}
-			if( pid == PID_FPSHL6 )
-			{
-				target.Say( SAY_EMOTE_ON_HEAD, "Моется душистым мылом" );
-				if( target.ParamBase[ CR_DIRTINESS ] <= 0 )
-					target.AddTimeEvent( "cte_aroma", REAL_SECOND(15), CTE_ROTTEN, 0 );
-			}
-
-			target.ParamBase[ CR_DIRTINESS ] = ( target.ParamBase[ CR_DIRTINESS ] * 0.8 ) - 5;
-			if( water.GetProtoId() == PID_BOTTLE_FULL )
-				cr.AddItem (PID_BOTTLE_EMPTY, 1);
-			else
-				cr.AddItem (PID_BOTTLE_GLASS, 1);
-
-			_SubItem( water, 1 );
-			if( Random( 0, 100 ) < 10 ) {
-				cr.Say( SAY_NETMSG, "Вы потратили мыло." );
-				_SubItem( item, 1 );
-			}
-
-			if( Random( 1, 100 ) > ( cr.StatBase[ ST_AGILITY ] + cr.StatBase[ ST_LUCK ] ) * 10 - 1 )
-			{
-				cr.Say( SAY_EMOTE, "Роняет мыло" );
-				MoveItem( item, 1, cr.GetMap(), cr.HexX + Random( -1, 1 ), cr.HexY + Random( -1, 1 ) );
-			}
-			
+			Cleaning( target, 0 );
 			return true;
 		}
 	}
@@ -1465,13 +1429,16 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
         {
             return UseCookingStuff( targetScen, cr );
         }
-
+		
         // Scenery
-        if( valid( targetScen ) )
-        {
-            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
-            return true;
-        }
+		if( valid( targetScen ) )
+		{
+			if( water_sources.find( targetScen.ProtoId ) != -1 )
+				Cleaning( cr, targetScen.ProtoId );
+			else
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING ); break;
+			return true;
+		}
 
         // Manufacture, Alcohol
         if( isPlayer && IsStill( targetItem ) && UseStill( cr, targetItem, -1, null ) )
@@ -1947,12 +1914,88 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			if( targetItem.GetType() == ITEM_TYPE_CONTAINER && StealContainerOrArmor( cr, targetCr, targetItem ) )
 				return true;
         }
+		if( valid( targetScen ) )
+		{
+			if( water_sources.find( targetScen.ProtoId ) != -1 )
+				Cleaning( cr, targetScen.ProtoId );
+			else
+				cr.Say( SAY_EMOTE, "Моется в " + targetScen.ProtoId ); break;
+
+			return true;
+		}
     break; }
     default: {
     break; }
     }
 
 	return false;
+}
+
+//import void Cleaning( Critter& player, uint water_source ) from "main";
+void Cleaning( Critter& player, uint water_source ) //exported
+{
+	if( water_source == 0 ) //Если нет стороннего источника воды
+	{
+		Item@ water = player.GetItem( PID_BOTTLE_FULL, -1 );
+		if( !valid(water) )
+			@water = player.GetItem( PID_GLASS_BOTTLE_FULL, -1 );
+		
+		if( !valid(water) )
+		{
+			player.Say( SAY_NETMSG, "Вам нужна чистая вода для этого." );
+			return;
+		}
+		
+		_SubItem( water, 1 );
+		if( water.GetProtoId() == PID_BOTTLE_FULL )
+			player.AddItem( PID_BOTTLE_EMPTY, 1 );
+		else
+			player.AddItem( PID_BOTTLE_GLASS, 1 );
+	}
+	
+	Item@ soap =  player.GetItem( PID_itsoap01, -1 );
+	if( !valid(soap) )
+		@soap = player.GetItem( PID_FPSHL6, -1 );
+		
+	int pid = valid(soap) ? soap.GetProtoId() : 0;
+	bool isSoap = false;
+	
+	uint[] hand_washers = { 2615, 2619 };
+	bool isHandsOnly = hand_washers.find(water_source) != -1;
+	
+	switch( pid )
+	{
+		case( PID_itsoap01 ):
+			isSoap = true;
+			player.Say( SAY_EMOTE_ON_HEAD, "Моет" + ( isHandsOnly ? " руки" : "ся" ) + " хозяйственным мылом" );
+			player.ParamBase[ CR_DIRTINESS ] = ( player.ParamBase[ CR_DIRTINESS ] * 0.8 ) - 5;
+		break;
+		case( PID_FPSHL6 ):
+			isSoap = true;
+			player.Say( SAY_EMOTE_ON_HEAD, "Моет" + ( isHandsOnly ? " руки" : "ся" ) + " душистым мылом" );
+			player.ParamBase[ CR_DIRTINESS ] = ( player.ParamBase[ CR_DIRTINESS ] * 0.6 ) - 10;
+			
+			if( player.ParamBase[ CR_DIRTINESS ] <= 0 && player.GetTimeEvents( CTE_ROTTEN, null, null, null ) < 1 )
+				player.AddTimeEvent( "cte_aroma", REAL_SECOND(15), CTE_ROTTEN, 0 );
+		break;
+		default:
+			player.Say( SAY_EMOTE_ON_HEAD, "Ополаскивает" + ( isHandsOnly ? " руки" : "ся" ) );
+			player.ParamBase[ CR_DIRTINESS ] -= Random( 0, player.ParamBase[ CR_DIRTINESS ] * 0.2 );
+		break;
+	}
+
+	if( isSoap )
+	{
+		if( Random( 0, 100 ) < 10 )
+			_SubItem( soap, 1 );
+		
+		int chance = player.StatBase[ ST_AGILITY ] + player.StatBase[ ST_LUCK ];
+		if( Random( 0, 100 ) > Random( chance, chance * 10 ) - 1 )
+		{
+			player.Say( SAY_EMOTE, "Роняет мыло" );
+			MoveItem( soap, 1, player.GetMap(), player.HexX + Random( -1, 1 ), player.HexY + Random( -1, 1 ) );
+		}
+	}
 }
 
 bool inHeaven( Critter& cr )
