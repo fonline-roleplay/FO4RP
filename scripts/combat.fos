@@ -1681,7 +1681,9 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
     // stuff like animations, effects
 
     // Shoot
-	hearshot( cr, weapon, weaponMode );
+	if( !isGrenade && !isHthAttack )
+		hearshot( cr, weapon, weaponMode );
+	
     if( _WeaponEffect( weapon, use ) != 0 )
     {
 		string sfx = "";
@@ -1702,6 +1704,8 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
 			case( DAMAGE_EMP ): sfx = "треск"; break;
 			//case( DAMAGE_EXPLODE ): sfx = ""; break;
 		}
+		if( isGrenade ) sfx = "стук";
+		
 		if( sfx.length() > 0 )
 			map.SetText( tx - 1, ty - 1, COLOR_LGRAY, ":" + sfx + ":" );
 
@@ -1975,7 +1979,6 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
         uint8 dist = GetDistantion( attack.Hx, attack.Hy, target.HexX, target.HexY );
         // Применяем flash эффект, ослепляем цели на определенное время.
         ApplyFlashEff( target, dist );
-		map.SetText( attack.Hx, attack.Hy, COLOR_GRAY, ":вспышка:" );
         return;
     }
 // /////////////////////////////////////////////////////////
@@ -3197,30 +3200,130 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     }
 }
 
+uint e_DelayedExplosionEff( uint[]@ values )
+{
+	if( values.length() != 6 ) return 0;
+	
+	Map @map = ( values[0] > 0 ? GetMap( values[0] ) : null );
+	if( !valid(map) ) return 0;
+	
+	map.RunEffect( values[1], values[2], values[3], values[4] );
+	
+	values[4]++;
+	if( values[4] >= values[5] ) 
+		return 0;
+	
+	CreateTimeEvent( __FullSecond + REAL_MS( 200 ), "e_DelayedExplosionEff", values, false );
+	return 0;
+}
+
+uint e_DelayedExplosion( uint[]@ values )
+{
+	if( values.length() != 8 ) return 0;
+	
+	int i = 0;
+	int x = values[i++];
+	int y = values[i++];
+	int mapId = values[i++];
+	Map @map = mapId > 0 ? GetMap( mapId ) : null;
+	if( !valid(map) ) return 0;
+	
+	int type = 0;
+	int pid = values[i++];
+	switch( pid )
+	{
+		case( PID_FLASH_GRENADE ): 		type = PID_EXPLODE_EMP; break;
+		case( PID_HOLY_HAND_GRENADE ):
+		case( PID_FRAG_GRENADE ): 		type = PID_EXPLODE_FIRE_SMALL; break;
+		case( PID_MOLOTOV_COCKTAIL ): 	type = PID_EXPLODE_FIRE_BIG; break;
+		case( PID_PULSE_GRENADE ): 		type = PID_EXPLODE_EMP; break;
+		case( PID_PLASMA_GRENADE ): 	type = PID_EXPLODE_PLASMA; break;
+		default: 						type = PID_EXPLODE_FIRE_BIG; break;
+	}
+	//QuakeScreen2( target );
+	// if( pid != PID_FLASH_GRENADE && pid != PID_FLASH_GRENADE )
+		// QuakeScreen( map );
+	
+	int maxDist = 4;
+	int r = ( pid == PID_FLASH_GRENADE ? 7 : maxDist );
+
+    Critter@[] critsHit;
+    map.GetCrittersHex( x, y, r, FIND_LIFE_AND_KO, critsHit );
+	
+    int targetId = values[i++];
+	int DmgMin = values[i++];
+	int DmgMax = values[i++];
+	int DmgType = values[i++];
+
+	Critter@ target = targetId > 0 ? GetCritter( targetId ) : null;
+	if( valid( target ) && pid != PID_FLASH_GRENADE )
+		InjureCritter( target, Random( DmgMin, DmgMax ), DmgType, GetDirection( x, y, target.HexX, target.HexY ), 0 );
+	
+	bool stopped = false;
+	
+    for( int k = 0, j = critsHit.length(); k < j; k++ )
+		if( critsHit[ k ].HexX == x && critsHit[ k ].HexY == y && critsHit[ k ].IsKnockout() )
+		{
+			target.Say( SAY_EMOTE, "закрывает собой" );
+			if( pid == PID_FLASH_GRENADE )
+				ApplyFlashEff( critsHit[ k ], 0 );
+			else
+				InjureCritter( target, Random( DmgMin, DmgMax ), DmgType, GetDirection( x, y, target.HexX, target.HexY ), 0 );
+			stopped = true;
+			break;
+		}
+
+	if( pid == PID_FLASH_GRENADE )
+		map.SetText( x, y, COLOR_GRAY, ":вспышка:" );
+
+	if( type > 0 ) 
+	{
+		uint max = ( stopped ? 0 : ( pid == PID_FLASH_GRENADE ? 0 : 3 ) );
+		uint[] vals = { mapId, type, x, y, 0, max };
+		CreateTimeEvent( __FullSecond + 1, "e_DelayedExplosionEff", vals, false );
+	}
+	
+	if( stopped ) return 0;	
+	
+    for( int k = 0, j = critsHit.length(); k < j; k++ )
+    {
+		int distance = GetDistantion( x, y, critsHit[ k ].HexX, critsHit[ k ].HexY );
+        if( pid == PID_FLASH_GRENADE )
+        {
+            uint8 DirToCrit = GetDirection( x, y, critsHit[ k ].HexX, critsHit[ k ].HexY );
+            uint8 FlashDir, Near1, Near2;
+            REVERSE_DIRECTION( FlashDir, DirToCrit );
+            GET_NEAR_DIRECTION( FlashDir, Near1, Near2 );
+            if( ( distance != 0 ) && ( critsHit[ k ].Dir != FlashDir ) && ( critsHit[ k ].Dir != Near1 ) && ( critsHit[ k ].Dir != Near2 ) )
+				continue;
+			ApplyFlashEff( critsHit[ k ], distance );
+			continue;
+        }
+        if( !valid( target ) || targetId != critsHit[ k ].Id )
+		{
+			int dir = GetDirection( x, y, critsHit[ k ].HexX, critsHit[ k ].HexY );
+			float mul = 1.0 - distance * ( 1.0 / maxDist );
+			int dmg = Random( DmgMin, DmgMax );
+            InjureCritter( critsHit[ k ], dmg * mul, DmgType, dir, 0 );
+		}
+    }
+	return 0;
+}
 
 void CommenceExplosion( AttackStruct& attack, Map@ map, uint16 tx, uint16 ty, Critter@ target, uint weapPid, bool isCritical, uint intentionallyId, bool isRocket, CombatRes[]& results )
 {
-    uint radius = isRocket ? 3 : ( ( weapPid == PID_FLASH_GRENADE ) ? 7 : 2 );
-    // binyan - Светошумовая граната
-    if( weapPid != PID_FLASH_GRENADE )
-    // /////////////////////////////////////////////////////
-    {
-        if( weapPid == PID_MOLOTOV_COCKTAIL )
-            map.RunEffect( PID_EXPLODE_FIRE_BIG, tx, ty, 2 );
-        else if( weapPid == PID_FRAG_GRENADE || weapPid == PID_HOLY_HAND_GRENADE )
-            map.RunEffect( PID_EXPLODE_FIRE_SMALL, tx, ty, 2 );
-        else if( weapPid == PID_PULSE_GRENADE )
-            map.RunEffect( PID_EXPLODE_EMP, tx, ty, 2 );
-        else if( weapPid == PID_PLASMA_GRENADE )
-            map.RunEffect( PID_EXPLODE_PLASMA, tx, ty, 2 );
-        else if( isRocket )
-            map.RunEffect( PID_EXPLODE_ROCKET, tx, ty, 1 );
-        else
-            map.RunEffect( PID_EXPLODE_FIRE_BIG, tx, ty, 2 );  // default case
+	if( !isRocket )
+	{
+		if( !valid(map) ) return;
+		uint[] vals = { tx, ty, map.Id, weapPid, ( valid( target ) ? target.Id : 0 ), attack.DmgMin, attack.DmgMax, attack.DmgType };
+		CreateTimeEvent( __FullSecond + REAL_SECOND(2), "e_DelayedExplosion", vals, false );
+		return;
+	}
+	
+    uint radius = 3;
+    map.RunEffect( PID_EXPLODE_ROCKET, tx, ty, 1 );
+	QuakeScreen( map );//todo
 
-		if( weapPid != PID_MOLOTOV_COCKTAIL )
-			QuakeScreen( map );
-    }
     Critter@[] critsHit;
     map.GetCrittersHex( tx, ty, radius, FIND_LIFE_AND_KO, critsHit );
     bool validTarget = valid( target );
@@ -3237,21 +3340,8 @@ void CommenceExplosion( AttackStruct& attack, Map@ map, uint16 tx, uint16 ty, Cr
     attack.Hy = ty;
 
     for( int i = 0, j = critsHit.length(); i < j; i++ )
-    {
-        // binyan - проверка на гранату вспышку, стоит ли ли лицом к ней криттер.///////////////////
-        if( weapPid == PID_FLASH_GRENADE )
-        {
-            uint8 DirToCrit = GetDirection( tx, ty, critsHit[ i ].HexX, critsHit[ i ].HexY );
-            uint8 FlashDir, Near1, Near2;
-            REVERSE_DIRECTION( FlashDir, DirToCrit );
-            GET_NEAR_DIRECTION( FlashDir, Near1, Near2 );
-            if( ( critsHit[ i ].Dir != FlashDir ) && ( critsHit[ i ].Dir != Near1 ) && ( critsHit[ i ].Dir != Near2 ) )
-                continue;
-        }
-        // ////////////////////////////////////////////////////////////////////////////////////////
         if( !validTarget || targetId != critsHit[ i ].Id )
             ApplyDamage( attack, critsHit[ i ], 1, false, intentionally, results );
-    }
 }
 
 
