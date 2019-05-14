@@ -10,6 +10,8 @@ import bool IsMutant( Critter& cr ) from "races";
 import bool IsGhoul( Critter& cr ) from "races";
 import void ApplyGhoul( Critter& cr ) from "morphes";
 
+import bool isGM( Critter& player ) from "gm";
+
 #define RADIATION_STAGES           ( 6 )
 #define RADIATION_STATS            ( 8 )
 #define RADIATION_DURATION         ( 10080 * 60 )
@@ -48,12 +50,12 @@ void AffectRadiation( Critter& cr, int value ) // Export
     if( cr.IsDead() )
         return;
 
-    if( cr.Stat[ ST_BODY_TYPE ] == BT_ROBOT || cr.Stat[ ST_BODY_TYPE ] == BT_ALIEN )
+    if( cr.Stat[ ST_BODY_TYPE ] == BT_ROBOT )
         return;
 
     if( IsGhoul( cr ) || IsMutant( cr ) || cr.Perk[ PE_TERMINATOR ] > 0 )
     {
-        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, Random( 12961, 12964 ) );
+        //cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, Random( 12961, 12964 ) );
         return;
     }
 
@@ -246,9 +248,34 @@ uint e_radFlow( uint[]@ values )
     
     Item@ item = GetItem( values[0] );
 
-    if( item is null || item.Accessory != ACCESSORY_HEX ) 
-		return 0;
-    
+    if( item is null ) return 0;
+	
+	uint16 x, y;
+	Critter@ owner;
+	Item@ cont;
+	
+	switch( item.Accessory )
+	{
+		case( ACCESSORY_NONE ): return 0; break;
+		case( ACCESSORY_CRITTER ): 
+			@owner = GetCritter( item.CritId );
+			if( !valid( owner ) ) return REAL_MINUTE(1);
+			x = owner.HexX;
+			y = owner.HexY;
+		break;
+		case( ACCESSORY_HEX ): 
+			x = item.HexX;
+			y = item.HexY;
+		break;
+		case( ACCESSORY_CONTAINER ): 
+			@cont = GetItem( item.ContainerId );
+			if( !valid( cont ) ) return REAL_MINUTE(1);
+			x = cont.HexX;
+			y = cont.HexY;
+		break;
+		default: return 0; break;
+	}
+	
     Map@ map = GetMap( item.MapId );
     if( map is null ) { Log("radFlow error: map #"+item.MapId+" is null"); return 0; }
     
@@ -261,11 +288,11 @@ uint e_radFlow( uint[]@ values )
 	*/
 	
 	Critter@[] critters;
-    uint count = map.GetCrittersHex( item.HexX, item.HexY, dist, FIND_ALL, critters );
+    uint count = map.GetCrittersHex( x, y, dist, FIND_ALL, critters );
 
     for( uint i = 0; i < count; i++ )
     {
-		int step = GetDistantion( item.HexX, item.HexY, critters[i].HexX, critters[i].HexY );
+		int step = GetDistantion( x, y, critters[i].HexX, critters[i].HexY );
 		int rad = item.Val0 - item.Val1 * step;
 		rad = CLAMP( rad, 0, rad ); //Защита от отрицательных значений.
 		rad = Random( rad * 0.8, rad ); //20% погрешность при локализации источника
@@ -286,7 +313,7 @@ uint e_radFlow( uint[]@ values )
 	for( uint i = 0; i < count; i++ )
 	{
 		if( geigers[i].Val1 != 1 ) continue; //Выключенные не ловят.
-		int step = GetDistantion( item.HexX, item.HexY, geigers[i].HexX, geigers[i].HexY );
+		int step = GetDistantion( x, y, geigers[i].HexX, geigers[i].HexY );
 		int rad = item.Val0 - item.Val1 * step;
 		rad = CLAMP( rad, 0, rad ); //Защита от отрицательных значений.
 		rad = Random( rad * 0.8, rad ); //20% погрешность при локализации источника
@@ -306,12 +333,12 @@ void _showRadItem( Item& item, Critter& player, bool entered, uint8 dir )
 		if( entered )
 		{	
 			player.Say( SAY_NETMSG, "Вы обнаружили источник радиации." ); //И уж дальше сами думайте, что с ним делать))
-			if( player.GetAccess() > 0 )
+			if( isGM( player ) )
 				UNSETFLAG( item.Flags, ITEM_HIDDEN ); //Делает объект видимым, нужно лишь тестерам да ГМам.
 		}
 		else
 		{
-			if( player.GetAccess() > 0 )
+			if( isGM( player ) )
 				SETFLAG( item.Flags, ITEM_HIDDEN ); //Делает объект невидимым, нужно лишь тестерам да ГМам. Что бы не сбрасывать видимость - ТПшимся с него в сторону.
 		}
 	}
@@ -327,8 +354,6 @@ void radiate( Critter& cr, int VAL, int FADE, int DIST )
 
 	item_radiate( map.Id, cr.HexX, cr.HexY, VAL, FADE, DIST, 3, PID_URANIUM_ORE );
 }
-
-import bool isGM( Critter& player ) from "gm";
 
 void unsafe_GM_ItemRadiate( Critter& cr, int p0, int p1, int p2, string@ p3, int[]@ data )
 {
