@@ -1385,14 +1385,22 @@ void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string
 		player.ParamBase[ CR_SLEEPING_STATE ] = 0;
         player.StatBase[ ST_CURRENT_AP ] += 100 * 100;
         player.EraseTimeEvents( CTE_SLEEPING );
-        player.Say( SAY_NETMSG, "Вы поднимаетесь." );
+        player.Say( SAY_NETMSG, "Вы встаёте." );
+		if( player.ParamBase[ CR_FITNESS ] > 0 && player.ParamBase[ CR_RELAXED ] > 0 )
+		{	//REST_MUL = коэффициент преобразования опыта во "время отдыха", т.е. количество экспы, эквивалентной 1 секунде. Сейчас исходит из того, что за минуту отдыха "конвертируется" 100 опыта.
+			float REST_MUL = 100.0 / 60.0; //Читай выше ^
+			int rest = CLAMP( player.ParamBase[ CR_RELAXED ] * REST_MUL, 0, player.ParamBase[ CR_FITNESS ] );
+			player.StatBase[ ST_EXPERIENCE ] += rest;
+			player.ParamBase[ CR_FITNESS ] -= rest;
+			player.ParamBase[ CR_RELAXED ] = 0;
+		}
 		return;
     }
 
 	if( !player.IsKnockout() && player.GetTimeEvents( CTE_SLEEPING, null, null, null ) == 0 )
     {
         player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( isBack == 0 ) ), 100, player.HexX, player.HexY );
-        player.Say( SAY_NETMSG, "Вы упали." );
+        player.Say( SAY_NETMSG, "Вы лежите." );
         player.AddTimeEvent( "cte_sleep", 0, CTE_SLEEPING, 0 );
 		player.ParamBase[ CR_SLEEPING_STATE ] = 1 + isBack;
 		if( isRemote == 1 )
@@ -1405,8 +1413,8 @@ void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string
 
 uint cte_sleep( Critter& player, int identifier, uint& rate )
 {
-	rate++;
-	if( rate == 60 )
+	player.ParamBase[ CR_RELAXED ]++;
+	if( player.ParamBase[ CR_RELAXED ] == 60 )
 	{
 		player.Say( SAY_NETMSG, "Если вы пролежите не вставая полчаса - то полностью восстановите накопившуюся усталость." );
         DeepSleep( player );
@@ -1687,7 +1695,7 @@ bool TryTraining( Critter& cr, uint pid ) //exported
 //import void Training( Critter& player, int type ) from "general_unsafe";
 void Training( Critter& player, int type ) //exported
 {
-	if( player.IsDead() || player.IsBusy() || player.IsKnockout() || player.StatBase[ ST_CURRENT_AP ] < 0 )
+	if( player.IsDead() || player.IsKnockout() || player.StatBase[ ST_CURRENT_AP ] < 0 ) //Убрал временно обработку "player.IsBusy()"
 		return;
 
 	if( player.Stat[ ST_HUNGER ] < 50 || player.Stat[ ST_THRIST ] < 50 )
@@ -1696,6 +1704,7 @@ void Training( Critter& player, int type ) //exported
 		return;
 	}
 	
+	player.Wait( 2000 );
 	player.StatBase[ ST_HUNGER ] -= Random( 0, 2 );
 	player.StatBase[ ST_THRIST ] -= Random( 0, 2 );
 	player.StatBase[ ST_DYSPNEA ] -= Random( 0, 10 ) / 7;
@@ -1724,7 +1733,7 @@ void Training( Critter& player, int type ) //exported
 			if( type == 0 )
 				player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( false ), AP, player.HexX, player.HexY );
 			else
-				player.Action( ACTION_PICK_ITEM, 0, null );
+				player.Action( ACTION_PICK_ITEM, 1, null );
 		}
 	}
 	else
@@ -1733,14 +1742,18 @@ void Training( Critter& player, int type ) //exported
 		switch( type )
 		{
 			case( 3 ): text = "боксирует"; 
-				player.Animate( 0, ANIM2_PUNCH_RIGHT, null, false, true );
+				player.Animate( 0, ANIM2_PUNCH_RIGHT, null, true, true );
+				player.Wait( 0 );
 			break;
 			case( 4 ): text = "тренирует ноги"; 
-				player.Animate( 0, ANIM2_WALK, null, false, true );
+				player.Animate( 0, ANIM2_WALK, null, true, true );
 			break;
 			case( 5 ): text = "готовится тягать штангу"; 
-				player.Action( ACTION_PICK_ITEM, 0, null );
-				start_lifting( player );
+				player.Action( ACTION_PICK_ITEM, 1, null );
+				player.Say( SAY_EMOTE_ON_HEAD, "Полирует штангу" );
+				player.ParamBase[ CR_VAL2 ] = 0;
+				return;
+				//start_lifting( player );
 			break;
 			case( 6 ): text = "поднимает штангу";
 				unsafe_ChatSay( player, SAY_EMOTE_ON_HEAD, player.HexX, player.HexY, " *поднимает штангу*", null );
@@ -1769,17 +1782,15 @@ void Training( Critter& player, int type ) //exported
 	player.ParamBase[ CR_DIRTINESS ] += Random( 0, 2 );
 
 	if( !failed )
-		player.StatBase[ ST_EXPERIENCE ] += CLAMP( Random( difficulty * 0.5, difficulty ) * 0.1, 0, 100 );
+		player.ParamBase[ CR_FITNESS ] += CLAMP( Random( difficulty * 0.5, difficulty ) * 0.1, 0, 100 );
 	else
 		player.Say( SAY_NETMSG, "Попытка  не удалась." );
-
-	player.Wait( 2000 );
 }
 
 uint cte_lifting( Critter& player, int identifier, uint& rate )
 {
-	// if( player.ParamBase[ CR_VAL2 ] == 1 )
-		// return 0;
+	if( player.ParamBase[ CR_VAL2 ] == 0 )
+		return 0;
 
 	// player.StatBase[ ST_CURRENT_AP ] = -100 * 100;
 	// player.ParamBase[ CR_VAL2 ] = 1;
