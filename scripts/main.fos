@@ -1582,10 +1582,18 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
         return true;
 	break; }
     case SKILL_PUSH_CRITTER: {
+		//cr.Say( SAY_EMOTE_ON_HEAD, "Толкает" );
         cr.Action( ACTION_PICK_CRITTER, 2, null );
-        if( ( cr.Timeout[ TO_BATTLE ] == 0 && targetCr.Timeout[ TO_BATTLE ] == 0 ) &&
-            ( targetCr.IsPlayer() || ( targetCr.IsNoPlanes() && targetCr.GetTalkedPlayers( null ) == 0 ) ) )
-            targetCr.MoveToDir( cr.Dir );
+        if( ( cr.Timeout[ TO_BATTLE ] == 0 && targetCr.Timeout[ TO_BATTLE ] == 0 ) 
+			&& ( targetCr.IsPlayer() || ( targetCr.IsNoPlanes() && targetCr.GetTalkedPlayers( null ) == 0 ) )
+			&& targetCr.MoveToDir( cr.Dir ) 
+			)
+				cr.Say( SAY_NETMSG, "Вы толкаете цель." );
+			else
+				cr.Say( SAY_NETMSG, "Цель сопротивляется." );
+				// targetCr.Say( SAY_EMOTE_ON_HEAD, "Поддается" );
+			// else
+				// targetCr.Say( SAY_EMOTE_ON_HEAD, "Сопротивляется" );
         return true;
 	break; }
     case SK_SCIENCE: {
@@ -2224,7 +2232,7 @@ uint process_reload( Critter@ cr, int& param0, int& param1, int& param2 )
 
 void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo )
 {
-	//cr.Wait(GetProtoTime(weapon.Proto, USE_RELOAD, cr));
+	cr.Wait(500);//GetProtoTime(weapon.Proto, USE_RELOAD, cr)
 		
     // Special weapons
     if( weapon.Proto.Weapon_Caliber == 0 )
@@ -2265,39 +2273,49 @@ void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo )
     {
 		//if (cr.GetTimeEvents( CTE_SLOWRELOAD, null, null, null ) > 0) cr.EraseTimeEvents( CTE_SLOWRELOAD );
 	 
+		cr.Say( SAY_EMOTE_ON_HEAD, "Заряжает оружие" );
+
 		if( !valid( ammo ) )
 		{
 			@ammo = cr.GetItem( weapon.AmmoPid, -1 );
 			int need_ammo = weapon.Proto.Weapon_MaxAmmoCount - weapon.AmmoCount;
-			if( !valid( ammo ) )
+			if( !valid( ammo ) && need_ammo > 0 && cr.CountItem( PID_AMMO_BELT ) > 0 )
 			{
-				if( need_ammo > 0 )
+				Item@[] inventory;
+				Item@[] belts; belts.resize(0);
+				uint count = cr.GetItems( -1, inventory );
+				for( uint i = 0; i < count; i++ )
+					if( inventory[i].GetProtoId() == PID_AMMO_BELT )
+						belts.insertLast( inventory[i] );
+				
+				Item@ finded;
+				int local_max = 0;
+				for( uint i = 0; i < belts.length(); i++ )
 				{
-					if( cr.CountItem( PID_AMMO_BELT ) > 0 )
+					@finded = belts[i].GetItem( weapon.AmmoPid, 0 );
+					if( valid( finded ) && finded.GetCount() >= local_max )
 					{
-						cr.Say( SAY_EMOTE_ON_HEAD, "Заряжается из патронташа" );
-						Item@[] inventory;
-						Item@[] belts; belts.resize(0);
-						uint count = cr.GetItems( -1, inventory );
-						for( uint i = 0; i < count; i++ )
-							if( inventory[i].GetProtoId() == PID_AMMO_BELT )
-								belts.insertLast( inventory[i] );
-						
-						Item@ finded;
-						int local_max = 0;
-						for( uint i = 0; i < belts.length(); i++ )
-						{
-							@finded = belts[i].GetItem( weapon.AmmoPid, 0 );
-							if( valid( finded ) && finded.GetCount() >= local_max )
-							{
-								local_max = finded.GetCount();
-								@ammo = @finded;
-							}
-						}
+						local_max = finded.GetCount();
+						@ammo = @finded;
 					}
 				}
+				if( valid( ammo ) )
+					cr.Say( SAY_EMOTE_ON_HEAD, "Заряжается из патронташа" );
 			}
 		}
+		
+		if( !valid( ammo ) ) //Если же не найдено патронов того же типа, ищем подобные, по калибру.
+		{
+			Item@[] inventory;
+			uint count = cr.GetItems( -1, inventory );
+			for( uint i = 0; i < count; i++ )
+				if( inventory[i].Proto.Ammo_Caliber == weapon.Proto.Weapon_Caliber )
+				{
+					cr.Say( SAY_EMOTE_ON_HEAD, "Меняет тип боеприпаса" );
+					@ammo = inventory[i];
+					break;
+				}
+		}		
 	 
 		uint16 weapPid = weapon.GetProtoId(), skill = 1, reloadBaseTime = 0;
 
@@ -2511,20 +2529,19 @@ void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo )
 		
 		if( not valid( ammo ) || ( weapon.AmmoCount > 0 && weapon.AmmoPid != ammo.GetProtoId() ) || ( weapon.AmmoCount == weapon.Proto.Weapon_MaxAmmoCount ) )
         {
-			cr.Say( SAY_EMOTE_ON_HEAD, "Разряжает оружие" );
-            if( weapon.AmmoPid != 0 )
+            if( weapon.AmmoPid != 0 && weapon.AmmoCount > 0 )
             {
+				cr.Say( SAY_EMOTE_ON_HEAD, "Разряжает оружие" );
                 Item@ existAmmo = cr.GetItem( weapon.AmmoPid, -1 );
                 if( not valid( existAmmo ) )
                     cr.AddItem( weapon.AmmoPid, weapon.AmmoCount );
                 else
                     _IncItem( existAmmo, weapon.AmmoCount );
+				weapon.AmmoCount = 0;
+				weapon.Update();
             }
-            weapon.AmmoCount = 0;
-			weapon.Update();
 			return;
         }
-		cr.Say( SAY_EMOTE_ON_HEAD, "Заряжает оружие" );
 		
         int reloadTime = ( RELOAD_BASE + reloadBaseTime ) - ( ( cr.StatBase[ ST_AGILITY ] * 200 ) + ( skill * 40 ) );
         reloadTime = CLAMP( reloadTime, 1000, 10000 );
@@ -2588,31 +2605,38 @@ uint cte_aroma( Critter& cr, int identifier, uint& rate )
 uint cte_slowReload_one( Critter& cr, int identifier, uint& rate )
 {
     Item@ weapon = GetItem( rate );
-    if( !valid( weapon ) ) {ChangeCritterSpeed( cr ); return 0;}
-	if( weapon.Id != _CritGetItemHand( cr ).Id ) {ChangeCritterSpeed( cr ); return 0;}
-	if ( weapon.AmmoCount >= weapon.Proto.Weapon_MaxAmmoCount ) {ChangeCritterSpeed( cr ); return 0;}
+	Item@ hand = _CritGetItemHand( cr );
+    if( !valid( weapon ) || !valid(hand) || weapon.Id != hand.Id || weapon.AmmoCount >= weapon.Proto.Weapon_MaxAmmoCount ) 
+	{ 
+		ChangeCritterSpeed( cr ); 
+		return 0; 
+	}
 
-	Item @ ammo;
+	Item@ ammo;
 	if ( weapon.Val1 > 0 ) @ammo =  GetItem( weapon.Val1 );
 	
 	if( valid( ammo ) )
     {
-        weapon.AmmoCount ++;
+        weapon.AmmoCount++;
         weapon.AmmoPid = ammo.GetProtoId();
         _SubItem( ammo, 1 );
     }
 	weapon.Update();
 	
-	if( !valid( ammo ) ) {ChangeCritterSpeed( cr ); return 0;}
-	if ( weapon.AmmoCount >= weapon.Proto.Weapon_MaxAmmoCount ) {ChangeCritterSpeed( cr ); return 0;}
+	if( !valid( ammo ) ) 
+	{ 
+		ChangeCritterSpeed( cr ); 
+		return 0; 
+	}
+	//if( weapon.AmmoCount >= weapon.Proto.Weapon_MaxAmmoCount ) {ChangeCritterSpeed( cr ); return 0;}
     return REAL_SECOND(1);
 }
 
 uint cte_slowReload( Critter& cr, int identifier, uint& rate )
 {
     Item@ weapon = GetItem( rate );
-    if( !valid( weapon ) ) {ChangeCritterSpeed( cr ); return 0;}
-	if( weapon.Id != _CritGetItemHand( cr ).Id ) {ChangeCritterSpeed( cr ); return 0;}
+	Item@ hand = _CritGetItemHand( cr );
+    if( !valid( weapon ) || !valid(hand) || weapon.Id != hand.Id ) { ChangeCritterSpeed( cr ); return 0; }
 	
 	Item @ ammo;
 	if ( weapon.Val1 > 0 ) @ammo = GetItem( weapon.Val1 );
@@ -3645,8 +3669,10 @@ uint item_cost( Item& item, Critter& cr, Critter& npc, bool sell )
             cost *= brokenCount != 100 ? brokenCount * 0.01 : 0.01;
 
         if( itemType == ITEM_TYPE_WEAPON && !item.IsStackable() )
-        {
-            cost += GetProtoItem( item.AmmoPid ).Cost * item.AmmoCount;
+        {	
+			ProtoItem@ ammo = GetProtoItem( item.AmmoPid );
+			if( valid( ammo ) )
+				cost += ammo.Cost * item.AmmoCount;
         }
     }
 
