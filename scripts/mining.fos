@@ -1,0 +1,318 @@
+#include "_macros.fos"
+#include "_colors.fos"
+
+import bool isGM( Critter& player ) from "gm";
+import int  GetDeteriorationProcent( Item& item ) from "repair";
+import void SetDeterioration( Item& item, int deteriorationProcent ) from "repair";
+import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat";
+
+//~run mining go 0 0 0
+void go( Critter& cr, int p0, int p1, int p2 )
+{
+	//nothing here yet
+}
+
+DropList@ dropList;
+void InitDropList()
+{
+	if( valid( dropList ) ) return;
+	
+	@dropList = CreateDropList( "Основной " )
+		.add( CreateDrop( 40 ).setInfo("Кажется, ничего ценного добыть не удалось.").add( PID_ROCK, 3 ) )
+		.add( CreateDrop( 15 ).setInfo("Вы нашли вкрапления минерала в породе.").add( PID_ROCK, 6 ).add( PID_MINERAL, 1 ) )
+		.add( CreateDrop( 10 ).setInfo("Вы нашли небольшую жилу в породе.").add( PID_ROCK, 8 ).add( PID_METAL_ORE, 2 ) )
+		.add( CreateDrop( 15 ).setInfo("Вы наткнулись на ценное скопление в породе.").add( PID_ROCK, 10 ).add( PID_METAL_ORE, 2 ).add( PID_MINERAL, 2 ) )
+		.add( CreateDrop( 10 ).setInfo("Вы наткнулись на небольшую жилу.").add( PID_ROCK, 14 ).add( PID_METAL_ORE, 3 ).add( PID_MINERAL, 3 ) )
+		.add( CreateDrop( 99 ).setInfo("Вы обнаружили крупную жилу с проблесками золота.").add( PID_GOLD_NUGGET, 1 ).add( PID_ROCK, 16 ).add( PID_METAL_ORE, 4 ).add( PID_MINERAL, 4 ) )
+			; //Сумма: 100+
+}
+
+//Вот тут и происходит проверка по списку, забитому в dropList
+void DropListCheck( Critter& cr )
+{
+	InitDropList();
+	dropList.check( cr );
+}
+
+//Работа с камнями и рудами:
+//import bool Mining( Critter& cr, Item@ item, Item@ targetItem ) from "mining";
+bool Mining( Critter& cr, Item@ item, Item@ targetItem ) //exported
+{
+	if( !Prepare( cr, item, targetItem ) ) return false; //Проверка готовности, начало копки.
+	
+	if( Random( 0, 100 ) <= 40 ) return false; //Не всякий юз даёт профит.
+	if( Random( 0, 80 ) + cr.StatBase[ ST_LUCK ] * 1.5 + cr.StatBase[ ST_STRENGTH ] * 2 + cr.ParamBase[ SK_REPAIR ] * 0.2 + cr.ParamBase[ SK_OUTDOORSMAN ] * 0.2 >= 20 )
+	{
+		uint tool = item.GetProtoId();
+		
+		cr.ParamBase[ CHANCE ] = 0;
+		if( tool == PID_SLEDGEHAMMER ) cr.ParamBase[ CHANCE ] -= Random( 0, 30 );
+		if( tool == PID_DRILL ) cr.ParamBase[ CHANCE ] += Random( 0, 30 );
+		cr.ParamBase[ CHANCE ] += cr.StatBase[ ST_LUCK ] * 2 + cr.StatBase[ ST_STRENGTH ] * 2 + cr.StatBase[ ST_PERCEPTION ] * 2 + cr.ParamBase[ SK_OUTDOORSMAN ] * 0.2;
+		
+		uint[] ores = { PID_ORE_1, PID_ORE_2 }; //Список руд, из которых дропается что-либо.
+		if( ores.find( targetItem.GetProtoId() ) != -1 )
+		{
+			DropListCheck(cr); //Вот тут и происходит проверка по списку, забитому в dropList
+
+			uint[] values = { targetItem.Id };
+			EraseTimeEvent( targetItem.Val2 );
+			SETFLAG( targetItem.Flags, ITEM_NO_BLOCK );
+			SETFLAG( targetItem.Flags, ITEM_HIDDEN );
+			targetItem.Val2 = CreateTimeEvent( __FullSecond + REAL_MINUTE( Random( 1, 60 ) ), "e_RocksCollapse", values, false );
+		}
+		else
+		{
+			switch( targetItem.GetProtoId() )
+			{
+				case( PID_ROCKFALL ): {
+					if( _CritCountItem( cr, PID_BOULDER ) > 0 )
+					{
+						cr.Say( SAY_NETMSG, "Вы итак несёте булыжник. Сначала освободитесь от него." );
+						return false;
+					}				
+					
+					Map@ map = cr.GetMap();
+					Item @ blockage = map.GetItem( cr.HexX, cr.HexY, PID_BOULDER );
+					if( valid( blockage ) )
+					{
+						cr.Say( SAY_NETMSG, "Вы не можете работать, стоя на булыжнике. Освободите место." );
+						return false;
+					}						
+					
+					targetItem.Val0--;
+					if( targetItem.Val0 < 0 )
+					{
+						DeleteItem( targetItem );
+						cr.Say( SAY_NETMSG, "Вы наконец-таки разобрали завал." );
+					}
+					cr.Say( SAY_EMOTE, "Откалывает валун" );
+					Item@ boulder = cr.AddItem( PID_BOULDER, 1 );
+					uint hash = 0;
+					uint[] boulders = { 2080, 2429, 2430, 2435, 2074, 2075 }; //Пиды различных сценери-булыжников.
+					ProtoItem@ proto = GetProtoItem( boulders[ Random( 0, boulders.length() - 1 ) ] );
+					if( @proto !is null )
+						hash = proto.PicMap;
+					
+					boulder.Val0 = Random( 0, 3 );
+					boulder.PicMap = hash;
+					boulder.Update();
+				break; }
+				
+				case( PID_BOULDER ): {
+					targetItem.Val0--;
+					if( targetItem.Val0 < 0 )
+					{
+						DeleteItem( targetItem );
+						cr.Say( SAY_NETMSG, "Вы разбили булыжник на мелкие камни." );
+					}
+					cr.Say( SAY_EMOTE, "Раздрабливает валун" );
+					cr.AddItem( PID_ROCK, Random( 3, 12 ) );
+				break; }
+				
+				default: cr.Say( SAY_NETMSG, "Что-то пошло не так.." ); return true;
+			}
+		}
+
+		//Получение производственных травм:
+		if( Random( 1, 100 ) - ( cr.Stat[ST_LUCK] - 5 ) * 5 >= 80 )
+		{
+			cr.ParamBase[ CHANCE ] = Random( 0, 300 ) - cr.StatBase[ ST_LUCK ] * 10 - cr.StatBase[ ST_INTELLECT ] * 2 - cr.StatBase[ ST_AGILITY ] * 2;
+			if( cr.ParamBase[ CHANCE ]  >= 60 && cr.ParamBase[ CHANCE ]  <= 130 )
+			{
+				cr.Say( SAY_NETMSG, "Осколок больно задел ногу!" ); //TODO: Добавить проверку на наличие спецодежды.
+				cr.ParamBase[ DAMAGE_RIGHT_LEG ] = 1;
+				InjureCritter( cr, 20, DAMAGE_NORMAL, cr.Dir, cr.Id );
+				cr.Say(SAY_EMOTE, "Вскрикивает от боли");
+			}
+			if( cr.ParamBase[ CHANCE ]  >= 131 && cr.ParamBase[ CHANCE ]  <= 252 )
+			{
+				cr.Say( SAY_NETMSG, "Камни больно резонируют. У вас уже ломит руки, дайте костям отдохнуть." );
+				cr.ParamBase[ DAMAGE_LEFT_ARM ] = 1;
+				InjureCritter( cr, 20, DAMAGE_NORMAL, cr.Dir, cr.Id );
+				cr.Say(SAY_EMOTE, "Рука безвольно повисла");
+			}
+		}
+		
+		cr.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 5 ) + REAL_SECOND( 0 );
+		cr.ParamBase[ CHANCE ] = 0;
+		return true;
+	}
+	return false;
+}
+
+uint e_RocksCollapse( uint[]@ values ) //Обратное появление камней.
+{
+	if( !valid(values) ) return 0;
+	
+	Item@ rocks = GetItem( values[0] );
+	if( !valid(rocks) ) return 0;
+
+	UNSETFLAG( rocks.Flags, ITEM_NO_BLOCK );
+	UNSETFLAG( rocks.Flags, ITEM_HIDDEN );
+	
+	return 0; //TODO: Добавить возможность погрести под завалом жертву (кнокает и дамажит).
+}
+
+//Проверка готовности, начало копки.
+bool Prepare( Critter& cr, Item@ item, Item@ source )
+{
+	if( !valid( item ) || !valid(source) ) return false;
+
+	uint tool = item.GetProtoId();
+	uint[] tools = { PID_SLEDGEHAMMER, PID_PICKAXE, PID_DRILL };
+	int strength = tools.find( tool );
+	if( strength == -1 ) return false;
+	
+	uint[] sources = { PID_ORE_1, PID_ORE_2, PID_BOULDER, PID_ROCKFALL }; 
+	if( sources.find( source.GetProtoId() ) == -1 ) 
+		return false;
+
+	if( tool == PID_DRILL )
+	{
+		if( item.AmmoCount < 1 )
+		{
+			cr.Say( SAY_EMOTE_ON_HEAD, "Отдышка" );
+			cr.Say( SAY_NETMSG, "Это было хорошей идеей, пока вы не поняли, что в буре нет энергии." );
+			return false;
+		}
+		uint det = GetDeteriorationProcent(item);
+		if( det >= 95 )
+		{
+			cr.Say( SAY_NETMSG, "Бур слишком повреждён." );
+			return false;
+		}
+		SetDeterioration( item, det + 1 );
+	}
+		
+	if( cr.TimeoutBase[ TO_STEALING ] > __FullSecond + REAL_MINUTE( 2 ) )
+	{
+		cr.Say( SAY_EMOTE_ON_HEAD, "Отдышка" );
+		cr.Say( SAY_NETMSG, "Вы слишком устали, передохните хотя бы три минуты." );
+		
+		if( !isGM(cr) )
+			return false;
+	}
+	
+	if( cr.ParamBase[ DAMAGE_RIGHT_LEG ] >= 1 || cr.ParamBase[ DAMAGE_LEFT_ARM ] >= 1 || cr.ParamBase[ DAMAGE_LEFT_LEG ] >= 1 || cr.ParamBase[ DAMAGE_RIGHT_ARM ] >= 1 ) 
+	{
+		cr.Say( SAY_NETMSG, "Вы травмированы и не в состоянии добывать руду." ); 
+		return false;
+	}
+	if( cr.ParamBase[ ST_LEVEL ] <= 5 ) {
+		cr.Say( SAY_NETMSG, "Вы еще недостаточно опытны. Требования: 6 уровень." ); 
+		return false;
+	}		
+	
+	Map@ map = cr.GetMap();
+	if( tool == PID_SLEDGEHAMMER || tool == PID_PICKAXE ) 
+	{
+		cr.Animate( 6, ANIM2_SWING_1H, null, ( tool == PID_PICKAXE ? true : false ), true );
+		map.SetText( cr.HexX, cr.HexY, COLOR_RED, ":УДАР:" );
+	}
+	else
+	{
+		map.SetText( cr.HexX, cr.HexY, COLOR_RED, ":РОКОТ БУРА:" );
+		if( Random( 0, 2 ) == 0 ) item.AmmoCount--; //33% шанс потратить единицу энергии
+		item.Update();
+	}
+	
+	return true;
+}
+
+#ifndef __MINING_CLASSES
+	#define __MINING_CLASSES
+	class Loot
+	{
+		uint pid;
+		uint count;
+		
+		Loot( uint pid, uint count = 1 )
+		{
+			this.pid = pid;
+			this.count = count;
+		}
+		
+		void generate( Critter& cr )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_ITEM, 100 * pid );
+			cr.Say( SAY_NETMSG, "   " + count + " шт." );
+			cr.AddItem( pid, count );
+		}
+	}
+
+	Drop@ CreateDrop( uint range )
+	{
+		return Drop( range );
+	}
+
+	class Drop
+	{
+		uint range;
+		string info;
+		Loot[] loot;
+		
+		Drop( uint range )
+		{
+			this.range = range;
+		}
+		
+		Drop@ add( uint pid, uint count = 1 )
+		{
+			return this.add( Loot( pid, count ) );
+		}
+
+		Drop@ add( Loot item )
+		{
+			loot.insertLast( item );
+			return this;
+		}
+		
+		Drop@ setInfo( string info )
+		{
+			this.info = info;
+			return this;
+		}
+		
+		bool generate( Critter& cr )
+		{
+			cr.ParamBase[ CHANCE ] -= range;
+			if( cr.ParamBase[ CHANCE ] > 0 ) return false;
+			
+			cr.Say( SAY_NETMSG, info + "\n    Добыто:" );
+			for( uint i = 0; i < loot.length(); i++ )
+				loot[i].generate( cr );
+			
+			return true;
+		}
+	}
+
+	DropList@ CreateDropList( string name )
+	{
+		return DropList( name );
+	}
+
+	class DropList
+	{
+		string name;
+		Drop[] drop;
+		
+		DropList( string name )
+		{
+			this.name = name;
+		}
+		
+		DropList@ add( Drop item )
+		{
+			drop.insertLast( item );
+			return this;
+		}
+		
+		void check( Critter& cr )
+		{
+			for( uint i = 0; i < drop.length(); i++ )
+				if( drop[i].generate( cr ) )
+					return;
+		}
+	}
+#endif
