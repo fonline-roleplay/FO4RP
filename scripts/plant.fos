@@ -12,12 +12,6 @@ import void DIALOG_MENU( Critter& cr, string[] data ) from "gm";
 #define PLANT_CORN        ( 2 )
 #define PLANT_MAX         ( 3 )
 
-#define PID_RADCVET       ( 1600 )
-#define PID_CABBAGE       ( 1610 )
-#define PID_CORN          ( 1620 )
-
-#define GROW_STAGE_TIME		REAL_SECOND( 10 )
-
 #define TIME_EVENT		Val0
 #define GROW_STAGE		Val1
 #define SELECTION		Val2
@@ -26,215 +20,256 @@ import void DIALOG_MENU( Critter& cr, string[] data ) from "gm";
 #define FERTILITY		Val5
 #define PLANT_GAIN		Val6
 
-void _InitPlant( Item& item, bool firstTime )
+#define isSEED			#(item)		( item.GROW_STAGE == 0 )
+
+uint getStageTime()
 {
-    if( firstTime )
-    {
-        uint16 proto = item.GetProtoId();
-        if( item.GetType() != ITEM_TYPE_PLANT )
-            return;
-
-        uint8 hashNum = item.PLANT_TYPE;
-        item.SELECTION = 1;
-
-        CPlant @ plant;
-
-        switch( proto )
-        {
-			//Добавить коноплю
-			case PID_RADCVET:
-				@plant = CRadCvet();
-				break;
-			case PID_CABBAGE:
-				@plant = CCabbage();
-				break;
-			case PID_CORN:
-				@plant = CCorn();
-				break;
-			default:
-				break;
-        }
-
-        if( valid( plant ) )
-        {
-            hashNum = plant.PlantType;
-        }
-
-        item.PLANT_TYPE = hashNum;
-
-        item.Update();
-    }
-
-	//Херня какая-то.
-    if( item.GROW_STAGE == 0 )
-    {
-        item.SetEvent( ITEM_EVENT_DROP, "_DropPlant" );
-        if( item.Accessory == ACCESSORY_HEX && item.TIME_EVENT != 0 )
-            item.SetEvent( ITEM_EVENT_SKILL, "_SkillPlant" );
-    } else {
-    	item.SetEvent( ITEM_EVENT_SKILL, "_SkillPlant" );
-    	//item.SetEvent( ITEM_EVENT_WALK, "_WalkPlant" );
-    	item.SetEvent (ITEM_EVENT_USE_ON_ME, "_OnMePlant");
-	}
-
-	//Нахера?
-    if( item.GROW_STAGE == 0 || item.GROW_STAGE == 3 )
-    {
-        SETFLAG( item.Flags, ITEM_CAN_USE );
-    }
-    else
-        UNSETFLAG( item.Flags, ITEM_CAN_USE );
-        
-    item.SetEvent( ITEM_EVENT_USE, "_UsePlant" );
-	item.Update();
-}
-
-bool _UsePlant( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-    CPlant @ plant = GetCPlant( item.PLANT_TYPE );
-    if( valid( onCritter ) || valid( onItem ) || valid( onScenery ) || !valid( plant ) )
-        return false;
-
-    if( item.GROW_STAGE == 0 )
-    {
-        AffectRadiation( cr, 1 );
-        AffectPoison( cr, 1 );
-
-        int heal = cr.Param[ ST_MAX_LIFE ] - cr.Param[ ST_CURRENT_HP ],
-            good = item.SELECTION;
-        if( good > heal )
-            good = heal;
-        if( good > 5 )
-            good = 5;
-        cr.ParamBase[ ST_CURRENT_HP ] += good;
-        DeleteItem( item );
-    }
-    else
-        return false;
-
-    return true;
-}
-
-void _DropPlant( Item& item, Critter& cr )
-{
-    Map@ map = cr.GetMap();
-    if( map is null )
-        return;
-
-    if( item.GROW_STAGE != 0 )
-        return;
-
-    if( map.GetItems( cr.HexX, cr.HexY, null ) > 1 )
-    {
-        if( cr.IsLife() )
-            cr.Say( SAY_NETMSG, "Это тут не прорастет." );
-        return;
-    }
-
-    uint time = 0;
-    if( CheckGard( map, cr.HexX, cr.HexY ) )
-    {
-        time = GROW_STAGE_TIME;
-        if( cr.IsLife() )
-            cr.Say( SAY_NETMSG, "Плод посажен." );
-    }
-    else
-    {
-        if( cr.IsLife() )
-            cr.Say( SAY_NETMSG, "Это тут не прорастет." );
-		return;
-    }
-
-    item.SetEvent( ITEM_EVENT_SKILL, "_SkillPlant" );
-    //item.SetEvent( ITEM_EVENT_WALK, "_WalkPlant" );
-    item.SetEvent( ITEM_EVENT_USE_ON_ME, "_OnMePlant" );
-
-    item.TIME_EVENT = CreateTimeEvent( __FullSecond + time, "e_ProcessPlant", item.Id, true );
-}
-
-bool AskRemove( Critter& cr, uint targetId ) //exported
-{
-	cr.ParamBase[CR_VAL0] = targetId;
-	cr.ShowScreen( SCREEN_DIALOGBOX, 1, "plant@answer_REMOVE" );
-	cr.Say( SAY_DIALOGBOX_TEXT, "Вы уверены, что хотите вырвать это растение? Оно умрет!" );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "да" );
-	return true;
-}
-
-void answer_REMOVE( Critter& cr, uint answerI, string& answerS )
-{
-	Item@ item = GetItem( cr.ParamBase[CR_VAL0] );
-	if( !valid( item ) ) return;
+	GameVar@ speedUpPlants = GetGlobalVar( GVAR_speedUpPlants );		
+	if( !valid( speedUpPlants ) || speedUpPlants.GetValue() == 0 )
+		return REAL_HOUR( 1 ); //Анури, вот твоё дефолтное время, остальное не трожь!
 	
-	item.SetEvent( ITEM_EVENT_SKILL, null );
-	item.SetEvent( ITEM_EVENT_USE_ON_ME, null );
-	item.SetEvent( ITEM_EVENT_USE, null );
-	item.SetEvent( ITEM_EVENT_DROP, null );
+	return( REAL_SECOND( speedUpPlants.GetValue() ) );
+}
+
+void go( Critter& cr, int, int, int )
+{
+	Item@[] loot;
+	cr.GetItems( -1, loot );
+	DeleteItems( loot );
 	
-	if( item.TIME_EVENT != 0 )
+	cr.Say( SAY_EMOTE, "Одевает соломенную шляпу" );
+	
+	cr.AddItem( PID_RADCVET_SEED, 5 );
+	cr.AddItem( PID_CABBAGE_SEED, 5 );
+	cr.AddItem( PID_CORN_SEED, 	  5 );
+	cr.AddItem( PID_SHOVEL, 1 );
+	cr.AddItem( PID_BOTTLE_FULL, 5 );
+	cr.AddItem( PID_SHIT_SMALL, 5 );
+}
+
+void _InitShit(Item& item, bool firstTime)
+{
+	//TODO: Пачкаться в грязи.
+}
+
+#ifndef __PLANT_BEHAVIOR
+	#define __PLANT_BEHAVIOR
+	
+	void _InitPlant( Item& item, bool firstTime )
 	{
-		EraseTimeEvent( item.TIME_EVENT );
-		item.TIME_EVENT = 0;
+		UNSETFLAG( item.Flags, ITEM_FLAT );
+		SETFLAG( item.Flags, ITEM_CAN_USE );
+		
+		if( firstTime )
+		{
+			
+			uint proto = item.GetProtoId();
+			
+			if( item.GetType() != ITEM_TYPE_PLANT )
+			{
+				Log( "Not a plant #" + proto + " id " + item.Id + " [" + item.GetType() + "]" );
+				return;
+			}
+
+			uint hashNum = item.PLANT_TYPE;
+			CPlant@ plant = GetCPlant( proto );
+			if( valid( plant ) )
+				hashNum = plant.PlantType;
+			else
+			{
+				item.GROW_STAGE = -1;
+				/*
+				cleanScripts( item );
+				UNSETFLAG( item.Flags, ITEM_HIDDEN );
+				item.ChangeProto( PID_SHIT_SMALL );
+				item.Update();
+				*/
+			}
+			item.PLANT_TYPE = hashNum;
+
+			item.Update();
+		}
+
+		if( isSEED(item) )
+			item.SetEvent( ITEM_EVENT_USE, "_PlantSeeds" );
+		else
+			item.SetEvent( ITEM_EVENT_USE, "_UsePlant" );
+
+		item.SetEvent( ITEM_EVENT_SKILL, "_SkillPlant" );
+		item.SetEvent( ITEM_EVENT_USE_ON_ME, "_OnMePlant" );
+
+		item.Update();
 	}
-
-	CPlant @ plant = GetCPlant( item.PLANT_TYPE );
-	plant.Kill( item );
-}
-
-void answer_CHECKOUT( Critter& cr, uint answerI, string& answerS )
-{
-	//do nothing yet
-}
-
-bool _SkillPlant( Item& item, Critter& cr, int skill )
-{
-    if( skill == SKILL_PICK_ON_GROUND )
-    {
+	
+	bool CleanUpPlant( Critter& cr, Item& item )
+	{
 		CPlant @ plant = GetCPlant( item.PLANT_TYPE );
-		if( plant is null )
-			return true;
+		if( !valid( plant ) ) return false;
 
+		if( item.GROW_STAGE == plant.MaxCycle )
+		{
+			cr.Say( SAY_NETMSG, "Тут нет ничего ценного, остаётся пустить на перегной." );
+			return true;
+		}
+		
 		if( item.GROW_STAGE == plant.SeedCycle )
 		{
-			for( uint i = 0, len = item.PLANT_GAIN * 2; i < len; i++ )
-			{
-				Item@ pl = cr.AddItem( plant.BasePid, 1 );
-				pl.SELECTION = item.SELECTION + Random( 0, 1 );
-				pl.PLANT_TYPE = item.PLANT_TYPE;
-				pl.SetScript( "plant@_InitPlant" ); //Оно ж итак должно инициилизироваться!
-			}
-			DeleteItem( item );
-			cr.Say( SAY_NETMSG, "Вы собрали семена." );
+			cr.AddItem( plant.BasePid, 2 );
+			_SubItem( item, 1 );
+			
+			cr.Say( SAY_EMOTE_ON_HEAD, "Собирает семена" );
 			return true;
 		}
 		
 		if( item.GROW_STAGE == plant.SeedCycle + 1 )
 		{
-			if( item.PLANT_GAIN > 0 )
-			{
-				cr.AddItem( plant.BasePid + plant.MaxCycle + 1, item.PLANT_GAIN );
-				cr.Say( SAY_NETMSG, "Вы собрали семена." );
-			}
-			else
-			{
-				cr.Say( SAY_NETMSG, "Вы не нашли ни одного нормального плода." );
-			}
-			DeleteItem( item );
+			cr.AddItem( plant.CollectPid, 1 );
+			_SubItem( item, 1 );
+			
+			cr.Say( SAY_EMOTE_ON_HEAD, "Собирает плоды" );
 			return true;
 		}
-			
-		return AskRemove( cr, item.Id );
-    }
-	if( skill == SK_SCIENCE )
+		
+		return false;
+	}
+	
+	bool _UsePlant(Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery)
 	{
-		if( cr.Skill[SK_OUTDOORSMAN] + cr.Skill[SK_SCIENCE] >= 200 )
+		if( valid( onCritter ) && onCritter.Id != cr.Id ) return false;
+
+		return CleanUpPlant( cr, item );
+	}
+	
+	bool _PlantSeeds(Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery)
+	{
+		if( valid( onCritter ) && onCritter.Id != cr.Id ) return false;
+		
+		if( !cr.IsLife() ) return false;
+		
+		Map@ map = cr.GetMap();
+		if( !valid( map ) ) return false;
+
+		if( !isSEED(item) ) return false;
+
+		if( map.GetItems( cr.HexX, cr.HexY, null ) > 0 )
+		{
+			cr.Say( SAY_NETMSG, "Это тут не прорастет." );
+			return true;
+		}
+
+		uint time = 0;
+		if( !CheckGard( map, cr.HexX, cr.HexY ) )
+		{
+			cr.Say( SAY_NETMSG, "Это тут не прорастет." );
+			return true;
+		}
+		
+		_SubItem( item, 1 );
+		cr.Say( SAY_EMOTE_ON_HEAD, "Сеет" );
+
+		Item@ seed = map.AddItem( cr.HexX, cr.HexY, item.GetProtoId(), 1 );
+		seed.TIME_EVENT = CreateTimeEvent( __FullSecond + getStageTime(), "e_ProcessPlant", seed.Id, true );
+		
+		return true;
+	}
+
+	bool _OnMePlant( Item& plant, Critter& cr, Item@ usedItem )
+	{
+		if( !valid( usedItem ) ) return false;
+
+		if( Fertilize( cr, plant, usedItem ) )
+			return true;
+		
+		if( Watering( cr, plant, usedItem ) )
+			return true;
+		
+		return false;
+	}
+
+	bool _SkillPlant( Item& item, Critter& cr, int skill )
+	{
+		if( skill == SKILL_PICK_ON_GROUND )
+		{
+			CPlant @ plant = GetCPlant( item.PLANT_TYPE );
+			if( !valid( plant ) ) return false;
+
+			if( item.GROW_STAGE == plant.MaxCycle )
+			{
+				cr.ParamBase[ CR_DIRTINESS ] += Random( 0, 2 );
+				cr.Say( SAY_EMOTE_ON_HEAD, "Собирает" );
+				cleanScripts( item );
+				
+				CPlant@ plant = GetCPlant( item.PLANT_TYPE );
+				if( valid( plant ) )
+					plant.Kill( item );
+				
+				MoveItem( item, item.GetCount(), cr );
+				return true;
+			}
+			
+			if( item.GetProtoId() == PID_SHIT_SMALL )
+			{
+				cr.ParamBase[ CR_DIRTINESS ] += Random( 1, 4 );
+				cr.Say( SAY_EMOTE_ON_HEAD, "Убирает перегной" );
+				cleanScripts( item );
+				MoveItem( item, item.GetCount(), cr );
+				return true;
+			}			
+				
+			return AskCheckout( cr, item );
+		}
+		
+		if( skill == SK_SCIENCE )
+			return Watering( cr, item, null );
+
+		if( skill == SK_REPAIR )
+			return Fertilize( cr, item );
+		
+		if( skill == SK_TRAPS )
+			return PlantPickup( cr, item );
+
+		return false;
+	}
+	
+#endif
+
+#ifndef __PLANT_SUBFUNCTIONS
+	#define __PLANT_SUBFUNCTIONS
+	
+	void cleanScripts( Item@ item )
+	{
+		if( !valid( item ) ) return;
+		
+		item.SetEvent( ITEM_EVENT_SKILL, null );
+		item.SetEvent( ITEM_EVENT_USE_ON_ME, null );
+		item.SetEvent( ITEM_EVENT_USE, null );
+		item.SetEvent( ITEM_EVENT_DROP, null );
+		
+		if( item.TIME_EVENT != 0 )
+		{
+			EraseTimeEvent( item.TIME_EVENT );
+			item.TIME_EVENT = 0;
+		}
+	}
+
+	bool AskCheckout( Critter& cr, Item@ item )
+	{
+		if( !valid( item ) ) return false;
+		
+		string stage = "Мутант";
+		string[] stage_names = { "Семечка", "Побег", "Росток" };
+		if( item.GROW_STAGE < stage_names.length() )
+			stage = stage_names[item.GROW_STAGE];
+
+		if( cr.Skill[SK_OUTDOORSMAN] + cr.Skill[SK_SCIENCE] < 200 )
+			stage = "Вы недостаточно образованы, что бы понять что к чему.";
+		else
 		{
 			CPlant@ plant = GetCPlant( item.PLANT_TYPE );
-			if( plant is null )
-				return true;
-			
-			string[] stage_names = { "Семечка", "Побег", "Росток" };
-			string stage = "";
+			if( !valid( plant ) ) return true;
+
+			if( isSEED( item) )
+				stage = "Семечка";
 
 			if( item.GROW_STAGE == plant.SeedCycle )
 				stage = "Семяносная";
@@ -244,417 +279,405 @@ bool _SkillPlant( Item& item, Critter& cr, int skill )
 			
 			if( item.GROW_STAGE == plant.MaxCycle )
 				stage = "Перегной";
-			
-			if( stage.length() == 0 && item.GROW_STAGE < stage_names.length() )
-				stage = stage_names[item.GROW_STAGE];
-			
-			string[] data = { 
-				"plant@answer_CHECKOUT", "Информация о растении:\n" + "\nСтадия роста: " + stage + "\nСелекция: " + item.SELECTION, 
-					"Поли" + ( item.WATERING < 1 ? "ть" : "то" ),
-					"Удобр" + ( item.FERTILITY < 1 ? "ить" : "ено" ) };
-			DIALOG_MENU( cr, data );
+		}
+		
+		cr.ParamBase[CR_VAL0] = item.Id;
+		
+		string[] data = { 
+			"plant@answer_CHECKOUT", 
+			"Информация о растении:\n" 
+			+ "\nСтадия роста: " + stage
+			+ "\nУрожайность: " + item.PLANT_GAIN, 
+				"Поли" + ( item.WATERING < 1 ? "ть" : "то" ),
+				"Удобр" + ( item.FERTILITY < 1 ? "ить" : "ено" ),
+				"Собрать" };
+		DIALOG_MENU( cr, data );
+		
+		return true;
+	}
+
+	void answer_CHECKOUT( Critter& cr, uint answerI, string& answerS )
+	{
+		Item@ plant = GetItem( cr.ParamBase[CR_VAL0] );
+		if( !valid( plant ) ) return;
+		
+		switch( answerI )
+		{
+			case( 0 ): Watering( cr, plant, null ); break;
+			case( 1 ): Fertilize( cr, plant );		break;
+			case( 2 ): AskRemove( cr, plant.Id ); 	return;
+			default: break;
+		}
+		
+		AskCheckout( cr, plant );
+	}
+
+	bool AskRemove( Critter& cr, uint targetId )
+	{
+		cr.ParamBase[CR_VAL0] = targetId;
+		cr.ShowScreen( SCREEN_DIALOGBOX, 1, "plant@answer_REMOVE" );
+		cr.Say( SAY_DIALOGBOX_TEXT, "Вы уверены?" );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "да" );
+		return true;
+	}
+
+	void answer_REMOVE( Critter& cr, uint answerI, string& answerS )
+	{
+		PlantPickup( cr, GetItem( cr.ParamBase[CR_VAL0] ) );
+	}
+
+	bool PlantPickup( Critter& cr, Item@ plant )
+	{
+		if( !valid( plant ) ) return false;
+
+		cr.Animate( 0, ANIM2_PICKUP, null, false, true );
+		cleanScripts( plant );
+		
+		if( isSEED(plant) )
+		{
+			cr.ParamBase[ CR_DIRTINESS ] += Random( 0, 1 );
+			cr.Say( SAY_EMOTE_ON_HEAD, "Выковыривает семена из земли" );
 		}
 		else
-			cr.Say(SAY_NETMSG, "Вы недостаточно образованы, что бы понять что к чему.");
-
-		return true;
-    }
-    return false;
-}
-
-//Отключено, следует переработать.
-void _WalkPlant( Item& item, Critter& cr, bool entered, uint8 dir )
-{
-    if( entered && item.GROW_STAGE > 1 )
-    {
-        if( Random( 1, 95 ) > 5 )
-        {
-            CPlant @ plant = GetCPlant( item.PLANT_TYPE );
-            plant.Kill( item );
-        }
-    }
-}
-
-bool _OnMePlant( Item& item, Critter& cr, Item@ usedItem )
-{
-	cr.Say (SAY_EMOTE, "Возится с растением");
-    if( usedItem is null )
-        return true;
-    if( item.GROW_STAGE == 0 )
-        return true;
-
-	//Нужно достать вменяемую ф-ю "полива", разделив на: проверку бутылки, трату бутылки, получение результата
-    uint16 pid = usedItem.GetProtoId();
-    if( pid == PID_NUKA_COLA
-	 || pid == PID_BEER
-     || pid == PID_BOOZE
-	 || pid == PID_GLASS_BOTTLE_FULL
-	 ||	pid == PID_BOTTLE_FULL )
-    {
-		cr.Say (SAY_NETMSG, "Вы полили растение.");
-        item.WATERING += 1;
-    }
-    
-	if( pid == PID_SHIT_SMALL )
-    {
-    	cr.Say (SAY_NETMSG, "Вы удобрили растение.");
-        item.FERTILITY += 1;
-    }
-
-    return false;
-}
-
-CPlant@ GetCPlant( uint8 plantNum )
-{
-    if( plantNum < 0 || plantNum > PLANT_MAX )
-        return null;
-
-    CPlant@ tempPlant;
-
-    switch( plantNum )
-    {
-		//переработать логику ветвления
-    case PLANT_RADCVET:
-        @tempPlant = CRadCvet();
-        break;
-    case PLANT_CABBAGE:
-        @tempPlant = CCabbage();
-        break;
-    case PLANT_CORN:
-        @tempPlant = CCorn();
-        break;
-    default:
-        break;
-    }
-
-    return tempPlant;
-}
-
-class CRadCvet  : CPlant
-{
-    CRadCvet()
-    {
-        MaxCycle = 4;
-        SeedCycle = 3;
-        BasePid = PID_RADCVET;
-        PlantType = PLANT_RADCVET;
-    }
-
-    uint Cycle1( Item& item )
-    {
-        SETFLAG( item.Flags, ITEM_HIDDEN );
-        item.ChangeProto( PID_RADCVET + 1 );
-        item.Update();
-        return GROW_STAGE_TIME;
-    }
-
-    uint Cycle2( Item& item )
-    {
-        UNSETFLAG( item.Flags, ITEM_CAN_USE );
-        UNSETFLAG( item.Flags, ITEM_HIDDEN );
-        item.ChangeProto( PID_RADCVET + 2 );
-        item.Update();
-        return GROW_STAGE_TIME;
-    }
-
-    uint Cycle3( Item& item )
-    {
-        SETFLAG( item.Flags, ITEM_CAN_USE );
-        item.ChangeProto( PID_RADCVET + 3 );
-        item.TIME_EVENT = 0;
-        item.Update();
-        return GROW_STAGE_TIME;
-    }
-
-    uint Cycle4( Item& item )
-    {
-        item.ChangeProto( PID_RADCVET + 4 );
-        item.Update();
-        return GROW_STAGE_TIME;
-    }
-}
-
-class CCabbage  : CPlant
-{
-    CCabbage()
-    {
-        MaxCycle = 4;
-        SeedCycle = 2;
-        BasePid = PID_CABBAGE;
-        PlantType = PLANT_CABBAGE;
-    }
-
-    uint Cycle1( Item& item )
-    {
-        SETFLAG( item.Flags, ITEM_HIDDEN );
-        item.ChangeProto( PID_CABBAGE + 1 );
-        item.Update();
-        return GROW_STAGE_TIME;
-    }
-
-    uint Cycle2( Item& item )
-    {
-        item.ChangeProto( PID_CABBAGE + 2 );
-        SETFLAG( item.Flags, ITEM_CAN_USE );
-        UNSETFLAG( item.Flags, ITEM_HIDDEN );
-        item.Update();
-        return GROW_STAGE_TIME;
-    }
-
-    uint Cycle3( Item& item )
-    {
-        item.ChangeProto( PID_CABBAGE + 3 );
-        SETFLAG( item.Flags, ITEM_CAN_USE );
-        item.TIME_EVENT = 0;
-        item.Update();
-        return GROW_STAGE_TIME;
-    }
-
-    uint Cycle4( Item& item )
-    {
-        item.ChangeProto( PID_CABBAGE + 4 );
-        item.Update();
-        return GROW_STAGE_TIME * 2;
-    }
-}
-
-class CCorn : CPlant
-{
-    CCorn()
-    {
-        MaxCycle = 5;
-        SeedCycle = 4;
-        BasePid = PID_CORN;
-        PlantType = PLANT_CORN;
-    }
-
-    uint Cycle1( Item& item )
-    {
-        SETFLAG( item.Flags, ITEM_HIDDEN );
-        item.ChangeProto( PID_CORN + 1 );
-        item.Update();
-
-        return GROW_STAGE_TIME;
-    }
-
-    uint Cycle2( Item& item )
-    {
-        item.ChangeProto( PID_CORN + 2 );
-        UNSETFLAG( item.Flags, ITEM_CAN_USE );
-        UNSETFLAG( item.Flags, ITEM_HIDDEN );
-        item.Update();
-
-        IncreaseFruits( item );
-        return GROW_STAGE_TIME;
-    }
-
-    uint Cycle3( Item& item )
-    {
-        item.ChangeProto( PID_CORN + 3 );
-        SETFLAG( item.Flags, ITEM_CAN_USE );
-        item.Update();
-
-		if( item.FERTILITY > 0 && Random( 0, 1 ) == 0 )
-			IncreaseFruits( item );
-
-        return GROW_STAGE_TIME;
-    }
-
-    uint Cycle4( Item& item )
-    {
-        item.ChangeProto( PID_CORN + 4 );
-        SETFLAG( item.Flags, ITEM_CAN_USE );
-        
-        item.TIME_EVENT = 0;//нахрена?
-        item.Update();
-        return GROW_STAGE_TIME;
-    }
-
-    uint Cycle5( Item& item )
-    {
-        item.ChangeProto( PID_CORN + 5 );
-        item.Update();
-        return GROW_STAGE_TIME * 2;
-    }
-}
-
-class CPlant
-{
-    uint8 PlantType;
-    uint8 MaxCycle;
-    uint8 SeedCycle;
-    uint8[] ToWater;
-    uint8[] ToShit;
-    uint16 BasePid;
-    uint16 CollectPid;
-	
-    CPlant()
-    {
-        PlantType = 0;
-        MaxCycle = 0;
-        BasePid = 0;
-    }
-
-    CPlant( uint8 maxCycle )
-    {
-        MaxCycle = maxCycle;
-    }
-
-    uint Release( Item& item )
-    {
-        uint8 hashNum = item.PLANT_TYPE;
-        uint  time = 0;
-
-        switch( item.GROW_STAGE )
-        {
-        case 1:
-            time = Cycle1( item );
-            break;
-        case 2:
-            time = Cycle2( item );
-            break;
-        case 3:
-            time = Cycle3( item );
-            break;
-        case 4:
-            time = Cycle4( item );
-            break;
-        case 5:
-            time = Cycle5( item );
-            break;
-        default:
-            time = 0;
-        }
-
-        return time;
-    }
-
-    bool CheckWater( Item& item )
-    {
-    	Map@ currentMap = GetMap( item.MapId );
-    	int rain = currentMap.GetRain();
-		if( rain > 0 )
-			item.WATERING++;
+		{
+			cr.Say( SAY_EMOTE_ON_HEAD, "Собирает" );
+			plant.SetEvent( ITEM_EVENT_USE, "_UsePlant" );
+			
+			if( plant.PLANT_GAIN > 1 )
+			{
+				Item@ item = cr.AddItem( plant.GetProtoId(), plant.PLANT_GAIN );
+				if( valid( item ) )
+					item.PLANT_TYPE = plant.PLANT_TYPE;
+				
+				DeleteItem( plant );
+				return true;
+			}
+		}
 		
-        if( item.GROW_STAGE > 1 && ( item.WATERING < 1 ) )
-        {
-			Kill( item );
+		MoveItem( plant, plant.GetCount(), cr );
+		return true;
+	}
+#endif
+
+#ifndef __PLANT_WATERING
+	#define __PLANT_WATERING
+	
+	bool Watering( Critter& cr, Item& plant, Item@ usedItem )
+	{
+		InitWaterSourceList();	
+		return WaterSources.watering( cr, plant, usedItem );
+	}
+	
+	WaterSourceList@ WaterSources;
+	void InitWaterSourceList()
+	{
+		if( valid( WaterSources ) ) return;
+		
+		@WaterSources = CreateWaterSourceList( "Источники воды" )
+		//  .add( PID_полный, PID_пустой )
+			.add( PID_BOTTLE_FULL, PID_BOTTLE_EMPTY )
+			.add( PID_GLASS_BOTTLE_FULL, PID_BOTTLE_GLASS )
+		;
+	}
+	
+	class WaterSource
+	{
+		//uint power; //TODO: Различная ценность/сила источников воды. Или можно сделать логику, по которой вода не тратится сразу вся за 1 юз.
+		uint pidFull;
+		uint pidEmpty;
+		
+		WaterSource( uint pidFull, uint pidEmpty )
+		{
+			this.pidFull = pidFull;
+			this.pidEmpty = pidEmpty;
+		}
+		
+		bool use( Critter& cr )
+		{
+			if( cr.CountItem( pidFull ) < 1 ) return false;
+			
+			cr.DeleteItem( pidFull, 1 );
+			cr.AddItem( pidEmpty, 1 );
+			
+			return true;
+		}
+		
+		bool isSource( Item@ source )
+		{
+			if( !valid( source ) ) return false;
+			
+			return source.GetProtoId() == pidFull;
+		}
+		
+		bool watering( Critter& cr, Item@ plant )
+		{
+			if( !valid(plant) || !use( cr ) ) return false;
+			
+			cr.Say( SAY_EMOTE_ON_HEAD, "Поливает растение" );
+			plant.WATERING++;
+			
+			return true;
+		}
+	}
+
+	WaterSourceList@ CreateWaterSourceList( string name )
+	{
+		return WaterSourceList( name );	
+	}
+
+	class WaterSourceList
+	{
+		string name;
+		WaterSource[] list;
+		
+		WaterSourceList( string name )
+		{
+			this.name = name;
+		}
+		
+		WaterSourceList@ add( uint pidFull, uint pidEmpty )
+		{
+			return this.add( WaterSource( pidFull, pidEmpty ) );
+		}
+
+		WaterSourceList@ add( WaterSource@ item )
+		{
+			list.insertLast( item );
+			return this;
+		}
+		
+		bool watering( Critter& cr, Item@ plant, Item@ item )
+		{
+			if( !valid( item ) )
+				return watering( cr, plant );
+			
+			for( uint i = 0; i < list.length(); i++ )
+				if( list[i].isSource( item ) )
+					return list[i].watering( cr, plant );
+				
 			return false;
-        }
-        return true;
-    }
+		}
+		
+		bool watering( Critter& cr, Item@ plant )
+		{
+			for( uint i = 0; i < list.length(); i++ )
+				if( list[i].watering( cr, plant ) )
+					return true;
+			
+			return false;
+		}
+	}
+#endif
 
-    bool Kill( Item& item )
-    {
-        CPlant@ plant = GetCPlant( item.PLANT_TYPE );
-        if( plant is null )
-            return false;
-
-		UNSETFLAG( item.Flags, ITEM_HIDDEN );
-        item.ChangeProto( plant.BasePid + plant.MaxCycle );
-        item.Update();
-
-		item.FERTILITY = 0;
-		item.PLANT_GAIN = 0;
-		item.GROW_STAGE = plant.MaxCycle;
-        return true;
-    }
-
-    uint MakeShit( Item& item )
-    {
-        UNSETFLAG( item.Flags, ITEM_HIDDEN );
-        item.ChangeProto( PID_SHIT_SMALL );
-        item.Update();
-        return 0;
-    }
-
-    void IncreaseFruits( Item& item )
-    {
-        item.PLANT_GAIN += 1;
-    }
-
-    uint CycleDead( Item& item )
-    {
-        return 0;
-    }
-
-    uint Cycle1( Item& item )
-    {
-        return 0;
-    }
-
-    uint Cycle2( Item& item )
-    {
-        return 0;
-    }
-
-    uint Cycle3( Item& item )
-    {
-        return 0;
-    }
-
-    uint Cycle4( Item& item )
-    {
-        return 0;
-    }
-
-    uint Cycle5( Item& item )
-    {
-        return 0;
-    }
-}
-
-uint e_ProcessPlant( uint[] @ values )
+bool Fertilize( Critter& cr, Item& plant )
 {
-    if( values is null || values.length() != 1 )
-        return 0;
+	if( cr.CountItem( PID_SHIT_SMALL ) > 0 ) 
+		return Fertilize( cr, plant, cr.GetItem( PID_SHIT_SMALL, -1 ) );
 
-    Item@ item = GetItem( values[ 0 ] );
-
-    if( item is null )
-        return 0;
-
-    uint16 pid = item.GetProtoId();
-    if( item.GetType() != ITEM_TYPE_PLANT )
-        return 0;
-
-    uint8 hashNum = item.PLANT_TYPE;
-    CPlant @ plant = GetCPlant( hashNum );
-
-    if( item.GROW_STAGE == 0 )
-        item.SetEvent( ITEM_EVENT_DROP, null );
-    else if( item.GROW_STAGE >= plant.MaxCycle )
-        return plant.MakeShit( item );
-
-    if( item.GROW_STAGE > 0 )
-    {
-        if( !plant.CheckWater( item ) )
-            return GROW_STAGE_TIME * 2;
-
-        if( Random( 1, 95 ) == 5 )
-        {
-            Map @ map = GetMap( item.MapId );
-            if( !(map is null) )
-            {
-				//больше разных мобов
-                map.AddNpc( 16, item.HexX, item.HexY, 0, null, null, "mob@_MobInit" );
-                DeleteItem( item );
-                return 0;
-            }
-        }
-    }
-
-    item.GROW_STAGE++;
-
-    if( item.SELECTION <= 2 )
-        item.SELECTION += Random( 0, 1 );
-    else
-        item.SELECTION += Random( -2, 2 );
-
-    return plant.Release( item );
+	if( cr.CountItem( PID_SHIT_BIG ) > 0 ) 
+		return Fertilize( cr, plant, cr.GetItem( PID_SHIT_BIG, -1 ) );
+	
+	return false;
 }
 
-void _InitShit(Item& item, bool firstTime)
+bool Fertilize( Critter& cr, Item& plant, Item@ usedItem )
 {
-	//lolwhat?
+	if( !valid( usedItem ) ) return false;
+
+	uint pid = usedItem.GetProtoId();
+	
+	if( pid != PID_SHIT_SMALL && pid != PID_SHIT_BIG ) return false;
+
+	cr.ParamBase[ CR_DIRTINESS ] += Random( 0, 3 );
+	cr.Say( SAY_EMOTE_ON_HEAD, "Удобряет растение" );
+	cr.DeleteItem( pid, 1 );
+	plant.FERTILITY += 1;
+	
+	return true;
 }
+
+#ifndef __PLANT_CLASSES
+	#define __PLANT_CLASSES
+	
+	CPlant@ GetCPlant( uint plantNum )
+	{
+		switch( plantNum )
+		{
+			case( PID_RADCVET_SEED ): 	return CPlant( PID_RADCVET_SEED, 	4, 	3, 	PID_RADCVET_SEED, 	PID_RADCVET_SEED );
+			case( PID_CABBAGE_SEED ): 	return CPlant( PID_CABBAGE_SEED, 	4, 	2, 	PID_CABBAGE_SEED, 	PID_CABBAGE 	 );
+			case( PID_CORN_SEED ): 		return CPlant( PID_CORN_SEED, 		5, 	3, 	PID_CORN_SEED, 		PID_CORN 		 );
+		}
+		return null;
+	}
+
+	class CPlant
+	{
+		uint PlantType;
+		
+		uint MaxCycle;
+		uint SeedCycle;
+		
+		uint BasePid;
+		uint CollectPid;
+
+		CPlant( uint PlantType, uint MaxCycle, uint SeedCycle, uint BasePid, uint CollectPid )
+		{
+			this.PlantType = PlantType;
+			
+			this.MaxCycle = MaxCycle;
+			this.SeedCycle = SeedCycle;
+			
+			this.BasePid = BasePid;
+			this.CollectPid = CollectPid;
+		}
+
+		uint Release( Item& item )
+		{
+			ChangePic( item );
+
+			switch( item.GROW_STAGE )
+			{
+				case 1: return Cycle1( item );
+				case 2: return Cycle2( item );
+				case 3: return Cycle3( item );
+				case 4: return Cycle4( item );
+				case 5: return Cycle5( item );
+			}
+			return 0;
+		}
+
+		bool CheckWater( Item& item )
+		{
+			Map@ currentMap = GetMap( item.MapId );
+			int rain = currentMap.GetRain();
+			if( rain > 0 )
+				item.WATERING++;
+			
+			if( item.GROW_STAGE > 1 && ( item.WATERING < 1 ) )
+			{
+				Kill( item );
+				return false;
+			}
+			return true;
+		}
+
+		bool Kill( Item& item )
+		{
+			CPlant@ plant = GetCPlant( item.PLANT_TYPE );
+			if( !valid( plant ) ) return false;
+
+			UNSETFLAG( item.Flags, ITEM_HIDDEN );
+
+			item.FERTILITY = 0;
+			item.PLANT_GAIN = 0;
+			item.GROW_STAGE = plant.MaxCycle;
+			ChangePic( item );
+			
+			return true;
+		}
+
+		uint MakeShit( Item& item )
+		{
+			UNSETFLAG( item.Flags, ITEM_HIDDEN );
+			item.ChangeProto( PID_SHIT_SMALL );
+			item.Update();
+			return 0;
+		}
+
+		void IncreaseFruits( Item& item )
+		{
+			item.PLANT_GAIN += 1;
+		}
+
+		void ChangePic( Item& item )
+		{
+			item.ChangeProto( BasePid + item.GROW_STAGE );
+			item.Update();
+		}
+		
+		uint CycleDead( Item& item )
+		{
+			return getStageTime();
+		}
+
+		uint Cycle1( Item& item ) //Семечка становится невидимой.
+		{
+			SETFLAG( item.Flags, ITEM_HIDDEN );
+			item.Update();
+
+			return getStageTime();
+		}
+
+		uint Cycle2( Item& item ) //Пробивается молодой побег.
+		{
+			IncreaseFruits( item );
+			
+			UNSETFLAG( item.Flags, ITEM_HIDDEN );
+			item.Update();
+
+			return getStageTime();
+		}
+
+		uint Cycle3( Item& item ) //Побег становится крупней.
+		{
+			if( item.FERTILITY > 0 && Random( 0, 1 ) == 0 )
+				IncreaseFruits( item );
+
+			item.Update();
+
+			return getStageTime();
+		}
+
+		uint Cycle4( Item& item ) //Крупные побеги всходят, маленькие - стареют.
+		{
+			return getStageTime();
+		}
+
+		uint Cycle5( Item& item ) //Растение умирает и гниёт.
+		{
+			return getStageTime();
+		}
+	}
+
+	uint e_ProcessPlant( uint[] @ values )
+	{
+		if( values is null || values.length() != 1 )
+			return 0;
+
+		Item@ item = GetItem( values[ 0 ] );
+		if( !valid( item ) ) return 0;
+
+		if( item.GetType() != ITEM_TYPE_PLANT ) return 0;
+
+		CPlant@ plant = GetCPlant( item.PLANT_TYPE );
+		if( !valid( plant ) ) return 0;
+
+		if( isSEED( item ) )
+			item.SetEvent( ITEM_EVENT_DROP, null );
+		else if( item.GROW_STAGE >= plant.MaxCycle )
+			return plant.MakeShit( item );
+
+		if( item.GROW_STAGE > 0 )
+		{
+			if( !plant.CheckWater( item ) )
+				return getStageTime();
+
+			if( Random( 1, 95 ) == 5 )
+			{
+				Map @ map = GetMap( item.MapId );
+				if( valid(map) )
+				{
+					uint[] mobs = { 16, 310, 311, 312, 313, 319 };
+					map.AddNpc( mobs[ Random( 0, mobs.length() - 1 ) ], item.HexX, item.HexY, 0, null, null, "mob@_MobInit" );
+					DeleteItem( item );
+					return 0;
+				}
+			}
+		}
+
+		item.GROW_STAGE++;
+
+		return plant.Release( item );
+	}
+
+#endif
