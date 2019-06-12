@@ -199,16 +199,32 @@ int[][] Repairing_tools =      {{ PID_MULTI_TOOL, PID_SUPER_TOOL_KIT, PID_SHOVEL
 int[][] Repairing_iterations = {{ 1, 2, 3 }, {0}};
 //item.SetEvent( ITEM_EVENT_SKILL, "e_BrokenItem" );
 
-//Должны быть MISC-TYPE объектами, пока код примитивный.
-uint[] firables = { PID_SIGN, PID_FIREWOOD, PID_WOOD_PART, PID_SHARPENED_POLE, PID_CLUB, PID_WOOD_PLANK, PID_WOOD_PLANK2 }; 
+uint[] firables = { 
+	//Изделия из древесины:
+	PID_SIGN, PID_FIREWOOD, PID_WOOD_PART, PID_SHARPENED_POLE, PID_CLUB, PID_WOOD_PLANK, PID_WOOD_PLANK2,
+	//Перегной и фермерские угодья:
+	PID_SHIT_BIG, PID_SHIT_SMALL, 1601, 1602, 1603, 1604, 1611, 1612, 1613, 1614, 1621, 1622, 1623, 1624, 1625
+	}; 
 uint[] firesources = { PID_LIGHTER, PID_FIREPLACE };
 uint[] ashes = { PID_ASHES_1, PID_ASHES_2, PID_ASHES_3 };
 
-bool FireUp( Item& item, uint pid )
+//import bool FireUp( Item& item, uint pid ) from "adv_items";
+bool FireUp( Item& item, uint pid ) //exported
 {
-	if( firesources.find( pid ) == -1 ) return false;
-	if( firables.find( item.GetProtoId() ) == -1 && ashes.find( item.GetProtoId() ) == -1  ) return false;
+	return FireUp( item, pid, 2 );
+}
 
+//import bool FireUp( Item& item, uint pid, int strength ) from "adv_items";
+bool FireUp( Item& item, uint pid, int strength ) //exported
+{
+	//Если это не попытка разжечь угли жигой - фейл. Защита от повторного возгорания пепелища.
+	if( pid != PID_LIGHTER && ashes.find( item.GetProtoId() ) != -1 ) return false;
+	else
+	{
+		if( firesources.find( pid ) == -1 ) return false;
+		if( firables.find( item.GetProtoId() ) == -1 ) return false;
+	}
+	
 	Map@ map = GetMap( item.MapId );
 	if(!valid(map)) return false;
 	Item@ fire = map.AddItem( item.HexX, item.HexY, PID_FIREPLACE, 1 );
@@ -223,7 +239,40 @@ bool FireUp( Item& item, uint pid )
 	fire.SetScript( "_InitItem" );
 	LightControl( fire, true, 50, 5 );
 
-	fire.VAL = 2;
+	fire.VAL = strength;
+	fire.TYPE = TYPE_FIREPIT; 
+	SETFLAG( fire.Flags, ITEM_HIDDEN );
+	SETFLAG( fire.Flags, ITEM_NO_HIGHLIGHT );
+	fire.Update();
+
+	uint[] values = { fire.Id, 0 };
+	fire.EVENT = CreateTimeEvent( __FullSecond + REAL_SECOND(2), "e_FireBurn", values, true );
+	SayLog( map, " [Возгорание в координатах (" + fire.HexX + ", " + fire.HexY + " )]" ); 
+	return true;
+}
+
+//import bool spawnFire( Map@ map, int x, int y ) from "adv_items";
+bool spawnFire( Map@ map, int x, int y ) //exported
+{
+	if(!valid(map)) return false;
+	
+	if( !map.IsHexPassed( x, y ) )
+		return false;
+	
+	Item@[] heated;	
+	map.GetItems( x, y, heated );
+	
+	for( uint i = 0; i < heated.length(); i++ )
+		if( heated[i].GetProtoId() == PID_FIREPLACE )
+			return false;
+	
+	Item@ fire = map.AddItem( x, y, PID_FIREPLACE, 1 );
+	if( !valid( fire ) ) return false;
+
+	fire.SetScript( "_InitItem" );
+	LightControl( fire, true, 50, 5 );
+
+	fire.VAL = 1;
 	fire.TYPE = TYPE_FIREPIT; 
 	SETFLAG( fire.Flags, ITEM_HIDDEN );
 	SETFLAG( fire.Flags, ITEM_NO_HIGHLIGHT );
@@ -289,8 +338,11 @@ bool e_Repair( Item& item, Critter& cr, Item@ usedItem )
 	if( initFire && valid(usedItem) ) {
 		if( usedItem.GetProtoId() == PID_CROWBAR) {
 			int count = item.VAL * 8 / 10;
-			if(count > 0 ) _CritAddItem( cr, PID_FIREWOOD, count );
-			cr.Say( SAY_EMOTE, "выгребает древесину" );
+			if(count > 0 ) 
+			{
+				_CritAddItem( cr, PID_FIREWOOD, count );
+				cr.Say( SAY_EMOTE, "выгребает древесину" );
+			}
 			item.VAL = 0;
 			uint[] values = { item.Id, 0 };
 			item.EVENT = CreateTimeEvent( __FullSecond, "e_FireBurn", values, true );
@@ -369,7 +421,9 @@ void e_Hot(Item& item, Critter& crit, bool entered, uint8 dir) {
 
 uint cte_Hot( Critter& cr, int identifier, uint& rate )
 {
-	InjureCritter( cr, rate, DAMAGE_FIRE, 0, 0 );
+	if( cr.IsDead() ) return 0;
+	cr.ParamBase[CR_TEMP]++;
+	InjureCritter( cr, cr.ParamBase[CR_TEMP], DAMAGE_FIRE, 0, 0 );
 	rate++;
 	return REAL_SECOND( 1 );
 }
@@ -413,7 +467,7 @@ uint e_FireBurn( uint[] @ values )
 				}
 				
 				for( uint i = 0; i < heated.length(); i++ )
-					FireUp( heated[i], PID_FIREPLACE );
+					FireUp( heated[i], PID_FIREPLACE, 1 );
 			}
 		}
 		
