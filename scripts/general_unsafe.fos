@@ -1591,57 +1591,80 @@ void unsafe_itemhit( Critter& player, int id, int itemId, int param2, string@ pa
 
 }
 
-void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ param3, int[] @ param4 ) {
+void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ param3, int[] @ param4 ) 
+{
 	if( player.IsBusy() || player.Stat[ ST_CURRENT_AP ] < 50 )
+		return;
+
+	uint16 tx = hx, ty = hy;
+	uint distance = GetDistantion( player.HexX, player.HexY, hx, hy );
+	Map@ currentMap = player.GetMap ();
+
+	if( !valid(currentMap) || player.IsDead() || player.IsKnockout() || distance > player.Stat [ST_STRENGTH] * 2 ) 
 	{
+		player.Say (SAY_NETMSG, "Вы не в состоянии кидать так далеко");
 		return;
 	}
-
-	Map@ currentMap = player.GetMap ();
-	uint16 tx = hx, ty = hy;
-	uint distance = GetDistantion (player.HexX, player.HexY, hx, hy);
-	currentMap.GetHexCoord (player.HexX,  player.HexY, tx, ty,  0.0f, distance);
-	Critter@ target = currentMap.GetCritter (tx, ty);
-	if (!currentMap.IsHexPassed (tx, ty) && target is null) {
-		currentMap.GetHexCoordWall (player.HexX,  player.HexY, tx, ty,  0.0f, distance);
+	
+	if( player.Param [P_BODYSWAPPED] != 0 ) 
+	{
+		player.Say( SAY_NETMSG, "Вы пытаетесь бросить предмет, но сознание владельца тела не дает вам этого сделать." );
+		return;
 	}
+	
+	currentMap.GetHexCoord( player.HexX,  player.HexY, tx, ty,  0.0f, distance );
+	Critter@ target = currentMap.GetCritter( tx, ty );
+
+	Item@[] items;
+	Item@ container;
+	uint count = currentMap.GetItems( tx, ty, items );
+	for( uint i = 0; i < count; i++ )
+		if( items[i].GetType() == ITEM_TYPE_CONTAINER && ( !items[i].Proto.Container_Changeble || FLAG( items[i].LockerCondition, LOCKER_ISOPEN ) ) )
+		{
+			@container = @items[i];
+			break;
+		}
+
+	if( !currentMap.IsHexPassed( tx, ty ) && !valid(target) && !valid(container) )
+		currentMap.GetHexCoordWall( player.HexX,  player.HexY, tx, ty,  0.0f, distance );
+
 	Item@ itemInHand = _CritGetItemHand (player);
-	if (itemInHand is null) return;
+	if( !valid(itemInHand) ) return;
+	
 	uint pid = itemInHand.GetProtoId();
 	uint[] impossibles = { PID_HANDCUFFS_USED, PID_ROPE_USED, PID_WORKBENCH_TOKEN, PID_FIREPLACE_TOKEN };
-	if ( impossibles.find( pid ) > -1 || ( pid == PID_SANDBAG_1 && !isGM( player ) ) ) {
+	if ( impossibles.find( pid ) > -1 || ( pid == PID_SANDBAG_1 && !isGM( player ) ) ) 
+	{
 		player.Say (SAY_NETMSG, "Вы не можете бросить это.");
 		return;
 	}
 
-	bool canThrow = true;
-	
-	if (player.Param [P_BODYSWAPPED] != 0) {
-		player.Say (SAY_NETMSG, "Вы пытаетесь бросить предмет, но сознание владельца тела не дает вам этого сделать.");
-		return;
-	}
-	
-	if (!player.IsDead() && !player.IsKnockout() && distance < player.Stat [ST_STRENGTH]*2) {
-		player.SetDir( GetDirection( player.HexX, player.HexY, tx, ty ) );
-		if (valid(target) && !target.IsDead() ) {
-			bool targetFreeHands = (_CritGetItemHand (target) is null);
-			if (targetFreeHands && !(target is player) ) {
-				MoveItem (itemInHand, /*player.CountItem (itemInHand.GetProtoId())*/ 1, target);
-				target.Say (SAY_EMOTE, "Ловит предмет");
-			} else {
-				MoveItem (itemInHand, /*player.CountItem (itemInHand.GetProtoId())*/ 1, currentMap, tx, ty);
-				if (!(target is player)) target.Say (SAY_EMOTE, "Руки заняты, не может поймать предмет");
-			}
-		} else {
+	player.SetDir( GetDirection( player.HexX, player.HexY, tx, ty ) );
+	if( valid(target) && !target.IsDead() ) 
+	{
+		bool targetFreeHands = (_CritGetItemHand (target) is null);
+		if (targetFreeHands && !(target is player) ) 
+		{
+			MoveItem (itemInHand, /*player.CountItem (itemInHand.GetProtoId())*/ 1, target);
+			target.Say (SAY_EMOTE, "Ловит предмет");
+		} else 
+		{
 			MoveItem (itemInHand, /*player.CountItem (itemInHand.GetProtoId())*/ 1, currentMap, tx, ty);
+			if (!(target is player)) target.Say (SAY_EMOTE, "Руки заняты, не может поймать предмет");
 		}
-		currentMap.RunFlyEffect( _WeaponEffect( GetProtoItem(PID_FRAG_GRENADE), _WeaponModeUse (0)), player, target, player.HexX, player.HexY, tx, ty );
-		_CritAnimateThrow (player);
-		player.Wait (200 * 5 );
-		player.ParamBase[ ST_CURRENT_AP ] -= 50 * 100;
-	} else {
-		player.Say (SAY_NETMSG, "Вы не в состоянии кидать так далеко");
+	} 
+	else 
+	{
+		if( valid( container ) ) 
+			MoveItem( itemInHand, 1, container, 0 );
+		else
+			MoveItem( itemInHand, 1, currentMap, tx, ty );
 	}
+	
+	currentMap.RunFlyEffect( _WeaponEffect( GetProtoItem(PID_FRAG_GRENADE), _WeaponModeUse (0) ), player, target, player.HexX, player.HexY, tx, ty );
+	_CritAnimateThrow (player);
+	player.Wait (200 * 5 );
+	player.ParamBase[ ST_CURRENT_AP ] -= 50 * 100;
 }
 
 import void ShowInputBoxScreen( Critter& cr, string funcName, uint16 textLength, uint8 flags ) from "main";
