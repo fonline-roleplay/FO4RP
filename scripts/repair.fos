@@ -14,7 +14,10 @@ import void ChangeStatus( Critter& cr, uint16 status, uint8 value, bool set ) fr
 bool TryRepairItem( Critter& cr, Item& item ) // Export
 {
     if( not item.IsDeteriorable() )
+	{
+		cr.Say( SAY_NETMSG, "Этот объект не подлежит износу." );
         return true;
+	}
 
     if( cr.Timeout[ TO_BATTLE ] > 0 )
     {
@@ -439,26 +442,6 @@ int GetDeteriorationProcent( Item& item ) // Export
     return CLAMP( value, 0, 100 );
 }
 
-/* из СДК, проверить есть ли конфликты с нашим динамическим рассчетом
-   void SetItemCost(Item& item)
-   {
-        //item.Cost = item.Proto.Cost * CLAMP(100 - GetDeteriorationProcent(item), 5, 100)/ 100;
-        int wearPercent = GetDeteriorationProcent(item);
-        if (wearPercent == 100)
-        {
-                item.Cost = uint(item.Proto.Cost / 3);
-        }
-        else if (wearPercent > 75)
-        {
-                item.Cost = uint(2 * item.Proto.Cost / 3);
-        }
-        else
-        {
-                item.Cost = 0;
-        }
-   }
- */
-
 bool IsHaveBlade( uint16 pid )            // pm added
 {
     if( pid == PID_KNIFE             ||
@@ -476,6 +459,180 @@ bool IsHaveBlade( uint16 pid )            // pm added
 
     return false;
 
+}
+
+import void DIALOG_MENU( Critter& cr, string[] data ) from "gm";
+import bool isGM( Critter& player ) from "gm";
+
+//import bool AskAction( Critter& cr, Item& item ) from "repair";
+bool AskAction( Critter& cr, Item& item ) //exported
+{
+	uint type = item.GetType();
+	
+	cr.ParamBase[CR_VAL0] = item.Id;
+	
+	uint[] inspectable = { ITEM_TYPE_ARMOR, ITEM_TYPE_WEAPON };
+	
+	string[] data = { "repair@answer_Action", "Выберите действие:", "Починить", "Разобрать" };
+	if( inspectable.find( type ) != -1 )
+	{
+		data.insertLast( "Сделать чертёж" );
+		if( isGM( cr ) )
+			data.insertLast( "Список чертежей" );
+	}
+	
+	DIALOG_MENU( cr, data );
+	return true;
+}
+
+void answer_Action( Critter& cr, uint answerI, string& answerS )
+{
+	Item@ item = GetItem( cr.Param[CR_VAL0] );
+	if( !valid( item ) ) return;
+	
+	switch( answerI )
+	{
+		case(0): TryRepairItem( cr, item ); break;
+		case(1): TryDisassembleItem( cr, item ); break;
+		case(2): TryMakeBlueprint( cr, item ); break;
+		case(3): EnlistBlueprints( cr ); break;
+		default: cr.Say( SAY_NETMSG, "Из этого ничего не вышло." ); break;
+	}
+}
+
+class Blueprint
+{
+	uint original;
+	uint pid;
+	//TODO: Уникальную сложность для разных чертежей.
+	uint difficulty;
+	
+	Blueprint( uint original, uint pid, uint difficulty = 300 )
+	{
+		this.original = original;
+		this.pid = pid;
+		this.difficulty = difficulty;
+	}
+	
+	string info()
+	{
+		return "Чертёж[" + pid + "] объекта №" + original + " сложности " + difficulty + "%";
+	}
+	
+	bool check( Critter& cr, Item& item )
+	{
+		if( item.GetProtoId() == original )
+		{
+			if( Random( 0, difficulty ) <= cr.Skill[SK_SCIENCE] )
+			{
+				cr.Say( SAY_NETMSG, "Вы смогли сделать чертёж предмета." );
+				cr.AddItem( pid, 1 );
+			}
+			else
+			{
+				cr.Say( SAY_NETMSG, "Вы не смогли сделать чертёж предмета, вам нужно переварить информацию в течении суток." );
+			}
+			
+			cr.AddTimeEvent( "cte_tired", 0, CTE_TIRED, 24 );
+			
+			if( Random( 0, difficulty ) <= cr.Skill[SK_REPAIR] )
+			{
+				cr.Say( SAY_NETMSG, "В ходе работы вы успешно пересобрали исследуемый предмет заного." );
+			}
+			else
+			{
+				cr.Say( SAY_NETMSG, "В ходе работы вы сломали исследуемый предмет. Но оно того стоило." );
+				_SubItem( item, 1 );
+			}
+			
+			return true;
+		}
+		
+		return false;
+	}
+}
+
+uint cte_tired( Critter& cr, int identifier, uint& rate )
+{
+	rate--;
+	if( rate >= 0 )
+		return GAME_HOUR(1);
+	
+	return 0;
+}
+
+Blueprints@ blueprints;
+void InitBlueprints()
+{
+	if( valid( blueprints ) ) return;
+
+	@blueprints = CreateBlueprints()
+		.add( PID_10MM_PISTOL, PID_bp_colt6520, 500 )
+	;
+}
+
+Blueprints@ CreateBlueprints()
+{
+	return Blueprints();
+}
+
+class Blueprints
+{
+	Blueprint[] list;
+	
+	Blueprints@ add( uint original, uint pid, uint difficulty = 300 )
+	{
+		return this.add( Blueprint( original, pid, difficulty ) );
+	}
+	
+	Blueprints@ add( Blueprint@ item )
+	{
+		list.insertLast( item );
+		return this;
+	}
+	
+	bool check( Critter& cr, Item& item )
+	{
+		uint[] rates;
+		if( cr.GetTimeEvents( CTE_TIRED, null, null, rates ) > 0 )
+		{
+			uint timeleft = 0;
+			if( rates.length() > 0 ) 
+				timeleft = rates[0];
+			cr.Say( SAY_NETMSG, "Вы ещё не отдохнули до конца после прошлого раза. " + ( timeleft > 0 ? "Осталось около " + timeleft + " часов." : "Ещё немного отдыха - и можно вернуться за работу." ) );
+			return true;
+		}
+		
+		for( uint i = 0; i < list.length(); i++ )
+			if( list[i].check( cr, item ) ) return true;
+		
+		cr.Say( SAY_NETMSG, "Вы не смогли придумать способ сделать чертёж этого объекта." );
+		return false;
+	}
+	
+	bool info( Critter& cr )
+	{
+		string result = "Список доступных чертежей:";
+		for( uint i = 0; i < list.length(); i++ )
+			result += "\n" + i + ") " + list[i].info();
+		
+		cr.Say( SAY_NETMSG, result );
+		return true;
+	}
+}
+
+bool TryMakeBlueprint( Critter& cr, Item& item )
+{
+	InitBlueprints();
+	
+	return blueprints.check( cr, item );
+}
+
+bool EnlistBlueprints( Critter& cr )
+{
+	InitBlueprints();
+	
+	return blueprints.info( cr );
 }
 
 
@@ -677,37 +834,40 @@ bool TryDisassembleItem( Critter& cr, Item& item ) // Export
 		parts.insertLast( PID_CRAFT_M_JUNK ); parts.insertLast( 1 );	break;
     default: isItemPartable = false;
     }
-	if (!isItemPartable) return false;
+	if (!isItemPartable) 
+	{
+		cr.Say( SAY_NETMSG, "Вы не знаете, что с этим делать." );
+		return false;
+	}
 	
 	if ( repair > cr.Skill[ SK_REPAIR ]	|| science > cr.Skill[ SK_SCIENCE ] )
-		{
+	{
 		cr.Say( SAY_NETMSG, "Нехватает навыков" );
 		return true;
-		}
+	}
 	
 	if ( ( tools.length()>0 ) && ( !valid( _CritGetItemHand( cr ) ) || tools.find( _CritGetItemHand( cr ).GetProtoId() ) == -1 ) )
-		{
+	{
 		cr.Say( SAY_NETMSG, "Необходимый инструмент:" );
 	    for( uint8 j = 0; j < tools.length(); j++ )
-			{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_ITEM, 100*tools[j] );
-			}	
+
 		cr.Say( SAY_NETMSG, "Получаемые части:" );
 		for( uint8 jj = 0; jj < parts.length(); jj+=2 )
-			{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_ITEM, 100*parts[jj] );
-			}	
 		return true;
-		}
+	}
 		
     for( uint8 i = 0; i < parts.length(); i+=2 )
-        {
         cr.AddItem( parts[ i ], parts[ i + 1 ] );
-        }
 	
 	cr.Say( SAY_NETMSG, "Вы разобрали предмет." );
 
-	if ( item.GetCount() > 1 ) item.SetCount(item.GetCount() - 1);
+	if ( item.GetCount() > 1 )
+	{
+		item.SetCount(item.GetCount() - 1);
+		AskAction( cr, item );
+	}
 	else DeleteItem( item );
 
     return true;
