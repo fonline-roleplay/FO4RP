@@ -146,11 +146,13 @@ jQuery(function($){
         $(e.currentTarget).scrollTop($(e.currentTarget).scrollTop() + e.originalEvent.deltaY/2);
     })
 
-    var skin = null;
+    var skin = null, asidePosition = null;
     if (window.localStorage) {
         skin = localStorage.getItem('skin');
+        asidePosition = localStorage.getItem('aside-position');
     }
     if (!skin) skin = 'green';
+    if (!asidePosition) asidePosition = 'left';
     var skinLink = document.createElement('link')
     skinLink.id = 'skin'
     skinLink.rel = 'stylesheet'
@@ -158,9 +160,11 @@ jQuery(function($){
     skinLink.href = '/assets/skin/'+skin+'.css'
     document.head.appendChild(skinLink)
 
+    if (asidePosition != 'left') $('#aside').parent().removeClass('reverse')
+
     $(document).ready(function(e){
         $("#prompt").cmd({
-            prompt: '$> ',
+            prompt: 'guest@poseidon:net/> ',
             width: '100%',
             commands: function(cmd) {
 
