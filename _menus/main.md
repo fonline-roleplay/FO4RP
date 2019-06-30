@@ -1,0 +1,7 @@
+- [Проект](/)
+- [Новости](/news)
+- [События](/events)
+- [Обновления](/updates)
+- [Скачать](/download)
+- [Discord](https://discord.gg/qD6WYFY)
+- [Настройки](/settings)

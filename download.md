@@ -1,3 +1,8 @@
+---
+layout: default
+permalink: /download
+title: Скачать
+---
 # Быстрый старт
 
 Для загрузки игрового клиента [скачайте апдейтер](https://github.com/fonline-roleplay/FO4RP/releases/download/1.0/FOnlineUpdater.exe), положите его в пустую папку и запустите. 
