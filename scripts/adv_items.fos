@@ -17,8 +17,9 @@ import void SayLog( Map@ map, string message ) from "general_unsafe";
 #define PID_CACTUS_2      ( 7906 ) //У него спрайт генератора!
 #define PID_POWER_GEN     ( 7907 ) //У него нет спрайта!
 #define PID_LIGHT_ENV     ( 7908 ) // val1 = lightColor, val2 = radius
+#define PID_FIREPLACE_OFF ( 7911 )
 
-int[][] groups = { {}, { PID_POWER_GEN }, { PID_FIREBARREL }, { PID_FIREPLACE, 286 }, { PID_WELL_1, PID_WELL_2, PID_WELL_3 }, { PID_CACTUS_1, PID_CACTUS_2 } };
+int[][] groups = { {}, { PID_POWER_GEN }, { PID_FIREBARREL }, { PID_FIREPLACE, PID_FIREPLACE_OFF, 286 }, { PID_WELL_1, PID_WELL_2, PID_WELL_3 }, { PID_CACTUS_1, PID_CACTUS_2 } };
 string[] group_descriptions = { "ERROR", "генераторе", "бочке", "костре", "колодце", "кактусе"};
 #define TYPE_NONE        ( 0 )
 #define TYPE_POWERGEN    ( 1 )
@@ -200,6 +201,7 @@ int[][] Repairing_iterations = {{ 1, 2, 3 }, {0}};
 //item.SetEvent( ITEM_EVENT_SKILL, "e_BrokenItem" );
 
 uint[] firables = { 
+	PID_FIREPLACE_OFF, //Потухший костёр
 	//Изделия из древесины:
 	PID_SIGN, PID_FIREWOOD, PID_WOOD_PART, PID_SHARPENED_POLE, PID_CLUB, PID_WOOD_PLANK, PID_WOOD_PLANK2,
 	//Перегной и фермерские угодья:
@@ -245,8 +247,8 @@ bool FireUp( Item& item, uint pid, int strength ) //exported
 		if( water.find( items[i].GetProtoId() ) != -1 && Random( 1, 4 ) != 1 ) //25% что защита не сработает
 			return false;
 		
-		if( Random( 1, 3 ) == 3 )
-			FireUp( items[i], PID_FIREPLACE, 1 );
+		//if( Random( 1, 3 ) == 3 )
+		//	FireUp( items[i], PID_FIREPLACE, 1 );
 	}
 	
 
@@ -384,8 +386,11 @@ bool e_Repair( Item& item, Critter& cr, Item@ usedItem )
 			LightControl( item, false, 50, 5 );
 
 			Map@ map = GetMap( item.MapId );
-			if(valid(map)) map.SetText(item.HexX,item.HexY,COLOR_GRAY,":шипение пара:");
+			if( valid(map) ) 
+				map.SetText(item.HexX,item.HexY,COLOR_GRAY,":шипение пара:");
 			SayLog( map, cr.Name + " " + cr.Id + " **тушит огонь** " ); 
+			
+			switchState( item );
 			return true;
 		}
 	}
@@ -429,6 +434,8 @@ bool e_Repair( Item& item, Critter& cr, Item@ usedItem )
 			item.EVENT = CreateTimeEvent( __FullSecond + REAL_SECOND(2), "e_FireBurn", values, true );
 			LightControl( item, true, 50, 5 );
 			SayLog( cr.GetMap(), cr.Name + " " + cr.Id + " **разжигает огонь** " ); 
+			
+			switchState( item );
 		}
 		return e_Skill( item, cr, SKILL_PICK_ON_GROUND );
 	}
@@ -522,15 +529,19 @@ uint e_FireBurn( uint[] @ values )
 					item.Update();
 					LightControl( item, false, 50, 5 );
 
-					map.SetText( item.HexX, item.HexY, COLOR_GRAY, ":шипение пара:" );
+					// if( Random( 1, 2 ) == 1 )
+						// map.SetText( item.HexX, item.HexY, COLOR_GRAY, ":шипение пара:" );
 					SayLog( map, "Сработала противопожарка №" + items[i].Id + " на источник возгорания №" + item.Id );
+					
+					switchState( item );
 					return 0;
 				}
 				
 				FireUp( items[i], PID_FIREPLACE, 1 );
 			}
 			
-			map.SetText( item.HexX, item.HexY, COLOR_LGRAY, ":треск огня:" );
+			//if( Random( 1, 10 ) == 1 ) 
+			//	map.SetText( item.HexX, item.HexY, COLOR_LGRAY, ":треск огня:" );
 		}
 
 		Critter@[] target;
@@ -544,11 +555,7 @@ uint e_FireBurn( uint[] @ values )
 	LightControl( item, false, 50, 5 );
 	if( item.TYPE == TYPE_FIREPIT )
 	{
-		//DeleteItem(item);
-		item.ChangeProto( ashes[ Random( 0, ashes.length() - 1 ) ] );
-		UNSETFLAG( item.Flags, ITEM_SHOW_ANIM );
-		UNSETFLAG( item.Flags, ITEM_CAN_PICKUP );
-		item.Update();
+		recreateWithNewProto( item, ashes[ Random( 0, ashes.length() - 1 ) ] );
 		return 0;
 	}
 	
@@ -585,7 +592,9 @@ bool NeededItem( Critter& cr, uint16 protoId )
  
 void LightControl( Item& item, bool onOff, uint intensity, uint8 radius )
 {
-	ChangeFrame( item, onOff ? 1 : 0 );
+	//item.ChangeProto( onOff ? PID_FIREPLACE : PID_FIREPLACE_OFF );
+	//ChangeFrame( item, onOff ? 1 : 0 );
+	
 	item.SetEvent( ITEM_EVENT_WALK, onOff ? "e_Hot" : null );
     item.LightIntensity = intensity;
 	//item.LightRadius = radius;
@@ -645,4 +654,116 @@ uint e_CactusCharge( uint[] @ values )
     }
 	cactus.EVENT = 0;
     return 0;
+}
+
+void RemoveItemsByPID( Map& map, uint pid )
+{
+	Item@[] items;
+	uint count = map.GetItems( pid, items );
+	for( uint i = 0; i < count; i++ )
+		DeleteItem( items[i] );
+}
+
+void RemoveItemsByPID( Map& map, uint[] pids )
+{
+	for( uint i = 0, len = pids.length(); i < len; i++ )
+		RemoveItemsByPID( map, pids[i] );
+}
+
+//~run adv_items clear 0 0 0 
+void clear( Critter& cr, int, int, int )
+{
+	Map@ map = cr.GetMap();
+	if(!valid(map)) return;
+	
+	RemoveItemsByPID( map, firables );
+	RemoveItemsByPID( map, firesources );
+	RemoveItemsByPID( map, ashes );
+}
+
+//~run adv_items run 0 0 0 
+void run( Critter& cr, int, int, int )
+{
+	Map@ map = cr.GetMap();
+	if( !valid(map) ) return;
+	
+	uint count;
+	Item@[] fires;
+	
+	count = map.GetItems( cr.HexX + 1, cr.HexY + 1, fires );
+	if( count == 0 )
+		fires.insertLast( map.AddItem( cr.HexX + 1, cr.HexY + 1, PID_FIREPLACE, 1 ) );
+	if( fires.length() == 1 )
+		switchState( fires[0] );
+	fires.resize(0);
+	
+	count = map.GetItems( cr.HexX - 1, cr.HexY + 1, fires );
+	if( count == 0 )
+		fires.insertLast( map.AddItem( cr.HexX - 1, cr.HexY + 1, PID_FIREPLACE_OFF, 1 ) );
+	if( fires.length() == 1 )
+		switchState( fires[0] );
+	fires.resize(0);
+}
+
+//~run adv_items go id1 id2 id3
+void go( Critter& cr, int id1, int id2, int id3 )
+{
+	int[] ids = { id1, id2, id3 };
+	
+	for( uint i = 0, len = ids.length(); i < len; i++ )
+		switchState( ids[i] );
+}
+
+void switchState( int itemId )
+{
+	if( itemId == 0 ) return;
+	Item@ item = GetItem( itemId );
+	if( !valid( item ) ) return;
+	switchState( item );
+}
+
+void switchState( Item@ item )
+{
+	if( !valid( item ) ) return;
+	
+	uint pid = item.GetProtoId();
+	
+	if( pid != PID_FIREPLACE_OFF && pid != PID_FIREPLACE ) return;
+	
+	bool isFire = ( pid == PID_FIREPLACE );
+	
+	//item.ChangeProto( isFire ? PID_FIREPLACE_OFF : PID_FIREPLACE );
+	@item = @recreateWithNewProto( item, isFire ? PID_FIREPLACE_OFF : PID_FIREPLACE );
+	if( !isFire && valid( item ) )
+		item.SetEvent( ITEM_EVENT_WALK, isFire ? "e_Hot" : null );
+}
+
+Item@ recreateWithNewProto( Item& item, uint pid )
+{
+	Map@ map = GetMap( item.MapId );
+	if( !valid( map ) ) return null;
+	
+	if( item.Accessory != ACCESSORY_HEX ) return null;
+	
+	Item@ result = map.AddItem( item.HexX, item.HexY, pid, 1 );
+	if( !valid( result ) ) null;
+	
+	cloneVals( item, result );
+	DeleteItem( item );
+	
+	return result;
+}
+
+void cloneVals( Item& source, Item& target )
+{
+	target.Val0 = source.Val0;
+	target.Val1 = source.Val1;
+	target.Val2 = source.Val2;
+	target.Val3 = source.Val3;
+	target.Val4 = source.Val4;
+	target.Val5 = source.Val5;
+	target.Val6 = source.Val6;
+	target.Val7 = source.Val7;
+	target.Val8 = source.Val8;
+	target.Val9 = source.Val9;
 }
