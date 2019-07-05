@@ -348,7 +348,7 @@ bool e_Repair( Item& item, Critter& cr, Item@ usedItem )
 			return true;
 		}
 		int pid = BottlePIDs_after.find(usedItem.GetProtoId());
-		if( pid != -1 ) {
+		if( pid != -1 && item.STATE != 1 ) {
 			cr.Say( SAY_EMOTE, "тушит огонь" );
 			_SubItem(usedItem, 1);
 			_CritAddItem(cr, BottlePIDs_before[pid], 1);
@@ -395,7 +395,6 @@ bool e_Repair( Item& item, Critter& cr, Item@ usedItem )
 			{
 				item.ChangeProto(PID_FIREPLACE);
 				item.SetScript( "_InitItem" );
-
 			}
 			item.VAL = 2;
 			item.TYPE = TYPE_FIREPIT; 
@@ -413,14 +412,36 @@ bool e_Repair( Item& item, Critter& cr, Item@ usedItem )
 	return false;
 }
 
-void e_Hot(Item& item, Critter& crit, bool entered, uint8 dir) {
-	if(entered) crit.AddTimeEvent( "cte_Hot", 0, CTE_DYSPNEA, 0 );
-	else crit.EraseTimeEvents(CTE_DYSPNEA);
+void e_Hot(Item& item, Critter& crit, bool entered, uint8 dir) 
+{
+	if( entered )
+	{
+		if( crit.GetTimeEvents( CTE_DYSPNEA, null, null, null ) == 0 )
+			crit.AddTimeEvent( "cte_Hot", 0, CTE_DYSPNEA, 0 );
+	}
+	else crit.EraseTimeEvents( CTE_DYSPNEA );
 }
 
 uint cte_Hot( Critter& cr, int identifier, uint& rate )
 {
 	if( cr.IsDead() ) return 0;
+	
+	Map@ map = cr.GetMap();
+	if( !valid( map ) ) return 0;
+	
+	bool isBurning = false;
+	
+	Item@[] fire;
+	uint count = map.GetItems( cr.HexX, cr.HexY, fire );
+	for( uint i = 0; i < count; i++ )
+		if( fire[i].GetProtoId() == PID_FIREPLACE && fire[i].STATE == 0 )
+		{
+			isBurning = true;
+			break;
+		}
+		
+	if( !isBurning ) return 0;
+	
 	cr.ParamBase[CR_TEMP]++;
 	InjureCritter( cr, cr.ParamBase[CR_TEMP], DAMAGE_FIRE, 0, 0 );
 	rate++;
@@ -449,28 +470,32 @@ uint e_FireBurn( uint[] @ values )
 			item.VAL -= Random( 0, 1); 
 		}
 		
+		Map@ map = GetMap( item.MapId );
+		if( !valid( map ) ) return 0;
+
 		if( Random(0,1) == 0 ) 
 		{
-			Map@ map = GetMap( item.MapId );
-			if( valid(map) )
+			uint16 hx = item.HexX, hy = item.HexY;
+			map.SetText( hx, hy, COLOR_LGRAY, ":треск огня:" );
+			
+			Item@[] heated;
+			for( uint i = 0; i < 6; i++ ) 
 			{
-				uint16 hx = item.HexX, hy = item.HexY;
-				map.SetText( hx, hy, COLOR_LGRAY, ":треск огня:" );
-				
-				Item@[] heated;
-				for( uint i = 0; i < 6; i++ ) 
-				{
-					hx = item.HexX; hy = item.HexY;
-					map.MoveHexByDir( hx, hy, i, 1 );
-					map.GetItems( hx, hy, heated );
-				}
-				
-				for( uint i = 0; i < heated.length(); i++ )
-					FireUp( heated[i], PID_FIREPLACE, 1 );
+				hx = item.HexX; hy = item.HexY;
+				map.MoveHexByDir( hx, hy, i, 1 );
+				map.GetItems( hx, hy, heated );
 			}
+			
+			for( uint i = 0; i < heated.length(); i++ )
+				FireUp( heated[i], PID_FIREPLACE, 1 );
 		}
-		
-        return FIRE_BURNING_TIME;
+
+		Critter@[] target;
+		uint count = map.GetCrittersHex( item.HexX, item.HexY, 0, FIND_LIFE_AND_KO, target );
+		for( uint i = 0; i < count; i++ )
+			target[i].AddTimeEvent( "cte_Hot", 0, CTE_DYSPNEA, 0 );
+			
+		return FIRE_BURNING_TIME;
     }
 	
 	LightControl( item, false, 50, 5 );
