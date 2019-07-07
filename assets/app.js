@@ -27,14 +27,18 @@ jQuery(function($){
         document.head.appendChild(hl)
     }*/
 
-    var minMenuWidth = 0;
-    $('.menu div').each(function(i, item){
-        var width = $(item).width();
-        if (minMenuWidth < width) minMenuWidth += width;
-    });
-    if (minMenuWidth) {
-        $('#aside').css('min-width',minMenuWidth + 'px')
-    }
+    var fixMenuWidth = function(){
+        
+        /*var minMenuWidth = 0;
+        $('#aside a').each(function(i, item){
+            var width = $(item).outerWidth();
+            if (minMenuWidth < width) minMenuWidth += width;
+            console.log(width)
+        });
+        if (minMenuWidth) {
+            $('#aside').css('min-width',minMenuWidth + 'px')
+        }*/
+    }; fixMenuWidth()
 
     function textNodesUnder(node){
         var all = [];
@@ -59,9 +63,14 @@ jQuery(function($){
         $('a',el).each(function(){
             if (this.innerHTML) this.innerHTML = '[' + this.innerHTML + ']';
         })
-        $('row li',el).each(function(){
-            if (this.innerHTML) this.innerHTML = '- ' + this.innerHTML;
-        })
+
+        $("#contents").html("")
+        var headers = $('h1,h2,h3,h4,h5,h6', el)
+        if (headers.length > 3) {
+            headers.each(function(i,e){
+                $('#contents').append('<a href="#'+e.id+'">  ['+e.innerHTML.trim(':.;-')+']</a>');
+            });
+        }
 
         if (!(!noscriptSwap && !isMobile)) return;
 
@@ -146,13 +155,26 @@ jQuery(function($){
         $(e.currentTarget).scrollTop($(e.currentTarget).scrollTop() + e.originalEvent.deltaY/2);
     })
 
+    $(document).on('click','[data-category-filter],[data-subcategory-filter]',function(){
+        var category = $(this).attr('data-category-filter')
+        var subcategory = $(this).attr('data-subcategory-filter')
+        var els = subcategory ? $('[data-category="'+category+'"][data-subcategory='+subcategory+']') : $('[data-category="'+category+'"]:not([data-subcategory])')
+        if (els.not('.active').length == 0) {
+            els.removeClass('active')
+            $('.state',this).html('+')
+        } else {
+            els.addClass('active')
+            $('.state',this).html('-')
+        }
+    })
+
     var skin = null, asidePosition = null;
     if (window.localStorage) {
         skin = localStorage.getItem('skin');
         asidePosition = localStorage.getItem('aside-position');
     }
     if (!skin) skin = 'green';
-    if (!asidePosition) asidePosition = 'left';
+    if (!asidePosition) asidePosition = 'right';
     var skinLink = document.createElement('link')
     skinLink.id = 'skin'
     skinLink.rel = 'stylesheet'
@@ -179,6 +201,10 @@ jQuery(function($){
 
     // Links handling
     $(document).on('click', 'a', function(e){
+        if ($(this).attr('href').startsWith('#')) {
+            return;
+        }
+
         e.preventDefault(); e.stopPropagation()
         var url = $(this).attr('href')
         $.get(url, function(html){

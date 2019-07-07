@@ -1,6 +1,7 @@
 ---
 category: Механики
-title: Торговля
+subcategory: Прочее
+title: Воровство
+permalink: /gameplay/thievery
 ---
-
 ОШИБКА, неожиданный обрыв архива
