@@ -1,6 +1,5 @@
 ---
 category: Лор
-subcategory: Поселения
 title: Корабль "Посейдон"
 permalink: /poseidon
 index: true

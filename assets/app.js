@@ -68,7 +68,7 @@ jQuery(function($){
         var headers = $('h1,h2,h3,h4,h5,h6', el)
         if (headers.length > 3) {
             headers.each(function(i,e){
-                $('#contents').append('<a href="#'+e.id+'">  ['+e.innerHTML.trim(':.;-')+']</a>');
+                $('#contents').append('<a href="#'+e.id+'">  ['+e.innerHTML.trim(':. ;-')+']</a>');
             });
         }
 
@@ -102,7 +102,7 @@ jQuery(function($){
             $('a.active').removeClass('active')
         }   else {
             $('a.active:not([href*="'+window.location.pathname+'"])').removeClass('active');
-            $('a[href*="'+window.location.pathname+'"]:not(.active)').addClass('active');
+            $('a[href="'+window.location.pathname+'"]:not(.active)').addClass('active');
         }
     },5)
 
