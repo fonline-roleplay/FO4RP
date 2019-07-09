@@ -1,6 +1,6 @@
 ---
 category: Начало игры
-title: Создание персонажа
+title: Ролевая система S.P.E.C.I.A.L.
 permalink: /start/special/special
 ---
 
