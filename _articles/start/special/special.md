@@ -1,7 +1,7 @@
 ---
 category: Начало игры
 title: Создание персонажа
-permalink: /start/special
+permalink: /start/special/special
 ---
 
 S.P.E.C.I.A.L. — ролевая система, разработанная в 1996 году специально для компьютерной игры Fallout.
