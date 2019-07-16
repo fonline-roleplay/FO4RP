@@ -4,6 +4,6 @@ title: Регион игровых действий
 permalink: /lore/region
 ---
 
-# Залив Сан-Франциско, январь 2247
+# Залив Сан-Франциско, лето 2247
 
-![Стоянка1](https://snag.gy/x3Qgt1.jpg){: .left} 
+![Стоянка1](https://snag.gy/fuyjkG.jpg){: .left} 
