@@ -5,6 +5,8 @@
 // / Server
 #ifndef __CLIENT
 
+import void heard_radio_log_ch0(Critter& cr, string@ message, int[]@ channels) from "test";
+
 void _InitMicrophone(Item& item, bool firstTime) 
 {
     if (firstTime) {
@@ -17,23 +19,64 @@ void _InitMicrophone(Item& item, bool firstTime)
 }
 
 void unsafe_OutMessage(Critter& cr, int sayType, int p0, int p1, string@ msg, int[]@ p2) {
+    // Не палить ГМов
+    if (0 != cr.ParamBase[QST_INVIS]) {
+        return;
+    }
+
     Map@ map = cr.GetMap();
     if (null is map || msg is null) return;
 
+    // Отсев эмоутов и пустых сообщений
+    array<uint8> buffer;
+    uint8 prev = ' ';
+    bool ignore = false;
+    for (uint i = 0, l = msg.length(); i < l; i++) {
+        if (
+            (prev == ' ' && msg[i] == ' ')
+            || (prev == '*' && msg[i] == '*')
+        ) {
+            continue;
+        } else {
+            prev = msg[i];
+        }
+
+        if (msg[i] == '*') {
+            ignore = !ignore;
+        } else if (!ignore) {
+            buffer.insertLast(msg[i]);
+        }
+    }
+    ignore = false;
+    msg.resize(buffer.length);
+    for (uint i = 0, l = buffer.length; i < l; i++) {
+        if (!ignore || i + 1 == l) {
+            if (buffer[i] == ' ') continue;
+            else ignore = true;
+        }
+
+        msg[i] = buffer[i];
+    }
+    if (0 == msg.length()) return;
+
+    // Добавление идентификации голоса
     msg = msg + " - " + (cr.StatBase[ST_GENDER] == 0 ? "мужской" : "женский") + " голос";
 
+    // Модификация дистанции слишимости в зависимости от типа речи
     float distance = 200.0f;
     switch(sayType) {
         case SAY_SHOUT: 
             distance = 10000.0f;
             break;
+        case SAY_RADIO:
         case SAY_WHISP:
             distance = 64.0f;
             break;
     }
 
+    // Поиск микрофонов у криттеров в пределах видимости TODO: отрефакторить снизив нагрузку
     array<int> skip = {};
-
+    array<int> channels = {};
     array<Critter@> find = {@cr};
     array<Critter@> critters;
     map.GetCrittersSeeing(find, true, FIND_LIFE, critters);
@@ -41,10 +84,13 @@ void unsafe_OutMessage(Critter& cr, int sayType, int p0, int p1, string@ msg, in
         Item@ item = critters[i].GetItem(PID_MICROPHONE,-1);
         if (null !is item && FLAG(item.Flags, ITEM_RADIO) && !FLAG(item.RadioFlags, RADIO_DISABLE_SEND) && 0 > skip.find(item.RadioChannel) ) {
             RadioMessage(item.RadioChannel, msg);
+            channels.insertLast(item.RadioChannel);
+            heard_radio_log_ch0(cr, msg, channels);
             skip.insertLast(item.RadioChannel);
         }
     }
 
+    // Поиск раций и микрофонов на земле
     array<Item@> items;
     if (0 < (map.GetItems(PID_MICROPHONE, items) + map.GetItems(PID_RADIO, items))) {
         for (uint i = 0, l = items.length; i < l; i++) {
@@ -57,6 +103,8 @@ void unsafe_OutMessage(Critter& cr, int sayType, int p0, int p1, string@ msg, in
                 && 0 > skip.find(item.RadioChannel)
             ) {
                 RadioMessage(item.RadioChannel, msg);
+                channels.insertLast(item.RadioChannel);
+                heard_radio_log_ch0(cr, msg, channels);
                 skip.insertLast(item.RadioChannel);
             }
         }
