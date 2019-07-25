@@ -1,0 +1,398 @@
+// Mines and stuff by Jonathan Joestar for FO4RP
+
+#include "_macros.fos"
+#include "_colors.fos"
+#include "scripting_object.fos"
+
+import Lookup@ getClassesLookup() from "scripting_objects_lookup";
+
+import void CriticallyInjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId, uint hitLocation ) from "combat";
+
+void registerMines()
+{
+	getClassesLookup().appendScriptingObjects(Mine());
+	getClassesLookup().appendScriptingObjects(ActiveMine());
+}
+
+class Mine : DisabledExplosiveTrap
+{
+	Mine()
+	{
+		DISABLED_TRAP_PID = PID_MINE;
+		ACTIVE_TRAP_PID = PID_ACTIVE_MINE;
+		EXPLODE_BASE_DAMAGE = 100;
+		EXPLODE_RADIUS = 5;
+	}
+	
+	string getInvalidPlacingMessage()
+	{
+		return "Нельзя установить мину здесь.";
+	}
+	
+	string getInstallEmoteMessage()
+	{
+		return "Устанавливает мину.";
+	}
+}
+
+class ActiveMine : ActiveExplosiveTrap
+{
+	ActiveMine()
+	{
+		DISABLED_TRAP_PID = PID_MINE;
+		ACTIVE_TRAP_PID = PID_ACTIVE_MINE;
+		EXPLODE_BASE_DAMAGE = 100;
+		EXPLODE_RADIUS = 5;
+	}
+}
+
+
+
+/**
+	* Далее базовые классы взрывающихся ловушек 
+	* Реализация должна наследоваться от DisabledExplosiveTrap и ActiveExplosiveTrap
+*/
+
+class ExplosiveTrap : GenericObject
+{
+	int DISABLED_TRAP_PID;
+	
+	int ACTIVE_TRAP_PID;
+		
+	int EXPLODE_BASE_DAMAGE;
+	
+	int EXPLODE_RADIUS;
+	
+	void detonate(Item@ trap)
+	{
+		uint16 hexX = 0, hexY = 0;
+		Map@ map = trap.GetMapPosition(hexX, hexY);
+		
+		if( @map == null )
+		{
+			return;
+		}
+		
+		if(!checkTrapMalfunction( trap ))
+		{
+			Critter@[] @targets = findTargets( map, hexX, hexY);
+			applyDamage( trap, targets, hexX, hexY );
+			playEffect( map, hexX, hexY );
+		} 
+		else
+		{
+			trapMalfunction(map, hexX, hexY );
+		}
+		
+		deleteTrap( trap );
+	}
+	
+	void trapMalfunction(Map@ map, uint16 hexX, uint16 hexY)
+	{
+		map.SetText( hexX, hexY, COLOR_LGRAY, getTrapMalfunctionText());
+		map.AddItem( hexX, hexY, DISABLED_TRAP_PID, 1);
+	}
+	
+	bool checkTrapMalfunction(Item@ trap)
+	{
+		return trap.Val0 == 0;
+	}
+	
+	Critter@[] findTargets(Map@ map, uint16 hexX, uint16 hexY)
+	{
+		Critter@[] targets;
+		map.GetCrittersHex( hexX, hexY, EXPLODE_RADIUS, FIND_LIFE_AND_KO, targets );
+		
+		return targets;
+	}
+	
+	void applyDamage(Item@ trap, Critter@[] targets, uint16 hexX, uint16 hexY)
+	{
+		int ownerId = getTrapOwnerId( trap );
+		
+		for(uint i = 0; i < targets.length(); i++)
+		{
+			Critter@ cr = targets[ i ];
+			uint     dist = ::GetDistantion( hexX, hexY, cr.HexX, cr.HexY );
+			int      dir = ( dist == 0 ? ( cr.Dir + 3 ) % 6 : GetDirection( hexX, hexY, cr.HexX, cr.HexY ) );
+			int damage = EXPLODE_BASE_DAMAGE - ( dist * getDamageDropRate() );
+			
+			CriticallyInjureCritter( cr, damage, getDamageType(), dir, ownerId, Random(HIT_LOCATION_HEAD, HIT_LOCATION_GROIN ) );
+			if( ownerId != 0 )
+				cr.AddEnemyInStack( ownerId );
+		}
+	}
+	
+	void playEffect(Map@ map, uint16 hexX, uint16 hexY)
+	{
+		map.RunEffect( getExplodeEffectPid(), hexX, hexY, EXPLODE_RADIUS );
+		map.PlaySound( getExplodeSoundName() );
+	}
+	
+	void deleteTrap(Item@ item)
+	{
+		DeleteItem( item );
+		item.Update();
+	}
+	
+	int getTrapOwnerId(Item@ trap)
+	{
+		return trap.Val1;
+	}
+	
+	void setTrapOwnerId(Item@ trap, int id)
+	{
+		trap.Val1 = id;
+	}
+	
+	string getTrapMalfunctionText()
+	{
+		return "::кряк::";
+	}
+	
+	int getSkillNumber()
+	{
+		return SK_TRAPS;
+	}
+	
+	int getCriticalFailureStatNumber()
+	{
+		return ST_LUCK;
+	}
+	
+	int getExplodeEffectPid()
+	{
+		return PID_EXPLODE_ROCKET;
+	}
+	
+	string getExplodeSoundName()
+	{
+		return "WHN1XXX1.ACM";
+	}
+	
+	int getDamageType()
+	{
+		return DAMAGE_EXPLODE;
+	}
+	
+	int getDamageDropRate()
+	{
+		return 10;
+	}
+}
+
+/**
+	* Базовый класс для любых ловушек взрывающихся при наступании на них
+	* DisabledExplosiveTrap для предмета в инвентаре
+*/
+
+class DisabledExplosiveTrap : ExplosiveTrap
+{
+	string getInvalidAccessoryMessage()
+	{
+		return "Чтобы установить ловушку она должна быть у вас в руках.";
+	}
+	
+	string getInvalidPlacingMessage()
+	{
+		return "Нельзя установить ловушку здесь.";
+	}
+	
+	string getInstallEmoteMessage()
+	{
+		return "Устанавливает ловушку.";
+	}
+	
+	string getInstallMegaFailMessage()
+	{
+		return "Вы что-то сделали не так и ловушка взорвалась у вас в руках";
+	}
+	
+	// Установка ловушки
+	bool itemUse(Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scenery@ onScenery)	
+	{
+		Map@ map = crit.GetMap();
+
+		if(!valid(map)) //Прекращаем обработку если ловушка используется на глобале
+		{
+			return false;
+		}
+	
+		if(!checkItemInHands(item)) //Проверка на то что ловушка в руках
+		{
+			crit.Say(SAY_NETMSG, getInvalidAccessoryMessage());
+			return true;
+		}
+		
+		if(!checkTrapInstallPlace(map, crit.HexX, crit.HexY)) // Проверка есть ли на этом месте уже установленная ловушка
+		{
+			crit.Say(SAY_NETMSG, getInvalidPlacingMessage());
+			return true;
+		}
+		
+		Item@ trap = createTrap(map, crit.HexX, crit.HexY);
+		int hardness;
+		if( !installSkillCheck( crit ) )
+		{
+			hardness = crit.Skill[getSkillNumber()];
+		}
+		else if( criticalFailCheck( crit ) )
+		{
+			hardness = 0;
+		}
+		else
+		{
+			criticalFail( trap, crit );
+			return true;
+		}
+		
+		setTrapDisarmHardness(trap, hardness );
+		setTrapOwnerId( trap, crit.Id );
+
+		crit.Say(SAY_EMOTE, getInstallEmoteMessage());
+		
+		deleteTrap( item );
+		
+		return true;
+	}
+
+	array<int> getProtoIds()
+	{
+		array<int> protoIds = {DISABLED_TRAP_PID};
+		return protoIds;
+	}
+	
+	void criticalFail( Item@ trap, Critter@ critter )
+	{
+		critter.Say(SAY_NETMSG, getInstallMegaFailMessage());
+		detonate( trap );
+	}
+	
+	bool installSkillCheck(Critter@ critter)
+	{
+		return Random(0, 100) > critter.Skill[getSkillNumber()];
+	}
+	
+	bool criticalFailCheck(Critter@ critter)
+	{
+		return Random(0, 10) > critter.Stat[getCriticalFailureStatNumber()];
+	}
+	
+	Item@ createTrap(Map@ map, uint16 hexX, uint16 hexY)
+	{
+		return map.AddItem(hexX, hexY, ACTIVE_TRAP_PID, 1);
+	}
+	
+	void setTrapDisarmHardness(Item@ mine, int hardness)
+	{
+		mine.Val0 = CLAMP(hardness, 0, 300);
+	}
+	
+	bool checkTrapInstallPlace(Map@ map, uint16 hexX, uint16 hexY)
+	{
+		return !valid(map.GetItem(hexX, hexY, ACTIVE_TRAP_PID));
+	}
+	
+	bool checkItemInHands(Item@ item)
+	{
+		return item.Accessory == ACCESSORY_CRITTER && item.CritSlot == SLOT_HAND1;
+	}
+}
+
+
+class ActiveExplosiveTrap : ExplosiveTrap
+{
+	string getSuccessfulDisarmMessage()
+	{
+		return "Вы успешно деактивировали ловушку";
+	}
+	
+	string getUnsuccessfulDisarmMessage()
+	{
+		return "Вам не удалось деактивировать ловушку.";
+	}
+	
+	string getAlmostStepMessage()
+	{
+		return "Вы чуть было не наступили в ловушку, но вовремя заметили её";
+	}
+	
+	string getStepIntoEmoteMessage()
+	{
+		return "Наступает в ловушку";
+	}
+
+
+	bool itemSkillUse(Item& item, Critter& crit, int skill)
+	{
+		if( disarmCheck(item, crit) )
+		{
+			Map@ map = crit.GetMap();
+			createDisarmedTrap( map, item.HexX, item.HexY );
+			crit.Say(SAY_NETMSG, getSuccessfulDisarmMessage() );
+			deleteTrap( item );
+		}
+		else if(!disarmCriticalFailCheck(crit))
+		{
+			crit.Say(SAY_NETMSG, getUnsuccessfulDisarmMessage() );
+		}
+		else
+		{
+			detonate( item );
+		}
+		
+		return true;
+	}
+	
+	void itemWalk(Item& item, Critter& crit, bool entered, uint8 dir)
+	{
+		if(entered)
+		{
+			crit.Wait(0);
+			
+			int hardness = item.Val0;
+			int skill = item.Val1;
+			
+			if(perceptionCheck(item, crit))
+			{
+				crit.Say(SAY_NETMSG, getAlmostStepMessage());
+			}
+			else
+			{
+				crit.Say(SAY_EMOTE, getStepIntoEmoteMessage());
+				detonate( item );			
+			}
+		}	
+	}
+	
+	array<int> getProtoIds()
+	{
+		array<int> protoIds = {ACTIVE_TRAP_PID};
+		return protoIds;
+	}
+	
+	bool perceptionCheck(Item@ trap, Critter@ crit)
+	{
+		return Random(0, 100) + (crit.Param[ST_PERCEPTION] * 10) > Random(0, 100) + ( getTrapDisarmHardness(trap) / 3);
+	}
+	
+	void createDisarmedTrap(Map@ map, uint16 hexX, uint16 hexY)
+	{
+		map.AddItem(hexX, hexY, DISABLED_TRAP_PID, 1);
+	}
+	
+	bool disarmCheck(Item@ trap, Critter@ crit)
+	{
+		return Random(0, 100 ) + getTrapDisarmHardness( trap ) / 3 < Random( 0, 100 ) + crit.Skill[ getSkillNumber() ] / 3;
+	}
+	
+	bool disarmCriticalFailCheck(Critter@ crit)
+	{
+		return Random(0, 10) > crit.Stat[ getCriticalFailureStatNumber() ];
+	}
+	
+	int getTrapDisarmHardness(Item@ trap)
+	{
+		return trap.Val0;
+	}
+}
