@@ -140,6 +140,9 @@ import void ScouringStick( Critter& cr, Item& item ) from "mio_tests";
 import void registerTraps() from "traps";
 import void registerMines() from "traps_mines";
 
+import void brahminInitSearch( Critter& cr ) from "brahmins";
+import bool BrahminPetting( Critter& cr, Item& item, Critter@ targetCr ) from "brahmins";
+
 import NpcNamesHolder@ getNpcNamesHolder() from "npc_names_holder";
 
 uint[] water_sources = { 2615, 2619, 2621, 2623, 2895 };
@@ -347,14 +350,23 @@ uint loop()
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on something critter attack another.
+import uint GetAimApCost( int hitLocation ) from "combat";
+
 import void hearshot( Critter& cr, ProtoItem& weapon, uint8 weaponMode ) from "rp_combat"; //Выстрелы на карте
 void 		critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo )
 {
 	uint8 mode = weaponMode;
 	
 	if( _WeaponModeAim( mode ) == HIT_LOCATION_NONE && _WeaponAim( weapon, mode & 0x0F ) )
+	{
 		mode = ( weaponMode & 0x0F ) + ( cr.ParamBase[CR_AUTO_AIM] << 4 );
-	
+		if( cr.ParamBase[CR_AUTO_AIM] != HIT_LOCATION_NONE )
+		{
+			int delta = int( _WeaponApCost( weapon, weaponMode ) ) * 20;
+			cr.StatBase[ ST_CURRENT_AP ] -= delta; //плюс 20% затрат ОД на прицельные атаки
+		}
+	}
+
 	uint windupTime = GetProtoWindupTime(weapon, mode, cr);
 
  	if( windupTime != 0 )
@@ -379,6 +391,7 @@ void 		critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 we
 
 uint e_DelayedAttack(uint[]@ values)
 {
+	if( !valid( values ) || values.length() != 7 ) return 0;
 	Critter@ cr = GetCritter(values[0]);
 	Critter@ target = GetCritter(values[1]);
 	ProtoItem@ weapon = GetProtoItem(values[2]);
@@ -386,6 +399,8 @@ uint e_DelayedAttack(uint[]@ values)
 	ProtoItem@ ammo = GetProtoItem(values[4]);
 	uint hexX = values[5];
 	uint hexY = values[6];
+	
+	if( !valid(cr) || !valid( weapon ) ) return 0;
 	
 	if( valid(target) && !cr.IsSee(target) && cr.Anim2Life == ANIM2_WINDUP )
 	{
@@ -704,6 +719,9 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			}
 		}
 	}
+	
+	if( valid( targetCr ) && targetCr.StatBase[ ST_BODY_TYPE ] == BT_BRAHMIN && BrahminPetting( cr, item, targetCr ) )
+		return true;
 
 	// ================================================== Мио ==================================================
 
@@ -4261,74 +4279,6 @@ uint cte_bodyswap (Critter& cr, int identifier, uint& rate) {
 	}
 }
 
-void brahminInitSearch (Critter& cr) {
-	if (cr.GetTimeEvents (CTE_BRAHMIN_SEARCH, null, null, null) > 0) return;
-	cr.AddTimeEvent ("cte_search_partner", 0, CTE_BRAHMIN_SEARCH, 0);
-}
-
-void brahminBirth (Map@ map, uint16 hexX, uint16 hexY) {
-	Critter@ baby = map.AddNpc (NPC_BRAHMIN_SM, hexX, hexY, Random (0, 5), null, null, null);
-	if (valid (baby)) {
-		baby.StatBase [ST_GENDER] = (Random (0, 1) == 0) ? GENDER_MALE : GENDER_FEMALE;
-		baby.AddTimeEvent ("cte_brahmin_growth", 3*24*60*60*__TimeMultiplier, CTE_BRAHMIN_GROWTH, 0);
-		baby.StatBase[ ST_AI_ID ] = 6;
-	}
-}
-
-uint cte_brahmin_pregnancy (Critter& cr, int identifier, uint& rate) {
-	if (!cr.IsDead ()) {
-		Map@ map = cr.GetMap ();
-		brahminBirth (map, cr.HexX, cr.HexY);
-	}
-	return 0;
-}
-
-uint cte_search_partner (Critter& cr, int identifier, uint& rate) {
-	if (cr.Stat [ST_GENDER] == GENDER_FEMALE) return 60*__TimeMultiplier;
-	Map@ map = cr.GetMap ();
-	Critter@[] partners;
-	rate += 1;
-	if( Random (0, 99) < int( rate ) ) {
-		map.GetCrittersHex (cr.HexX, cr.HexY, 15, FIND_LIFE, partners);
-		int plen = partners.length ();
-		int i = 0;
-		int closestIndex = -1;
-		uint minDistance = 15;
-		while (i < plen) {
-			bool isPregnant = (partners[i].GetTimeEvents (CTE_BRAHMIN_PREGNANCY, null, null, null) > 0);
-			if (partners[i].Stat [ST_BASE_CRTYPE] == 15 && partners[i].Stat [ST_GENDER] == GENDER_FEMALE && !isPregnant) {
-				if (GetCrittersDistantion (cr, partners[i]) <= minDistance) {
-					minDistance = GetCrittersDistantion (cr, partners[i]);
-					closestIndex = i;
-				}
-			}
-			i ++;
-		}
-		if (closestIndex >= 0) {
-			if (GetCrittersDistantion (cr, partners[closestIndex]) <= 2) {
-				cr.Say (SAY_EMOTE, "Браминий секс");
-				partners[closestIndex].Say (SAY_EMOTE, "Браминий секс");
-				partners[closestIndex].AddTimeEvent ("cte_brahmin_pregnancy", 2*24*60*60*__TimeMultiplier, CTE_BRAHMIN_PREGNANCY, 0);
-				cr.AddTimeEvent ("cte_search_partner", 24*60*60*__TimeMultiplier, CTE_BRAHMIN_SEARCH, 0);
-				return 0;
-			} else {
-				cr.ModeBase [MODE_NO_HOME] = 1;
-				AddWalkPlane (cr, 0, partners[closestIndex].HexX, partners[closestIndex].HexY, 6, false, 1);
-				cr.Say (SAY_EMOTE, "Возбужденно мычит");
-				return 10*__TimeMultiplier;
-			}
-		}
-	}
-	return 15*__TimeMultiplier;
-}
-
-uint cte_brahmin_growth (Critter& cr, int identifier, uint& rate) {
-	if (!cr.IsDead()) {
-		cr.ChangeCrType (15);
-	}
-	return 0;
-}
-
 void unsafe_MakeDescLex( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
 {
 	MakeDescLex( player, 0, param3 );
@@ -4624,3 +4574,11 @@ bool canPutItemInContainer( Item@ item, Item@ container )
 	
 	return true;
 }
+
+//DEPRECATED (ОТКЛЮЧЕННОЕ):
+
+//Все функции с браминами были перенесены в отдельный модуль. 
+//Что бы избежать путанницы и битых ссылок, оставил здесь "закрывающую" логику для существующих ивентов.
+uint cte_brahmin_pregnancy( Critter& cr, int identifier, uint& rate ) { return 0; }
+uint cte_search_partner( Critter& cr, int identifier, uint& rate ) { return 0; }
+uint cte_brahmin_growth( Critter& cr, int identifier, uint& rate ) { return 0; }
