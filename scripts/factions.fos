@@ -8,6 +8,33 @@ import uint16 GetVersionWorldSave( ::string@ time ) from "main";
 
 _Manager manager;
 
+class DefaultRelation : IRelations
+{
+	DefaultRelation( string name, int value, IRelations@ down = null )
+	{
+		_name = name;
+		if( @down !is null )
+		{
+			DefaultRelation@ downdef = cast<DefaultRelation@>(down);
+			if( downdef !is null )
+				@downdef._up = this;
+			@_down = down; 
+		}
+		@_down = down;
+		@_up = null;
+		_value = value;
+	}
+
+	string get_Name() { return _name; }
+	int get_Value() { return _value; }
+	
+	private string _name;
+	private int _value;
+	
+	IRelations@ _up;
+	IRelations@ _down;	
+}
+
 class _Manager : iManagerModule, iManager_world_save
 {
 	_Manager()
@@ -17,21 +44,169 @@ class _Manager : iManagerModule, iManager_world_save
 
 	bool manager_init() override
 	{
+		DefaultRelation	war( "war", Relation_War ),
+								dislike( "dislike", Relation_Dislike, war ),
+								neutral( "neutral", Relation_Neutral, dislike ),
+								like( "like", Relation_Like, neutral ),
+								ally( "ally", Relation_Ally, like );
+		
+		Relations.set( "war", @war );
+		Relations.set( "dislike", @dislike  );
+		Relations.set( "neutral", @neutral  );
+		Relations.set( "like", @like  );
+		Relations.set( "ally", @ally  );
+		
 		uint16 version = GetVersionWorldSave( null );
 		
 		if( version == 0 )
 			NpcFractionGeneration( );
 		else LoadFractions();
+		
 		return true;
 	}
 	
 	bool global_world_save() override
 	{
-		SaveFractions();
+	
+		filesystem fs;
+		file f;
+		fs.deleteFile(".\\save\\fractions.bak");
+		fs.move(".\\save\\fractions.fo", ".\\save\\fractions.bak");
+		if(f.open("./save/fractions.fo", "w")!=0) return false;
+		for( uint i = 0, iend = List.length(); i < iend; i++ )
+			List[i].Serialize(f);
+		f.close();
+		
 		return true;
 	}
 	
+	void LoadFractions() //exported
+	{
+		clear();
+		uint start = GetTick();			
+		LoadFractions( LoadFile("./save/fractions.fo" ) );
+		Log("Loaded " + List.length() + " fractions in " + ( GetTick() - start ) + " milliseconds." );
+	}
+	
+	private void LoadFractions( string@ txt )
+	{
+		if( @txt is null )
+			return;
+
+		string@[] lines = splitEx( txt, "\n" );
+		string@ currentLine = null;
+		string@[]@ data = null, check = null;
+		Fraction @fraction = null;
+		int tempi = -1;
+		uint tempu = 0, countLine = lines.length();
+		string@ name = null;
+		
+		for( uint i = 0; i < countLine; i++ )
+		{
+			@currentLine = lines[i];
+			if( currentLine is null || currentLine.length() == 0  )
+				continue;
+			if( currentLine[0] == '#' )
+				continue;
+			
+			@data = splitEx( currentLine, "#" );
+			if( data.length() > 1 )
+				@currentLine = data[0];
+			data = splitEx( currentLine, "=" );
+			if( data.length() == 2 )
+			{
+				if( data[0] == "Fraction" )
+				{
+					set( fraction );
+					@fraction = Fraction( clearstr( data[1] ) );
+				}
+				else if( data[0] == "Players" )
+				{
+					@check = splitEx( data[1], " " );
+					tempu = check.length();
+					for( uint i = 0; i < tempu; i++ )
+					{
+						if( StrToInt( check[i], tempi ) )
+							fraction.AddPlayer( tempi );
+						else fraction.AddPlayer( GetStrHash( check[i] ) );
+					}
+				}
+				else if( data[0] == "Stats" )
+				{
+					@check = splitEx( data[1], " " );
+					tempu = check.length();
+					for( uint i = 0; i < tempu; i++ )
+					{
+						StrToInt( check[i], tempi );
+						fraction.Stats[i] = tempi;
+					}
+				}
+				else if( data[0] == "IsNpc" )
+				{
+					fraction.IsNpc = clearstr( data[1] ) == "true";
+				}
+				else if( substring( data[0], 0, 13 ) == "GameVariable_" )
+				{
+					StrToInt( data[1], tempi );
+					fraction.InitVariable( data[0], tempi );
+				}
+			}
+		}
+		
+		set( fraction );
+	}
+	
+	private void set( Fraction @fraction )
+	{
+		if( @fraction !is null )
+		{
+			Library.set( fraction.Name, fraction );
+			List.insertLast(fraction);
+			fraction.InitProccess = false;
+		}
+	}
+
+	private string@ LoadFile(string@ fileName)
+	{
+		file f;
+		if(f.open(fileName, "r") != -1)
+		{
+			string txt = "";
+			f.readString( f.getSize(), txt); 
+			f.close();
+			return @txt;
+		}
+		Log("Error loading factions! Can't open file.");
+		return null;
+	}
+	
+	private void clear()
+	{
+		List.resize(0);
+		Library.deleteAll();
+	}
+	
+	private void NpcFractionGeneration( )
+	{
+		const string ex_fraction_files = "fofraction";
+		const uint exlength = ex_fraction_files.length();
+		
+		filesystem fs;
+		fs.changeCurrentPath( fs.getCurrentPath() + "\\data\\NpcFractions\\" );
+		string code = "";
+		fs.getFiles( code );
+		
+		string@[] files = ::splitEx( code, "\n" );
+		code = "";
+		for( uint i = 0, iEnd = files.length(); i < iEnd; i++ )
+			if( files[i].length() > exlength && substring( files[i], files[i].length() - exlength, exlength ) == ex_fraction_files ) //.fofraction
+				code += LoadFile( "./data/NpcFractions/" + files[i] );
+				
+		LoadFractions( code );
+	}
+	
 	dictionary Library;
+	dictionary Relations;
 	array<Fraction@> List;
 }
 
@@ -44,58 +219,6 @@ void AddNpc( Critter& critter, int x, int y, int pid )
 void ModuleInit( )
 {
 	manager_add_module( manager, "factions", 0);
-}
-
-void RestartFactions( )
-{
-	Critter@[] crs;
-    GetAllPlayers( crs );
-    
-	for( uint i = 0, iEnd = GetAllPlayers( crs ); i < iEnd; i++ )
-        CheckFaction( crs[ i ], true );
-}
-
-void RestartFactions( Critter& cr, int p0, int p1, int p2 )
-{
-    RestartFactions( );
-}
-
-bool FactionInGame( Critter& player, Critter@ npc, int faction, int number )
-{
-	//Log( "Use delete stuff" );
-    return false;
-}
-
-void DrugsALARM( Critter& player, Critter@ npc, int chance )
-{
-	//Log( "Use delete stuff" );
-}
-
-void PackageAlarm( Critter& player, int destination )
-{
-    //Log( "Use delete stuff" );
-}
-
-void CheckFaction( Critter& cr, bool join )
-{
-    //Log( "Use delete stuff" );
-}
-
-int GetCritterColor( uint , Critter& fromCr, Critter& toCr )
-{
-	Fraction@ fromf=GetFraction(fromCr.Stat[ST_FACTION]);
-	if( @fromf != null )
-	{
-		for( uint n = 0, nMax = fromf.ColorList.length( ); n < nMax; n += 2 )
-		{
-			Log( "" + fromf.ColorList[ n ] + " " + n + " " + nMax );
-            if( fromf.ColorList[ n ] == fromf.Id )
-			{
-				return int( fromf.ColorList[ n + 1 ] );		
-			}
-		}
-	}	
-	return 0;
 }
 
 uint GetId(string& name)
@@ -133,49 +256,6 @@ array<uint> GetIDs() //exported
 	return ids;
 }
 
-array<string@> GetUnrelatedOrgList(uint id)
-{
-	array<string@> list;
-	Fraction@ fr=GetFraction(id);
-	if(!valid(fr)) return list;
-	uint enemyLength=fr.Enemies.length(),
-		 friendsLength= fr.Allies.length();
-	for(uint n=0, nMax=manager.List.length(); n<nMax; n++)
-	{
-		if(id==manager.List[n].Id) continue;
-		bool skip=false;
-		for(uint m=0; m<FR_MAX_REQUESTS; m++)
-		{
-			if(fr.Requests[m]==manager.List[n].Id)
-			{
-				skip=true;
-				break;
-			}
-		}
-		if(skip) continue;
-		for(uint m=0; m<enemyLength; m++)
-		{
-			if(fr.Enemies[m]==manager.List[n].Id)
-			{
-				skip=true;
-				break;
-			}
-		}
-		if(skip) continue;
-		for(uint m=0; m<friendsLength; m++)
-		{
-			if(fr.Allies[m]==manager.List[n].Id)
-			{
-				skip=true;
-				break;
-			}
-		}
-		if(skip) continue;
-		list.insertLast(@manager.List[n].Name);
-	}
-	return list;
-}
-
 Fraction@ GetFraction( Critter& critter )
 {
 	return GetFraction( critter.Stat[ST_FACTION]);
@@ -204,20 +284,6 @@ string@ GetName(uint id)
 
 bool Exist( string& name) { return manager.Library.exists(name); }
 
-//import bool SaveFractions() from "factions";
-bool SaveFractions() //exported
-{
-	filesystem fs;
-	file f;
-	fs.deleteFile(".\\save\\fractions.bak");
-	fs.move(".\\save\\fractions.fo", ".\\save\\fractions.bak");
-	if(f.open("./save/fractions.fo", "w")!=0) return false;
-	for(uint n=0; n<manager.List.length(); n++)
-		manager.List[n].Serialize(f);
-	f.close();
-	return true;
-}
-
 void CorruptFaction( Critter& admin, int, int, int)
 {
 	Fraction@ fraction=GetFraction(admin.Stat[ST_FACTION]);
@@ -226,40 +292,52 @@ void CorruptFaction( Critter& admin, int, int, int)
 
 void ReloadFactions( Critter& admin, int, int, int)
 {
-	LoadFractions();
+	manager.LoadFractions();
 }
 
-string@ LoadFile(string@ fileName)
+void RestartFactions( )
 {
-	file f;
-	if(f.open(fileName, "r") != -1)
+    Log( "Use delete faction stuff" );
+	Critter@[] crs;
+    GetAllPlayers( crs );
+    
+	for( uint i = 0, iEnd = GetAllPlayers( crs ); i < iEnd; i++ )
 	{
-		string txt = "";
-		f.readString( f.getSize(), txt); 
-		f.close();
-		return @txt;
+        // CheckFaction( crs[ i ], true );
 	}
-	Log("Error loading factions! Can't open file.");
-	return null;
 }
 
-//import void LoadFractions() from "factions";
-void LoadFractions() //exported
+void RestartFactions( Critter& cr, int p0, int p1, int p2 )
 {
-	uint start=GetTick();
-	manager.List.resize(0);
-	manager.Library.deleteAll();
-	string@ txt = LoadFile("./save/fractions.fo" );
-	if( txt is null ) return;
-	LoadFractions( txt );
-	Log("Loaded "+manager.List.length()+" fractions in "+(GetTick()-start)+" miliseconds.");
+    RestartFactions( );
+}
+
+bool FactionInGame( Critter& player, Critter@ npc, int faction, int number )
+{
+    Log( "Use delete faction stuff" );
+    return false;
+}
+
+void DrugsALARM( Critter& player, Critter@ npc, int chance )
+{
+    Log( "Use delete faction stuff" );
+}
+
+void PackageAlarm( Critter& player, int destination )
+{
+    Log( "Use delete faction stuff" );
+}
+
+void CheckFaction( Critter& cr, bool join )
+{
+    Log( "Use delete faction stuff" );
 }
 
 //import void AddFraction( string& name, uint leaderId) from "factions";
 void AddFraction( string& name, uint leaderId) //exported
 {
 	Critter@ player=GetCritter(leaderId);
-	if(validEngineObject(player))
+	if( @player !is null && !player.IsNotValid )
 	{
 		player.StatBase[ST_FACTION]=GetStrHash( name );
 		player.StatBase[ST_FR_LEADERSHIP]=2;
@@ -290,48 +368,8 @@ void DeleteFraction(uint id)
 			index=n;
 			continue;
 		}
-		m = fraction.Enemies.find( id );
-		if( m != -1 )
-			fraction.Enemies.removeAt( m );
-		m = fraction.Allies.find( id );
-		if( m != -1 )
-			fraction.Allies.removeAt( m );
-		m = fraction.Requests.find( id );
-		if( m != -1 )
-			fraction.Requests.removeAt( m );
 	}
 	manager.List.removeAt(index);
-}
-
-void SortFractions(uint low, uint high) //TabaK. QuickSort
-{
-	uint i=low;
-	uint j=high;
-	Fraction middle=manager.List[(low+high)/2];
-	while(i<j)
-	{
-		while(manager.List[i].Stats[FR_RATING]>middle.Stats[FR_RATING] && i<high)
-		{
-		//	Log(manager.List[i].Stats[FR_RATING]+">"+middle.Stats[FR_RATING]+"; i="+i+". Increasing");
-			i++;
-		}
-		while(manager.List[j].Stats[FR_RATING]<middle.Stats[FR_RATING] && j>low)
-		{
-		//	Log(manager.List[j].Stats[FR_RATING]+"<"+middle.Stats[FR_RATING]+"; j="+j+". Decreasing");
-			j--;
-		}
-		if(i<=j)
-		{
-			Fraction temp=manager.List[j];
-			manager.List[j]=manager.List[i];
-			manager.List[i]=temp;
-			if(i!=high) i++;
-			if(j!=low) j--;
-		}
-		else break;
-	}
-	if(low < j) SortFractions(low, j);
-    if(i < high) SortFractions(i, high);
 }
 
 array<uint>@ GetPlayersByFraction(uint orgId)
@@ -342,19 +380,6 @@ array<uint>@ GetPlayersByFraction(uint orgId)
 	retArr=fraction.GetPlayers( );
 	retArr.insertLast(orgId);
 	return retArr;
-}
-
-uint e_FractionOrder_Update(array<uint>@ values)
-{
-	uint lng=manager.List.length();
-	if(lng<2) return REAL_MINUTE(30);
-	else if(lng==2)
-	{
-		if(manager.List[1].Stats[FR_RATING]>manager.List[0].Stats[FR_RATING]) manager.List.reverse();
-		return REAL_MINUTE(30);
-	}
-	SortFractions(0, lng-1);
-	return REAL_MINUTE(30);
 }
 
 uint e_DeleteFraction(array<uint>@ values)
@@ -377,20 +402,6 @@ bool IdentifyPlayerFraction(Critter& critter )
 	return false;
 }
 
-void DrapRatingsAll()
-{
-	for( uint n = 0, nEnd = manager.List.length(); n < nEnd; n++ )
-		manager.List[n].Stats[FR_RATING]=0;
-}
-
-bool AddFactionRating(int index, int val)
-{
-	Fraction@ fraction = GetFraction( index );
-	if( fraction is null ) return false;
-	fraction.Stats[FR_RATING] += val;
-	return true;
-}
-
 string@ clearstr( string&in str )
 {
 	uint len = str.length();
@@ -401,152 +412,6 @@ string@ clearstr( string&in str )
 		str = substring( str, 1, --len );
 	}
 	return str;
-}
-
-void LoadFractions( string@ txt )
-{
-	string@[] lines = splitEx( txt, "\n" );
-	string@ currentLine = null;
-	string@[]@ data = null, check = null;
-	Fraction @fraction = null;
-	int tempi = -1;
-	uint tempu = 0, countLine = lines.length();
-	string@ name = null;
-	for( uint i = 0; i < countLine; i++ )
-	{
-		@currentLine = lines[i];
-		if( currentLine is null || currentLine.length() == 0  )
-			continue;
-		if( currentLine[0] == '#' )
-			continue;
-		
-		@data = splitEx( currentLine, "#" );
-		if( data.length() > 1 )
-			@currentLine = data[0];
-		data = splitEx( currentLine, "=" );
-		if( data.length() == 2 )
-		{
-			if( data[0] == "Fraction" )
-			{
-				if( fraction !is null )
-				{
-					manager.Library.set( fraction.Name, fraction );
-					manager.List.insertLast(fraction);
-					fraction.InitProccess = false;
-				}
-				@fraction = Fraction( clearstr( data[1] ) );
-			}
-			else if( data[0] == "Players" )
-			{
-				@check = splitEx( data[1], " " );
-				tempu = check.length();
-				for( uint i = 0; i < tempu; i++ )
-				{
-					if( StrToInt( check[i], tempi ) )
-						fraction.AddPlayer( tempi );
-					else fraction.AddPlayer( GetStrHash( check[i] ) );
-				}
-			}
-			else if( data[0] == "Requests" )
-			{
-				@check = splitEx( data[1], " " );
-				tempu = check.length();
-				for( uint i = 0; i < tempu; i++ )
-				{
-					StrToInt( check[i], tempi );
-					fraction.Requests[i] = tempi;
-				}
-			}
-			else if( data[0] == "Stats" )
-			{
-				@check = splitEx( data[1], " " );
-				tempu = check.length();
-				for( uint i = 0; i < tempu; i++ )
-				{
-					StrToInt( check[i], tempi );
-					fraction.Stats[i] = tempi;
-				}
-			}
-			else if( data[0] == "Allies" )
-			{
-				@check = splitEx( data[1], " " );
-				tempu = check.length();
-				fraction.Allies.resize( tempu );
-				for( uint i = 0; i < tempu; i++ )
-				{
-					if( StrToInt( check[i], tempi ) )
-						fraction.Allies[i] = tempi;
-					else fraction.Allies[i] = GetStrHash( check[i] );
-				}
-			}
-			else if( data[0] == "Enemies" )
-			{
-				@check = splitEx( data[1], " " );
-				tempu = check.length();
-				fraction.Enemies.resize( tempu );
-				for( uint i = 0; i < tempu; i++ )
-				{
-					if( StrToInt( check[i], tempi ) )
-						fraction.Enemies[i] = tempi;
-					else fraction.Enemies[i] = GetStrHash( check[i] );
-				}
-			}
-			else if( data[0] == "KnownLocs" )
-			{
-				@check = splitEx( data[1], " " );
-				tempu = check.length();
-				fraction.KnownLocs.resize( tempu );
-				for( uint i = 0; i < tempu; i++ )
-				{
-					if( StrToInt( check[i], tempi ) )
-						fraction.KnownLocs[i] = tempi;
-					else fraction.KnownLocs[i] = GetStrHash( check[i] );
-				}
-			}
-			else if( data[0] == "IsNpc" )
-			{
-				fraction.IsNpc = clearstr( data[1] ) == "true";
-			}
-			else if( data[0] == "ColorList" )
-			{
-				@check = splitEx( data[1], " " );
-				tempu = check.length();
-				fraction.ColorList.resize( tempu );
-				for( uint i = 0; i < tempu; i++ )
-				{
-					StrToInt( check[i], tempi );
-					fraction.ColorList[i] = tempi;
-				}
-			}
-			else if( substring( data[0], 0, 13 ) == "GameVariable_" )
-			{
-				StrToInt( data[1], tempi );
-				fraction.InitVariable( data[0], tempi );
-			}
-		}
-	}
-	if( fraction !is null )
-	{
-		manager.Library.set( fraction.Name, fraction );
-		manager.List.insertLast(fraction);
-		fraction.InitProccess = false;
-	}
-}
-
-void NpcFractionGeneration( )
-{
-	const string ex_fraction_files = "fofraction";
-	filesystem fs;
-	fs.changeCurrentPath( fs.getCurrentPath() + "\\data\\NpcFractions\\" );
-	string code = "";
-	fs.getFiles( code );
-	
-	string@[] files = ::splitEx( code, "\n" );
-	code = "";
-	for( uint i = 0, iEnd = files.length(); i < iEnd; i++ )
-		if( files[i].length() > ex_fraction_files.length() && substring( files[i], files[i].length() - ex_fraction_files.length(), ex_fraction_files.length() ) == ex_fraction_files ) //.fofraction
-			code += LoadFile( "./data/NpcFractions/" + files[i] ); 
-	LoadFractions( code );
 }
 
 import bool isGM( Critter& player ) from "gm";
