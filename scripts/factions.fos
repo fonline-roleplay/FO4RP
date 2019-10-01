@@ -5,6 +5,7 @@
 
 import uint GetAllPlayers( Critter@[]& crs ) from "manager";
 import uint16 GetVersionWorldSave( ::string@ time ) from "main";
+import bool isGM( Critter& player ) from "gm";
 
 _Manager manager;
 
@@ -32,7 +33,7 @@ class DefaultRelation : IRelations
 	private int _value;
 	
 	IRelations@ _up;
-	IRelations@ _down;	
+	IRelations@ _down;
 }
 
 class _Manager : iManagerModule, iManager_world_save
@@ -120,6 +121,10 @@ class _Manager : iManagerModule, iManager_world_save
 					set( fraction );
 					@fraction = Fraction( clearstr( data[1] ) );
 				}
+				else if( @fraction is null )
+				{
+					Log( "Error parse faction file, faction not valide <line:№" + i + ":#" + currentLine + ">" );
+				}
 				else if( data[0] == "Players" )
 				{
 					@check = splitEx( data[1], " " );
@@ -145,10 +150,19 @@ class _Manager : iManagerModule, iManager_world_save
 				{
 					fraction.IsNpc = clearstr( data[1] ) == "true";
 				}
-				else if( substring( data[0], 0, 13 ) == "GameVariable_" )
+				else if( substring( data[0], 0, 12 ) == "GameVariable" )
 				{
 					StrToInt( data[1], tempi );
 					fraction.InitVariable( data[0], tempi );
+				}
+				else if( substring( data[0], 0, 8 ) == "Relation" )
+				{
+					if( Relations.exists( data[1] ) )
+					{
+						IRelations@ relation = null;
+						if( Relations.get( data[1], @relation ) )
+							fraction.SetRelation( data[0], @relation );
+					}
 				}
 			}
 		}
@@ -207,12 +221,12 @@ class _Manager : iManagerModule, iManager_world_save
 	
 	dictionary Library;
 	dictionary Relations;
-	array<Fraction@> List;
+	Fraction@[] List;
 }
 
 void AddNpc( Critter& critter, int x, int y, int pid )
 {
-	int[] params = {ST_FACTION, GetStrHash( "Template" ) };
+	int[] params = { ST_FACTION, GetStrHash( "Template" ) };
 	critter.GetMap().AddNpc( pid, x, y, 0, params, null, null );
 }
 
@@ -223,13 +237,13 @@ void ModuleInit( )
 
 uint GetId(string& name)
 {
-	if(!manager.Library.exists(name)) return 0;
+	if(!Exist(name)) return 0;
 	return GetStrHash( name );
 }
 
-array<string@> GetList(uint exclude)
+string@[] GetList(uint exclude)
 {
-	array<string@> list;
+	string@[] list;
 	for( uint n=0, nMax=manager.List.length(); n<nMax; n++ )
 	{
 		if(manager.List[n].Id!=exclude)
@@ -238,19 +252,19 @@ array<string@> GetList(uint exclude)
 	return list;
 }
 
-//import array<string@> GetList() from "factions";
-array<string@> GetList() //exported
+//import string@[] GetList() from "factions";
+string@[] GetList() //exported
 {
-	array<string@> list = {};
+	string@[] list = {};
 	manager.Library.keys(list);
 	return list;
 }
 
-//import array<uint> GetIDs() from "factions";
-array<uint> GetIDs() //exported
+//import uint[] GetIDs() from "factions";
+uint[] GetIDs() //exported
 {
-	array<string@> list = GetList();
-	array<uint> ids = {};
+	string@[] list = GetList();
+	uint[] ids = {};
 	for( uint i = 0; i < list.length(); i++ )
 		ids.insertLast( GetId( list[i] ) );
 	return ids;
@@ -278,59 +292,24 @@ Fraction@ GetFraction(string& name)
 string@ GetName(uint id)
 {
 	Fraction@ fr=GetFraction(id);
-	if(!valid(fr)) return "";
+	if( fr is null ) return "";
 	return fr.Name;
 }
 
-bool Exist( string& name) { return manager.Library.exists(name); }
+bool Exist( string& name)
+{
+	return manager.Library.exists(name);
+}
 
 void CorruptFaction( Critter& admin, int, int, int)
 {
-	Fraction@ fraction=GetFraction(admin.Stat[ST_FACTION]);
+	Fraction@ fraction = GetFraction(admin.Stat[ST_FACTION]);
 	fraction.Stats.resize(1);
 }
 
 void ReloadFactions( Critter& admin, int, int, int)
 {
 	manager.LoadFractions();
-}
-
-void RestartFactions( )
-{
-    Log( "Use delete faction stuff" );
-	Critter@[] crs;
-    GetAllPlayers( crs );
-    
-	for( uint i = 0, iEnd = GetAllPlayers( crs ); i < iEnd; i++ )
-	{
-        // CheckFaction( crs[ i ], true );
-	}
-}
-
-void RestartFactions( Critter& cr, int p0, int p1, int p2 )
-{
-    RestartFactions( );
-}
-
-bool FactionInGame( Critter& player, Critter@ npc, int faction, int number )
-{
-    Log( "Use delete faction stuff" );
-    return false;
-}
-
-void DrugsALARM( Critter& player, Critter@ npc, int chance )
-{
-    Log( "Use delete faction stuff" );
-}
-
-void PackageAlarm( Critter& player, int destination )
-{
-    Log( "Use delete faction stuff" );
-}
-
-void CheckFaction( Critter& cr, bool join )
-{
-    Log( "Use delete faction stuff" );
 }
 
 //import void AddFraction( string& name, uint leaderId) from "factions";
@@ -341,9 +320,9 @@ void AddFraction( string& name, uint leaderId) //exported
 	{
 		player.StatBase[ST_FACTION]=GetStrHash( name );
 		player.StatBase[ST_FR_LEADERSHIP]=2;
-		player.RunClientScript("client_fraction_gui@__Scr_ReInit", leaderId,2,0,null,null);
 	}
 	else return;
+	
 	Fraction fraction(name);
 	manager.List.insertLast(@fraction);
 	fraction.AddPlayer( leaderId );
@@ -372,17 +351,19 @@ void DeleteFraction(uint id)
 	manager.List.removeAt(index);
 }
 
-array<uint>@ GetPlayersByFraction(uint orgId)
+uint[]@ GetPlayersByFraction(uint orgId)
 {
-	array<uint> retArr;
+	uint[] retArr;
 	Fraction@ fraction = GetFraction(orgId);
-	if( fraction is null ) retArr;
-	retArr=fraction.GetPlayers( );
-	retArr.insertLast(orgId);
+	if( fraction !is null )
+	{
+		retArr = fraction.GetPlayers( );
+		retArr.insertLast(orgId);
+	}
 	return retArr;
 }
 
-uint e_DeleteFraction(array<uint>@ values)
+uint e_DeleteFraction( uint[]@ values )
 {
 	DeleteFraction(values[0]);
 	return 0;
@@ -414,8 +395,6 @@ string@ clearstr( string&in str )
 	return str;
 }
 
-import bool isGM( Critter& player ) from "gm";
-
 void unsafe_ListFactions( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
 {
 	if( isGM( player ) )
@@ -426,3 +405,11 @@ void ListFactions( Critter& player, int param0, int param1, int param2, string@ 
 {
 	player.Say( SAY_NETMSG, "Функционал находится в процессе разработки." );
 }
+
+// Old staff, no use
+void RestartFactions( ){}
+void RestartFactions( Critter& cr, int p0, int p1, int p2 ){ RestartFactions( ); }
+bool FactionInGame( Critter& player, Critter@ npc, int faction, int number ){ return false; }
+void DrugsALARM( Critter& player, Critter@ npc, int chance ){}
+void PackageAlarm( Critter& player, int destination ){}
+void CheckFaction( Critter& cr, bool join ){}
