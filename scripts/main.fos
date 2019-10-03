@@ -3540,105 +3540,142 @@ void karma_voting( Critter& crFrom, Critter& crTo, bool valUp )
 // To start working set flag LOOK_CHECK_SCRIPT to __LookChecks global var.
 // Return true to allow see one critter another, false to disallow.
 // Note: CRITTER_EVENT_SHOW_CRITTER_X, CRITTER_EVENT_HIDE_CRITTER_X is not processed.
-bool check_look( Map& map, Critter& cr, Critter& opponent )
+
+class check_look_data
 {
-	// if( cr.IsNpc() && opponent.IsNpc() ) return true; //НПЦ друг друга всегда видят. Это снижает 90% нагрузки на сервер.
-	// Cracker: В перспективе это наоборот увеличит нагрузку, кроме того ломает логику работы скриптов ии.
-	
-    if( map.GetProtoId() == MAP_UTILITY_START && opponent.IsPlayer() && cr.IsPlayer() && !isGM( cr ) )
-        return false;
-
-    uint16 hexX = cr.HexX, hexY = cr.HexY, oppHexX = opponent.HexX, oppHexY = opponent.HexY;
-
-    int   dist = int( GetDistantion( hexX, hexY, oppHexX, oppHexY ) );
-
-	if( cr.Param[ QST_VISION ] >= dist && opponent.Param[ QST_INVIS ] <= dist )
-		return true;
-    if( opponent.Param[ QST_INVIS ] != 0 && ( opponent.Param[ QST_INVIS ] - 1 ) < dist )// && ( !( cr.IsPlayer() ) || cr.IsPlayer() && !isGM( cr ) ) )
-        return false;
-    if( opponent.Param[ QST_INVIS ] > dist || cr.Param[ QST_VISION ] >= dist )
-        return true;
-
-		//Обзор Восприятие
-	uint maxView = 10 + cr.Stat[ ST_PERCEPTION ] * 5,
-		 maxHear = 5 + cr.Stat[ ST_PERCEPTION ] * 2;
-
-    if( cr.IsNpc() )
-    {
-            maxHear += 20;
-    }
-
-    bool isView = true, isHear = true, isRunOpp = opponent.IsRuning, isRunCr = cr.IsRuning;
-
-    int8 startDir = GetDirection( hexX, hexY, oppHexX, oppHexY );
-
-    int8 lookDir = abs( startDir - cr.Dir ); //Направление
-    if( lookDir > 3 )
-        lookDir = 6 - lookDir;
-
-    switch( lookDir )
-    {
-    case 0:
-        maxView *= 1;
-		maxHear *= 0.8;
-        break;
-    case 1:
-        maxView *= 0.8;
-		maxHear *= 1;
-        break;
-    case 2:
-        maxView *= 0.5;
-		maxHear *= 0.8;
-        break;
-    case 3:
-        maxView *= 0.4;
-		maxHear *= 0.8;
-        break;
-	default:
-	break;
-	}
-	
-    maxHear *= ( isRunOpp ? 3 : 1 ) * ( isRunCr ? 0.8 : 1 ); //слышимость при беге
-	
-    uint16 wallHexX = oppHexX, wallHexY = oppHexY;
-
-    map.GetHexCoord( hexX, hexY, wallHexX, wallHexY, 0.0f, maxView );
-    int walldist = int( GetDistantion( hexX, hexY, wallHexX, wallHexY ) );
-
-    bool isOutWall = dist > walldist;
-    if( isOutWall )
+	bool check( Map& map, Critter& cr, Critter& opponent )
 	{
-		isView = false;
-		switch( cr.Stat[ST_PERCEPTION])
+		hexX = cr.HexX;
+		hexY = cr.HexY;
+		oppHexX = opponent.HexX;
+		oppHexY = opponent.HexY;
+
+		dist = int( GetDistantion( hexX, hexY, oppHexX, oppHexY ) );
+		crVision = cr.ParamBase[ QST_VISION ];
+		opponentInvis = opponent.ParamBase[ QST_INVIS ];
+		perception = cr.Stat[ ST_PERCEPTION ];
+
+		if( crVision >= dist && opponentInvis <= dist )
+			return true;
+		if( opponentInvis != 0 && ( opponentInvis - 1 ) < dist )// && ( !( cr.IsPlayer() ) || cr.IsPlayer() && !isGM( cr ) ) )
+			return false;
+		if( opponentInvis > dist || crVision >= dist )
+			return true;
+
+		if( cr.IsNpc() ) // упрощенный расчет для нпц, учитывает только дистанцию
 		{
+			if( cr.IsDead() ) return false;
+			if( cr.GetProtoId() >= 2200 )
+				return uint( 10 + perception * 5 ) >= GetDistantion( cr.HexX, cr.HexY, opponent.HexX, opponent.HexY );		
+		}
+
+			//Обзор Восприятие
+		maxView = 10 + perception * 5;
+		maxHear = 5 + perception * 2;
+
+		if( cr.IsNpc() )
+			maxHear += 20;
+
+		isView = true;
+		isHear = true;
+
+		startDir = GetDirection( hexX, hexY, oppHexX, oppHexY );
+		lookDir = abs( startDir - cr.Dir ); //Направление
+		if( lookDir > 3 )
+			lookDir = 6 - lookDir;
+
+		switch( lookDir )
+		{
+		case 0:
+			// maxView *= 1;
+			maxHear *= 0.8;
+			break;
 		case 1:
+			maxView *= 0.8;
+			// maxHear *= 1;
+			break;
 		case 2:
+			maxView *= 0.5;
+			maxHear *= 0.8;
+			break;
 		case 3:
-		case 4:
-			maxHear *= 0.1;
-			break;
-		case 5:
-		case 6:
-		case 7:
-		case 8:
-			maxHear *= 0.3;
-			break;
-		case 9:
-		case 10:
-			maxHear *= 0.4;
+			maxView *= 0.4;
+			maxHear *= 0.8;
 			break;
 		default:
 		break;
 		}
+		
+		maxHear *= ( opponent.IsRuning ? 3 : 1 ) * ( cr.IsRuning ? 0.8 : 1 ); //слышимость при беге
+		
+		wallHexX = oppHexX;
+		wallHexY = oppHexY;
+		map.GetHexCoord( hexX, hexY, wallHexX, wallHexY, 0.0f, maxView );
+		if( dist > int( GetDistantion( hexX, hexY, wallHexX, wallHexY ) ) )
+		{
+			isView = false;
+			switch( perception )
+			{
+			case 1:
+			case 2:
+			case 3:
+			case 4:
+				maxHear *= 0.1;
+				break;
+			case 5:
+			case 6:
+			case 7:
+			case 8:
+				maxHear *= 0.3;
+				break;
+			case 9:
+			case 10:
+				maxHear *= 0.4;
+				break;
+			default:
+			break;
+			}
+		}
+
+		if( dist > int( maxView ) ) isView = false;
+		if( dist > int( maxHear ) ) isHear = false;
+
+		return ( !isView && !isHear ? false : true );
 	}
 
-    if( dist > int( maxView ) )
-        isView = false;
+	private int dist;
+	private int crVision;
+	private int opponentInvis;
+	private int perception;
+	
+	private bool isView;
+	private bool isHear;
+	
+	private uint16 hexX;
+	private uint16 hexY;
+	private uint16 oppHexX;
+	private uint16 oppHexY;
+	private uint16 wallHexX;
+	private uint16 wallHexY;
+	
+	private uint maxView;
+	private uint maxHear;
+	
+	private int8 startDir;
+	private int8 lookDir;
+}
 
-    if( dist > int( maxHear ) )
-        isHear = false;
+check_look_data LookData; // Выделяем память для обработки чек лука глобально, чтобы не выделять ее каждый раз.
 
-    return ( !isView && !isHear ? false : true );
+bool check_look( Map& map, Critter& cr, Critter& opponent )
+{
+	// if( cr.IsNpc() && opponent.IsNpc() ) return true; //НПЦ друг друга всегда видят. Это снижает 90% нагрузки на сервер.
+	// Cracker: В перспективе это наоборот увеличит нагрузку, кроме того ломает логику работы скриптов ии.
+
+    if( map.GetProtoId() == MAP_UTILITY_START && opponent.IsPlayer() && cr.IsPlayer() && !isGM( cr ) )
+        return false;
+
+    return LookData.check( map, cr, opponent );
 }
 
 void chlook( Critter& player, int p0, int p1, int p2 )
