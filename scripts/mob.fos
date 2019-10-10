@@ -64,7 +64,7 @@ void LOG_MOB(Critter& cr, string& str) {
 #define DISTANCE_ATTACK          ( 10 ) // расстояние начала атаки
 #define DISTANCE_GROUP_RADIUS    ( 15 ) // расстояние на котором группа видит друг друга (и помогает атаковать противника)
 #define DISTANCE_AGGRO		  # (cr)	( ( cr.StatBase[ST_STRENGTH] + 2 ) * 2 )
-#define DISTANCE_UNAGGRO	  # (cr)	( ( cr.StatBase[ST_STRENGTH] + 2 ) * 3 )  
+#define DISTANCE_UNAGGRO	  # (cr)	( ( cr.StatBase[ST_STRENGTH] + 2 ) * 4 )
 #define DISTANCE_GO_HOME         ( 15 ) // расстояние от дома при котором моб идет домой
 #define MAX_FURY                 ( 2 )  // сколько раз нужно разозлить НПС чтобы он стал игнорить границы обитания
 #define DISTANCE_HELP            ( 35 ) // расстояние помощи
@@ -181,6 +181,8 @@ void _MobInit( Critter& npc, bool firstTime )
     npc.SetEvent( CRITTER_EVENT_IDLE,        "_Idle" );
     npc.SetEvent( CRITTER_EVENT_MESSAGE,     "_OnMessage" );
     npc.SetEvent( CRITTER_EVENT_PLANE_BEGIN, "_PlaneBegin" );
+	npc.SetEvent( CRITTER_EVENT_PLANE_RUN, 	 "_PlaneRun" );
+	npc.SetEvent( CRITTER_EVENT_PLANE_END, 	 "_PlaneEnd" );
 	
     npc.SetEvent( CRITTER_EVENT_SMTH_DEAD,   null ); //"_Death" );
     npc.SetEvent( CRITTER_EVENT_DEAD,        null ); //"_MyDeath");
@@ -533,12 +535,13 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
         if( not valid( target ) )
             return;
 		uint dist = ::GetCrittersDistantion( npc, target ) ;
-		uint max_dist = DISTANCE_GROUP_RADIUS;
+		uint max_dist = DISTANCE_UNAGGRO(npc);
 		LOG_MOB(npc, "_OnMessage, dist: "+dist+" max_dist: "+max_dist);
         if( dist >= max_dist )
             return;
 		LOG_MOB(npc, "_OnMessage, AddAttackPlane");
-		AddAttackPlane( npc, 0, target );
+		//AddAttackPlane( npc, 0, target );
+		AttackOrFind(npc, target);
     }
     else if( message == MSG_GROUP_FURY )
     {
@@ -729,6 +732,7 @@ int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Ite
         {
 			LOG_MOB(npc, "_PlaneBegin, REASON_FOUND_IN_ENEMY_STACK || REASON_FROM_SCRIPT");
             uint distantion = ::GetCrittersDistantion( npc, target );
+			bool can_see = npc.IsSee(target);
             if( distantion <= DISTANCE_UNAGGRO(npc) )
             {
 				LOG_MOB(npc, "_PlaneBegin, distantion <= DISTANCE_UNAGGRO(npc)");
@@ -750,13 +754,13 @@ int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Ite
 
 				//npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
 
-				if( npc.IsSee(target) ) {
+				/*if( can_see ) {
 					return PLANE_KEEP;
 				} else {
-					AddWalkPlane( npc, 0, target.HexX, target.HexY, Random( 0, 5 ), true, 0);
+					AddWalkPlane( npc, 0, target.HexX, target.HexY, Random( 0, 5 ), true, 1);
 					return PLANE_KEEP;
-				}
-                // зовем друзей
+				}*/
+                return PLANE_KEEP;
             }
             else
             {
@@ -765,9 +769,30 @@ int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Ite
                 return PLANE_DISCARD;
             }
         }
-    }
+    } else if ( reason == REASON_FROM_SCRIPT ) {
+		return PLANE_KEEP;
+	}
     return PLANE_RUN_GLOBAL;
 }
+
+int _PlaneRun( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r1, uint& r2 ) {
+	LOG_MOB(npc, "_PlaneRun, type: "+plane.Type+ ", reason: "+reason);
+	return PLANE_RUN_GLOBAL;
+}
+
+int _PlaneEnd( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem ) {
+	LOG_MOB(npc, "_PlaneEnd, type: "+plane.Type+ ", reason: "+reason);
+	return PLANE_RUN_GLOBAL;
+}
+
+void AttackOrFind(Critter& self, Critter& target) {
+	if( self.IsSee(target) ) {
+		AddAttackPlane( self, 0, target );
+	} else {
+		AddWalkPlane( self, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, Random( 0, 5 ), true, 1);
+	}
+}
+
 
 // CRITTER_EVENT_ATTACKED
 bool _Attacked( Critter& npc, Critter& attacker )
@@ -775,7 +800,7 @@ bool _Attacked( Critter& npc, Critter& attacker )
 	LOG_MOB(npc, "Attacked");
 	if( int( attacker.Id ) == npc.StatBase [ST_FOLLOW_CRIT] )
 	{
-		LOG_MOB(npc, "Attackint( attacker.Id ) == npc.StatBase [ST_FOLLOW_CRIT]ed");
+		LOG_MOB(npc, "Attackint( attacker.Id ) == npc.StatBase [ST_FOLLOW_CRIT]");
         npc.EraseEnemyFromStack( attacker.Id );
         EraseAttackPlane( npc, attacker );
 		return true;
@@ -786,7 +811,7 @@ bool _Attacked( Critter& npc, Critter& attacker )
     // npc.SendMessage( MSG_GROUP_FURY, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
     // зовем друзей
     npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
-	AddAttackPlane( npc, 0, attacker );
+	AttackOrFind(npc, attacker);
 
     // if( npc.VarFear <= npc.VarMaxFear && npc.Stat[ ST_CURRENT_HP ] < npc.Stat[ ST_MAX_LIFE ] / 5 )
         // npc.VarFear = npc.VarMaxFear + 1;
