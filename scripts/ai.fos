@@ -13,22 +13,19 @@ class _AiManager : iManagerModule, iAiManager, iManager_critter_init, iManager_c
 	_AiManager()
 	{
 		AddStartCallback( "ai", "Start" );
+		@BaseBestCreater = DefaultCreater();
 	}
 
 	bool manager_init() override
 	{
-		Set( BaseAi() );
+		Set( CreateAi( null ) );
 		return true;
 	}
 	
 	bool global_critter_init( Critter& critter, bool firstTime ) override
 	{
-		if( critter.IsNpc() )
-		{
-			iAI@ result = BaseAi( critter );
-			if( !Collector.exists( "" + critter.Id ) )
-				Collector.set( "" + critter.Id, @result );
-		}
+		if( critter.IsNpc() && !Collector.exists( "" + critter.Id ) )
+			Set( critter, CreateAi( critter ) );
 		return true;
 	}
 	
@@ -42,58 +39,20 @@ class _AiManager : iManagerModule, iAiManager, iManager_critter_init, iManager_c
 	bool global_critter_attacked( Critter& critter, Critter& attacker ) override
 	{
 		Critter@[] critters;
+		Critter@ target = null, npc = null;
+		iAI@ ai = null;
 		for( uint i = 0, j = critter.GetCritters( true, FIND_LIFE_AND_KO | FIND_ONLY_NPC, critters ); i < j; i++ )
-			npc_look_attack( critters[i], critter, attacker );
-		
-		return true;
-	}
-	
-	void npc_look_attack( Critter& npc, Critter& critter, Critter& attacker )
-	{
-		iAI@ ai = Get(npc);
-		if( ai !is null )
 		{
-			int critterPrior = ai.ProtectedRate( critter );
-			int attackerPrior = ai.ProtectedRate( attacker );
-			Critter@ target = null;
-			
-			switch( attackerPrior )
+			@npc = critters[i];
+			@ ai = Get(npc);
+			if( ai !is null )
 			{
-			    case Relation_War:
-				{
-				    @target = attacker;
-				} break;
-			    case Relation_Dislike:
-				{
-				    if( critterPrior >= Relation_Like )
-					@target = attacker;
-				    else if( critterPrior == Relation_War )
-					@target = critter;
-				} break;
-			    case Relation_Neutral:
-				{
-				    if( critterPrior == Relation_War )
-					@target = critter;
-				    else if( critterPrior == Relation_Ally )
-					@target = attacker;
-				} break;
-			    case Relation_Like:
-				{
-				    if( critterPrior <= Relation_Dislike )
-					@target = critter;
-				    else if( critterPrior == Relation_Ally )
-					@target = attacker;
-				} break;
-			    case Relation_Ally:
-				{
-				    if( critterPrior <= Relation_Neutral )
-					@target = critter;
-				} break;
-			    default: break;
+				@target = ai.LookAttack( critter, attacker );
+				if( target !is null )
+					npc_look_enemy( npc, target, ai );
 			}
-			if( target !is null )
-				npc_look_enemy( npc, target, ai );
 		}
+		return true;
 	}
 	
 	bool global_critter_idle( Critter& critter ) override
@@ -106,12 +65,16 @@ class _AiManager : iManagerModule, iAiManager, iManager_critter_init, iManager_c
 		uint countlook = critter.GetCritters( false, FIND_LIFE_AND_KO, critters );
 		for( uint i = 0; i < countlook; i++ )
 			npc_look_critter( critter, critters[i], ai );
+			
+		if( critter.IsNoPlanes( ) )
+		{
+			// ToDo: ходьба
+		}			
 		return true;
 	}
 	
 	void npc_look_critter( Critter& npc, Critter& critter, iAI@ ai )
-	{		
-		// ToDo:
+	{
 		if( ai.IsEnemy( critter ) )
 			npc_look_enemy( npc, critter, ai );
 	}
@@ -135,7 +98,7 @@ class _AiManager : iManagerModule, iAiManager, iManager_critter_init, iManager_c
 		
 		if( !Collector.exists( "" + critter.Id ) )
 		{
-			iAI@ result = BaseAi( critter );
+			iAI@ result = CreateAi( critter );
 			Collector.set( "" + critter.Id, @result );
 			return result;
 		}
@@ -154,7 +117,9 @@ class _AiManager : iManagerModule, iAiManager, iManager_critter_init, iManager_c
 	
 	void Set( Critter& critter, iAI@ ai )
 	{
-		
+		if( ai !is null )
+			Collector.set( "" + critter.Id, @ai );
+		else Collector.delete( "" + critter.Id );
 	}
 	
 	iAI@ Get( const string&in name ) override
@@ -171,8 +136,33 @@ class _AiManager : iManagerModule, iAiManager, iManager_critter_init, iManager_c
 		return result;
 	}
 	
+	void AddAiCreater( iAICreater@ creater )
+	{
+		AICreaters.insertLast( creater );
+	}
+	
+	iAICreater@ GetBestCreater( Critter@ critter )
+	{
+		iAICreater@ creater = null;
+		iAICreater@ best = BaseBestCreater;
+		for( uint i = 0, iend = AICreaters.length(); i < iend; i++ )
+		{
+			@creater = AICreaters[i];
+			if( creater.IsBest( best, critter ) && ( best is null || !best.IsBest( creater, critter ) ) ) 
+				@best = creater;
+		}
+		return @best;
+	}
+	
+	iAI@ CreateAi( Critter@ critter )
+	{
+		return GetBestCreater( critter ).CreateAi( critter );
+	}
+	
 	private iAI@[] List;
 	private dictionary Collector;
+	private iAICreater@[] AICreaters;
+	private iAICreater@ BaseBestCreater;
 }
 
  _AiManager master;
@@ -181,14 +171,34 @@ iAiManager@ get_AiManager()
 	return @master;
 }
 
+class DefaultCreater : iAICreater
+{
+	iAI@ CreateAi( Critter@ critter ) override
+	{
+		return BaseAi( critter );
+	}
+	
+	bool IsBest( iAICreater@ creater, Critter@ critter ) override
+	{
+		return creater is null;
+	}
+}
+
 class BaseAi : iAI
 {
-	BaseAi( Critter& critter )
+	BaseAi( Critter@ critter )
 	{
-		Initialize( critter );
+		if( critter !is null )
+			Initialize( critter );
+	}
+	
+	void Initialize( Critter& critter )
+	{
+		@npc = critter;
+		get_fraction();
 	}
 
-	bool IsEnemy( Critter& target )	// if target is enemy return true else return false 
+	bool IsEnemy( Critter& target ) override	// if target is enemy return true else return false 
 	{
 		if( npc.GetProtoId() < 2200 && target.GetProtoId() >= 2200 )
 			return true;
@@ -197,55 +207,83 @@ class BaseAi : iAI
 		return GetFractionRelation( fraction, target ).Value == Relation_War;
 	}
 	
-	int ProtectedRate( Critter& target )		// return priority protection for target
+	int ProtectedRate( Critter& target )
 	{
 		if( @fraction is null )
 			return 0;
 		return GetFractionRelation( fraction, target ).Value;
 	}
 	
-	void Initialize( Critter& critter )
-	{
-		@npc = critter;
-		get_fraction();
-	}
-	
-	uint GetWorkCritters( Critter@[] @critters, Critter& critter )	// get critters for further worked, return count critters
-	{
-		return 0;
-	}
-	
-	uint GetTeamCritters( Critter& critter, Critter@[]@ critters )
-	{
-		return 0;
-	}
-	
-	bool AddAttackPlane( Critter& critter, Critter& target )
+	bool AddAttackPlane( Critter& critter, Critter& target ) override
 	{
 		return ::AddAttackPlane( critter, 0, target );
 	}
 	
-	bool get_IsIdleWalk( )
+	Critter@ LookAttack( Critter& critter, Critter& attacker ) override
 	{
-		return true;
+		int critterPrior = ProtectedRate( critter );
+		int attackerPrior = ProtectedRate( attacker );
+		Critter@ target = null;
+			
+		switch( attackerPrior )
+		{
+		    case Relation_War:
+			{
+			    @target = attacker;
+			} break;
+		    case Relation_Dislike:
+			{
+			    if( critterPrior >= Relation_Like )
+					@target = attacker;
+			    else if( critterPrior == Relation_War )
+					@target = critter;
+			} break;
+		    case Relation_Neutral:
+			{
+			    if( critterPrior == Relation_War )
+					@target = critter;
+			    else if( critterPrior == Relation_Ally )
+					@target = attacker;
+			} break;
+		    case Relation_Like:
+			{
+			    if( critterPrior <= Relation_Dislike )
+					@target = critter;
+			    else if( critterPrior == Relation_Ally )
+					@target = attacker;
+			} break;
+		    case Relation_Ally:
+			{
+			    if( critterPrior <= Relation_Neutral )
+					@target = critter;
+			} break;
+		    default: break;
+		}
+		
+		return target;
 	}
 	
-	bool get_IsControllerEnemy( )
+	void SayDebug( string& say )
+	{
+		npc.Say( SAY_NORM_ON_HEAD, say );
+	}
+	
+	bool get_IsIdleWalk( ) override
 	{
 		return false;
 	}
 	
-	const string get_Name( )
+	const string get_Name( ) override
 	{
 		return "0";
 	}
 	
-	iAI @Copy( Critter& critter )
+	iAI @Copy( Critter& critter ) override
 	{
 		return BaseAi( critter );
 	}
 	
-	Fraction@ get_fraction( )
+	Fraction@ get_fraction( ) override
 	{
 		if( npc.Stat[ST_FACTION] != tempfractionname )
 		{
