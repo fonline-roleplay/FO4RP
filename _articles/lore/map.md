@@ -4,7 +4,7 @@ title: Регион игровых действий
 permalink: /lore/region
 ---
 
-# Залив Сан-Франциско, лето 2247
+# Перфекшен, лето 2247
 
 ![Перфекшен](https://snipboard.io/X8tWfT.jpg){: .left} 
 
