@@ -1,0 +1,346 @@
+#include "_macros.fos"
+#include "_colors.fos"
+
+///Утилиты, которые нужно будет вынести в отдельный модуль.
+
+//#define TEST_INFO	#(cr)	( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
+bool testInfo( Critter& cr, string text, uint8 saytype = 11 /*SAY_NETMSG*/, bool result = false )
+{
+	if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
+		cr.Say( saytype, text );
+	return result;
+}
+
+bool Find( Critter@& link, int id )
+{
+	if( id == 0 ) return false;
+	@link = GetCritter( uint( id ) );	
+	return valid( link );
+}
+
+import bool isGM( Critter& player ) from "gm";
+import uint GetAllPlayers( Critter@[]& crs ) from "manager";
+///Функционал, используемый в модуле, но не относящийся к его прямому назначению. Проще говоря - будущий импорт.
+
+//Отменяет или создает связь (следование) между существами. Нужно для визуального отображения стрелочек над существами.
+bool unbound( Critter& owner, int targetID ) { return bound( owner, targetID, false ); }
+bool bound( Critter& owner, int targetID, bool set = true )
+{
+	//"Пустой" вызов ф-ии.
+	if( targetID == 0 ) return true;
+	
+	Critter@ target;
+	if( !Find( target, targetID ) )
+		return testInfo( owner, "Invalid target id: " + targetID );
+
+	target.StatBase[ ST_FOLLOW_CRIT ] = ( set ? int( owner.Id ) : 0 );
+	return true;
+}
+
+///Основная логика модуля.
+
+//RunServerScriptUnsafe( "rp_chat@unsafe_SetChatTarget", targetId, 0, 0, null, null );
+void unsafe_SetChatTarget( Critter& cr, int id, int, int, string@, int[]@ )
+{
+	if( !SetChatTarget( cr, uint( id ) ) )
+		testInfo( cr, "Failed to set chat target: " + cr.Id + " " + id );
+}
+
+//Устанавливает новую цель для "ролевых возможностей чата": серого текста или речи за целевое существо.
+//Используемая "обратная связь" отвечает за возможность говорить за ЛЮБЫХ животных у ГМов, и СВОИХ животных у обычных игроков.
+bool SetChatTarget( Critter& cr, uint id )
+{	
+	cr.ParamBase[ CR_TALKING_TARGET_ID ] = id;
+	
+	if( isGM( cr ) && cr.Id != id ) //Если ГМ и не сам себя.
+	{
+		//Отменяет обратную связь со старым существом.
+		unbound( cr, cr.StatBase[ ST_FOLLOW_CRIT ] );
+
+		//Создает обратную связь с новым существом.
+		bound( cr, cr.ParamBase[ CR_TALKING_TARGET_ID ] );
+	}
+
+	//Для визульного отображения - стрелочки над целью.
+	cr.StatBase[ ST_FOLLOW_CRIT ] = cr.ParamBase[ CR_TALKING_TARGET_ID ];
+	
+	return true;
+}
+
+//RunServerScriptUnsafe( "rp_chat@unsafe_SayChatMessage", sayType, hexX, hexY, message, null );
+void unsafe_SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message, int[]@ )
+{
+	if( !SayChatMessage( cr, sayType, x, y, message ) )
+		testInfo( cr, "Failed to say chat message: " + cr.Id + " " + sayType + " " + x + " " + y + " '" + message + "'" );
+}
+
+bool SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message )
+{
+	bool isNear = ( ABS( x - cr.HexX ) < 3 && ABS( y - cr.HexY ) < 3 );
+
+	//TODO: debug only, remove after successfull public tests
+	testInfo( cr, 	( isGM( cr ) ? "" : "!" ) + "GM " + 
+					cr.ParamBase[ CR_TALKING_TARGET_ID ] + " " + cr.StatBase[ ST_FOLLOW_CRIT ] + " " + cr.Stat[ ST_LEVEL ] + 
+					" [" + x + ", " + y + " ] [" + cr.HexX + ", " + cr.HexY + " ] " + 
+					( isNear ? "" : "!" ) + "Near" );
+	
+	if( sayType != SAY_SOCIAL && ( cr.StatBase[ ST_FOLLOW_CRIT ] == 0 || cr.StatBase[ ST_FOLLOW_CRIT ] != cr.ParamBase[ CR_TALKING_TARGET_ID ] ) )
+	{	//Если это не "эмбиент"-сообщение (серый текст), нет цели или "сбилась" цель - ведём стандартную речь.
+		cr.Say( sayType, message );
+		return false;
+	}
+	
+	if( sayType == SAY_SOCIAL || cr.StatBase[ ST_FOLLOW_CRIT ] == int( cr.Id ) ) //Серый текст.
+	{
+		if( !isGM( cr ) && ( cr.Stat[ ST_LEVEL ] < 12 || !isNear ) ) 
+		{ //Не хватает уровня, слишком далеко, или просто не ГМ.
+			cr.Say( ( sayType == SAY_SOCIAL ? SAY_NORM : sayType ), message );
+			return false;
+		}
+		
+		Map@ map = cr.GetMap();
+		if( !valid( map ) ) return false;
+		map.SetText( x, y, isGM( cr ) ? COLOR_GRAY : COLOR_LGRAY, message );
+	}
+	else
+	{
+		Critter@ target;
+		if( !Find( target, cr.StatBase[ ST_FOLLOW_CRIT ] ) || target.IsDead() || target.StatBase[ ST_FOLLOW_CRIT ] != int( cr.Id ) || ( !isGM( cr ) && target.IsPlayer() ) ) 
+		{ //Цель не найдена, не "зацеплена" или мертва - не сможет говорить. Дополнительное исключение - для защиты от разговоров "за зацепленных за себя" персонажей, если ты не ГМ.
+			cr.Say( sayType, message );
+			return false;
+		}
+		
+		if( target.Stat[ ST_CURRENT_HP ] < 0 || target.IsKnockout() )
+		{
+			Map@ map = target.GetMap();
+			if( !valid( map ) ) return false;
+			//map.SetText( target.HexX, target.HexY, COLOR_TEXT, "|0x00000000 :" + target.Id + ":|0xf9fa94 " + message );
+			map.SetText( target.HexX, target.HexY, COLOR_TEXT, "|0xf9fa94 " + message );//TODO: Вынести отображение текста в клиентские скрипты, а-ля rp_combat.fos
+		}
+		else
+		{
+			target.Say( sayType, message );
+			SayLog( target, sayType, message );
+		}
+	}
+	
+	return true;
+}
+
+//Код шамана, не трогать! Всемирное наследие ЮНЕСКО!
+void heard_radio_log_ch0(Critter& cr, string@ message, int[]@ channels)
+{
+	if (null is message || null is channels) {
+		return;
+	}
+
+	// Наивное логирование нулевого канала для экспорта в дискорд
+	if (0 >= channels.find(0)) {
+		file f;
+		if (f.open("logs\\radio_0.txt", "a") >= 0) {
+			f.writeString(message + "\n");
+			f.close();
+		}		
+	}
+}
+
+string enlist( int[]@ list )
+{ //TODO: Вынести в отдельный модуль утилит.
+	if( !valid( list ) ) return "[-]";
+	uint len = list.length();
+	if( len == 0 ) return "[-]";
+	
+	string result = "[ " + list[0];
+	for( uint i = 1; i < len; i++ )
+		result += ", " + list[i];
+	
+	return result + " ]";
+}
+
+void unsafe_GM_Hear_Radio( Critter& cr, int, int, int, string@ message, int[]@) //TODO: Причесать код, расширить функциональность.
+{
+	array<int> ch_0, channels;
+	array<Item@> items;
+	if( cr.GetItems( -1, items ) > 0 )
+		for( uint i = 0, l = items.length; i < l; i++ ) 
+		{
+			if( FLAG( items[i].Flags, ITEM_RADIO ) && !FLAG( items[i].RadioFlags, RADIO_DISABLE_SEND ) )
+			{
+				if( items[i].RadioChannel == 0 )
+					ch_0.insertLast( int( items[i].RadioChannel ) );
+				channels.insertLast( int( items[i].RadioChannel ) );
+			}
+		}
+	
+	heard_radio_log_ch0( cr, message, ch_0 );
+
+	if( cr.CountItem( PID_RADIO ) < 1 ) // А радио ведь не только PID_RADIO может быть...
+		return;
+	
+    Critter@[] crs;
+    GetAllPlayers( crs );
+
+    string str = enlist( channels ) + " " + GetPlayerName( cr.Id ) + ": |0xFFFFFFFF ..." + message +  "...";
+
+    for( uint i = 0, j = crs.length(); i < j; i++ )
+    {
+        if( crs[ i ] is null or !isGM( crs[ i ] ) )
+            continue;
+		if( crs[i].Id == cr.Id )
+			continue;
+        crs[ i ].Say( SAY_NETMSG, str );
+    }
+}
+
+void unsafe_GM_Hear_Whisper( Critter& cr, int, int, int, string@ message, int[]@ ) //TODO: Причесать код.
+{
+    Critter@[] crs;
+    GetAllPlayers( crs );
+	
+	Map @map = cr.GetMap();
+	if(!valid(map)) return;
+
+    for( uint i = 0, j = crs.length(); i < j; i++ )
+    {
+        if( crs[ i ] is null or !isGM( crs[ i ] ) )
+            continue;
+		if( crs[i].Id == cr.Id )
+			continue;
+		
+		Map@ map1 = crs[i].GetMap();
+		if( !valid(map1) || map1.Id != map.Id ) continue;
+		
+		if( GetDistantion( cr.HexX, cr.HexY, crs[i].HexX, crs[i].HexY ) <= __WisperDist )
+			continue;
+		
+		crs[ i ].RunClientScript( "rp_client@__HearWhisper", cr.HexX, cr.HexY, 0, GetPlayerName(cr.Id) + "@" + message, null );
+    }
+}
+
+void unsafe_shout_all( Critter& cr, int, int, int, string@ message, int[]@ )//TODO: Причесать код.
+{
+	uint dist = ( isGM( cr ) ? 999 : cr.Stat[ ST_STRENGTH ] * 10 );
+
+	Map@ map = cr.GetMap();
+	if(!valid(map)) return;
+	
+	Critter@[] crs;
+	uint count = map.GetCrittersHex(cr.HexX, cr.HexY, dist, FIND_ALL, crs);
+
+    Critter@[] seeing;
+	Critter@[] source = { cr };
+	uint count2 = map.GetCrittersSeeing( source, true, FIND_ALL | FIND_ONLY_PLAYERS, seeing );
+
+	for( uint i = 0; i < count; i++ )
+	{
+		bool isSkipping = false;
+		for( uint j = 0; j < count2; j++ )
+			if( crs[i].Id == seeing[j].Id )
+			{
+				isSkipping = true;
+				break;
+			}
+		if( isSkipping )
+			continue;
+		
+		uint dist = GetDistantion( cr.HexX, cr.HexY, crs[i].HexX, crs[i].HexY );
+		if( int( dist ) <= crs[i].Stat[ ST_PERCEPTION ] * 10 )
+			crs[i].Say( SAY_NETMSG, "???: |0x00FF0000 !!! " + strupr( message ) + " !!!" );
+	}
+}
+
+void unsafe_SayLog( Critter& cr, int sayType, int, int, string@ message, int[]@ )
+{
+	if( !SayLog( cr, sayType, message ) )
+		testInfo( cr, "Failed to log text: #" + cr.Id + " " + sayType + " '" + message + "'" );
+}
+
+bool SayLog( Critter& cr, int sayType, string@ message )
+{
+	string data = "#" + cr.Id + ( cr.IsPlayer() ? " " + GetPlayerName( cr.Id ) : "" ) + " - ";
+	switch( sayType )
+	{	//Можно было бы и просто массивом соответствия задать..
+		case( SAY_NORM ): 	SayPrepare( cr, data, message, "" );		break;
+		case( SAY_EMOTE ): 	SayPrepare( cr, data, message, "**" ); 		break;
+		case( SAY_SOCIAL ):	SayPrepare( cr, data, message, "::" );		break; 
+		case( SAY_WHISP ):	SayPrepare( cr, data, message, ".." ); 		break;
+		case( SAY_SHOUT ):	SayPrepare( cr, data, message, "!!!" ); 	break; 
+		case( SAY_RADIO ): 	SayPrepare( cr, data, message, "..пшш.." ); break; 
+		default: 
+			Log( "Unhandled sayType for SayLog: #" + cr.Id + " " + sayType + " '" + message + "'" ); //TODO: Надо-ли дублировать информацию?
+			return testInfo( cr, "Unhandled sayType for SayLog: #" + cr.Id + " " + sayType + " '" + message + "'" );
+	}
+	return true;
+}
+
+import void SayLog( Map@ map, string message ) from "general_unsafe";
+void SayPrepare( Critter& cr, string data, string message, string effect ) //TODO: Либо вынести логгирования в отдельный модуль, либо перенести остальную логику сюда же.
+{
+	SayLog( cr.GetMap(), data + effect + message + effect );
+}
+
+
+void unsafe_stopTyping( Critter& cr, int, int, int, string@, int[]@ )
+{
+	StopTyping(cr);
+}
+
+void unsafe_ShowTyping( Critter& cr, int, int, int, string@, int[]@ )
+{
+	ShowTyping(cr);	
+}
+
+void ShowTyping( Critter& cr )
+{
+	if( isGM( cr ) && cr.ParamBase[ QST_INVIS ] != 0 ) return;
+
+	Critter@ target = @cr;
+	if( cr.StatBase[ ST_FOLLOW_CRIT ] != 0 && cr.ParamBase[ CR_TALKING_TARGET_ID ] == cr.StatBase[ ST_FOLLOW_CRIT ] )
+		@target = GetCritter( cr.StatBase[ ST_FOLLOW_CRIT ] );
+	
+	if( !valid(target) || target.StatBase[ ST_FOLLOW_CRIT ] != int( cr.Id ) )
+		@target = @cr;
+	
+	target.ParamBase[CR_TYPING_TIME] = __TypingDelay;
+	if( target.GetTimeEvents( CTE_TYPING, null, null, null ) == 0 )
+		target.AddTimeEvent( "cte_ShowTyping", REAL_SECOND( 5 ), CTE_TYPING, 0 );	
+}
+
+void StopTyping( Critter& cr )
+{
+	if( isGM( cr ) && cr.ParamBase[ QST_INVIS ] != 0 ) return;
+
+	Critter@ target = @cr;
+	if( cr.StatBase[ ST_FOLLOW_CRIT ] != 0 && cr.ParamBase[ CR_TALKING_TARGET_ID ] == cr.StatBase[ ST_FOLLOW_CRIT ] )
+		@target = GetCritter( cr.StatBase[ ST_FOLLOW_CRIT ] );
+
+	if( !valid(target) || target.StatBase[ ST_FOLLOW_CRIT ] != int( cr.Id ) )
+		@target = @cr;
+	
+	target.ParamBase[CR_TYPING_TIME] = 0;
+	target.EraseTimeEvents( CTE_TYPING );
+}
+
+uint cte_ShowTyping( Critter& cr, int identifier, uint& rate ) 
+{
+	if( isGM( cr ) && cr.ParamBase[ QST_INVIS ] != 0 ) return 0;
+
+	if( cr.ParamBase[CR_TYPING_TIME] > 0 )
+	{
+		string text = "|0xFF828a96 ";
+		for( uint i = 0; i <= rate % 3; i++ )
+			text += " .";
+		rate++;
+		
+		Map@ map = cr.GetMap();
+		if( !valid(map) )
+			cr.Say( SAY_NORM_ON_HEAD, text );
+		else
+			map.SetText( cr.HexX, cr.HexY, COLOR_LGRAY, text ); //Нужно написать модуль, который отображал текст над именем криттера всем кто его видит, плюс учитывал дистанцию и рассеивание звуков.
+
+		cr.ParamBase[CR_TYPING_TIME]--;
+		return REAL_MS(500);
+	}
+	return 0;
+}
