@@ -16,6 +16,13 @@ bool UseItemOnLocker( Critter& cr, Item& locker, Item& item )                   
         {
             if( !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) )
             {
+				if( hasKey( locker ) ) 
+				{
+					bool thisSide = hasKeyAround( cr, locker );
+					cr.Say( SAY_NETMSG, "С " + ( thisSide ? "этой" : "другой" ) + " стороны в замок вставлен ключ, он вам мешает." );
+					return false;
+				}
+
                 if( FLAG( locker.LockerCondition, LOCKER_LOCKED ) )
                 {
                     UNSETFLAG( locker.LockerCondition, LOCKER_LOCKED );
@@ -43,6 +50,107 @@ bool UseItemOnLocker( Critter& cr, Item& locker, Item& item )                   
 }
 
 import bool AddWalkPlane( Critter& npc, uint priority, uint16 hexX, uint16 hexY, uint8 dir, bool run, uint cut ) from "npc_planes";
+
+//TODO: Вынести этот дубль ф-и из rp_chat.fos и lockers.fos в один единый utils.fos
+bool testInfo( Critter& cr, string text, uint8 saytype = 11 /*SAY_NETMSG*/, bool result = false )
+{
+	if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
+		cr.Say( saytype, text );
+	return result;
+}
+
+bool Warning( string text, bool result = false )
+{
+	Log( text );
+	return result;
+}
+
+Item@[] getItemsAround( Item& target )
+{
+	Item@[] empty_result; //Костыль, т.к. нет нормального преобразования типов из null.
+
+	Map@ map = GetMap( target.MapId );
+	if( !valid( map ) && Warning( "Can't find items around item #" + target.Id + ", as it's at the global map.", true ) ) return empty_result;
+	return getItemsAround( map, target.HexX, target.HexY );
+
+	}
+Item@[] getItemsAround( Critter& target )
+{
+	Item@[] empty_result; //Костыль, т.к. нет нормального преобразования типов из null.
+
+	Map@ map = target.GetMap( );
+	if( !valid( map ) && Warning( "Can't find items around critter #" + target.Id + ", as it's at the global map.", true ) ) return empty_result;
+	return getItemsAround( map, target.HexX, target.HexY );
+}
+
+Item@[] getItemsAround( Map& map, uint16 x, uint16 y ) //TODO: range arg
+{
+	Item@[] result;
+	
+	for( uint i = 0; i < 6; i++ )
+	{
+		uint16 tx = x, ty = y;
+		map.MoveHexByDir( tx, ty, i, 1 );
+		map.GetItems( tx, ty, result );
+	}
+	map.GetItems( x, y, result );
+	
+	return result;
+}
+
+bool hasKeyAround( Critter& cr, Item& locker )
+{
+	Item@[] list = getItemsAround( cr );
+	for( uint i = 0, len = list.length(); i < len; i++ )
+		if( list[i].GetType() == ITEM_TYPE_KEY && list[i].LockerId == locker.LockerId )
+			return true;
+		
+	return false;
+}
+
+#define NO_DIR	-1
+bool hasKey( Item& locker, int dir = NO_DIR )
+{
+	Item@[] list = getItemsAround( locker );
+	
+	for( uint i = 0, len = list.length(); i < len; i++ )
+		if( list[i].GetType() == ITEM_TYPE_KEY && list[i].LockerId == locker.LockerId )
+			return true;
+	
+	return false;
+}
+
+bool hasKey( Critter& cr, Item& locker )
+{
+	Item@ hand = cr.GetItem( 0, SLOT_HAND1 );
+	if( !valid( hand ) ) return testInfo( cr, "Empty hand." );
+	if( hand.GetType() != ITEM_TYPE_KEY ) return testInfo( cr, "Not a key." );
+	if( hand.LockerId != locker.LockerId ) return testInfo( cr, "Wrong locker id: " + hand.LockerId + " != " + locker.LockerId );
+	return true;
+}
+
+bool LockpickMenu( Critter& cr, Item& locker )
+{
+	cr.StatBase[ ST_VAR0 ] = locker.Id;
+	
+	string[] data = { "lockers@answer_LOCKPICK", "Выберите действие:", "постучать", "выбить", "начать взлом" };
+	
+	string action = " ключ";
+	if( hasKey( locker ) && hasKeyAround( cr, locker ) )
+	{
+		data.insertLast( "вынуть" + action );
+		data.insertLast( ( FLAG( locker.LockerCondition, LOCKER_LOCKED ) ? "От" : "За" ) + "переть замок" );
+	}
+	else if( hasKey( cr, locker ) ) 
+	{
+		data.insertLast( "вставить" + action );
+		data.insertLast( ( FLAG( locker.LockerCondition, LOCKER_LOCKED ) ? "От" : "За" ) + "переть замок" );
+	}
+
+	DIALOG_MENU( cr, data );
+	
+	return true;
+}
 
 bool UseSkillOnLocker( Critter& cr, Item& locker, int skill ) // Export
 {
@@ -248,8 +356,6 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill ) // Export
             return true;
         }
 
-		cr.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( cr );
-
         int base = cr.Skill[ SK_LOCKPICK ] - locker.LockerComplexity;
         Item@lockpick = cr.GetItem( 0, SLOT_HAND1 );
         if( locker.Val0 == 4 && valid( lockpick ) && lockpick.GetProtoId() != PID_ELECTRONIC_LOCKPICKS )
@@ -267,7 +373,7 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill ) // Export
             cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_LOCKPICK_FAIL );  // постоянный замок
 			return true;
 		}
-        else if( locker.LockerCondition == LOCKER_ELECTRO )                  // pm added if block
+        else if( locker.LockerCondition == LOCKER_ELECTRO )                
         {
             uint16 complex = locker.LockerComplexity;
             uint16 exp = complex * 2;
@@ -308,13 +414,7 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill ) // Export
         }
         else
         {
-            cr.StatBase[ ST_VAR0 ] = locker.Id;
-			
-			//injection here
-			string[] data = { "lockers@answer_LOCKPICK", "Выберите действие:", "постучать", "выбить", "начать взлом" };
-			DIALOG_MENU( cr, data );
-
-            return true;
+            return LockpickMenu( cr, locker );
         }
     }
     else if( skill == SKILL_TAKE_ALL_CONT )
@@ -326,7 +426,7 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill ) // Export
 }
 
 void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
-{
+{ 
     Item@ lock = GetItem( player.Stat[ ST_VAR0 ] );
     if( lock is null )
         return;
@@ -373,7 +473,14 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
 	}
     if( answerI == 2 )
     {
-        if( FLAG( lock.LockerCondition, LOCKER_ISOPEN ) )
+		if( hasKey( lock ) ) 
+        {
+			bool thisSide = hasKeyAround( player, lock );
+            player.Say( SAY_NETMSG, "С " + ( thisSide ? "этой" : "другой" ) + " стороны в замок вставлен ключ, его не взломать." );
+            return;
+        }
+
+		if( FLAG( lock.LockerCondition, LOCKER_ISOPEN ) )
         {
             player.Say( SAY_NETMSG, "Дверь и так открыта." );
             return;
@@ -422,7 +529,7 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
         {
 			lockpick.Val0 = 0;
             _SubItem( lockpick, 1 );
-            player.Say( SAY_NETMSG, "Отмычка сломалась, видимо ее неудачно вытащили ее из замка в прошлый раз." );
+            player.Say( SAY_NETMSG, "Отмычка сломалась, видимо ее неудачно вытащили из замка в прошлый раз." );
             return;
         }
         else if( valid( lockpick ) && Random( 0, 1 ) == 0 )
@@ -442,6 +549,79 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
         Log_Lockpick( player, player.Stat[ ST_VAR0 ], 0, 0, null, null );
         player.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( player );
     }
+
+	if( answerI == 3 )
+	{
+		if( hasKey( lock ) )
+		{
+			if( hasKeyAround( player, lock ) )
+				takeKey( player, lock );
+			else
+				player.Say( SAY_NETMSG, "С другой стороны в замок вставлен ключ, он вам мешает." );
+		}
+		else if( hasKey( player, lock ) ) 
+			putKey( player, lock );
+	}
+	if( answerI == 4 )
+	{
+		if( !hasKey( lock ) )
+		{
+			if( FLAG( lock.LockerCondition, LOCKER_LOCKED ) )
+			{
+				UNSETFLAG( lock.LockerCondition, LOCKER_LOCKED );
+				player.Say( SAY_NETMSG, "Вы отперли замок." );
+				player.Say( SAY_EMOTE_ON_HEAD, "Отпирает" );
+			}
+			else
+			{
+				SETFLAG( lock.LockerCondition, LOCKER_LOCKED );
+				player.Say( SAY_NETMSG, "Вы заперли замок." );
+				player.Say( SAY_EMOTE_ON_HEAD, "Запирает" );
+			}
+		}
+		else
+		{
+			bool thisSide = hasKeyAround( player, lock );
+			player.Say( SAY_NETMSG, "С " + ( thisSide ? "этой" : "другой" ) + " стороны в замок вставлен ключ, он вам мешает." );
+		}
+		
+		
+		LockpickMenu( player, lock );
+	}
+}
+
+bool takeKey( Critter& cr, Item& locker )
+{
+	Item@[] list = getItemsAround( locker );
+	
+	for( uint i = 0, len = list.length(); i < len; i++ )
+		if( list[i].GetType() == ITEM_TYPE_KEY && list[i].LockerId == locker.LockerId )
+		{
+			MoveItem( list[i], 1, cr );
+			UNSETFLAG( list[i].Flags, ITEM_HIDDEN );
+			list[i].Update();
+			cr.Say( SAY_EMOTE, "Вынимает ключ из замка" );
+			return true;
+		}
+	
+	return false;
+}
+
+bool putKey( Critter& cr, Item& locker )
+{
+	Item@ hand = cr.GetItem( 0, SLOT_HAND1 );
+	if( !valid( hand ) ) return testInfo( cr, "Empty hand." );
+	if( hand.GetType() != ITEM_TYPE_KEY ) return testInfo( cr, "Not a key." );
+	if( hand.LockerId != locker.LockerId ) return testInfo( cr, "Wrong locker id: " + hand.LockerId + " != " + locker.LockerId );
+	
+	Map@ map = cr.GetMap();
+	if( !valid( map ) ) return testInfo( cr, "Attempted to 'putKey' on global by cr #" + cr.Id + " for locker #" + locker.Id + "." );
+	MoveItem( hand, 1, map, cr.HexX, cr.HexY );
+	SETFLAG( hand.Flags, ITEM_HIDDEN );
+	hand.Update();
+	
+	cr.Say( SAY_EMOTE, "Вставляет ключ в замок" );
+	return true;
 }
 
 void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
@@ -711,3 +891,4 @@ void LockerBudge( Item& item )   // export
     // sound[ 7 ] = item.Proto.SoundId;
     map.PlaySound( sound, item.HexX, item.HexY, 8 );
 }
+
