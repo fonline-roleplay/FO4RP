@@ -40,7 +40,7 @@ import void AffectRadiation( Critter& cr, int value ) from "radiation";
 import void SetHair( Critter& cr ) from "hair";
 import void RestartHair( Critter& cr ) from "hair";
 import void HairCut( Critter& cr, Critter& onCr ) from "hair";
-import void Shave( Critter& cr, Critter& onCr ) from "hair";
+import void Shave( Critter& cr, Critter@ onCr ) from "hair";
 
 import void WorldmapInit() from "worldmap";
 import void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16 hexX, uint16 hexY ) from "combat";
@@ -682,11 +682,17 @@ bool subWater( Critter& cr, Item@ item )
 	return true;
 }
 
+import bool LikeThat( Critter& cr, Item& item ) from "super_coding_axel";
+
 import bool collectWater( Critter& cr, Item@ bottle ) from "adv_items";
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on something critter use item.
 bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param )
 {
+	//Тут наш "хак":
+	if( LikeThat( cr, item ) )
+		return true; //true - значит что ситуация обработана. false - "из этого ничего не вышло"
+	
 	string exception_catcher = cr.Id + "# in " + (valid(cr.GetMap())?"@"+cr.GetMap().Id:"global") + " used "
 		+ (valid(item)?item.Id:0) + ":" + (valid(item)?item.GetProtoId():0) + " on [" 
 		+ (valid(targetCr)?targetCr.Id:0) + ", " 
@@ -783,12 +789,13 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		return true;
 	}
 	
-	if( ( pid == PID_itsoap01 || pid == PID_FPSHL6 ) )
+	uint[] soap_pids = { PID_itsoap01_PRT, PID_FPSHL6_PRT, PID_itsoap01, PID_FPSHL6 };
+	if( soap_pids.find( pid ) != -1 )
 	{
 		Critter@ target = useOnSelf ? @cr : @targetCr;
 		if( valid( target ) )
 		{
-			Cleaning( target, 0 );
+			Cleaning( target, pid, 0 );
 			return true;
 		}
 	}
@@ -1021,85 +1028,13 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
     }
 
     if(( pid == PID_CUTTHROAT ) || ( pid == PID_RAZOR ))
-    {
-        if( useOnSelf )
-            Shave( cr, cr );
-        else
-            Shave( cr, targetCr );
+	{
+        Shave( cr, useOnSelf ? @cr : @targetCr );
         return true;
     }
 
-	uint[] knifes = { PID_COMBAT_KNIFE, PID_LIL_JESUS_WEAPON, PID_KNIFE, PID_SWITCHBLADE, PID_WAKIZASHI_BLADE, PID_REVKNIFE1, PID_REVKNIFE2 };
-	
-    bool isKnife = knifes.find( item.GetProtoId() ) != -1;
+	if( CutCheck( cr, item, useOnSelf ? @cr : @targetCr ) ) return true;
 
-    if( isKnife )
-    {
-        Map@ map = cr.GetMap();
-		if( valid(map) )
-		{
-			if( useOnSelf )
-			{
-				bool success = false;
-				@targetItem = map.GetItem( cr.HexX, cr.HexY, PID_HOLD_HOOK );
-				if( valid( targetItem ) ) {
-					DeleteItem( targetItem );
-					success = true;
-				}
-				
-				@targetItem = map.GetItem( cr.HexX, cr.HexY, PID_REV_BALL1 );
-				if(!valid(targetItem))
-					@targetItem = map.GetItem( cr.HexX, cr.HexY, PID_REV_BALL2 );
-				if(valid(targetItem)) {
-					_SubItem( targetItem, 1 );
-					success = true;
-				}
-
-				if( success ) {
-					cr.Say( SAY_EMOTE, "Режет путы" );
-					cr.Animate( 0, ANIM2_SWING_1H, null, false, true );
-					return true;
-				}
-				else 
-				{
-					return false;
-				}
-			}
-			else
-			{
-				bool success = false;
-				@targetItem = map.GetItem( targetCr.HexX, targetCr.HexY, PID_HOLD_HOOK );
-				if( valid( targetItem ) ) {
-					DeleteItem( targetItem );
-					success = true;
-				}
-				
-				@targetItem = map.GetItem( targetCr.HexX, targetCr.HexY, PID_REV_BALL1 );
-				if(!valid(targetItem))
-					@targetItem = map.GetItem( targetCr.HexX, targetCr.HexY, PID_REV_BALL2 );
-				if(valid(targetItem)) {
-					_SubItem( targetItem, 1 );
-					success = true;
-				}
-
-				if( success ) {
-					cr.Say( SAY_EMOTE, "Режет путы" );
-					cr.Animate( 0, ANIM2_SWING_1H, null, false, true );
-					return true;
-				}
-				else 
-				{
-					return e_InitSkinningUse( item, cr, targetCr, null, null );
-				}
-			}
-		}
-    }
-    /*
-       if(isKnife && !(targetCr is null))
-       {
-            e_InitSkinningUse(item, cr, targetCr, null, null);
-            return true;
-       }*/
     // Radio
     if( FLAG( item.Flags, ITEM_RADIO ) && useOnSelf )
     {
@@ -1266,10 +1201,31 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 	if ( (pid == PID_LIGHTER) && valid(targetItem) && targetItem.GetProtoId() == PID_COAL)
 	{ cr.Say(SAY_NETMSG , "Вам необходимы зажигалка и кусок ткани для розжига костра из этого"); }
 	
+	if( pid == PID_CIGARETTES )
+	{
+		cr.Say( SAY_EMOTE, "Вскрывает пачку сигарет" );
+		_SubItem( item, 1 );
+		cr.AddItem( PID_CIGARETTES_PRT, 1 );
+	}
+	
+	if( pid == PID_CIGARETTES_PRT )
+	{
+		if( item.Val0 < 1 )
+		{
+			cr.Say( SAY_NETMSG, "В пачке больше не осталось сигарет." );
+			_SubItem( item, 1 );
+			return false;
+		}
+		cr.Say( SAY_EMOTE, "Достаёт сигарету из пачки" );
+		cr.AddItem( PID_cigarette, 1 );
+		item.Val0--;
+		item.Update();
+	}
+	
     // Cigarettes smoking
-    if( pid == PID_CIGARETTES )
+    if( pid == PID_cigarette )
     {
-		Item @ respirator = _CritGetItemHandExt( cr );
+		Item@ respirator = _CritGetItemHandExt( cr );
 		if( !(respirator is null) && respirator.GetProtoId() == PID_RESPIRATOR )
 		{
 			cr.Say( SAY_NETMSG, "Вы не можете курить через респиратор." );
@@ -1279,15 +1235,14 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		{
 			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_CIGARETTES_SMOKE );
 			
-			if( item.Val0 >19 )
-				_SubItem( item, 1 );
+			_SubItem( item, 1 );
 			cr.StatBase[ ST_DYSPNEA ] -= Random( 0, 5 );
-			item.Val0 +=1;
+			cr.StatBase[ ST_HUNGER ] -= Random( 0, 1 );
+			cr.StatBase[ ST_THRIST ] -= Random( 0, 1 );
 			
 			int time = cr.Timeout[ TO_TIREDNESS ];
 			if( time > 0 )
 			{
-				//time = CLAMP( time - __FullSecond, 0, time );
 				time = CLAMP( time - REAL_SECOND( Random( 15, 30 ) ), 0, time );
 				cr.TimeoutBase[ TO_TIREDNESS ] = __FullSecond + time;
 			}
@@ -1455,13 +1410,13 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				Item @ Hook = map.GetItem( target.HexX, target.HexY, PID_HOLD_HOOK );
 				if( valid( Hook ) )
 				{
-					target.Say( SAY_EMOTE, "распутывается" );
+					target.Say( SAY_EMOTE, "пытается освободиться" );
 					if( Hook.Val5 > 0 )
 						Hook.Val5 -= Random( 0, target.Stat[ ST_LUCK ] / 2 ) + Random( 0, target.Stat[ ST_AGILITY ] / 3 );
 					else
 					{
 						DeleteItem( Hook );
-						target.Say( SAY_NETMSG, "Вы освободились от пут." );
+						target.Say( SAY_NETMSG, "Вы освободились." );
 					}
 					return true;
 				}
@@ -1510,7 +1465,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		if( valid( targetScen ) )
 		{
 			if( water_sources.find( targetScen.ProtoId ) != -1 )
-				Cleaning( cr, targetScen.ProtoId );
+				Cleaning( cr, 0, targetScen.ProtoId );
 			else
 			{
 				if (!TryTraining( cr, targetScen.ProtoId ) )
@@ -2023,7 +1978,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		if( valid( targetScen ) )
 		{
 			if( water_sources.find( targetScen.ProtoId ) != -1 )
-				Cleaning( cr, targetScen.ProtoId );
+				Cleaning( cr, 0, targetScen.ProtoId );
 			else
 				if( !TryTraining( cr, targetScen.ProtoId ) )
 					cr.Say( SAY_EMOTE, "Осматривает " + targetScen.ProtoId );
@@ -2040,8 +1995,8 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 
 import void start_cleaning( Critter& player, bool handsOnly ) from "test";
 
-//import void Cleaning( Critter& player, uint water_source ) from "main";
-void Cleaning( Critter& player, uint water_source ) //exported
+//import void Cleaning( Critter& player, uint soap_pid, uint water_source ) from "main";
+void Cleaning( Critter& player, uint soap_pid, uint water_source ) //exported
 {
 	uint[] hand_washers = { 2615, 2619 };
 	bool isHandsOnly = hand_washers.find(water_source) != -1;
@@ -2091,31 +2046,60 @@ void Cleaning( Critter& player, uint water_source ) //exported
 		}		
 	}
 	
-	Item@ soap =  player.GetItem( PID_itsoap01, -1 );
-	if( !valid(soap) )
-		@soap = player.GetItem( PID_FPSHL6, -1 );
+	Item@ soap;
+	uint[] soap_pids = { PID_itsoap01_PRT, PID_FPSHL6_PRT, PID_itsoap01, PID_FPSHL6 };
+	for( uint i = 0, l = soap_pids.length(); i < l; i++ )
+	{
+		@soap = player.GetItem( soap_pid == 0 ? soap_pids[i] : soap_pid, -1 );
+		if( valid( soap ) )
+			if( soap_pid != 0 && soap_pids.find( soap_pid ) != -1 )
+				break;
+			else
+				@soap = null;
+	}
 		
 	int pid = valid(soap) ? soap.GetProtoId() : 0;
-	bool isSoap = false;
-	
-	
 	switch( pid )
 	{
 		case( PID_itsoap01 ):
-			isSoap = true;
+			player.Say( SAY_NETMSG, "Вы используете новый кусок мыла." );
+			_SubItem( soap, 1 );
+			@soap = player.AddItem( PID_itsoap01_PRT, 1 );
+			
+		case( PID_itsoap01_PRT ):
 			player.Say( SAY_EMOTE_ON_HEAD, "Моет" + ( isHandsOnly ? " руки" : "ся" ) + " хозяйственным мылом" );
 			player.ParamBase[ CR_DIRTINESS ] = ( player.ParamBase[ CR_DIRTINESS ] * 0.8 ) - 5;
-			if (soap.Val0 <1) player.DeleteItem(pid , 1);
+
+			soap.Val0--;
+			soap.Update();
+			if( soap.Val0 < 1 )
+			{
+				player.Say( SAY_NETMSG, "Вы использовали последние крохи мыла." );
+				_SubItem( soap, 1 );
+			}
 		break;
+		
 		case( PID_FPSHL6 ):
-			isSoap = true;
+			player.Say( SAY_NETMSG, "Вы используете новый кусок мыла." );
+			_SubItem( soap, 1 );
+			@soap = player.AddItem( PID_FPSHL6_PRT, 1 );
+			
+		case( PID_FPSHL6_PRT ):
 			player.Say( SAY_EMOTE_ON_HEAD, "Моет" + ( isHandsOnly ? " руки" : "ся" ) + " душистым мылом" );
 			player.ParamBase[ CR_DIRTINESS ] = ( player.ParamBase[ CR_DIRTINESS ] * 0.6 ) - 10;
 			
 			if( player.ParamBase[ CR_DIRTINESS ] <= 0 && player.GetTimeEvents( CTE_ROTTEN, null, null, null ) < 1 )
 				player.AddTimeEvent( "cte_aroma", REAL_SECOND(15), CTE_ROTTEN, 0 );
-			if (soap.Val0 <1) player.DeleteItem(pid , 1);
+
+			soap.Val0--;
+			soap.Update();
+			if( soap.Val0 < 1 )
+			{
+				player.Say( SAY_NETMSG, "Вы использовали последние крохи мыла." );
+				_SubItem( soap, 1 );
+			}
 		break;
+		
 		default:
 			player.Say( SAY_EMOTE_ON_HEAD, "Ополаскивает" + ( isHandsOnly ? " руки" : "ся" ) );
 			player.ParamBase[ CR_DIRTINESS ] -= 1 + Random( 0, player.ParamBase[ CR_DIRTINESS ] * 0.2 );
@@ -2124,46 +2108,6 @@ void Cleaning( Critter& player, uint water_source ) //exported
 				start_cleaning( player, isHandsOnly );
 		break;
 	}
-	
-	if( isSoap )
-	{
-		int soaprandom = Random(1, 100);
-		//Log (""+soaprandom);
-		if( soaprandom < 5)
-		{
-			soap.Val0 += 0;
-		}
-		else if ((soaprandom > 94) || (soaprandom > player.StatBase[ ST_LUCK ]*10))
-		{
-			soap.Val0 -=2;
-		}
-		else 
-		{
-			soap.Val0 -=1;
-		}
-	}	
-		/*else
-		{
-			Map@ map = player.GetMap();
-			if(!valid(map)) return;
-			
-			int chance = 5 * ( player.StatBase[ ST_AGILITY ] + player.StatBase[ ST_LUCK ] );
-			if( Random( 1, 100 ) > Random( chance, chance * 10 ) )
-			{
-				player.Say( SAY_EMOTE, "Роняет мыло" );
-				uint x = 0;
-				while( x < 100 )
-				{
-					uint16 hexX = player.HexX, hexY = player.HexY, step = Random( 0, 1 );
-					if( step > 0 ) {
-						map.MoveHexByDir( hexX, hexY, Random( 0, 6 ), step );
-						if( !map.IsHexPassed( hexX, hexY ) ) continue;
-					}
-					MoveItem( soap, 1, player.GetMap(), hexX, hexY );
-					break;
-				}
-			}
-		}*/
 }
 
 //import bool inHeaven( Critter& cr ) from "main";
@@ -3600,11 +3544,18 @@ uint item_cost( Item& item, Critter& cr, Critter& npc, bool sell )
 				cost += ammo.Cost * item.AmmoCount;
         }
     }
+	
+	//if( itemType == ITEM_TYPE_PARTIAL ) //TODO: Переделать в новый "тип" предметов (прото) - PARTIAL.
+	uint[] partial_pids = { PID_itsoap01_PRT, PID_FPSHL6_PRT, PID_CIGARETTES_PRT };
+	if( partial_pids.find( pid ) != -1 )
+	{
+		cost = cost * item.Val0 / 10; //Прямая зависимость от количества оставшихся предметов в "пачке".
+	}
 
 	//Торговля мк3 - учитывает опыт НД и ТНФ. Сделал бы отделной ф-ей, да толку - от этой итак ничего не осталось уже.
 	
 	//Редактируемые "настройки" торговли:
-		int skill_range = 50; //Градация разницы в скиллах между НПЦ и чаром. Чем она шире - тем медленней падение/рост цен за 1% разницы.
+		int skill_range = 150; //Градация разницы в скиллах между НПЦ и чаром. Чем она шире - тем медленней падение/рост цен за 1% разницы.
 		
 		float price_range = 0.5; //Диапазон разброса цен на покупку у НПЦ.
 		//Т.е. это больше НЕ "максимальная допустимая уценка скупки и наценка продажи".
@@ -3736,107 +3687,72 @@ void items_crafted( Item@[]& items, uint[]& itemsCount, Item@[]& resources, Crit
 
     switch( itemsZiroPid )
     {
-    case PID_TRAP_FIRE_BREATH:
-    {
-        items[ 0 ].Val6 = 2;
-        items[ 0 ].Val5 = DAMAGE_FIRE;
-        items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 5;
-        items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 15;
-		items[ 0 ].Val1 = crafter.Id;
-        return;
-    }
-
-    case PID_TRAP_ELECTRIC:
-    {
-        items[ 0 ].Val6 = 4;
-        items[ 0 ].Val5 = DAMAGE_ELECTR;
-        items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 5;
-        items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 15;
-   		items[ 0 ].Val1 = crafter.Id;
-		return;
-    }
-
-    case PID_TRAP_KNIFES:
-    {
-        items[ 0 ].Val6 = 0;
-        items[ 0 ].Val5 = DAMAGE_NORMAL;
-        items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 10;
-        items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 20;
-		items[ 0 ].Val1 = crafter.Id;
-        return;
-    }
-
-    case PID_TRAP_CANISTER_SHOT:
-    {
-        items[ 0 ].Val6 = 0;
-        items[ 0 ].Val5 = DAMAGE_NORMAL;
-        items[ 0 ].Val4 = 2;
-        items[ 0 ].Val3 = 1;
-		items[ 0 ].Val1 = crafter.Id;
-        return;
-    }
-
-    case PID_TRAP_STUNNER:
-    {
-        items[ 0 ].Val6 = 4;
-        items[ 0 ].Val5 = DAMAGE_NORMAL;
-        items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 20;
-        items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 30;
-		items[ 0 ].Val1 = crafter.Id;
-        return;
-    }
-
-    case PID_TRAP_SLEDGE_HAMMER:
-    {
-        items[ 0 ].Val6 = 0;
-        items[ 0 ].Val5 = DAMAGE_NORMAL;
-        items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 10;
-        items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 20;
-		items[ 0 ].Val1 = crafter.Id;
-        return;
-    }
-
-    case PID_TRAP_POISON_BLADE:
-    {
-        items[ 0 ].Val6 = 0;
-        items[ 0 ].Val5 = DAMAGE_NORMAL;
-        items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 20;
-        items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 30;
-		items[ 0 ].Val1 = crafter.Id;
-        return;
-    }
-
-    case PID_TRAP_ITEM_BREAKER:
-    {
-        items[ 0 ].Val6 = 0;
-        items[ 0 ].Val5 = DAMAGE_NORMAL;
-        items[ 0 ].Val4 = 1;
-        items[ 0 ].Val3 = 0;
-		items[ 0 ].Val1 = crafter.Id;
-        return;
-    }
-
-    case PID_TRAP_STAKE:
-    {
-        items[ 0 ].Val6 = 0;
-        items[ 0 ].Val5 = DAMAGE_NORMAL;
-        items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 10;
-        items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 20;
-		items[ 0 ].Val1 = crafter.Id;
-        return;
-    }
-    case PID_GUNSMITH:
-	{
-	items[ 0 ].Val0=crafter.SkillBase [SK_REPAIR];
-	return;
-	}
-	case PID_FPSHL6:
-	case PID_itsoap01:
-	{
-	items[ 0 ].Val0= 30;
-	return;
-	}
-	//case
+		case PID_TRAP_FIRE_BREATH: {
+			items[ 0 ].Val6 = 2;
+			items[ 0 ].Val5 = DAMAGE_FIRE;
+			items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 5;
+			items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 15;
+			items[ 0 ].Val1 = crafter.Id;
+			return; }
+		case PID_TRAP_ELECTRIC: {
+			items[ 0 ].Val6 = 4;
+			items[ 0 ].Val5 = DAMAGE_ELECTR;
+			items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 5;
+			items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 15;
+			items[ 0 ].Val1 = crafter.Id;
+			return; }
+		case PID_TRAP_KNIFES: {
+			items[ 0 ].Val6 = 0;
+			items[ 0 ].Val5 = DAMAGE_NORMAL;
+			items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 10;
+			items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 20;
+			items[ 0 ].Val1 = crafter.Id;
+			return; }
+		case PID_TRAP_CANISTER_SHOT: {
+			items[ 0 ].Val6 = 0;
+			items[ 0 ].Val5 = DAMAGE_NORMAL;
+			items[ 0 ].Val4 = 2;
+			items[ 0 ].Val3 = 1;
+			items[ 0 ].Val1 = crafter.Id;
+			return; }
+		case PID_TRAP_STUNNER: {
+			items[ 0 ].Val6 = 4;
+			items[ 0 ].Val5 = DAMAGE_NORMAL;
+			items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 20;
+			items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 30;
+			items[ 0 ].Val1 = crafter.Id;
+			return; }
+		case PID_TRAP_SLEDGE_HAMMER: {
+			items[ 0 ].Val6 = 0;
+			items[ 0 ].Val5 = DAMAGE_NORMAL;
+			items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 10;
+			items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 20;
+			items[ 0 ].Val1 = crafter.Id;
+			return; }
+		case PID_TRAP_POISON_BLADE: {
+			items[ 0 ].Val6 = 0;
+			items[ 0 ].Val5 = DAMAGE_NORMAL;
+			items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 20;
+			items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 30;
+			items[ 0 ].Val1 = crafter.Id;
+			return; }
+		case PID_TRAP_ITEM_BREAKER: {
+			items[ 0 ].Val6 = 0;
+			items[ 0 ].Val5 = DAMAGE_NORMAL;
+			items[ 0 ].Val4 = 1;
+			items[ 0 ].Val3 = 0;
+			items[ 0 ].Val1 = crafter.Id;
+			return; }
+		case PID_TRAP_STAKE: {
+			items[ 0 ].Val6 = 0;
+			items[ 0 ].Val5 = DAMAGE_NORMAL;
+			items[ 0 ].Val4 = crafter.SkillBase[ SK_TRAPS ] / 10;
+			items[ 0 ].Val3 = crafter.SkillBase[ SK_TRAPS ] / 20;
+			items[ 0 ].Val1 = crafter.Id;
+			return; }
+		case PID_GUNSMITH: {
+			items[ 0 ].Val0=crafter.SkillBase [SK_REPAIR];
+			return; }
     }
 
 }
@@ -4695,3 +4611,64 @@ bool map_init( Map& map, bool isfirst )
 uint cte_brahmin_pregnancy( Critter& cr, int identifier, uint& rate ) { return 0; }
 uint cte_search_partner( Critter& cr, int identifier, uint& rate ) { return 0; }
 uint cte_brahmin_growth( Critter& cr, int identifier, uint& rate ) { return 0; }
+
+bool Inform( Critter& cr, string text )
+{
+	return testInfo( cr, text, SAY_NETMSG, true, true );
+}
+
+bool testInfo( Critter& cr, string text, uint8 saytype = 11 /*SAY_NETMSG*/, bool result = false, bool show_anyway = false )
+{
+	if( show_anyway || cr.Param[ QST_GAMEMODE ] == GAME_TEST )
+		cr.Say( saytype, text );
+	
+	return result;
+}
+
+bool CutCheck( Critter& cr, Item& item, Critter@ target )
+{ 
+	Map@ map = cr.GetMap();
+	if( !valid(map) )
+		return testInfo( cr, "На глобале нельзя." );
+	
+	uint[] knifes = { PID_COMBAT_KNIFE, PID_LIL_JESUS_WEAPON, PID_KNIFE, PID_SWITCHBLADE, PID_WAKIZASHI_BLADE, PID_REVKNIFE1, PID_REVKNIFE2 };
+	bool isKnife = knifes.find( item.GetProtoId() ) != -1;
+
+	Item@ hook = map.GetItem( target.HexX, target.HexY, PID_HOLD_HOOK );
+	if( !valid( hook ) )
+	{
+		if( isKnife )
+			return e_InitSkinningUse( item, cr, target, null, null );
+		
+		return testInfo( cr, "Цель не опутана, а этим инструментом её не освежевать." );
+	}
+	
+	testInfo( cr, "Сила опутывания: " + hook.Val5 );
+	
+	string eff = ( target.Id == cr.Id ? "ся" : "" );
+	if( hook.Val5 <= 10 )
+	{
+		if( !isKnife )
+			return Inform( cr, "Это здесь не поможет." );
+
+		Item@ net = map.GetItem( target.HexX, target.HexY, PID_REV_BALL1 );
+		if( !valid(net) )
+			@net = map.GetItem( target.HexX, target.HexY, PID_REV_BALL2 );
+		if( valid(net) )
+			_SubItem( net, 1 );
+
+		cr.Say( SAY_EMOTE, "Освобождает" + eff );
+	}
+	else	
+	{
+		if( item.GetProtoId() != PID_CROWBAR )
+			return Inform( cr, "Без монтировки тут не обойтись." );
+
+		cr.Say( SAY_EMOTE, "Высвобождает" + eff + " из капкана" );
+	}
+	
+	DeleteItem( hook );
+	cr.Animate( 0, ANIM2_SWING_1H, null, false, true );
+	target.Say( SAY_NETMSG, "Вы освобождены." );
+	return true;
+}
