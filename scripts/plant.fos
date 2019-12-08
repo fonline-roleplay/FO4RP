@@ -22,6 +22,35 @@ import void DIALOG_MENU( Critter& cr, string[] data ) from "gm";
 
 #define isSEED			#(item)		( item.GROW_STAGE == 0 )
 
+bool inform( Critter@ cr, string text, bool result = true, bool TMI = true ) 
+{
+	if( !TMI ) 
+		return result; 
+	
+	return SayReturn( cr, text, SAY_NETMSG, result ); 
+}
+bool action( Critter@ cr, string text, bool result = true ) { return SayReturn( cr, text, SAY_EMOTE_ON_HEAD, result ); }
+bool SayReturn( Critter@ cr, string text, uint SAYTYPE, bool result = true )
+{
+	cr.Say( SAYTYPE, text );
+	return result;
+}
+
+string debugInfo( Item@ item )
+{
+	if( !valid( item ) ) return "[null]";
+	
+	return 
+		"\n#" + item.Id + " / " + item.GetProtoId() + " x" + item.GetCount() +
+		"\n TIME_EVENT " + item.TIME_EVENT +
+		"\n GROW_STAGE " + item.GROW_STAGE +
+		"\n SELECTION " + item.SELECTION +
+		"\n PLANT_TYPE " + item.PLANT_TYPE +
+		"\n WATERING " + item.WATERING +
+		"\n PLANT_GAIN " + item.PLANT_GAIN
+		;
+}
+
 //~run gm speedupPlants value 0 0
 ///Можно использовать команду для тестов - ускорения роста. 
 ///Где value - количество секунд на каждую стадию роста.
@@ -107,21 +136,18 @@ void _InitShit(Item& item, bool firstTime)
 	bool CleanUpPlant( Critter& cr, Item& item )
 	{
 		CPlant @ plant = GetCPlant( item.PLANT_TYPE );
-		if( !valid( plant ) ) return false;
+		if( !valid( plant ) )
+			return inform( cr, "Растение мутировало, либо у вас не хватает навыков опознать его.\n\nКиньте скриншот в канал дискорда #баги. Информация:" + debugInfo( item ) );
 
 		if( item.GROW_STAGE == int( plant.MaxCycle ) )
-		{
-			cr.Say( SAY_NETMSG, "Тут нет ничего ценного, остаётся пустить на перегной." );
-			return true;
-		}
+			return inform( cr, "Тут нет ничего ценного, остаётся пустить на перегной." );
 		
 		if( item.GROW_STAGE == int( plant.SeedCycle ) )
 		{
 			cr.AddItem( plant.BasePid, 2 );
 			_SubItem( item, 1 );
 			
-			cr.Say( SAY_EMOTE_ON_HEAD, "Собирает семена" );
-			return true;
+			return action( cr, "Собирает семена" );
 		}
 		
 		if( item.GROW_STAGE == int( plant.SeedCycle + 1 ) )
@@ -129,64 +155,59 @@ void _InitShit(Item& item, bool firstTime)
 			cr.AddItem( plant.CollectPid, 1 );
 			_SubItem( item, 1 );
 			
-			cr.Say( SAY_EMOTE_ON_HEAD, "Собирает плоды" );
-			return true;
+			return action( cr, "Собирает плоды" );
 		}
 		
-		return false;
+		return inform( cr, "Вы не знаете, что с этим делать."  );
 	}
 	
 	bool _UsePlant(Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery)
 	{
-		if( valid( onCritter ) && onCritter.Id != cr.Id ) return false;
+		if( ( valid( onCritter ) && onCritter.Id != cr.Id ) || valid( onItem ) || valid( onScenery ) )
+			return inform( cr, "\"Используйте\" объект в инвентаре или на себя." );
 
 		return CleanUpPlant( cr, item );
 	}
 	
 	bool _PlantSeeds(Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery)
 	{
-		if( valid( onCritter ) && onCritter.Id != cr.Id ) return false;
-		
-		if( !cr.IsLife() ) return false;
+		if( ( valid( onCritter ) && onCritter.Id != cr.Id ) || valid( onItem ) || valid( onScenery ) )
+			return inform( cr, "\"Используйте\" объект в инвентаре или на себя." );
 		
 		Map@ map = cr.GetMap();
-		if( !valid( map ) ) return false;
+		if( !valid( map ) )
+			return inform( cr, "На глобале нельзя." );
 
-		if( !isSEED(item) ) return false;
+		if( !isSEED(item) )
+			return inform( cr, "С семечком что-то не так, его уже не посадить." );
 
 		if( map.GetItems( cr.HexX, cr.HexY, null ) > 0 )
-		{
-			cr.Say( SAY_NETMSG, "Это тут не прорастет." );
-			return true;
-		}
+			return inform( cr, "Сначала очистите место, семечку нужно больше пространства для роста." );
 
 		uint time = 0;
 		if( !CheckGard( map, cr.HexX, cr.HexY ) )
-		{
-			cr.Say( SAY_NETMSG, "Это тут не прорастет." );
-			return true;
-		}
+			return inform( cr, "Семечка сможет прорасти лишь на грядке." );
 		
 		_SubItem( item, 1 );
-		cr.Say( SAY_EMOTE_ON_HEAD, "Сеет" );
 
 		Item@ seed = map.AddItem( cr.HexX, cr.HexY, item.GetProtoId(), 1 );
 		seed.TIME_EVENT = CreateTimeEvent( __FullSecond + getStageTime(), "e_ProcessPlant", seed.Id, true );
 		
-		return true;
+		return action( cr, "Сеет" );
 	}
 
 	bool _OnMePlant( Item& plant, Critter& cr, Item@ usedItem )
 	{
-		if( !valid( usedItem ) ) return false;
+		if( !valid( usedItem ) )
+			return inform( cr, "Киньте скриншот в канал дискорда #баги, указав что за предмет вы использовали на растении." );
 
-		if( Fertilize( cr, plant, usedItem ) )
+		if( Fertilize( cr, plant, usedItem, false ) )
 			return true;
 		
-		if( Watering( cr, plant, usedItem ) )
+		if( Watering( cr, plant, usedItem, false ) )
 			return true;
 		
-		return false;
+		return inform( cr, "Вы не смогли сделать ничего толкового с растением." );
 	}
 
 	bool _SkillPlant( Item& item, Critter& cr, int skill )
@@ -194,12 +215,12 @@ void _InitShit(Item& item, bool firstTime)
 		if( skill == SKILL_PICK_ON_GROUND )
 		{
 			CPlant @ plant = GetCPlant( item.PLANT_TYPE );
-			if( !valid( plant ) ) return false;
+			if( !valid( plant ) )
+				return inform( cr, "Растение мутировало, либо у вас не хватает навыков опознать его.\n\nКиньте скриншот в канал дискорда #баги. Информация:" + debugInfo( item ) );
 
 			if( item.GROW_STAGE == int( plant.MaxCycle ) )
 			{
 				cr.ParamBase[ CR_DIRTINESS ] += Random( 0, 2 );
-				cr.Say( SAY_EMOTE_ON_HEAD, "Собирает" );
 				cleanScripts( item );
 				
 				//CPlant@ plant = GetCPlant( item.PLANT_TYPE );
@@ -207,31 +228,41 @@ void _InitShit(Item& item, bool firstTime)
 					plant.Kill( item );
 				
 				MoveItem( item, item.GetCount(), cr );
-				return true;
+				
+				return action( cr, "Собирает" );
 			}
 			
 			if( item.GetProtoId() == PID_SHIT_SMALL )
 			{
 				cr.ParamBase[ CR_DIRTINESS ] += Random( 1, 4 );
-				cr.Say( SAY_EMOTE_ON_HEAD, "Убирает перегной" );
 				cleanScripts( item );
 				MoveItem( item, item.GetCount(), cr );
-				return true;
+				
+				return action( cr, "Убирает перегной" );
 			}			
 				
 			return AskCheckout( cr, item );
 		}
 		
 		if( skill == SK_SCIENCE )
-			return Watering( cr, item, null );
+		{
+			Watering( cr, item, null );
+			return true;
+		}
 
 		if( skill == SK_REPAIR )
-			return Fertilize( cr, item );
+		{
+			Fertilize( cr, item );
+			return true;
+		}
 		
 		if( skill == SK_TRAPS )
-			return PlantPickup( cr, item );
+		{
+			PlantPickup( cr, item );
+			return true;
+		}
 
-		return false;
+		return inform( cr, "Вы не смогли ничего добиться. Попробуйте другие навыки." );
 	}
 	
 #endif
@@ -263,7 +294,8 @@ void _InitShit(Item& item, bool firstTime)
 
 	bool AskCheckout( Critter& cr, Item@ item )
 	{
-		if( !valid( item ) ) return false;
+		if( !valid( item ) ) 
+			return inform( cr, "Киньте скриншот в канал дискорда #баги, указав что вы сделали перед появлением сообщения." );
 		
 		string stage = "Мутант";
 		string[] stage_names = { "Семечка", "Побег", "Росток" };
@@ -275,7 +307,8 @@ void _InitShit(Item& item, bool firstTime)
 		else
 		{
 			CPlant@ plant = GetCPlant( item.PLANT_TYPE );
-			if( !valid( plant ) ) return true;
+			if( !valid( plant ) )
+				return inform( cr, "Растение мутировало, либо у вас не хватает навыков опознать его.\n\nКиньте скриншот в канал дискорда #баги. Информация:" + debugInfo( item ) );
 
 			if( isSEED( item) )
 				stage = "Семечка";
@@ -308,7 +341,11 @@ void _InitShit(Item& item, bool firstTime)
 	void answer_CHECKOUT( Critter& cr, uint answerI, string& answerS )
 	{
 		Item@ plant = GetItem( cr.ParamBase[CR_VAL0] );
-		if( !valid( plant ) ) return;
+		if( !valid( plant ) ) 
+		{
+			inform( cr, "Киньте скриншот в канал дискорда #баги, указав что конкретно вы сделали перед появлением этого сообщения." );
+			return;
+		}
 		
 		switch( answerI )
 		{
@@ -337,10 +374,11 @@ void _InitShit(Item& item, bool firstTime)
 
 	bool PlantPickup( Critter& cr, Item@ plant )
 	{
-		if( !valid( plant ) ) return false;
+		if( !valid( plant ) )
+			return inform( cr, "Киньте скриншот в канал дискорда #баги, указав что за растение вы попытались собрать." );
 
 		cr.Animate( 0, ANIM2_PICKUP, null, false, true );
-		cleanScripts( plant );
+		cleanScripts( plant );//TODO: Проверить - не генерило-ли это баг с потерей поведения.
 		
 		if( isSEED(plant) )
 		{
@@ -374,10 +412,10 @@ void _InitShit(Item& item, bool firstTime)
 #ifndef __PLANT_WATERING
 	#define __PLANT_WATERING
 	
-	bool Watering( Critter& cr, Item& plant, Item@ usedItem )
+	bool Watering( Critter& cr, Item& plant, Item@ usedItem, bool TMI = true )
 	{
 		InitWaterSourceList();	
-		return WaterSources.watering( cr, plant, usedItem );
+		return WaterSources.watering( cr, plant, usedItem, TMI );
 	}
 	
 	WaterSourceList@ WaterSources;
@@ -427,10 +465,9 @@ void _InitShit(Item& item, bool firstTime)
 		{
 			if( !valid(plant) || !use( cr ) ) return false;
 			
-			cr.Say( SAY_EMOTE_ON_HEAD, "Поливает растение" );
 			plant.WATERING++;
 			
-			return true;
+			return action( cr, "Поливает растение" );
 		}
 	}
 
@@ -460,25 +497,30 @@ void _InitShit(Item& item, bool firstTime)
 			return this;
 		}
 		
-		bool watering( Critter& cr, Item@ plant, Item@ item )
+		bool watering( Critter& cr, Item@ plant, Item@ item, bool TMI = true )
 		{
 			if( !valid( item ) )
 				return watering( cr, plant );
 			
 			for( uint i = 0; i < list.length(); i++ )
 				if( list[i].isSource( item ) )
-					return list[i].watering( cr, plant );
+				{
+					if( list[i].watering( cr, plant ) )
+						return true;
+					else
+						break;
+				}
 				
-			return false;
+			return inform( cr, "У вас не вышло нормально полить растение.", false, TMI );
 		}
 		
-		bool watering( Critter& cr, Item@ plant )
+		bool watering( Critter& cr, Item@ plant, bool TMI = true )
 		{
 			for( uint i = 0; i < list.length(); i++ )
 				if( list[i].watering( cr, plant ) )
 					return true;
 			
-			return false;
+			return inform( cr, "Вы не смогли полить растение.", false, TMI );
 		}
 	}
 #endif
@@ -491,23 +533,24 @@ bool Fertilize( Critter& cr, Item& plant )
 	if( cr.CountItem( PID_SHIT_BIG ) > 0 ) 
 		return Fertilize( cr, plant, cr.GetItem( PID_SHIT_BIG, -1 ) );
 	
-	return false;
+	return inform( cr, "У вас нет удобрений.", false );
 }
 
-bool Fertilize( Critter& cr, Item& plant, Item@ usedItem )
+bool Fertilize( Critter& cr, Item& plant, Item@ usedItem, bool TMI = true )
 {
-	if( !valid( usedItem ) ) return false;
+	if( !valid( usedItem ) ) 
+		return inform( cr, "Ваши удобрения не подходят.", false, TMI );
 
 	uint pid = usedItem.GetProtoId();
 	
-	if( pid != PID_SHIT_SMALL && pid != PID_SHIT_BIG ) return false;
+	if( pid != PID_SHIT_SMALL && pid != PID_SHIT_BIG )
+		return inform( cr, "Вы не смогли удобрить растение.", false, TMI );
 
 	cr.ParamBase[ CR_DIRTINESS ] += Random( 0, 3 );
-	cr.Say( SAY_EMOTE_ON_HEAD, "Удобряет растение" );
 	cr.DeleteItem( pid, 1 );
 	plant.FERTILITY += 1;
 	
-	return true;
+	return action( cr, "Удобряет растение" );
 }
 
 #ifndef __PLANT_CLASSES
