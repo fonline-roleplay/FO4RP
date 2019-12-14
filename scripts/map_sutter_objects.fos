@@ -13,6 +13,9 @@ import void Prolonged_heal ( Critter& targetCr, uint16 sk ) from "heal";
 import void RottenFood( Map@ map ) from "rotting";
 import void RottenFood( Critter& cr ) from "rotting";
 
+import void Cleaning( Critter& player, uint soap_pid, int water_source ) from "main";
+import bool ConsumeMeal( Critter& cr, uint water_pid, uint amount ) from "adv_items";
+import void DIALOG_MENU( Critter& cr, string[] data ) from "gm";
 
 #define PID_OBJECT_WATERPUMP    ( 1300 )
 #define PID_OBJECT_WATTS        ( 1303 )
@@ -53,128 +56,214 @@ int getPowerValue( Critter& cr )
 	return power_value;
 }
 
+void WaterpumpMenu( Critter& cr, Item& item )
+{
+	string state = ( item.Val2 > 0 ? "в" : "вы" ) + "ключена, индикатор показывает " + item.Val3;
+	
+	bool isBroken = false;
+	
+	if ( item.Val6 > 0 ) 
+	{
+		state += ". Требуется внимательный осмотр";
+		isBroken = true;
+	}
+	else
+	if ( item.Val5 > 0 )
+	{
+		state += ". Требуется ремонт";
+		isBroken = true;
+	}
+	else
+	if ( item.Val4 > 0 )
+	{
+		state += ". Требуется деталь";
+		isBroken = true;
+	}
+	
+	
+	string function = "map_sutter_objects@answer_Waterpump" + ( isBroken ? "Maintenance" : "Menu" );
+	string action = ( item.Val2 > 0 ? "вы" : "в" ) + "ключить";
+	string[] data = { function, "Помпа " + state + ", выберите действие:", action };
+	
+	if( !isBroken )
+	{ //TODO: Сделать возможность набрать воду/попить/помыться из сломанной помпы, но со штрафами.
+		data.insertLast( "набрать воды" );
+		data.insertLast( "попить" );
+		data.insertLast( "помыться" );
+	}
+	else
+	{ //TODO: Добавить кнопку "вставить деталь".
+		data.insertLast( "осмотреть" );
+		data.insertLast( "починить" );
+	}
+	
+	DIALOG_MENU( cr, data );
+	cr.ParamBase[ CR_VAL0 ] = item.Id;
+}
+
+void answer_WaterpumpMaintenance( Critter& cr, uint answerI, string& answerS )
+{
+	Item@ item = GetItem( cr.ParamBase[ CR_VAL0 ] );
+	
+	if( !valid( item ) )
+	{
+		cr.Say( SAY_NETMSG, "Помпа уже вся заржавела, из этого ничего не вышло." );
+		return;
+	}
+
+	switch( answerI )
+	{
+		case( 0 ): switchWaterpump( cr, item ); break;
+		case( 1 ): check_science( item, cr ); break;	
+		case( 2 ): check_repair( item, cr ); break;
+	}
+	
+	WaterpumpMenu( cr, item );
+}
+
+void answer_WaterpumpMenu( Critter& cr, uint answerI, string& answerS )
+{
+	Item@ item = GetItem( cr.ParamBase[ CR_VAL0 ] );
+	
+	if( !valid( item ) )
+	{
+		cr.Say( SAY_NETMSG, "Помпа уже вся заржавела, что-то пошло не так." );
+		return;
+	}
+
+	if( answerI == 0 )
+	{
+		switchWaterpump( cr, item );
+		return;
+	}
+	
+	if( item.Val3 < 1 )
+	{
+		cr.Say( SAY_NETMSG, "Воды больше нет." );
+		return;
+	}
+	
+	if( answerI == 1 )
+	{
+		collectWater( item, cr, null );
+		return;
+	}
+	
+	item.Val3--;
+		
+	switch( answerI )
+	{
+		case(2): ConsumeMeal( cr, PID_GLASS_BOTTLE_FULL, 1 ); break;
+		case(3): Cleaning( cr, 0, -1 );	break;
+	}
+	
+	WaterpumpMenu( cr, item );
+}
+
+void setAnimState( Item& item, bool state )
+{
+	if( state )
+		SETFLAG(item.Flags, ITEM_SHOW_ANIM);
+	else
+		UNSETFLAG(item.Flags, ITEM_SHOW_ANIM);
+
+	//Это костыль, т.к. иначе на стороне клиента не обновлялось состояние анимации.
+	SETFLAG( item.Flags, ITEM_HIDDEN );
+	item.Update();
+	uint[] values = { item.Id };
+	CreateTimeEvent( __FullSecond + 1, "e_ChangeAnims", values, true );
+}
+
+void switchWaterpump( Critter& cr, Item& item )
+{
+	if( getPowerValue(cr) <= 0 )
+	{
+		cr.Say( SAY_NETMSG, "Энергоснабжение отключено. Сначала запустите генератор." );
+		return;
+	}
+	
+	bool isOn = item.Val2 > 0;
+
+	item.Val2 = isOn ? 0 : 1;//Выключаем включенное и наоборот.
+	isOn = item.Val2 > 0;
+
+	setAnimState( item, isOn );
+
+	string state = ( isOn ? "В" : "Вы" ) + "ключено";
+	string action = ( isOn ? "" : "не " ) + "очищается";
+
+	cr.Say( SAY_NETMSG, state + ", вода " + action + "." );
+}
+
+void waterpumpInfo( Critter& cr, Item& item )
+{
+	string state = ( item.Val2 > 0 ? "в" : "вы" ) + "ключена, индикатор показывает " + item.Val3;
+	cr.Say( SAY_NETMSG, "Помпа " + state + "." );
+
+	check_science( item, cr );
+}
+
 bool _WaterPumpSkill( Item& item, Critter& cr, int skill )
 {
-    if( skill == SKILL_PICK_ON_GROUND )
-    {
-
-		uint8 switcher = item.Val2;
-
-        uint16 parts = item.Val4;
-        uint16 repair = item.Val5;
-		uint16 science = item.Val6;
-		
-		if ( science > 0 ) {cr.Say( SAY_NETMSG, "Требуется внимательный осмотр." ); return true;}
-		if ( parts > 0 ) {cr.Say( SAY_NETMSG, "Требуется деталь:" ); cr.SayMsg( SAY_NETMSG, TEXTMSG_ITEM, parts*100 ); return true;}
-		if ( repair > 0 ) {cr.Say( SAY_NETMSG, "Требуется ремонт." ); return true;}
-		
-
-		if( getPowerValue(cr) > 0 )
-        {
-            int val = switcher;
-            val = ( val > 0 ? 0 : 1 );
-
-            string msg = "";
-
-            if( val > 0 )
-            {
-                msg = "Включено";
-				
-                SETFLAG(item.Flags, ITEM_SHOW_ANIM);
-            }
-            else
-            {
-                msg = "Выключено";
-				
-                UNSETFLAG(item.Flags, ITEM_SHOW_ANIM);
-            }
-
-			SETFLAG( item.Flags, ITEM_HIDDEN );
-			item.Update();
-			uint[] values = { item.Id };
-			CreateTimeEvent( __FullSecond + 1, "e_ChangeAnims", values, true );
-
-            item.Val2 = val;
-
-            cr.Say( SAY_NETMSG, "" + msg + ". Вода " + ( val > 0 ? "" : "не" ) + " очищается." );
-        }
-        else
-        {
-            cr.Say( SAY_NETMSG, "Энергоснабжение отключено. Запустите генератор сначала." );
-        }
-    }
-    else if( skill == SK_SCIENCE )
-    {
-		if ( !check_science( item, cr )) return true;
-		
-        int    val = item.Val2;
-
-        string msg = "";
-
-        if( val > 0 )
-        {
-            msg = "включено";
-        }
-        else
-        {
-            msg = "выключено";
-        }
-
-        cr.Say( SAY_NETMSG, "Сейчас " + msg + "." );
-    }
-    else if( skill == SK_REPAIR && item.Val5 >0)
-    {
-		if ( !check_repair( item, cr )) return true;
+	cr.Say( SAY_NORM, "" + skill );//debug
+	
+    switch( skill )
+	{
+		case( SKILL_PICK_ON_GROUND ): WaterpumpMenu( cr, item ); break;
+		case( SK_SCIENCE ): waterpumpInfo( cr, item ); break;
+		case( SK_REPAIR ): check_repair( item, cr ); break;
 	}
+
+	return true;
+}
+
+bool collectWater( Item& item, Critter& cr, Item@ bottle )
+{
+	if( !valid( bottle ) )
+	{
+		@bottle = _CritGetItemHand( cr );
+		if( !valid( bottle ) ) 
+			return testInfo( cr, "Возьмите предмет в руки!" );
+	}
+
+	int8 index = bottlePid.find( bottle.GetProtoId() );
+
+    if( index == -1 )
+	{
+		check_parts( item, cr, bottle );
+		return true;
+	}
+
+	if( item.Val3 < 1 )
+	{
+		cr.Say( SAY_NETMSG, "Воды больше нет." );
+		return true;
+	}
+	
+	if( item.Val2 < 1 )
+	{
+		cr.Say( SAY_NETMSG, "Помпа отключена. Включите ее сначала." );
+		return true;
+	}
+	
+	if( getPowerValue(cr) <= 0 )
+	{
+		cr.Say( SAY_NETMSG, "Энергия отключена. Включите генератор." );
+		return true;
+	}
+	
+	_SubItem( bottle, 1 );
+	cr.AddItem( bottleFull[index], 1 );
+	cr.Say( SAY_EMOTE, "набирает воду" );
+	item.Val3--; 
+	
 	return true;
 }
 
 bool _WaterPumpOnMe( Item& item, Critter& cr, Item@ usedItem )
 {
-
-    if( usedItem is null )
-        return false;
-
-    uint pid = usedItem.GetProtoId();
-	
-	if ( !check_parts( item, cr, usedItem )) return true;
-	
-	int8 index = bottlePid.find( pid );
-
-    if( index != -1 )
-    {
-        uint8 switcher = item.Val2;
-        uint8 water = item.Val3;
-
-        if( getPowerValue(cr) > 0 )
-        {
-            if( switcher > 0 )
-            {
-                if( water > 0 )
-                {
-                    _SubItem( usedItem, 1 );
-					cr.AddItem( bottleFull[index], 1 );
-                    item.Val3 --;
-                }
-                else
-                {
-                    cr.Say( SAY_NETMSG, "Воды больше нет." );
-                }
-            }
-            else
-            {
-                cr.Say( SAY_NETMSG, "Помпа отключена. Включите ее сначала." );
-            }
-        }
-        else
-        {
-            cr.Say( SAY_NETMSG, "Энергия отключена. Включите генератор." );
-        }
-
-        return true;
-    }
-
-    return false;
+	collectWater( item, cr, usedItem );
+	return true;
 }
 
 void WattsInit( Item& item, bool firstTime )
@@ -1044,7 +1133,7 @@ void debugDyspnea(Critter& cr, int val, int, int){
 
 bool check_parts( Item& item, Critter& cr, Item@ usedItem )
 {
-    if( item is null || usedItem is null )
+    if( !valid( usedItem ) )
         return false;
 
     uint pid = usedItem.GetProtoId();
@@ -1065,41 +1154,76 @@ bool check_parts( Item& item, Critter& cr, Item@ usedItem )
     return true;
 }
 
-bool check_repair( Item& item, Critter& cr)
+bool check_repair( Item& item, Critter& cr )
 {
-    if( item is null )
-        return false;
-
-	if ( item.Val6 >0 ) {cr.Say( SAY_NETMSG, "Пока еще непонятно в чем проблема." ); return false;}
-	if ( item.Val4 >0 ) {cr.Say( SAY_NETMSG, "Пока еще нет нужной детали." ); return false;}
-	if ( cr.Skill[ SK_REPAIR ] < item.Val5 ) {cr.Say( SAY_NETMSG, "Недостаточно навыка для того чтобы исправить проблему." ); return false;}
-	else
+	if( item.Val6 > 0 ) 
+	{
+		cr.Say( SAY_NETMSG, "Пока еще непонятно в чем проблема." ); 
+		return true;
+	}
+	
+	if( item.Val4 > 0 && cr.CountItem( item.Val4 ) == 0 ) 
+	{
+		cr.Say( SAY_NETMSG, "Пока еще нет нужной детали. Используйте науку, что бы понять что нужно." ); 
+		return true;
+	}
+	
+	if ( item.Val5 > 0 )
+	{
+		if( cr.Skill[ SK_REPAIR ] < item.Val5 ) 
+			cr.Say( SAY_NETMSG, "Недостаточно навыка для того чтобы исправить проблему." ); 
+		else
 		{
-		cr.Say( SAY_NETMSG, "Вы определили неисправность и устранили ее." );
-		item.Val5 = 0;
+			if( item.Val4 > 0 )
+			{
+				cr.Say( SAY_NETMSG, "Вы определили неисправность и устранили ее, использовав необходимую деталь." );
+				
+				cr.DeleteItem( item.Val4, 1 );
+				item.Val4 = 0;
+			}
+			else
+				cr.Say( SAY_NETMSG, "Вы определили неисправность и устранили ее." );
+			
+			item.Val5 = 0;
 		}
+	}
+	
     return true;
 }
 
 bool check_science( Item& item, Critter& cr)
 {
-    if( item is null )
-        return false;
-
 	uint16 science = item.Val6;
 	uint16 parts = item.Val4;
-	if ( science > 0 )
+	
+	if( science > 0 )
 	{
-		if ( cr.Skill[ SK_SCIENCE ] < science ) {cr.Say( SAY_NETMSG, "Недостаточно навыка для того чтобы определить проблему." ); return false;}
+		if( cr.Skill[ SK_SCIENCE ] < science ) 
+			cr.Say( SAY_NETMSG, "Недостаточно навыка для того чтобы определить проблему." );
 		else
+		{
+			if( parts > 0 ) 
 			{
-			if ( parts >0 ) {cr.Say( SAY_NETMSG, "Вы определили и пометили неисправность, требуется деталь:" ); cr.SayMsg( SAY_NETMSG, TEXTMSG_ITEM, parts*100 );}
-			else if ( item.Val5 >0 ) cr.Say( SAY_NETMSG, "Вы определили и пометили неисправность, остается применить практические навыки." );
-			else cr.Say( SAY_NETMSG, "Вы определили неисправность и устранили ее." );
-			item.Val6 = 0;
-			return true;
+				cr.Say( SAY_NETMSG, "Вы определили и пометили неисправность, осталось добавить деталь:" ); 
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_ITEM, parts * 100 );
 			}
-	}		
+			else if( item.Val5 > 0 )
+				cr.Say( SAY_NETMSG, "Вы определили и пометили неисправность, остается применить практические навыки." );
+			else 
+				cr.Say( SAY_NETMSG, "Вы определили неисправность и устранили ее." );
+			
+			item.Val6 = 0;
+		}
+	}
+	else
+	{
+		if( parts > 0 ) 
+		{
+			cr.Say( SAY_NETMSG, "Для починки необходима деталь:" ); 
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_ITEM, parts * 100 );
+		}
+	}
+
     return true;
 }
 
