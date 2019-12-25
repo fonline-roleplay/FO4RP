@@ -4,10 +4,24 @@
 #include "_macros.fos"
 #include "_colors.fos"
 
+// Основные.
+import string Colorizing( int number, string[] list, int[] listX ) from "mio_deviants_toolkit";
+import string Dictkeys( int number, string[] list, int[] listX ) from "mio_deviants_toolkit";
+import int MenuChoice( int storage, uint answerI, string cell, bool rec ) from "mio_deviants_toolkit";
+import string[] StatusMaker( Critter& initiator, Critter@ target, string[] list, int[] listX, uint8[] listV ) from "mio_deviants_toolkit";
+
+// Упаковка.
 import int BitUnpacker( int storage, uint8 index, uint8 bit ) from "mio_deviants_toolkit";
-import int BitPacker( int cell, int storage, uint8 index, uint8 bit ) from "mio_deviants_toolkit";
 import int BitZeroing( int storage, uint8 index, uint8 bit ) from "mio_deviants_toolkit";
+import int BitPacker( int cell, int storage, uint8 index, uint8 bit ) from "mio_deviants_toolkit";
+import int BitChange( int number, int storage, uint8 index, uint8 bit ) from "mio_deviants_toolkit";
+
+// Сторонние.
+import void ChangeCritterSpeed( Critter& cr ) from "speed";
+
 import uint8 ChoiceMask( int[] list ) from "mio_deviants_toolkit";
+
+
 
 // ####################################################################################################
 // #                                       Obvious AID Manager                                        #
@@ -17,6 +31,50 @@ import uint8 ChoiceMask( int[] list ) from "mio_deviants_toolkit";
 #define TARGETID								( ST_VAR0 )					// Параметр криттера содержащий ID, с которым происходит взаимодействие.
 #define TARGETPID								( ST_VAR1 )					// Параметр криттера содержащий PID, с которым происходит взаимодействие.
 #define MENU_STORAGE							( ST_VAR2 )					// Параметр криттера содержащий выбор меню.
+#define MENU_PAGE								( ST_VAR3 )					// Параметр криттера содержащий дополнительные данные меню-журналов.
+
+// Пачки.
+#define NUM_MENU_PAGE							( 1 )						// Страница. Начальный индекс.
+#define BIT_MENU_PAGE							( 4 )						// 
+#define NUM_MENU_SIGN							( 32 )						// Знак. Начальный индекс.
+#define BIT_MENU_SIGN							( 1 )						// 
+
+#define STARTING_POINT							( 1 )						// Начало отсчёта.
+#define INDEX									# ( X ) ( X - STARTING_POINT )
+
+// Types.
+#define TYPE_NONE								( 0 )
+#define TYPE_ITEM								( 1 )
+#define TYPE_MAP								( 2 )
+#define TYPE_CRITTER							( 3 )
+#define TYPE_CRITTER_PARAM						( 4 )
+#define TYPE_CRITTER_NEEDS						( 5 )
+#define TYPE_CRITTER_COMBAT						( 6 )
+#define TYPE_CRITTER_DIFFERENT					( 7 )
+#define TYPE_LOC_NAVIGATION						( 8 )
+
+
+
+// ####################################################################################################
+// #                                        Condition Control                                         #
+// ####################################################################################################
+
+// Condition Control.
+#define NUM_DRAGGING							( 1 )						// Тащит тело.
+#define BIT_DRAGGING							( 1 )						// 
+#define NUM_HIDEFACE							( 2 )						// Закрыто лицо.
+#define BIT_HIDEFACE							( 1 )						// 
+#define NUM_SHOWSPAM							( 3 )						// Отображение точек при печати.
+#define BIT_SHOWSPAM							( 1 )						// 
+
+bool F_Dragging( Critter& player )          { return BitUnpacker( player.Param[ MIO_FLAGS ], INDEX( NUM_DRAGGING ), BIT_DRAGGING ) == 1; }
+void F_Dragging( Critter& player, int num ) { player.ParamBase[ MIO_FLAGS ] = BitPacker( num, player.Param[ MIO_FLAGS ], INDEX( NUM_DRAGGING ), BIT_DRAGGING ); }
+
+bool F_Hideface( Critter& player )          { return BitUnpacker( player.Param[ MIO_FLAGS ], INDEX( NUM_HIDEFACE ), BIT_HIDEFACE ) == 1; }
+void F_Hideface( Critter& player, int num ) { player.ParamBase[ MIO_FLAGS ] = BitPacker( num, player.Param[ MIO_FLAGS ], INDEX( NUM_HIDEFACE ), BIT_HIDEFACE ); }
+
+bool F_Showspam( Critter& player )          { return BitUnpacker( player.Param[ MIO_FLAGS ], INDEX( NUM_SHOWSPAM ), BIT_SHOWSPAM ) == 1; }
+void F_Showspam( Critter& player, int num ) { player.ParamBase[ MIO_FLAGS ] = BitPacker( num, player.Param[ MIO_FLAGS ], INDEX( NUM_SHOWSPAM ), BIT_SHOWSPAM ); }
 
 
 
@@ -41,8 +99,134 @@ void MenuMaker( Critter& initiator, string[] list, string@ headline, string@ poi
 }
 
 string Color( uint color ) { return "|"+color+" "; }
+void ShortRec( Critter& player, string cell, uint num ) { player.ParamBase[ MENU_STORAGE ] = MenuChoice( player.Param[ MENU_STORAGE ], num, cell, true ); }
+void PageReset( Critter& player ) { player.ParamBase[ MENU_PAGE ] = BitZeroing( player.Param[ MENU_PAGE ], INDEX( NUM_MENU_PAGE ), BIT_MENU_PAGE ); }
+void Empty( Critter& player, uint answerI, string& answerS ) { null; }
 
-// ************************************************** Дичь и говнокод **************************************************
+// ================================================== Обработчики ==================================================
+
+void Dispatcher( Critter& player, uint answerI, string& answerS ) // Координатор меню.
+{
+	ShortRec( player, "MENU_CHOICE", answerI );
+
+	int storage = 		player.Param[ MENU_STORAGE ];
+	uint8 branch = 		MenuChoice( storage, 0, "MENU_BRANCH", false );
+	uint8 depth = 		MenuChoice( storage, 0, "MENU_DEPTH", false );
+	uint8 count = 		MenuChoice( storage, 0, "MENU_COUNT", false );
+
+	bool BACK = 		( answerI == count-1 );
+	if( depth == 0 )	{ BACK = false; }
+	if( BACK )			{ depth--; ShortRec( player, "MENU_DEPTH", depth ); }
+
+	uint8 menumark_1 = 	MenuChoice( storage, 0, "MENU_MENUMARK_1", false );
+	uint8 menumark_2 = 	MenuChoice( storage, 0, "MENU_MENUMARK_2", false );
+
+	//player.Say( SAY_NETMSG, "dpt: "+depth +" - answerI: "+answerI +"/"+count );
+
+	if( branch == 0 )
+	{
+		if( depth == 0 )
+		{
+			if( BACK ) { CP_BASIC( player ); return; }																	// Рекурсия.
+			if( answerI == 0 ) { ChangeMASK( player, answerI, "" ); return; }											// Капюшон			- Логика.
+			if( answerI == 1 ) { ChangeSPAM( player, answerI, "" ); return; }											// Спам				- Логика.
+			if( answerI == 2 ) { MenuTALKVOLUME( player, answerI, "Дальность слышимости:" ); }							// Голос			- Меню.
+			if( answerI == 3 ) { MenuDEBUG( player, answerI, "Фикс заглючившей скорости:" ); }							// Debug			- Меню.
+			ShortRec( player, "MENU_MENUMARK_1", answerI );
+			ShortRec( player, "MENU_DEPTH", depth+1 );
+			return;
+		}
+
+		if( menumark_1 == 2 )
+		{
+			if( depth == 1 ) { ChangeTALKVOLUME( player, answerI, "" ); return; }										// Голос			- Логика.
+		}
+		if( menumark_1 == 3 )
+		{
+			if( depth == 1 ) { ChangeDEBUG( player, answerI, "" ); return; }											// Debug			- Логика.
+		}
+	}
+}
+
+
+
+// ####################################################################################################
+// #                                               MENU                                               #
+// ####################################################################################################
+
+void unsafe_CONTROL_PANEL_PLAYER( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	player.ParamBase[ MENU_STORAGE ] = 0;
+
+	if( param2 == 0 )
+	{
+		CP_BASIC( player );
+		return;
+	}
+}
+
+// ####################################################################################################
+// #                                            Main Menu                                             #
+// ####################################################################################################
+
+void CP_BASIC( Critter& player )
+{
+	ShortRec( player, "MENU_BRANCH", 0 );
+	string s1 = ( F_Hideface( player ) ? "+" : "-" ) + " Скрыть лицо";
+	string s2 = ( F_Showspam( player ) ? "+" : "-" ) + " Спамить точки";
+	string[] list = { s1, s2, "Голос", "Debug" };
+	MenuMaker( player, list, "Меню настроек персонажа.", "Dispatcher" );
+}
+
+void MenuTALKVOLUME( Critter& player, uint answerI, string& answerS )
+{
+	string[] list = { "5 шагов", "10 шагов", "15 шагов", "20 шагов", "<<< Назад" };
+	ShortRec( player, "MENU_COUNT", list.length() );
+	MenuMaker( player, list, answerS, "Dispatcher" );
+}
+void MenuDEBUG( Critter& player, uint answerI, string& answerS )
+{
+	string[] list = { "Пересчет скорости", "<<< Назад" };
+	ShortRec( player, "MENU_COUNT", list.length() );
+	MenuMaker( player, list, answerS, "Dispatcher" );
+}
+
+void ChangeMASK( Critter& player, uint answerI, string& answerS )
+{
+	if( F_Hideface( player ) ) { F_Hideface( player, 0 ); } else { F_Hideface( player, 1 ); }
+	CP_BASIC( player );
+}
+void ChangeSPAM( Critter& player, uint answerI, string& answerS )
+{
+	if( F_Showspam( player ) ) { F_Showspam( player, 0 ); } else { F_Showspam( player, 1 ); }
+	CP_BASIC( player );
+}
+void ChangeTALKVOLUME( Critter& player, uint answerI, string& answerS )
+{
+	MenuTALKVOLUME( player, answerI, "|0xFFFF00 Нужно боооольше золота!" );
+}
+void ChangeDEBUG( Critter& player, uint answerI, string& answerS )
+{
+	ChangeCritterSpeed( player );
+	MenuDEBUG( player, answerI, "|0xFF0000 Пересчитано!" );
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
