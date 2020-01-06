@@ -5,7 +5,7 @@ title: Скачать
 ---
 # Быстрый старт
 
-Для загрузки игрового клиента [скачайте апдейтер](https://github.com/fonline-roleplay/FO4RP/releases/download/1.01/F0nlineUpdater.exe), положите его в пустую папку и запустите. 
+Для загрузки игрового клиента [скачайте апдейтер](https://github.com/fonline-roleplay/FO4RP/releases/download/1.01/FOnlineUpdater.exe), положите его в пустую папку и запустите. 
 
 Как только апдейтер закончит загрузку, запустите `FOConfig.exe` и выберите подходящее разрешение экрана.
 
