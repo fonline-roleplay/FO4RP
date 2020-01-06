@@ -78,8 +78,6 @@ EXPORT void Critter_GetIp( Critter& cr, ScriptArray* array );
 /*                          TNF - includes                              */
 /************************************************************************/
 
-#include "revenge.h"
-
 #ifdef __CLIENT
 
 
@@ -136,26 +134,6 @@ uint GetHardware()
 
 #endif
 
-
-
-#ifdef __SERVER
-void RunClientScript( Critter* cr, ScriptString* funcName, int p0, int p1, int p2, ScriptString* p3, ScriptArray* p4 )
-{
-    _asm {
-        mov eax, ENGINE_PTR_FUNC_Cl_RunClientScript
-        push    p4
-        push    p3
-        push    p2
-        push    p1
-        push    p0
-        push    funcName
-        push    cr
-        call eax
-        add esp, 0x1C
-    }
-    return;
-}
-#endif
 
 struct StartCallback
 {
@@ -243,7 +221,6 @@ FONLINE_DLL_ENTRY( isCompiler )
 	RegisterScriptFileSystem( );
 
     #ifdef __SERVER
-    // ASEngine->RegisterObjectMethod("Critter", "void RunClientScript2(string& funcName, int p0, int p1, int p2, string@+ p3, int[]@+ p4)", asFUNCTION(RunClientScript), asCALL_CDECL_OBJFIRST);
     ASEngine->RegisterGlobalFunction( "void AddStartCallback(string&, string&)", asFUNCTION( AddStartCallback ), asCALL_CDECL );
     ASEngine->RegisterGlobalFunction( "void CallStartCallbacks()", asFUNCTION( CallStartCallbacks ), asCALL_CDECL );
 	ASEngine->RegisterGlobalFunction("uint GetUseApCost(Critter&, Item&, uint8)", asFUNCTION(GetUseApCost), asCALL_CDECL);

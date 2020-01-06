@@ -5,6 +5,10 @@
 #include "_macros.fos"
 #include "sprite.fos"
 
+# pragma bindfunc "NativeSprite@ AddMapSprite2(uint16, uint16, uint, int, int, int, int, int) -> rust_dll/client.dll add_map_sprite"
+# pragma bindfunc "bool ChangeTile(uint, uint16, uint16, int16, int16, uint8, bool) -> rust_dll/client.dll change_tile"
+# pragma bindfunc "void RegroupRoofs() -> rust_dll/client.dll regroup_roofs"
+
 // #include "qmap_h.fos"
 
 // Sprite[] tiles(6);
@@ -24,9 +28,12 @@ bool         updateTiles = false;
 
 Sprite[] sprites;
 
+#define VALUE_EMPTY (uint(-1))
+#define VALUE_ERROR (uint(-2))
+
 uint getSprite( uint hash )
 {
-    uint sn = uint( -1 );
+    uint sn = VALUE_EMPTY;
     if( hash == 0 )
         return sn;
 
@@ -38,14 +45,14 @@ uint getSprite( uint hash )
             break;
         }
     }
-    if( sn == uint( -1 ) )
+    if( sn == VALUE_EMPTY )
     {
         sn = sprites.length();
         sprites.grow( 1 );
         sprites[ sn ].Load( hash, 0 );
         if( sprites[ sn ].Id == 0 )
         {
-            sn = uint( -1 );
+            sn = VALUE_ERROR;
             sprites.removeLast();
             // Log("Не найден спрайт с хэшем "+hash+" "+int(hash));
             Message( "Не найден спрайт с хэшем " + hash + " " + int(hash) );
@@ -224,6 +231,8 @@ class MapTileData
         TileHashs.resize( 0 );
         TileHashs = data;
 
+        //Message("SetFullHash, len: "+TileHashCount());
+
         sprites.resize( 0 );
         ReloadSprites();
         return true;
@@ -270,6 +279,8 @@ class MapTileData
     bool LoadTiles( int param, int[]& data )
     {
         bool ck = true;
+        uint old_len = TileCount();
+        uint data_len = data.length();
 
         if( param == 2 )
         {
@@ -291,6 +302,7 @@ class MapTileData
                 Tiles = data;
             }
         }
+        //Message("LoadTiles, old_len: "+old_len+", data: "+data_len+", new_len:"+TileCount());
 
         updateScreen();
 
@@ -317,7 +329,7 @@ class MapTileData
 
         TileSprites.resize( len );
 
-        uint hash = 0, sn = 0;
+        /*uint hash = 0, sn = 0;
 
         for( uint i = 1; i < len; i++ )
         {
@@ -329,6 +341,10 @@ class MapTileData
 
             // if(sn!=uint(-1)) Message("Hash #"+i+" is "+sn+"/"+sprites[sn].Id+" ("+hash+")");
             // else Message("Hash #"+i+" is null ("+hash+")");
+        }*/
+
+        for( uint i = 1; i < len; i++ ) {
+            TileSprites[ i ] = VALUE_EMPTY;
         }
 
         return true;
@@ -340,11 +356,13 @@ class MapTileData
         {
             uint len = TileSprites.length();
             TileSprites.resize( hs + 1 );
-            for( uint i = len; i < hs; i++ )
-                TileSprites[ i ] = uint( -1 );
+            for( uint i = len; i < hs; i++ ) {
+                TileSprites[ i ] = VALUE_EMPTY;
+            }
         }
+        TileSprites[ hs ] = VALUE_EMPTY;
 
-        if( hs == 0 )
+        /*if( hs == 0 )
             return true;
 
         uint hash = uint( TileHashs[ hs ] );
@@ -359,12 +377,22 @@ class MapTileData
         {
             sn = getSprite( hash );
             TileSprites[ hs ] = sn;
-        }
+        }*/
 
         // if(sn!=uint(-1)) Message("Hash #"+hs+" is "+sn+"/"+sprites[sn].Id+" ("+hash+")");
         // else Message("Hash #"+hs+" is null ("+hash+")");
 
         return true;
+    }
+
+    uint LoadSprite( uint16 hash_index ) {
+        uint sprite_index = TileSprites[ hash_index ];
+        if( sprite_index == VALUE_EMPTY ){
+            uint hash = uint( TileHashs[ hash_index ] );
+            sprite_index = getSprite( hash );
+            TileSprites[ hash_index ] = sprite_index;
+        }
+        return sprite_index;
     }
 
     bool Draw()
@@ -375,114 +403,91 @@ class MapTileData
             return false;
 
         int    x = 0, y = 0;
-        uint16 hs = 0, val = 0, hexX = 0, hexY = 0;
-        uint   ts = 0, spriteId = 0;
+        uint16 hash_index = 0, val = 0, hexX = 0, hexY = 0;
+        uint   sprite_index = 0, spriteId = 0;
         uint8  layer = 0;
+        bool regroup_roofs = false;
 
         // Message("tilecount: "+TileCount()+" array size: "+Tiles.length());
         for( uint i = 0, len = TileCount(); i < len; i++ )
         {
-            DMO64_get( Tiles, i, hs, val, hexX, hexY, layer );
-            // Message(hs+" "+hexX+" "+hexY+" "+layer);
+            DMO64_get( Tiles, i, hash_index, val, hexX, hexY, layer );
+            // Message(hash_index+" "+hexX+" "+hexY+" "+layer);
 
             NativeField@ field = GetField( hexX, hexY );
             if( field is null )
                 continue;
 
-            if( layer < 2 )
+            bool is_tile = (layer < 2);
+
+            if( is_tile )
             {
                 hexX = ( hexX << 1 );
                 hexY = ( hexY << 1 );
-            }
-            else if( layer == 2 )
-            {
+            } else if( layer == 2 ) {
                 field.IsNotPassed = true;
                 field.IsNoLight = true;
                 field.IsNotRaked = true;
                 field.IsWall = true;
-            }
-            else if( layer == 3 )
-            {
+            } else if( layer == 3 ) {
                 field.IsNotPassed = true;
-                field.IsNoLight = true; /*field.IsNotRaked=true;*/ field.IsScen = true;
-            }
-            else if( layer > 4 )
+                field.IsNoLight = true; /*field.IsNotRaked=true;*/
+                field.IsScen = true;
+            } else if( layer > 4 )
                 continue;
 
-            // if(layer==0) {hexX = (hexX<<1)+2; hexY = (hexY<<1)+1;}
-            // else if(layer==1) {hexX = (hexX<<1)+2; hexY = (hexY<<1)+2;}
-
-            // Message("draw "+hexX+" "+hexY);
-
-            if( hs == 0 || hs == 0xFFFF )
+            uint len = TileHashCount();
+            if( hash_index == 0 || hash_index == 0xFFFF || hash_index >= len)
                 continue;
 
-            if( !GetHexPos( hexX, hexY, x, y ) || x < -100 || y < -100 || x > __ScreenWidth + 100 || y > __ScreenHeight + 100 )
-                continue;
-
-            if( TileSprites.length() <= hs )
-                continue;
-            ts = TileSprites[ hs ];
-            if( ts == uint( -1 ) || sprites.length() <= ts )
-            {
-                /*ReloadSprite(hs);*/
-                continue;
-            }
-            spriteId = sprites[ ts ].Id;
-
-            if( spriteId == 0 )
-                continue;
-
-            if( layer == 0 )
-            {
-                // DrawMapSprite(hexX, hexY, 2027, spriteId, 0, 8, 1);
-                // AddMapSprite(uint16 hexX, uint16 hexY, uint animId, int sprIndex, int offsX, int offsY, int drawOrderType, int drawOffsY)
-
-                // AddMapSprite(hexX, hexY, spriteId, 0, __MapTileOffsX, __MapTileOffsY, 8, 0);
-
-                ::SetTile( hexX, hexY, false, spriteId, 0, 0, 0 );
+            if( is_tile ) {
+                bool is_roof = (layer == 1);
+                ChangeTile(TileHashs[hash_index], hexX, hexY, 0, 0, 0, is_roof);
                 updateTiles = true;
                 Tiles[ i * 2 ] = 0;
-            }
-            else if( layer == 1 )
-            {
-                // DrawMapSprite(hexX, hexY, 2027, spriteId, 0, 8, -96);
+                if( is_roof ) {
+                    //max_roof_num = UpdateRoofNum(hexX, hexY, GetMaxRoofNum());
+                    regroup_roofs = true;
+                }
+            } else {
+                if(!GetHexPos( hexX, hexY, x, y ) || x < -100 || y < -100 || x > __ScreenWidth + 100 || y > __ScreenHeight + 100 )
+                    continue;
 
-                // NativeSprite@ sprite = GetSprite(spriteId, hexX, hexY);
+                sprite_index = LoadSprite(hash_index);
 
-                /*if(sprite !is null)
-                   {
-                        sprite.DrawOrderType=29;
-                        sprite.RecalcOrder(50);
-                   }*/
+                if( sprite_index == VALUE_EMPTY || sprite_index == VALUE_ERROR || sprites.length() <= sprite_index )
+                {
+                    continue;
+                }
+                spriteId = sprites[ sprite_index ].Id;
 
-                // AddMapSprite(hexX, hexY, spriteId, 0, __MapRoofOffsX, __MapRoofOffsY, 30, 50);
+                if( spriteId == 0 )
+                    continue;
 
-                ::SetTile( hexX, hexY, true, spriteId, 0, 0, 0 );
-                updateTiles = true;
-                Tiles[ i * 2 ] = 0;
-            }
-            else if( layer == 2 )
-            {
-                // DrawMapSprite(hexX, hexY, 5001, spriteId, 0, 0, 0);
+                if( layer == 2 )
+                {
+                    // DrawMapSprite(hexX, hexY, 5001, spriteId, 0, 0, 0);
 
-                NativeSprite@ sprite = AddMapSprite( hexX, hexY, spriteId, 0, __MapHexWidth >> 1, __MapHexHeight >> 1, 23, 0 );
-                sprite.EggType = 5;
-                // TestAnim(uint(TileHashs[hs]), hexX, hexY, 4); //wtf?
-            }
-            else if( layer == 3 )
-            {
-                // DrawMapSprite(hexX, hexY, 5001, spriteId, 0, 0, 0);
+                    NativeSprite@ sprite = AddMapSprite2( hexX, hexY, spriteId, 0, __MapHexWidth >> 1, __MapHexHeight >> 1, 23, 0 );
+                    if( sprite !is null ) {
+                        sprite.EggType = 5;
+                    }
+                    // TestAnim(uint(TileHashs[hash_index]), hexX, hexY, 4); //wtf?
+                }
+                else if( layer == 3 )
+                {
+                    // DrawMapSprite(hexX, hexY, 5001, spriteId, 0, 0, 0);
 
-                NativeSprite@ sprite = AddMapSprite( hexX, hexY, spriteId, 0, __MapHexWidth >> 1, __MapHexHeight >> 1, 23, 0 );
-                // sprite.EggType = 5;
-            }
-            else if( layer == 4 )
-            {
-                // DrawMapSprite(hexX, hexY, 5001, spriteId, 0, 0, 0);
+                    NativeSprite@ sprite = AddMapSprite2( hexX, hexY, spriteId, 0, __MapHexWidth >> 1, __MapHexHeight >> 1, 23, 0 );
+                    // sprite.EggType = 5;
+                }
+                else if( layer == 4 )
+                {
+                    // DrawMapSprite(hexX, hexY, 5001, spriteId, 0, 0, 0);
 
-                NativeSprite@ sprite = AddMapSprite( hexX, hexY, spriteId, 0, __MapHexWidth >> 1, __MapHexHeight >> 1, 24, 0 );
-                // sprite.EggType = 5;
+                    NativeSprite@ sprite = AddMapSprite2( hexX, hexY, spriteId, 0, __MapHexWidth >> 1, __MapHexHeight >> 1, 24, 0 );
+                    // sprite.EggType = 5;
+                }
             }
         }
 
@@ -490,12 +495,17 @@ class MapTileData
 
         Selected = 0;
 
+        if(regroup_roofs) {
+            RegroupRoofs();
+        }
+
         // __ScreenWidth
         // __ScreenHeight
 
         return true;
     }
-
+    //WIP
+    /*
     bool ApplySelection()
     {
         int    x = 0, y = 0;
@@ -563,7 +573,7 @@ class MapTileData
 
         return true;
     }
-
+    
     void Draw_iface()
     {
         CritterCl@ chosen = GetChosen();
@@ -659,6 +669,7 @@ class MapTileData
 
         return;
     }
+    */
 }
 
 /*
@@ -837,6 +848,7 @@ void updateScreen()
 
 void qmap_loop()
 {
+    //void RefreshMap(bool onlyTiles, bool onlyRoof, bool onlyLight)
     if( refreshMap )
     {
         RefreshMap( false, false, false );
@@ -850,6 +862,8 @@ void qmap_loop()
         updateTiles = false;
     }
 
+    //WIP
+    /*
     if( ( currMTD !is null ) && currMTD.Id != 0 )
     {
         if( currMTD.SelTick != 0 && currMTD.SelTick < GetTick() )
@@ -859,10 +873,13 @@ void qmap_loop()
             // ) Message("Can't apply selection.");
         }
     }
+    */
 }
 
 void qmap_iface()
 {
+    //WIP
+    /*
     if( ( __sinf & SINF_SPRITES ) != 0 && ( currMTD !is null ) && currMTD.Id != 0 )
     {
         bool ck = ( currMTD.Id == uint( -1 ) );
@@ -870,6 +887,7 @@ void qmap_iface()
         if( ( server_enabled && !ck ) || ( local_enabled && ck ) )
             currMTD.Draw_iface();
     }
+    */
 }
 
 void __SetFullHash( int id, int count, int param2, string@ param3, int[] @ data )
@@ -886,7 +904,7 @@ void __SetFullHash( int id, int count, int param2, string@ param3, int[] @ data 
     mtd.SetFullHash( data );
 
     if( mtd.TileHashCount() != uint( count ) )
-        Message( "Tiles error! Invalid data size: " + mtd.TileHashCount() + "!=" + uint( count ) );
+        Message( "__SetFullHash error! Invalid data size: " + mtd.TileHashCount() + "!=" + uint( count ) );
 }
 
 void __SetOneHash( int id, int hs, int hash, string@ param3, int[] @ param4 )
@@ -918,7 +936,7 @@ void __SetTiles( int id, int count, int param, string@ param3, int[] @ data )
     mtd.LoadTiles( param, data );
 
     if( mtd.TileCount() != uint( count ) )
-        Message( "Tiles error! Invalid data size: " + mtd.TileCount() + "!=" + uint( count ) );
+        Message( "__SetTiles error! Invalid data size: " + mtd.TileCount() + "!=" + uint( count ) );
 }
 
 void __SetTile( int id, int data01, int data02, string@ param3, int[] @ param4 )
@@ -1002,38 +1020,6 @@ void InitDesertGenerator()
 {
     Message( "DesertGenerator initiation..." );
 
-
-    #ifndef BLACKWHITE
-    uint[][] @ sandHashes = GetSandHashes();
-
-    for( uint i = 0; i < HASHES_SAND_MAX; i++ )
-    {
-        sandSprites[ i ].resize( 0 );
-        uint sHlen = sandHashes[ i ].length();
-
-//		if(i==)
-
-        // sandSprites[i].resize(sHlen);
-        for( uint j = 0; j < sHlen; j++ )
-        {
-            if( i == HASHES_SAND_EDG2 && j != 3 )
-                continue;
-            if( i == HASHES_SAND_EDG4 && j > 2 )
-                break;
-            if( i == HASHES_SAND_EDG3 && j > 0 )
-                break;
-
-            uint sn = getSprite( sandHashes[ i ][ j ] );
-            if( sn == uint( -1 ) )
-            {
-                Message( "Load sprite fail." );
-                return;
-            }
-            sandSprites[ i ].insertLast( sn );
-        }
-    }
-    #endif
-
     string frm = ".frm";
 
     for( uint i = 1; i <= 9; i++ )
@@ -1062,6 +1048,31 @@ void InitDesertGenerator()
     {
         currMTD.SetOneHash( 50 + i, GetStrHash( "art/scenery/weed" + i + frm ) );
     }
+
+    #ifndef BLACKWHITE
+    uint[][] @ sandHashes = GetSandHashes();
+
+    uint k = 80;
+    for( uint i = 0; i < HASHES_SAND_MAX; i++ )
+    {
+        sandSprites[ i ].resize( 0 );
+        uint sHlen = sandHashes[ i ].length();
+
+        for( uint j = 0; j < sHlen; j++ )
+        {
+            if( i == HASHES_SAND_EDG2 && j != 3 )
+                continue;
+            if( i == HASHES_SAND_EDG4 && j > 2 )
+                break;
+            if( i == HASHES_SAND_EDG3 && j > 0 )
+                break;
+
+            currMTD.SetOneHash( k, sandHashes[ i ][ j ]);
+            sandSprites[ i ].insertLast(k);
+            k++;
+        }
+    }
+    #endif
 
     des_gen_inited = true;
 
@@ -1117,16 +1128,16 @@ void GenerateDesert()
 
     // uint16 hx0 = 78, hy0 = 96,
     // hx = 226, hy = 244,
-    uint16 hx0 = 0, hy0 = 0,
+    uint16 hx0 = 86, hy0 = 94,
            hx = 398, hy = 398,
            tw = ( hx - hx0 ) >> 1, th = ( hy - hy0 ) >> 1;
 
     float[] noiseBuffer;
     GenerateDesert( noiseBuffer, 200 );
 
-    for( uint y = 0; y < 200; y++ )
+    for( uint y = 0; y < 75; y++ )
     {
-        for( uint x = 0; x < 200; x++ )
+        for( uint x = 0; x < 75; x++ )
         {
             float val = noiseBuffer[ x + y * 200 ];       // SmoothNoise2d(x/4, y/4)*0.25f+SmoothNoise2d(x/2, y/2)*0.5f+SmoothNoise2d(x, y)*0.25f;
 
@@ -1159,7 +1170,8 @@ void GenerateDesert()
 
             n = uint( floor( simpN / 2 * sandspr.length() ) );
 
-            SetTile( hx0 + x * 2, hy0 + y * 2, false, sprites[ sandspr[ n ] ].Id, 0, 0, 0 );
+            //ChangeTile(sandspr[ n ], hx0 + x * 2, hy0 + y * 2, 0, 0, 0, false);
+            currMTD.SetTile( sandspr[ n ], 0, hx0 /2+ x, hy0/2 + y, 0 );
 
             /*
                NativeField@ field = GetField( hx0 + x * 2, hy0 + y * 2 );
@@ -1187,25 +1199,33 @@ void GenerateDesert()
                     //if(val>-0.002f) currMTD.SetTile(Random(41, 45), 0, hx0+x*2, hy0+y*2, 4);
                }
                else */
-            if( val > sandCaps[ 1 ] )
-            {
+            //if( val > sandCaps[ 1 ] )
+            //{
                 // SetTile(hx0+x*2, hy0+y*2, false, sprites[data4[Random(0, 8)]].Id, 0, 0, 0);
 
-                if( val > 0.30f )
-                    currMTD.SetTile( getInterI( 4, 9, simpN / 2 ), 0, hx0 + x * 2, hy0 + y * 2, 3 );
+                //if( val > 0.30f )
+                //    currMTD.SetTile( getInterI( 4, 9, simpN / 2 ), 0, hx0 + x * 2, hy0 + y * 2, 3 );
 
                 // if((val>0.15f && val<0.16f) || val>0.35f) currMTD.SetTile(getInterI(4, 9, simpN/2), 0, hx0+x*2, hy0+y*2, 3);
                 // else if(val>0.255f && val<0.26f) currMTD.SetTile(getInterI(31, 32, simpN/2), 0, hx0+x*2, hy0+y*2, 2);
 
                 // else if(simpN<-0.95f) currMTD.SetTile(Random(4, 9), 0, hx0+x*2, hy0+y*2, 3);
                 // else if(simpN<-0.90f) currMTD.SetTile(Random(51, 76), 0, hx0+x*2, hy0+y*2, 4);
+            //}
+
+            if( val > 0.30f) {
+                currMTD.SetTile( getInterI( 4, 9, simpN / 2 ), 0, hx0 + x * 2, hy0 + y * 2, 3 );
+            } else {
+                if(simpN<0.01f) currMTD.SetTile(Random(31, 33), 0, hx0+x*2, hy0+y*2, 2);
+                else if(simpN<0.04f) currMTD.SetTile(Random(51, 76), 0, hx0+x*2, hy0+y*2, 4);
             }
 
             #ifdef BLACKWHITE
             uint val2 = uint( ( val + 1 ) * 10 );
             val2 = CLAMP( val2, 0, 19 );
 
-            SetTile( hx0 + x * 2, hy0 + y * 2, false, sprites[ dataT[ val2 ] ].Id, 0, 0, 0 );
+            //old dll method
+            //SetTile( hx0 + x * 2, hy0 + y * 2, false, sprites[ dataT[ val2 ] ].Id, 0, 0, 0 );
             #endif
         }
     }
