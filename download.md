@@ -5,7 +5,7 @@ title: Скачать
 ---
 # Быстрый старт
 
-Скачать игровой клиент можно [по ссылке](https://yadi.sk/d/tdkQJslEYbjagg). Если по какой-либо причине у вас заблокирован доступ к Яндекс-диску, можете скачать апдейтер клиента отдельно - для [x64](https://github.com/fonline-roleplay/FO4RP/releases/download/1.01/FOnlineUpdater.exe) либо [x32](https://github.com/fonline-roleplay/FO4RP/releases/download/1.01/FOnlineUpdat32.exe) систем. Положите его в пустую папку и запустите - он выкачает остальное самостоятельно.
+Для загрузки игрового клиента [скачайте апдейтер](https://github.com/fonline-roleplay/FO4RP/releases/download/1.01/F0nlineUpdater.exe), положите его в пустую папку и запустите. 
 
 Как только апдейтер закончит загрузку, запустите `FOConfig.exe` и выберите подходящее разрешение экрана.
 
