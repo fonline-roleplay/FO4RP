@@ -2,7 +2,6 @@
 // Mentors: Terpsic Mims, qthree, Mio, Frank Kost, Jonathan Joestar, Vvish
 
 #include "_macros.fos"
-#include "_msgstr.fos"
 #include "_ltp.fos"
 
 import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat";
@@ -10,15 +9,35 @@ import void BleedCritter( Critter& cr, int8 bleedValue ) from "critter_status";
 import bool isGM( Critter& player ) from "gm";
 
 const string[] SoundNames = {"Tree1.ogg", "Tree2.ogg", "Tree3.ogg", "Tree4.ogg" };
+//=============TREE PARAMETERS============//
+#define ORIGINAL_PID	 			Val0		// запись ДНК дерева, чтобы при смене прото вернуться к оригиналу
+#define	RESOURCE_CAPACITY			Val1 		// тут записано макс кол-во подходов к дереву. Используется как текущее.
+#define DNA							Val2		// тут пишем какому дереву соответствует какой вид пенька
+#define EVENT 						Val3 		// валка для записи тайм-ивента на рост дерева
+//=========CHARACTER STAT MODIFIERS==========//
+#define ACTION_PAUSE_MIN		 	( 800 )
+#define ACTION_PAUSE_MAX		 	( 1700 )
+#define ACTION_PAUSE_BASE		 	( 1800 )
+#define ACTION_PAUSE_BONUS_RATE	 	( 100 )
 
-#define ORIGINAL_PID	 		Val0 // запись ДНК дерева, чтобы при смене прото вернуться к оригиналу
-#define	RESOURCE_CAPACITY		Val1 // тут записано макс кол-во подходов к дереву. Используется как текущее.
-#define DNA						Val2 // тут пишем какому дереву соответствует какой вид пенька
-#define EVENT 					Val3 // валка для записи тайм-ивента на рост дерева
+#define ACTION_FATIGUE_MIN        	( 5 )
+#define ACTION_FATIGUE_MAX       	( 14 )
+#define ACTION_FATIGUE_BASE			( 15 )
+#define ACTION_FATIGUE_RATE			( 1 )
 
-// Массив инструментов
+#define OBJECT_DPA_MIN				( 70 ) // DPA = Damage Per Action
+#define OBJECT_DPA_MAX				( 350 )
+#define OBJECT_DPA_BASE				( 50 )
+#define OBJECT_HP_BASE				( 1000 )
+
+#define PHASE_TIMEOUT_MIN		 	( 45 )
+#define PHASE_TIMEOUT_MAX		 	( 90 )
+#define PHASE_TIMEOUT_BASE		 	( 40 )
+#define PHASE_TIMEOUT_RATE 			( 5 )
+
+#define CRITICAL_FAILURE_BASE		( 11 )
+
 const uint16[] tools = { PID_AXE, PID_REVKNIFE2, PID_MACHETE, PID_SHOVEL };
-// Массив типов деревьев
 const uint16[][] TreeList =
 {
 	{ 
@@ -40,9 +59,8 @@ const uint16[][] TreeList =
 	{ 
 		PID_TREE_CS1, PID_TREE_CS2, PID_TREE_CS3, PID_TREE_CL1, PID_TREE_CL2, PID_TREE_CL3, PID_TREE_CL4, PID_TREE_CL5, PID_TREE_GL2S
 	} // trees_chopped
-	
 };
-// функция автоучета вложенных массивов, сканирует каждый элемент массива
+// Tree array search
 uint FindTree( Item@ targetItem )
 {	
 	uint8 Tree = 0;
@@ -61,16 +79,15 @@ uint FindTree( Item@ targetItem )
 	}
 	return Tree;
 }
-
-// инициализация LTP (long time process)
+// LTP (long time process)
 bool ltp_inited = false;
 void ltp_init()
 {
 	LTPREG( LTP_CHOPPING, process_chopping )
 	ltp_inited = true;
 }
-
-bool PrepareChopping( Critter& cr, Item@ tool, Item@ target ) //exported - проверки на разное перед началом работы
+//exported to main.fos - checks before start
+bool PrepareChopping( Critter& cr, Item@ tool, Item@ target ) 
 {
 	Map@ map = cr.GetMap();
     if( !valid( map ) ) 
@@ -104,7 +121,9 @@ bool PrepareChopping( Critter& cr, Item@ tool, Item@ target ) //exported - прове
 			return false;
 		}
 	}
-	if( cr.Timeout[ TO_TIREDNESS ] > int( REAL_MINUTE( 1 ) ) )
+	uint timeout_limit = ( cr.Stat[ST_ENDURANCE] * PHASE_TIMEOUT_RATE ) + PHASE_TIMEOUT_BASE;
+	int timeout = CLAMP( timeout_limit, PHASE_TIMEOUT_MIN, PHASE_TIMEOUT_MAX);
+	if( cr.Timeout[ TO_TIREDNESS ] > REAL_SECOND( timeout ) )
 	{
 		cr.Say( SAY_EMOTE_ON_HEAD, "Одышка" );
 		cr.Say( SAY_NETMSG, "|0xFF0000 Вы слишком устали, передохните." );
@@ -122,7 +141,6 @@ bool PrepareChopping( Critter& cr, Item@ tool, Item@ target ) //exported - прове
 	return true;
 }
 
-// Начало рубки дерева
 bool start_chopping( Critter& cr, Item& tool, Item& target )
 {
 	if(!ltp_inited) 
@@ -130,25 +148,30 @@ bool start_chopping( Critter& cr, Item& tool, Item& target )
 
 	if( valid( tool ) && valid( target ) )
 	{	
-		StartProcess( cr, LTP_CHOPPING, 0, tool.Id, target.Id, 1000 ); 
+		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		StartProcess( cr, LTP_CHOPPING, 0, tool.Id, target.Id, action_pause );
 		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ChoppingSound", cr.Id, true);
-		cr.TimeoutBase[ TO_TIREDNESS ] = __FullSecond + cr.Timeout[ TO_TIREDNESS ] + REAL_SECOND( 10 );
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
 		return true;
 	}
 	return false;
 }
 
-// Процесс рубки дерева
 uint process_chopping( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_CHOPPING )
     //тут из param1 и param2 можно получить item и targetItem (разумеется перед этим отправив их id через StartProcess
+	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
     Item@ tool = GetItem( param1 ); // передает инструмент в 1 парам переменная tool
   	Item@ target = GetItem( param2 ); // передает цель в 2 парам переменная target
   	if( valid( tool ) && valid( target ) )
     {
       	param0++;
-  		if( param0 > 3 )
+  		uint object_dpa = ( cr.Skill[SK_OUTDOORSMAN] - 80 ) + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
+		int sequence_length = ceil( float( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
+		if( param0 > sequence_length )
 		{
                 uint8 Tree = FindTree( target );
                 if( Tree == 0 )
@@ -157,15 +180,15 @@ uint process_chopping( Critter@ cr, int& param0, int& param1, int& param2 )
                 }
 				if( Tree == 1 )
                 {
-                    if( target.RESOURCE_CAPACITY <= 1 )
+                    if( target.RESOURCE_CAPACITY <= OBJECT_HP_BASE )
 					{	
-						Cut_Tree( cr, target );
+						CutTree( cr, target );
 					}
 					else
 					{
-						if( target.RESOURCE_CAPACITY > 2 )
+						if( target.RESOURCE_CAPACITY > ( OBJECT_HP_BASE * 2 ) )
 							ChangeFrame( target, 1 );	
-						if( target.RESOURCE_CAPACITY <= 2 )
+						if( target.RESOURCE_CAPACITY <= ( OBJECT_HP_BASE * 2 ) )
 							ChangeFrame( target, 2 );
 					}
                 }
@@ -189,22 +212,31 @@ uint process_chopping( Critter@ cr, int& param0, int& param1, int& param2 )
 		{
 			_CritAnimateSwing(cr);
 			CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ChoppingSound", cr.Id, true);
-			cr.TimeoutBase[ TO_TIREDNESS ] = __FullSecond + cr.Timeout[ TO_TIREDNESS ] + REAL_SECOND( 10 );
-			return 1000;
+			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
+			return action_pause;
 		}
     }
 	return 0;
 }
-
+//Action sound delay time event
 uint e_ChoppingSound(uint[]@ values)
 {
 	Critter@cr = GetCritter(values[0]); 
 	Map@ map = cr.GetMap();
-	map.PlaySound( SoundNames[ Random( 0, SoundNames.length() -1 ) ], cr.HexX, cr.HexY, 3 );
+	map.PlaySound( SoundNames[ Random( 0, SoundNames.length() -1 ) ], cr.HexX, cr.HexY, 5 );
 	return 0;
-}	
-// Срубаем дерево, превращая в пенек, когда его ресурс истощился
-uint Cut_Tree( Critter& cr, Item@ target )
+}
+//Action fatigue delay time event
+uint e_TiredenessTimeout(uint[]@ values)
+{
+	Critter@cr = GetCritter( values[0] ); 
+	uint fatigue_per_action = ACTION_FATIGUE_BASE - ( cr.Stat[ST_ENDURANCE] * ACTION_FATIGUE_RATE );
+	uint fatigue = CLAMP( fatigue_per_action, ACTION_FATIGUE_MIN, ACTION_FATIGUE_MAX);
+	cr.TimeoutBase[ TO_TIREDNESS ] = __FullSecond + cr.Timeout[ TO_TIREDNESS ] + REAL_SECOND( fatigue );
+	return 0;
+}
+//Cut tree pid change, condition to regrow
+uint CutTree( Critter& cr, Item@ target )
 {
 	target.ORIGINAL_PID = target.GetProtoId();
 	uint[] values = {target.Id};
@@ -242,8 +274,7 @@ uint Cut_Tree( Critter& cr, Item@ target )
 	}
 	return 0;
 }
-
-// Тайм-ивент роста дерева из пенька
+// Regrowth time event
 uint e_TreeRegrow( uint[]@ values )
 {
 	uint itemId = values[0];
@@ -256,55 +287,67 @@ uint e_TreeRegrow( uint[]@ values )
 	}
 	return 0;
 }
-
-// Производственная травма
+// Accident 
 bool Accident( Critter& cr )
 {
-	if( ( Random( 1, 110 ) - cr.Stat[ST_LUCK] ) > 99 )
+	if( Random( 0, 99 ) < ( CRITICAL_FAILURE_BASE - (cr.ParamBase[ SK_OUTDOORSMAN ] / 30 ) ) )
 	{
-		int chance = Random( 0, 100 );
-		if( chance <= 5 )
+		int severity = Random( 1, 100 );
+		if( severity > 65 && ( Random( 1, 100 ) < ( cr.Stat[ST_LUCK] * 2 ) ) )
+		{	
+			cr.Say( SAY_NETMSG, "|0x606060 В последний момент Вы чудом избежали старшной травмы, но все же:" );
+			severity = severity - 35;
+		}
+
+		if( severity <= 5 )
 		{
-			cr.Say( SAY_NETMSG, "|0xFF0000 Крупная щепка больно ударила Вас в грудь." );
+			cr.Say( SAY_NETMSG, "|0xFF0000 Отлетевший осколок ударил Вас в грудь." );
 			InjureCritter( cr, 15, DAMAGE_NORMAL, cr.Dir, cr.Id );
 			cr.Say( SAY_EMOTE, "Потирает ушиб" );
 		}			
-		else if( chance  >= 6 && chance  <= 35 )	
+		else if( severity  >= 6 && severity  <= 35 )	
 		{			
-			cr.Say( SAY_NETMSG, "|0xFF0000 Обломок ветки слегка рассек Вам руку." );
+			cr.Say( SAY_NETMSG, "|0xFF0000 Вы ошиблись и слегка рассекли руку." );
 			InjureCritter( cr, 20, DAMAGE_NORMAL, cr.Dir, cr.Id );
 			SETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLEED );
 			BleedCritter( cr, 20 );
 			cr.Say(SAY_EMOTE, "Вскрикивает от боли");
 			cr.Say(SAY_SHOUT_ON_HEAD, "Ай");				
 		}
-		else if( chance  >= 36 && chance  <= 65 )				
+		else if( severity  >= 36 && severity  <= 65 )				
 		{			
-			cr.Say( SAY_NETMSG, "|0xFF0000 Вы попали топором себе по ноге, и рассеколи плоть." );
+			cr.Say( SAY_NETMSG, "|0xFF0000 Вы попали инструментом себе по ноге и рассекли плоть." );
 			InjureCritter( cr, 30, DAMAGE_NORMAL, cr.Dir, cr.Id );
 			BleedCritter( cr, 40 );
 			SETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG );
 			string emote = cr.Param[ ST_GENDER ] == 0 ? "Схватился за окровавленную ногу" : ( cr.Param[ ST_GENDER ] == 1 ? "Схватилась за окровавленную ногу" : "Завыло от боли" );			
 		}
-		else if( chance  >= 66 && chance  <= 95 )				
+		else if( severity  >= 66 && severity  <= 95 )				
 		{			
 			cr.Say( SAY_NETMSG, "|0xFF0000 Из-за неудачного движения Вы получили тяжелую производственную травму." );
 			InjureCritter( cr, 40, DAMAGE_NORMAL, cr.Dir, cr.Id );
 			SETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG );	
-			if(Random( 0, 1 ) == 0 )
+			switch( Random( 0,3 ) )
 			{
-				cr.ParamBase[ DAMAGE_LEFT_LEG ] = 1;
-			}
-			else
-			{
-				cr.ParamBase[ DAMAGE_RIGHT_LEG ] = 1;
+				case(0):
+					cr.ParamBase[ DAMAGE_RIGHT_LEG ] = 1;
+					break;
+				case(1):
+					cr.ParamBase[ DAMAGE_LEFT_LEG ] = 1;
+					break;
+				case(2):
+					cr.ParamBase[ DAMAGE_RIGHT_ARM ] = 1;
+					break;
+				case(3):
+					cr.ParamBase[ DAMAGE_LEFT_ARM ] = 1;
+					break;
 			}
 			string emote = cr.Param[ ST_GENDER ] == 0 ? "Заорал от боли" : ( cr.Param[ ST_GENDER ] == 1 ? "Заорала от боли" : "Заорало от боли" );
 			cr.Say(SAY_SHOUT_ON_HEAD, "А-а-а-ааа");			
 		}	
 		else
 		{
-			cr.Say( SAY_NETMSG, "|0xFF0000 Острая щепка отлетел Вам в глаз, кровь заливает лицо." );
+			cr.Say( SAY_NETMSG, "|0xFF0000 Острый обломок отлетел Вам в глаз, кровь заливает лицо." );
 			InjureCritter( cr, 50, DAMAGE_NORMAL, cr.Dir, cr.Id );
 			BleedCritter( cr, 50 );
 			SETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG );	
@@ -316,8 +359,7 @@ bool Accident( Critter& cr )
 	}
 	return true;
 }
-
-// Получение лута
+//Loot
 bool Profit(  Critter& cr, Item@ tool, Item@ target )
 {
 	uint8 amount = 0;
@@ -334,12 +376,12 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 	else
 	{
 		cr.AddItem( PID_FIREWOOD, amount );
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы добыли дрова в количестве " +amount+ " шт." ); 
-		target.RESOURCE_CAPACITY--;
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы добыли дрова в количестве " +amount+ " шт." );
+		target.RESOURCE_CAPACITY = target.RESOURCE_CAPACITY - OBJECT_HP_BASE;		
 	}
 	return true;
 }
-
+//Support function for tree change of frames
 void ChangeFrame(Item&item,uint8 frame)
 {
 	item.AnimStayBegin=frame;
@@ -349,4 +391,21 @@ void ChangeFrame(Item&item,uint8 frame)
 	item.AnimHideBegin=frame;
 	item.AnimHideEnd=frame;
 	item.Update();
+}
+
+void _TreeUpgrade (Critter& player, int param0, int param1, int param2)
+{
+	for( int i = 0, j = TreeList.length() ; i < j; i++)
+	{
+		for ( int ii = 0, jj = TreeList[i].length() ; ii < jj; ii++)
+		{
+			array<Item@> worldTrees = array<Item@>();
+			int count = GetAllItems(TreeList[i][ii], @worldTrees);
+			for( int treeIndex = 0; treeIndex < count; treeIndex++ )
+			{
+				Item@ currentTree = worldTrees[treeIndex];
+				currentTree.RESOURCE_CAPACITY = currentTree.RESOURCE_CAPACITY * 1000;
+			}
+		}
+	}
 }
