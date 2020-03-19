@@ -52,6 +52,8 @@ EXPORT bool Critter_IsOverweight( CritterMutual& cr );
 EXPORT bool Item_Weapon_IsHtHAttack( Item& item, uint8 mode );
 EXPORT bool Item_Weapon_IsGunAttack( Item& item, uint8 mode );
 EXPORT bool Item_Weapon_IsRangedAttack( Item& item, uint8 mode );
+EXPORT int  ItemTransferCount( CritterMutual& cr );
+EXPORT int  AccessContainerId( CritterMutual& cr );
 
 // Callbacks
 uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode );
@@ -70,7 +72,7 @@ EXPORT uint Map_GetRoof( Map& map, uint16 tx, uint16 ty );
 EXPORT bool Map_SetTile( Map& map, uint16 tx, uint16 ty, uint picHash );
 EXPORT bool Map_SetRoof( Map& map, uint16 tx, uint16 ty, uint picHash );
 
-EXPORT uint Critter_GetItemTransferCount( Critter& cr );
+// EXPORT uint Critter_GetItemTransferCount( Critter& cr );
 EXPORT void Critter_GetIp( Critter& cr, ScriptArray* array );
 #endif // __SERVER
 
@@ -692,6 +694,27 @@ EXPORT bool Item_Weapon_IsRangedAttack( Item& item, uint8 mode )
     return skill == SK_SMALL_GUNS || skill == SK_BIG_GUNS || skill == SK_ENERGY_WEAPONS || skill == SK_THROWING;
 }
 
+EXPORT int ItemTransferCount( CritterMutual& cr )
+{
+    int s = 0;
+    #ifdef __SERVER
+    s = cr.ItemTransferCount;
+    #else
+    s = 0;
+    #endif
+    return s;
+}
+EXPORT int AccessContainerId( CritterMutual& cr )
+{
+    int s = 0;
+    #ifdef __SERVER
+    s = cr.AccessContainerId;
+    #else
+    s = 0;
+    #endif
+    return s;
+}
+
 /************************************************************************/
 /* Callbacks                                                            */
 /************************************************************************/
@@ -1001,10 +1024,10 @@ EXPORT bool Map_SetRoof( Map& map, uint16 tx, uint16 ty, uint picHash )
     return false;
 }
 
-EXPORT uint Critter_GetItemTransferCount( Critter& cr )
-{
-    return cr.ItemTransferCount;
-}
+// EXPORT uint Critter_GetItemTransferCount( Critter& cr )
+// {
+    // return cr.ItemTransferCount;
+// }
 
 EXPORT void Critter_GetIp( Critter& cr, ScriptArray* array )
 {
