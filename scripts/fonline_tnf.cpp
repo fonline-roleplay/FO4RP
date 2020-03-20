@@ -362,8 +362,8 @@ EXPORT int getParam_Ap( CritterMutual& cr, uint )
 
 EXPORT int getParam_RegenAp( CritterMutual& cr, uint )
 {
-	float val = cr.Params[ST_APREGEN] + (cr.Params[ST_AGILITY] * APREGEN_PER_AGI) + (cr.Params[ST_ENDURANCE] * APREGEN_PER_END) + APREGEN_BASE;
-    return val;
+    float val = cr.Params[ST_APREGEN] + ((cr.Params[ST_AGILITY] + cr.Params[ST_AGILITY_EXT] )* APREGEN_PER_AGI) + ((cr.Params[ST_ENDURANCE] + cr.Params[ST_ENDURANCE_EXT]) * APREGEN_PER_END) + APREGEN_BASE;
+    return CLAMP(val, 0, APREGEN_MAX);
 }
 
 EXPORT int getParam_MaxMoveAp( CritterMutual& cr, uint )
