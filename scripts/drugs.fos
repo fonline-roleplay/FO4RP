@@ -716,6 +716,114 @@ int GetDrugTableIndex( uint16 drugPid )
     return index;
 }
 
+import string@ GetGameMsgStr( uint str_num ) from "fomsg";
+
+string hl( int text )    { return "|0xF8F993 " + text + "|0x00FF00 "; }
+string hl( string text ) { return "|0xF8F993 " + ( valid( text ) ? text : "" ) + "|0x00FF00 "; }
+
+//Сделал двойные отступы что бы подчеркнуть потребность вынести куски логики в отдельные самодостаточные ф-ии. 
+//Функция полностью дублирует логику uint ProcessDrug( Critter& cr, uint16 drugPid, uint& rate ), но не влияет на статы целевого криттера.
+void checkDrugsEffects( Critter& cr, int crId, int drugPID, int stage )
+{
+	if( crId == 0 && drugPID == 0 && stage == 0 )
+	{
+		cr.Say( SAY_NETMSG, "Аргументы вызова функции:\n"
+				"1) crId - айдишник целевого криттера;\n" +
+				"2) drugPID - номер прототипа вещества;\n" +
+				"3) stage - стадия вещества, от 0 до 4;" 
+				);
+		return;
+	}
+	
+	
+	string drugName = getPID_name( drugPID * 100 );
+	int index = GetDrugTableIndex( drugPID );
+	if( index < 0 )
+	{
+		cr.Say( SAY_NETMSG, drugName + " отсутствует в таблице эффектов." );
+		return;
+	}
+	
+
+	Critter@ target = getTarget( cr, crId );
+	if( !valid( target ) )
+	{
+		cr.Say( SAY_NETMSG, "Critter #" + crId + " not found!" );
+		return;
+	}
+	
+
+    uint flags = 0;
+	if( target.Trait[ TRAIT_CHEM_RELIANT ] != 0 )
+        flags |= DRUG_EFFECT_DIV2_WITHDRAWAL | DRUG_EFFECT_MUL2_ADDICTION;
+    if( target.Trait[ TRAIT_CHEM_RESISTANT ] != 0 )
+        flags |= DRUG_EFFECT_DIV2_ADDICTION | DRUG_EFFECT_DIV2_DURATION;
+
+	
+	if( stage <= 0 )
+	{
+		int addict = DrugEffects[ index + TABLE_DRUG_ADDICT ];
+		int addictProcBase = DrugEffects[ index + TABLE_DRUG_PROC ];
+		
+		int addictProc = addictProcBase;
+		if( FLAG( flags, DRUG_EFFECT_MUL2_ADDICTION ) )
+			addictProc *= 2;
+		if( FLAG( flags, DRUG_EFFECT_DIV2_ADDICTION ) )
+			addictProc /= 2;
+		
+		cr.Say( SAY_NETMSG, hl(GetGameMsgStr( 100000 + addict * 10 + 1 )) + ", шанс " + hl(addictProc) + " [" + hl(addictProcBase) + "]:" );
+		
+	
+		cr.Say( SAY_NETMSG, "Перечисляем все этапы воздействия:" );
+		for( uint i = 1; i <= 5; i++ )
+			checkDrugsEffects( cr, crId, drugPID, i );
+		return;
+	}
+	stage--;
+	
+	if( stage > 4 ) return;
+	
+	
+	uint durationBase = DrugEffects[ index + TABLE_DURATION( stage ) ];
+	uint duration = durationBase;	
+	
+	if( stage < 2 && FLAG( flags, DRUG_EFFECT_DIV2_DURATION ) )
+		duration /= 2;
+	
+	if( stage > 2 && FLAG( flags, DRUG_EFFECT_DIV2_WITHDRAWAL ) )
+		duration /= 2;
+		
+	string time = hl(DeltaTime_HMS(duration)) + " [" + hl(DeltaTime_HMS(durationBase)) + "]";
+	
+	string[] stage_names = { "отката", "нормализации", "зависимости", "исцеления" };
+	
+	string info = " [" + hl(stage) + "] ";// + hl(drugName) + ",";
+	if( stage < 4 )
+		info += "До " + hl(stage_names[stage]) + " " + time + ":";
+	else
+		info += "Этап " + hl(stage_names[stage-1]) + ":";
+	
+	cr.Say( SAY_NETMSG, info );
+	
+	
+	for( int i = 0; i < 4; i++ )
+	{
+		info = "  " + hl(i) + ") ";
+		
+		int stat = DrugEffects[ index + TABLE_STAT( i ) ];
+		if( stat < 0 )
+			continue;
+		
+		info += GetGameMsgStr( STR_PARAM_NAME( stat ) ); 
+		
+		int amount = DrugEffects[ index + TABLE_AMOUNT( i, stage ) ];
+		info += " " + hl( ( amount >= 0 ? "+" + amount : "" + amount ) );
+		
+		cr.Say( SAY_NETMSG, info + ";" );
+	}
+	
+}
+
 uint ProcessDrug( Critter& cr, uint16 drugPid, uint& rate )
 {
     uint stage = RATE_TO_STAGE( rate );
@@ -842,7 +950,7 @@ uint ProcessDrug( Critter& cr, uint16 drugPid, uint& rate )
 
     stage++;
     rate = FORM_RATE( stage, flags );
-    return duration * 60;
+    return REAL_SECOND( duration * 60 );
 }
 
 //~run drugs setDrugState crId drugPID stage
