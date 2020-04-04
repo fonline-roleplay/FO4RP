@@ -1,10 +1,8 @@
-#include "_macros.fos"
-#include "_colors.fos"
+#include "_utils.fos"
 #include "npc_names_holder_h.fos"
 
 import void ChangeStatus( Critter& cr, uint16 status, uint8 value, bool set ) from "critter_status";        // pm added
 import uint CountMapPlayers( Map@ map ) from "manager";
-import uint GetAllPlayers( Critter@[]& crs ) from "manager";
 import void RestartFactions( Critter& cr, int p0, int p1, int p2 ) from "factions";
 import void ShowInputBoxScreen( Critter& cr, string funcName, uint16 textLength, uint8 flags ) from "main";
 import void Warn( Critter& admin, int param0, int param1, int param2 )  from "warning";  // ErlKing
@@ -30,7 +28,6 @@ import void FlushScreen( Critter& cr, uint fromColor, uint toColor, uint timeMs 
 
 // Mio import.
 import void unsafe_CONTROL_PANEL( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 ) from "mio_control";
-import string Centering( string list ) from "mio_control";
 
 #include "Fractions.fosh"
 
@@ -60,32 +57,6 @@ import void DeleteFraction(uint id) from "factions";
 #define MAX_FURY                 ( 2 )  // сколько раз нужно разозлить НПС чтобы он стал игнорить границы обитания
 #define DISTANCE_HELP            ( 30 ) // расстояние помощи
 #define TIME_TEST_GO_HOME        ( 10 ) // переодичность тестирования на возврат домой и отмену атаки
-
-uint[] pocket_GMs;
-
-bool isPocketGM( int id )
-{
-	return( pocket_GMs.find(id) != -1 );
-}
-
-//import bool isGM( Critter& player ) from "gm";
-bool isGM( Critter& player ) //exported
-{
-	return isGM( player, true );
-}
-
-bool isGM( Critter& player, bool checkVision ) //exported
-{
-	if( !player.IsPlayer() ) return false;
-	
-	if( !isLoadedGMs )
-		LoadGMs( player, 0, 0, 0 );
-	
-	if( player.StatBase[ ST_ACCESS_LEVEL ] < ACCESS_MODER && ( player.GetAccess() >= ACCESS_MODER || isPocketGM( player.Id ) ) )
-		player.StatBase[ ST_ACCESS_LEVEL ] = ACCESS_MODER;
-
-	return player.StatBase[ ST_ACCESS_LEVEL ] >= ACCESS_MODER && ( checkVision ? player.ParamBase[ QST_VISION ] > 0 : true );
-}
 
 //~run gm abortOldGMs 0 0 0
 void abortOldGMs( Critter& cr, int, int, int )
@@ -131,75 +102,16 @@ void gmlist( Critter& cr, int action, int p1, int p2 )
 	cr.Say( SAY_NETMSG, result );
 }
 
-bool isLoadedGMs = false;
 //~run gm LoadGMs 0 0 0
 void LoadGMs( Critter& cr, int p0, int p1, int p2 )
 {
-	pocket_GMs.resize(0);
-	file f;
-	if( f.open( "pocket_GMs.txt", "r" ) >= 0 )
-	{
-        string word = "";
-        uint   pos = 0;
-		
-		int id = 0;
-        uint i = 0;
-		string full_text = "Список карманных ГМов:";
-        while( !f.isEndOfFile() )
-        {
-            f.readLine( word );
-
-			if( valid( word ) && word.length() > 1 )
-			{
-				word = substring( word, 0, word.length() - 2 );
-			}
-			else
-				continue;
-			
-			full_text += "\n" + (i++) + ") ";
-			
-			if( !StrToInt( word, id ) )
-			{
-				full_text += "[ERROR]";
-			}
-			else 
-			{
-				string@ name = GetPlayerName( id );
-				full_text += ( valid( name ) ? name : "[UNKNOWN]" );
-				pocket_GMs.insertLast( id );
-			}
-			
-			full_text += " #'" + word + "';";
-        }
-        f.close();	
-		
-		isLoadedGMs = true;
-		if( cr.StatBase[ ST_ACCESS_LEVEL ] >= ACCESS_MODER )
-			cr.Say( SAY_NETMSG, full_text );
-	}
-	else Log( "No pocket GMs found." );
+	reloadGMs(cr);
 }
 
 void TEST_MENU( Critter& cr, int p0, int p1, int p2 )
 {
 	string[] data = { "answer_GM_MENU", "HELLO WORLD!", "Ну, поехали.." };
 	DIALOG_MENU( cr, data );
-}
-
-//import void DIALOG_MENU( Critter& cr, string[] data ) from "gm";
-void DIALOG_MENU( Critter& cr, string[] data )
-{
-	if( !valid(data) || data.length() < 2 ) return;
-	
-	uint len = data.length() - 2;
-	if( len > 20 ) { cr.Say( SAY_NETMSG, "Часть возможностей не влезла в список!" ); len = 20; }
-	
-	cr.ShowScreen( SCREEN_DIALOGBOX, len, data[0] );
-	cr.Say( SAY_DIALOGBOX_TEXT, data[1] );
-	for( uint i = 0; i < len; i++ )
-		cr.Say( SAY_DIALOGBOX_BUTTON( i ), Centering( data[2 + i] ) );
-		
-	cr.Say( SAY_DIALOGBOX_BUTTON( len ), Centering( "Отмена" ) );
 }
 
 void answer_GM_MENU( Critter& cr, uint answerI, string& answerS )
@@ -5125,161 +5037,6 @@ void unsafe_GM_PANNEL_ITEM( Critter& player, int itemId, int param1, int param2,
 		GM_PANNEL_ITEM( player, itemId, param1, param2, param3, param4 );
 }
 
-uint char_width( string char )
-{
-	string[][] char_widths = { //Таблица символов, группированная по их широте. Тут нет лишь символа '|', т.к. он не отображаемый.
-		{ ".", ":", "\'", "i", "!" },//3
-		{ " ", ",", ";", "`", "l" },//4
-		{ "1", "I", "(", ")", "[", "]" },//5
-		{ "\"", "c", "f", "j", "r", "г", "з", "с", "э", "<", ">" },//6
-		{ "0", "2", "3", "4", "5", "6", "7", "8", "9", 
-			"a", "b", "C", "d", "E", "e", "F", "g", "h", "k", "L", "n", "o", "p", "q", "s", "T", "t", "u", "x", "y", "z", 
-			"а", "б", "в", "Г", "Е", "е", "Ё", "ё", "З", "и", "к", "н", "о", "п", "р", "С", "Т", "т", "у", "х", "ч", "Э", 
-			"у", "я", "ь", "?", "{", "}" },//7
-		{ "B", "D", "G", "H", "J", "K", "M", "m", "N", "O", "P", "R", "Q", "S", "U", "W", "w", "Z", 
-			"Б", "В", "И", "К", "Л", "л", "М", "м", "Н", "О", "П", "Р", "У", "Ц", "ц", "Ч", "У", "Я", 
-			"Ь", "~", "@", "#", "%", "^", "*" },//8
-		{ "A", "X", "Y", "А", "д", "Х", "Ш", "ъ" },//9
-		{ "Д", "Щ", "ы", "Ъ" },//10
-		{ "ж", "Ф", "ф", "ш", "Ы", "№" },//11
-		{ "щ" },//12
-		{ "Ж" }//13
-	};
-	if( findFirst( char, "\t" ) != -1 )
-		return 20;
-	
-	for( uint i = 0, imax = char_widths.length(); i < imax; i++ )
-		for( uint j = 0, jmax = char_widths[i].length(); j < jmax; j++ )
-		{
-			if( findFirst( char, char_widths[i][j] ) != -1 )
-			{
-				//Log( "Matched \'" + char_widths[i][j] + "\' [" + i + "][" + j + "] with \'" + char + "\'." );
-				return 3 + i;
-			}
-		}
-	
-	//Log( "Not found \'" + char + "\'!" );
-	return 0;//'\n' == 0
-}
-
-int pixelength( string@ text )
-{
-	if( !valid( text ) ) return 0;
-	
-	int result = 0;
-	for( uint i = 0, l = text.length(); i < l; i++ )
-	{
-		//Log( "Длинна символа \'" + substring( text, i, 1 ) + "\' = " + char_width( substring( text, i, 1 ) ) );
-		result += char_width( substring( text, i, 1 ) );
-	}
-	
-	return result;
-}
-
-//import string SpacedText( string text, int target_pixel, string hider, string default_color ) from "gm";
-string SpacedText( string text, int target_pixel, string hider, string default_color )
-{
-	return text + emptySpace( text, target_pixel, hider, default_color );
-}
-
-string emptySpace( string text, int target_pixel, string hider, string default_color )
-{
-	//'I' 5  ' ' 4  '.' 3
-	int space = target_pixel - pixelength( text );
-	while( space > 9 )
-	{
-		space -= 5;
-		hider += "I";
-	}
-	switch( space )
-	{
-		case( 5 ): hider += "I"; break;
-		case( 6 ): hider += ".."; break;
-		case( 7 ): hider += ". "; break;
-		case( 8 ): hider += "I."; break;
-		case( 9 ): hider += "I "; break;
-	}
-	return hider + default_color;
-}
-
-string StyledText( string delimiter, string name, int data )   { return StyledText( delimiter, name, "" + data ); }
-string StyledText( string delimiter, string name, float data ) { return StyledText( delimiter, name, "" + data ); }
-string StyledText( string delimiter, string name, string data ){ return StyledText( delimiter, name, "" + data, 100 ); }
-string StyledText( string delimiter, string name, string data, int target )
-{ 
-	string result = "|0xF8F993 " + name + "|0x00FF00 " + data;
-	
-	if( findFirst( delimiter, "|" ) == -1 )
-		return result + delimiter;
-	//else
-	return result + emptySpace( name + data, target, "|0x231D18 ", "|0x00FF00 " );
-}
-
-string OneAll( int value, uint count )   { return value + " (" + value * count + ")"; }
-string OneAll( float value, uint count ) { return value + " (" + value * count + ")"; }
-
-int ContainmentVolume( Item@ item )
-{
-	if( !valid( item ) ) return 0;
-
-	Item@[] loot;
-	uint volume = 0;
-	uint count = item.GetItems( uint(-1), loot );
-	for( uint i = 0; i < count; i++ )
-		volume += loot[i].Proto.Volume * loot[i].GetCount();
-	
-	return volume;
-}
-
-string ItemInfo( Item@ item )
-{
-	if( !valid( item ) ) return "[null]";
-	
-	uint count = item.GetCount();
-	float weight = float( item.Proto.Weight ) / 1000;
-	string info = 
-		StyledText( "|", "ProtoID: ", item.GetProtoId() ) + 
-		StyledText( "\n", "ID: ", item.Id ) +
-		StyledText( "|", "Count: ", count ) + 
-		StyledText( "\n", "Flags: ", item.Flags ) +
-		StyledText( "|", "Cost: ", OneAll( item.Proto.Cost, count ) ) +
-		StyledText( "\n", "Volume: ", OneAll( item.Proto.Volume, count ) ) +
-		StyledText( "\n", "Weight: ", OneAll( weight, count ) ) +
-		"";
-		
-	if( item.Proto.Deteriorable )
-		info += StyledText( "\n", "Deterioration: ", item.Deterioration );
-	
-	if( item.Proto.Container_Volume > 0 )
-		info += StyledText( "\n", "Used Space: ", ContainmentVolume( item ) + "/" + item.Proto.Container_Volume );
-	
-	uint8 type = item.GetType();
-	if( type == ITEM_TYPE_DOOR || type == ITEM_TYPE_CONTAINER )
-	{
-		bool always_open = ( type == ITEM_TYPE_CONTAINER && !item.Proto.Container_Changeble );
-		string state = "" +
-			( FLAG( item.LockerCondition, LOCKER_ISOPEN ) ? "open " : "" ) +
-			( FLAG( item.LockerCondition, LOCKER_JAMMED ) ? "jammed " : "" ) +
-			( FLAG( item.LockerCondition, LOCKER_BROKEN ) ? "broken " : "" ) +
-			( FLAG( item.LockerCondition, LOCKER_NOOPEN ) ? "blocked " : "" ) +
-			( FLAG( item.LockerCondition, LOCKER_LOCKED ) ? "locked " : "" ) +
-			( FLAG( item.LockerCondition, LOCKER_ELECTRO ) ? "electro " : "" ) +
-			"";
-
-		if( state.length() < 2 )//if( item.LockerCondition == 0 )
-			state = always_open ? "always open" : "closed";
-
-		info += StyledText( "|", "State: ", state );		
-		
-		if( FLAG( item.LockerCondition, LOCKER_LOCKED ) )
-			info += StyledText( "\n", "Id: ", item.LockerId ) + StyledText( "\n", "Complexity: ", item.LockerComplexity );
-
-		if( FLAG( item.LockerCondition, LOCKER_ELECTRO ) ) 
-			info += StyledText( "\n", "Code: ", item.Val4 ) + StyledText( "\n", "Complexity: ", item.LockerComplexity );
-	}
-	return info;
-}
-
 //import void GM_PANNEL_ITEM( Critter& player, int itemId, int param1, int param2, string@ param3, int[] @ param4 ) from "gm"; 
 void GM_PANNEL_ITEM( Critter& player, int itemId, int param1, int param2, string@ param3, int[] @ param4 )
 {
@@ -5294,7 +5051,7 @@ void GM_PANNEL_ITEM( Critter& player, int itemId, int param1, int param2, string
 	bool isCont = item.GetType() == ITEM_TYPE_CONTAINER;
 	player.ShowScreen( SCREEN_DIALOGBOX, 8, "answer_GM_PANNEL_ITEM" );
 	
-	player.Say( SAY_DIALOGBOX_TEXT, ItemInfo(item) );
+	player.Say( SAY_DIALOGBOX_TEXT, FullItemInfo(item) );
 	player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "переменные" );
 	player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "назначить скрипт" );
 	player.Say( SAY_DIALOGBOX_BUTTON( 2 ), "Изменить № описания" );
