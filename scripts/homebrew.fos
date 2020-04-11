@@ -1,0 +1,930 @@
+// Author: Anuri, Goris
+
+#include "_macros.fos"
+#include "_ltp.fos"
+#include "STAT_MODS_H.fos"
+
+import void ExplodeEx( Map& map, uint16 hexX, uint16 hexY, uint16 effectPid, uint effectRadius, uint damage, uint damageType, uint damageRadius, uint ownerId )  from "explode";
+import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat";
+
+#define STATE_PREPARE ( 0 )
+#define STATE_WORKING ( 1 )
+#define STATE_FINISH  ( 2 )
+
+//Спасибо, Мио
+import string Centering( string list ) from "mio_control";
+
+const uint PIC_POT_CLOSED = GetStrHash( "art\\items\\misc\\Still\\pot_alco.fofrm" );
+const string[] SoundNames = { "Slicing1.ogg", "Slicing2.ogg", "Slicing3.ogg", "Slicing4.ogg", "Slicing5.ogg", "Slicing6.ogg", "Slicing7.ogg", "Slicing8.ogg", "Slicing9.ogg", "Slicing10.ogg",
+							"Slicing11.ogg", "Slicing12.ogg", "Slicing13.ogg", "Slicing14.ogg", "Slicing15.ogg", "Slicing16.ogg", "Slicing17.ogg", "Slicing18.ogg", "Slicing19.ogg","Slicing20.ogg"};
+#define STATE									Val0 	// Статус 0 - пустая; 1 - начато брожение; 2+ - брожение завершено
+#define CAPACITY								Val1 	// Объем кувшина
+#define CURRENT_CAPACITY						Val2	// Текущий объем кувшина - сделать динамический вес чаши
+#define EVENT 									Val3 	// Для записи тайм-ивента брожения
+#define LIQUID_LEVEL							Val4 	// кол-во жидкостей
+#define STACH_LEVEL								Val5 	// кол-во ингридиентов в браге
+#define SUGAR_LEVEL								Val6 	// кол-во сахара
+#define POLUTION_LEVEL							Val7 	// кол-во загрязнения
+#define HOMEBREW_TYPE							Val8	// Тип получившейся браги	
+#define SPIRIT_LEVEL							Val9 	// Градус спирта в браге
+
+#define MAX_SPIRIT_LEVEL 					   ( 20 )	// Максимальный градус браги, после кторого умирают дрожжи
+#define SUGAR_FERMENTING_TIME		REAL_MINUTE( 3 ) 	// 3 минут реала
+#define SUGAR_FERMENTING_AMOUNT		           ( 10 )	// 10 грамм
+#define FERMENTING_MODIFIER					   ( 60 )   // 60 % от сахара == спирт
+
+const uint16[] glass_bottled_drinks 	= { PID_CLEAN_WATER2, PID_GLASS_BOTTLE_FULL, PID_GLASS_BOTTLE_DIRTY_FULL, PID_ATOM_COLA_SEA, PID_ATOM_COLA, PID_ROOTBEER, PID_BEER_LIGHT, PID_BEER_DARK, 
+											PID_TURBO_COLA, PID_NUKA_COLA, PID_ATOM_COLA_CHERRY, PID_ATOM_COLA_CRAFT, PID_BEER, PID_GAMMA_GULP_BEER, PID_ATOMIC_COCTAIL, PID_GROG, PID_BLOODMARRY,
+											PID_WHISKEY, PID_WHISKEY_PREWAR, PID_LIQUER, PID_ROT_GUT, PID_ROENTGEN_RUM, PID_BOOZE, PID_ALCOHOL_TINCTURE, PID_SUPER_ENERGY_DRINK, PID_BOTTLE_MILCH2,
+											PID_HOMEBREW
+										  };
+const uint16[] sugarIngridientsPid 		= { PID_MUTATED_FRUIT, PID_CORN, PID_ITCANDY, PID_CABBAGE, PID_CARAMEL2, PID_PRETZEL, PID_FLAPJACK, PID_VOKAS, PID_COOKIE, PID_PROTEIN_BAR, PID_PASLEN  };
+const uint16[] sugarIngridientsSugar	= { 	10,			    19, 		75, 			4,			 98, 		  13,		    10,		    5,			 20,		 29, 			10 		};
+const string[] brew_tastes					= { "", "мутафруктов", "кукурузы", "конфет", "капусты", "карамели", "ванили", "кукурузы", "орехов вокас", "печенья", "протеинового батончика", "ягод паслена" }; //+1 shift for taste
+const uint16[] tools					= { PID_KNIFE, PID_COMBAT_KNIFE, PID_SWITCHBLADE, PID_LIL_JESUS_WEAPON, PID_REVFIST1, PID_REVKNIFE1, PID_TESAK, PID_REVKNIFE2, PID_MACHETE };
+
+bool ShowMenuBrew( Critter& cr, Item& target ) //exported
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) 
+    {
+        return false;
+    }
+	if( target.PicMap == PIC_POT_CLOSED )
+	{
+		cr.ShowScreen( SCREEN_DIALOGBOX, 1, "unknown_brew_state" );
+		cr.Say( SAY_DIALOGBOX_TEXT, MenuInfoClosed( cr, target ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), Centering( "Открыть крышку" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), Centering( "Ничего не делать" ) );
+	}
+	else if( target.STATE == STATE_PREPARE )
+	{
+		cr.ShowScreen( SCREEN_DIALOGBOX, 6, "answer_brew" );
+		cr.Say( SAY_DIALOGBOX_TEXT, MenuInfoOpen( cr, target )  );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), Centering( "Добавить" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), Centering( "Измельчить" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), Centering( "Попробовать" ) );		
+		cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), Centering( "Засыпать Дрожжи" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 4 ), Centering( "Вылить все" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 5 ), Centering( "Закрыть крышку" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 6 ), Centering( "Ничего не делать" ) );
+	}
+	else if( target.STATE == STATE_WORKING  )
+	{
+		cr.ShowScreen( SCREEN_DIALOGBOX, 4, "answer_cooking_brew" );
+		cr.Say( SAY_DIALOGBOX_TEXT, MenuInfoOpen( cr, target )  );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), Centering( "Закрыть крышку" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), Centering( "Попробовать" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), Centering( "Добавить" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), Centering( "Вылить все" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 4 ), Centering( "Ничего не делать" ) );
+	}
+	else if( target.STATE >= STATE_FINISH  )
+	{
+		cr.ShowScreen( SCREEN_DIALOGBOX, 4, "answer_cooking_brew_fin" );
+		cr.Say( SAY_DIALOGBOX_TEXT, MenuInfoOpen( cr, target )  );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), Centering( "Закрыть крышку" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), Centering( "Попробовать" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), Centering( "Разлить по бутылкам" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), Centering( "Вылить все" ) );
+		cr.Say( SAY_DIALOGBOX_BUTTON( 4 ), Centering( "Ничего не делать" ) );
+	}
+	cr.StatBase[ST_VAR7] = target.Id;
+	return true;	
+}
+
+void unknown_brew_state( Critter& cr, uint answerI, string& answerS )
+{
+	if( !UnknownStateActions( cr, answerI ) )
+	{
+		cr.Say( SAY_NETMSG, "|0xFF0000 Из этого ничего не вышло." );
+	}
+}
+bool UnknownStateActions( Critter& cr, uint answer )
+{
+	switch( answer )
+	{
+		case( 0 ): return OpenClose( cr );
+		case( 1 ): return false;
+	}
+	return false;
+}
+
+void answer_brew( Critter& cr, uint answerI, string& answerS )
+{
+	if( !BrewActions( cr, answerI ) )
+	{
+		cr.Say( SAY_NETMSG, "|0xFF0000 Из этого ничего не вышло." );
+	}
+}
+bool BrewActions( Critter& cr, uint answer )
+{
+	switch( answer )
+	{
+		case( 0 ): return AddIngrigient( cr );
+		case( 1 ): return start_slicing( cr );
+		case( 2 ): return Taste( cr );
+		case( 3 ): return AddFerment( cr );	
+		case( 4 ): return DisposeBrew( cr );
+		case( 5 ): return OpenClose( cr );
+		case( 6 ): return false;
+	}
+	return false;
+}
+
+void answer_cooking_brew( Critter& cr, uint answerI, string& answerS )
+{
+	if( !BrewCookingActions( cr, answerI ) )
+	{
+		cr.Say( SAY_NETMSG, "|0xFF0000 Из этого ничего не вышло." );
+	}
+}
+bool BrewCookingActions( Critter& cr, uint answer )
+{
+	switch( answer )
+	{
+		case( 0 ): return OpenClose( cr );
+		case( 1 ): return Taste( cr );
+		case( 2 ): return AddIngrigient( cr );
+		case( 3 ): return DisposeBrew( cr );
+		case( 4 ): return false;
+	}
+	return false;
+}
+
+void answer_cooking_brew_fin( Critter& cr, uint answerI, string& answerS )
+{
+	if( !BrewFinActions( cr, answerI ) )
+	{
+		cr.Say( SAY_NETMSG, "|0xFF0000 Из этого ничего не вышло." );
+	}
+}
+
+bool BrewFinActions( Critter& cr, uint answer )
+{
+	switch( answer )
+	{
+		case( 0 ): return OpenClose( cr );
+		case( 1 ): return Taste( cr );
+		case( 2 ): return start_pouring( cr );
+		case( 3 ): return DisposeBrew( cr );
+		case( 4 ): return false;
+	}
+	return false;
+}
+
+bool AddIngrigient( Critter& cr )
+{
+	Map@ map = cr.GetMap();		
+	Item@ target = map.GetItem(cr.StatBase[ST_VAR7]);
+	if(!valid(target)) 
+	{ 
+		Log("Потеря указателя на предмет!"); 
+		return false; 
+	}
+	cr.ParamBase[ ST_LAST_CONT_ID ] = target.Id;
+	cr.ShowContainer( null, target, TRANSFER_HEX_CONT_UP );
+	return true;
+}
+
+bool TransferToPot( Critter& cr, Item& targetItem, Item& cont ) //export to main
+{
+	if(!valid(cont)) 
+	{ 
+		Log( "Потеря указателя на контейнер!" ); 
+		return false; 
+	}
+	
+	if( cont.STATE > 1 )
+	{
+		cr.Say( SAY_NETMSG, "|0xFF0000 Брага уже приготовилась, что-то добавлять смысла нет." );
+		return false; 
+	}
+	
+	if( targetItem.GetType() != ITEM_TYPE_FOOD && targetItem.GetType() != ITEM_TYPE_DRUG )
+	{
+		cr.Say( SAY_NETMSG, "|0xFF0000 Вам кажется, что из этого браги не сделать." );
+		return false; 
+	}
+
+	Map@ map = cr.GetMap();
+	uint transferAmount = cr.ItemTransferCount();
+	uint16 targetItemPid = targetItem.GetProtoId();
+	if( glass_bottled_drinks.find( targetItemPid ) != -1 )
+	{
+		cr.AddItem( PID_BOTTLE_GLASS, transferAmount );
+		cont.CURRENT_CAPACITY = cont.CURRENT_CAPACITY + ( ( targetItem.Proto.Weight - 150 ) * transferAmount );
+		switch( targetItemPid )
+		{
+			case(PID_CLEAN_WATER2):
+			case(PID_GLASS_BOTTLE_FULL):
+
+				cont.LIQUID_LEVEL = cont.LIQUID_LEVEL + ( ( targetItem.Proto.Weight - 150 ) * transferAmount );
+				cr.Say( SAY_EMOTE, "Наливает воду" );
+				break;
+			case(PID_GLASS_BOTTLE_DIRTY_FULL):
+				cont.LIQUID_LEVEL = cont.LIQUID_LEVEL + ( ( targetItem.Proto.Weight - 150 ) * transferAmount );
+				cont.POLUTION_LEVEL = cont.POLUTION_LEVEL * transferAmount;
+				cr.Say( SAY_EMOTE, "Наливает грязную воду" );
+				break;
+			case(PID_ATOM_COLA):
+			case(PID_ATOM_COLA_SEA):
+			case(PID_TURBO_COLA):
+			case(PID_NUKA_COLA):
+			case(PID_ATOM_COLA_CHERRY):
+			case(PID_SUPER_ENERGY_DRINK):
+			case(PID_ATOM_COLA_CRAFT):
+				cont.LIQUID_LEVEL = cont.LIQUID_LEVEL + ( ( targetItem.Proto.Weight - 260 ) * transferAmount );
+				cont.SUGAR_LEVEL = cont.SUGAR_LEVEL + ( ( targetItem.Proto.Weight - 540 ) * transferAmount );				
+				cr.Say( SAY_EMOTE, "Наливает газированную воду" );
+				break;
+			case(PID_BEER):
+			case(PID_BEER_LIGHT):
+			case(PID_ROOTBEER):
+			case(PID_BEER_DARK):
+				cont.LIQUID_LEVEL = cont.LIQUID_LEVEL + ( ( targetItem.Proto.Weight - 250 ) * transferAmount );
+				cont.SUGAR_LEVEL = cont.SUGAR_LEVEL + ( ( targetItem.Proto.Weight - 550 ) * transferAmount );				
+				cr.Say( SAY_EMOTE, "Вливает пиво" );
+				break;
+			case(PID_GAMMA_GULP_BEER):
+				cont.LIQUID_LEVEL = cont.LIQUID_LEVEL + ( ( targetItem.Proto.Weight - 250 ) * transferAmount );
+				cont.SUGAR_LEVEL = cont.SUGAR_LEVEL + ( ( targetItem.Proto.Weight - 550 ) * transferAmount );
+				cont.POLUTION_LEVEL = cont.POLUTION_LEVEL * transferAmount;			
+				cr.Say( SAY_EMOTE, "Вливает Гамма-гульп пиво" );
+				break;
+			case(PID_ATOMIC_COCTAIL):
+			case(PID_GROG):
+			case(PID_BLOODMARRY):
+			case(PID_WHISKEY):
+			case(PID_WHISKEY_PREWAR):
+			case(PID_LIQUER):
+			case(PID_ROT_GUT):
+			case(PID_ROENTGEN_RUM):
+			case(PID_BOOZE):
+			case(PID_BOTTLE_MILCH2):
+			case(PID_ALCOHOL_TINCTURE):
+				cont.LIQUID_LEVEL = cont.LIQUID_LEVEL + ( ( targetItem.Proto.Weight - 150 ) * transferAmount );
+				cont.POLUTION_LEVEL = cont.POLUTION_LEVEL + ( ( targetItem.Proto.Weight - 150 ) / 100 * transferAmount );			
+				cr.Say( SAY_EMOTE, "Вливает крепкий алкоголь" );
+				break;
+			default:
+				cont.LIQUID_LEVEL = cont.LIQUID_LEVEL + ( ( targetItem.Proto.Weight - 150 ) * transferAmount );
+				cr.Say( SAY_EMOTE, "Вливает жидкость" );
+				break;
+		}
+	}
+	else if( targetItemPid == PID_BOTTLE_FULL || targetItemPid == PID_BOTTLE_DIRTY_FULL ) // сделать массив, если жидкостей в пластиковых бутылках станет больше
+	{
+		cr.AddItem( PID_BOTTLE_EMPTY, transferAmount );
+		cont.CURRENT_CAPACITY = cont.CURRENT_CAPACITY + ( ( targetItem.Proto.Weight - 100 ) * transferAmount );
+		cont.LIQUID_LEVEL = cont.LIQUID_LEVEL + ( ( targetItem.Proto.Weight - 100 ) * transferAmount );
+		cr.Say( SAY_EMOTE, "Наливает воду" );
+		if( targetItemPid == PID_BOTTLE_DIRTY_FULL )
+		{
+			cont.POLUTION_LEVEL = cont.POLUTION_LEVEL * transferAmount;				
+		}
+	}
+	else
+	{
+		if( cont.STATE == STATE_PREPARE )
+		{
+			cont.AddItem( targetItemPid, transferAmount, 0 );
+			cr.Say( SAY_EMOTE, "Добавляет ингридиенты" );
+			cont.CURRENT_CAPACITY = cont.CURRENT_CAPACITY + ( ( targetItem.Proto.Weight ) * transferAmount );
+			cont.STACH_LEVEL = cont.STACH_LEVEL + ( ( targetItem.Proto.Weight ) * transferAmount );
+		}
+		else
+		{
+			cr.Say( SAY_NETMSG, "|0xFF0000 Процесс уже идет, Вам кажется, что добавлять твердые примеси не стоит." );
+			return false;
+		}
+	}
+	_SubItem( targetItem, transferAmount );
+	if(cont.CURRENT_CAPACITY >= cont.CAPACITY)
+	{
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы заполнили кувшин под крышку, пролив немного воды." );
+		map.SetText( cont.HexX, cont.HexY, COLOR_LGRAY, ":вода переливается через край:" );
+		cont.CURRENT_CAPACITY = cont.CAPACITY;
+		cont.LIQUID_LEVEL = cont.CAPACITY - ( cont.STACH_LEVEL + cont.SUGAR_LEVEL );
+	}	
+	if( cont.LIQUID_LEVEL >= cont.CAPACITY )
+	{
+		cont.LIQUID_LEVEL = cont.CAPACITY;
+	}
+	
+	cr.ShowContainer( null, cont, TRANSFER_HEX_CONT_UP );
+	return true;
+}
+
+bool TransferFromPot( Critter& cr, Item& targetItem, Item& cont )
+{
+	if(!valid(cont)) 
+	{ 
+		Log( "Потеря указателя на контейнер!" ); 
+		return false; 
+	}
+	uint transferAmount = cr.ItemTransferCount();
+	_SubItem( targetItem, transferAmount );
+	uint16 targetItemPid = targetItem.GetProtoId();
+	cr.AddItem( targetItemPid, transferAmount );
+	cont.CURRENT_CAPACITY = cont.CURRENT_CAPACITY - ( targetItem.Proto.Weight * transferAmount );
+	cont.STACH_LEVEL = cont.STACH_LEVEL - ( targetItem.Proto.Weight * transferAmount );
+	return true;
+}
+
+bool AddFerment( Critter& cr ) 
+{
+	Map@ map = cr.GetMap();		
+	Item@ target = map.GetItem(cr.StatBase[ST_VAR7]);
+	if(!valid(target)) 
+	{ 
+		Log("Потеря указателя на предмет!"); 
+		return false; 
+	}
+	
+	Item@ ferment = cr.GetItem( PID_FERMENT, -1 );
+	if( !valid(ferment) )
+	{
+		cr.Say( SAY_NETMSG, "|0xFF0000 У вас кончились дрожжи." );
+		return false;
+	}
+
+	cr.Say( SAY_EMOTE, "Засыпал дрожжи" );
+	map.PlaySound( "ROBE.ACM", cr.HexX, cr.HexY, 2 );	
+	_SubItem( ferment, 1 );
+	start_brewing( cr, target );
+	return true;
+}
+
+bool ltp_inited = false;
+void ltp_init()
+{
+	LTPREG( LTP_SLICING, process_slicing )
+	ltp_inited = true;
+}
+
+bool start_slicing( Critter& cr )
+{
+	if(!ltp_inited) 
+		ltp_init();
+	Item@ toolItem = cr.GetItem( 0, SLOT_HAND1 );
+	if( !valid( toolItem ) )
+	{
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вам необходим инструмент для нарезки в руке." );
+		return false;
+	}	
+	uint toolPid = toolItem.GetProtoId();
+	if( tools.find(toolPid) == -1 )
+	{
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вам необходим инструмент для нарезки в руке." );
+		return false;
+	}
+	Map@ map = cr.GetMap();		
+	Item@ target = map.GetItem(cr.StatBase[ST_VAR7]);
+	if( valid( target ) )
+	{
+		Item@[] ingridientsCheck;
+		if( target.GetItems( uint( -1 ), ingridientsCheck ) == 0 )
+		{
+			return false;
+		}
+
+		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint[] values = { cr.Id };
+		CreateTimeEvent( AFTER( REAL_MS( 300 ) ), "e_SlicingSound", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);	
+		StartProcess( cr, LTP_SLICING, 0, 0, target.Id, action_pause );
+		return true;
+	}
+	return false;
+}
+
+uint process_slicing( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_SLICING )
+	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+  	Item@ target = GetItem( param2 );
+	Item@[] stuff;
+	target.GetItems( uint( -1 ), stuff );
+	uint stuffCount = 0;
+	for( uint i=0; i < stuff.length(); i++ )
+	{
+		stuffCount = stuffCount + stuff[i].GetCount();
+	}
+  	if( valid( target ) )
+    {
+      	param0++;
+		int sequence_length = stuffCount;
+		if( param0 > sequence_length )
+		{
+			RecalculateSugar( cr, target );
+			return 0;
+		}
+		_CritAnimateUse(cr);
+		uint autoemote = Random( 0, 4 );
+		if( autoemote == 4 )
+		{
+			cr.Say( SAY_EMOTE, "Измельчает ингридиенты" );
+		}
+		uint[] values = { cr.Id };
+		CreateTimeEvent( AFTER( REAL_MS( 300 ) ), "e_SlicingSound", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
+		return action_pause;
+    }
+	return 0;
+}
+
+uint e_SlicingSound( uint[]@ values )
+{
+	Critter@cr = GetCritter(values[0]); 
+	Map@ map = cr.GetMap();
+	map.PlaySound( SoundNames[ Random( 0, SoundNames.length() -1 ) ], cr.HexX, cr.HexY, 5 );
+	return 0;
+}
+
+uint e_TiredenessTimeout(uint[]@ values)
+{
+	Critter@ cr = GetCritter( values[0] ); 
+	uint fatigue_per_action = ACTION_FATIGUE_BASE - ( cr.Stat[ST_ENDURANCE] * ACTION_FATIGUE_RATE );
+	uint fatigue = CLAMP( fatigue_per_action, ACTION_FATIGUE_MIN, ACTION_FATIGUE_MAX);
+	cr.TimeoutBase[ TO_TIREDNESS ] = __FullSecond + cr.Timeout[ TO_TIREDNESS ] + REAL_SECOND( fatigue );
+	return 0;
+}
+
+bool RecalculateSugar( Critter& cr, Item& target )
+{
+	if( !valid( target ) )    
+	{
+		Log("Потеря указателя на предмет!"); 
+		return false;
+	}
+	Item@[] ingridients;
+	if( target.GetItems( uint( -1 ), ingridients ) == 0 )
+	{
+		return false;
+	}
+
+	int max_weight_index = -1;
+	int max_weight_value = 0;
+	for( uint i=0; i < ingridients.length(); i++ )
+	{
+		uint sugar = 0;
+        uint ingridientPid = ingridients[i].GetProtoId();
+        uint ingridientsCount = ingridients[i].GetCount();
+		int index = sugarIngridientsPid.find( ingridientPid );
+		if( index != -1 )
+        {
+            sugar += ingridients[i].Proto.Weight * sugarIngridientsSugar[index] / 100; 
+            target.SUGAR_LEVEL += sugar * ingridientsCount;
+            target.STACH_LEVEL -= sugar * ingridientsCount;
+			
+			int weight = ingridients[i].Proto.Weight * ingridientsCount;
+			if( ( weight * 100 / target.CURRENT_CAPACITY ) >= 30 && weight > max_weight_value ) 
+			{
+				max_weight_value = weight;
+				max_weight_index = index++; //+1 shift for taste
+			}
+        }
+		else
+		{
+			target.POLUTION_LEVEL = target.POLUTION_LEVEL + ingridients[i].Proto.Weight * 10 * ingridientsCount / 100;
+		}
+		target.HOMEBREW_TYPE = max_weight_index;
+		DeleteItem( ingridients[i] );
+	}	
+	return true;
+}
+
+bool start_brewing( Critter& cr, Item& target )
+{
+	if( !valid( target ) )    
+	{
+		Log("Потеря указателя на предмет!"); 
+		return false;
+	}
+	if( target.LIQUID_LEVEL == 0 || target.SUGAR_LEVEL == 0 )
+	{
+		if( target.LIQUID_LEVEL == 0 )
+		{
+			cr.Say( SAY_NETMSG, "|0xFF0000 Без воды процесс не начнется, вы зря потратили ценные дрожжи." );
+		}
+		else
+		{
+			cr.Say( SAY_NETMSG, "|0xFF0000 Без сахара процесс не начнется, вы зря потратили ценные дрожжи." );
+		}
+		return false;
+	}
+	target.PicMap = PIC_POT_CLOSED;
+	target.Update();
+	target.STATE = 1;
+	uint[] values = {target.Id};
+	target.EVENT = CreateTimeEvent( AFTER( SUGAR_FERMENTING_TIME ), "e_Brewing", values, true );
+	return true;
+}
+
+uint e_Brewing( uint[]@ values )
+{
+	uint itemId = values[0];
+	Item@ target = GetItem( itemId );
+	if( !valid( target ) )    
+	{
+		Log("Потеря указателя на предмет!"); 
+		return 0;
+	}
+	if( target.SUGAR_LEVEL > 0 && ( ( target.SPIRIT_LEVEL * 100 + target.POLUTION_LEVEL * 100 ) / target.LIQUID_LEVEL ) < MAX_SPIRIT_LEVEL ) 
+	{
+		target.SUGAR_LEVEL = target.SUGAR_LEVEL - SUGAR_FERMENTING_AMOUNT;
+		target.SPIRIT_LEVEL = target.SPIRIT_LEVEL + ( SUGAR_FERMENTING_AMOUNT * FERMENTING_MODIFIER / 100 );
+		if( target.STATE > 0 && target.PicMap != PIC_POT_CLOSED )
+		{
+			uint16 HexX=0, HexY=0;
+			Map @map = target.GetMapPosition( HexX, HexY );
+			map.SetText( target.HexX, target.HexY, COLOR_LGRAY, ":тошнотворный запах:" );
+		}
+		return SUGAR_FERMENTING_TIME;
+	}	
+	target.SPIRIT_LEVEL = CLAMP( ( target.SPIRIT_LEVEL * 100 / target.LIQUID_LEVEL ), 0, MAX_SPIRIT_LEVEL );
+	target.STATE = STATE_FINISH;
+	EraseTimeEvent( target.EVENT );
+	target.EVENT = 0;
+	return 0;
+}
+
+bool OpenClose( Critter& cr )
+{
+	Map@ map = cr.GetMap();
+	if(!valid(map)) 
+	{ 
+		Log("Вызов с глобала!"); 
+		return false; 
+	}
+	Item@ target = map.GetItem(cr.StatBase[ST_VAR7]);
+	if(!valid(target)) 
+	{ 
+		Log("Потеря указателя на предмет!"); 
+		return false; 
+	}
+	if( target.PicMap == PIC_POT_CLOSED )
+	{
+		ProtoItem@ proto = GetProtoItem( PID_POT_ALCO );
+		target.PicMap = proto.PicMap;
+		target.Update();
+		cr.Say( SAY_EMOTE, "Открыл крышку" );
+		if(target.STATE >= 2)
+		{
+			uint[] values = {target.Id};
+			target.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_BrewSmell", values, true );
+		}
+	}
+	else
+	{
+		target.PicMap = PIC_POT_CLOSED;
+		target.Update();
+		cr.Say( SAY_EMOTE, "Закрыл крышку" );
+	}
+	if( target.STATE > 0 && target.PicMap != PIC_POT_CLOSED )
+	{
+		map.SetText( target.HexX, target.HexY, COLOR_LGRAY, ":тошнотворный запах:" );
+	}
+	map.PlaySound( "ROCK.ACM", target.HexX, target.HexY, 3 );  
+	ShowMenuBrew ( cr, target );
+	return true;
+}
+
+uint e_BrewSmell( uint[]@ values )
+{
+	uint itemId = values[0];
+	Item@ target = GetItem( itemId );
+	if( !valid( target ) )    
+	{
+		Log("Потеря указателя на предмет!"); 
+		return 0;
+	}
+	if( target.STATE >= STATE_FINISH && target.PicMap != PIC_POT_CLOSED )
+	{
+		uint16 HexX=0, HexY=0;
+		Map @map = target.GetMapPosition( HexX, HexY );
+		map.SetText( target.HexX, target.HexY, COLOR_LGRAY, ":тошнотворный запах:" );
+		return REAL_MINUTE( 5 );
+	}
+	if( target.PicMap == PIC_POT_CLOSED )	
+	{
+		EraseTimeEvent( target.EVENT );
+		target.EVENT = 0;
+	}
+	return 0;
+}
+
+bool Taste( Critter&cr )
+{
+	Map@ map = cr.GetMap();
+	Item@ target = map.GetItem(cr.StatBase[ST_VAR7]);
+	if(!valid(target)) 
+	{ 
+		Log("Потеря указателя на предмет!"); 
+		return false;
+	}
+	if( target.LIQUID_LEVEL == 0 )
+	{
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Пробовать без воды не имеет никакого смысла." );
+		return false;
+	}
+	string result = "";
+	string sugar = "";
+	string state = target.STATE == 0 ? "водичка" : ( target.STATE == 1 ? "закваска" : "брага" );
+	string alcohol = "";
+	string polution = "";
+	string taste = " со вкусом ";
+	if( target.SUGAR_LEVEL == 0 )
+	{
+		sugar = "Пресная";
+	}
+	else if( ( target.SUGAR_LEVEL * 100 / target.LIQUID_LEVEL ) >= 1 && ( target.SUGAR_LEVEL * 100 / target.LIQUID_LEVEL ) <= 5 )
+	{	
+		sugar = "Сладковатая";
+	}
+	else if( ( target.SUGAR_LEVEL * 100 / target.LIQUID_LEVEL ) >= 6 && ( target.SUGAR_LEVEL * 100 / target.LIQUID_LEVEL ) <= 10 )
+	{
+		sugar = "Cладкая";
+	}
+	else
+	{
+		sugar = "Приторная";
+	}
+	
+	if( target.SPIRIT_LEVEL > 0 )
+	{
+		uint calcSpirit = target.STATE == 1? CLAMP( ( target.SPIRIT_LEVEL * 100 / target.LIQUID_LEVEL ), 0, MAX_SPIRIT_LEVEL ) : target.SPIRIT_LEVEL;
+		
+		if( calcSpirit >= 1 && calcSpirit <= 7 )
+			alcohol = ", слегка горчит алкоголем";
+		else if( calcSpirit >= 8 && calcSpirit <= 15 )
+			alcohol = ", горчит алкоголем";
+		else
+			alcohol = ", сильно горчит алкоголем";
+	}
+	if( target.POLUTION_LEVEL > 0 )
+	{
+		if( target.POLUTION_LEVEL >= 1 && target.POLUTION_LEVEL <= 10 )
+			polution = ", немного отдает тухлятиной.";
+		else if( target.POLUTION_LEVEL >= 11 && target.POLUTION_LEVEL <= 20 )
+			polution = ", отдает тухлятиной.";
+		else
+			polution = ", сильно отдает тухлятиной.";
+	}
+	if( target.HOMEBREW_TYPE == 0 )
+	{
+		taste = "";
+	}
+	else
+	{
+		taste += brew_tastes[target.HOMEBREW_TYPE];
+	}
+	result += sugar + " " + state + taste + alcohol + polution;
+	cr.Say( SAY_NETMSG, "|0xFFFF00 Попробовав, Вы определили, что это: " +result );
+	ShowMenuBrew ( cr, target );
+	return true;
+}
+
+bool another_ltp_inited = false;
+void another_ltp_init()
+{
+	LTPREG( LTP_POURING, process_pouring )
+	another_ltp_inited = true;
+}
+
+bool start_pouring( Critter& cr )
+{
+	if(!another_ltp_inited) 
+		another_ltp_init();
+
+	Map@ map = cr.GetMap();		
+	Item@ target = map.GetItem(cr.StatBase[ST_VAR7]);
+	if( valid( target ) )
+	{
+		if( ( target.LIQUID_LEVEL / 500 ) < 1 )
+		{
+			cr.Say( SAY_NETMSG, "|0xFFFF00 Недостаточно жидкости для перелива." );
+			return false;
+		}
+		if( cr.CountItem( PID_BOTTLE_GLASS ) < 1 )
+		{
+			cr.Say( SAY_NETMSG, "|0xFFFF00 У вас нет подходящей тары." );
+			return false;
+		}
+
+		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);	
+		StartProcess( cr, LTP_POURING, 0, 0, target.Id, action_pause );
+		return true;
+	}
+	return false;
+}
+
+uint process_pouring( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_POURING )
+	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+  	Item@ target = GetItem( param2 );
+  	if( valid( target ) )
+    {
+      	if( cr.CountItem( PID_BOTTLE_GLASS ) == 0 || ( target.LIQUID_LEVEL / 500 ) < 1 )
+		{
+			string TXT = cr.CountItem( PID_BOTTLE_GLASS ) == 0 ? "У Вас закончилась тара." : "Вы разлили всю брагу по бутылкам.";
+			cr.Say( SAY_NETMSG, "|0xFFFF00" + TXT );
+			return 0;
+		}
+		_CritAnimateUse(cr);
+		uint autoemote = Random( 0, 4 );
+		if( autoemote == 4 )
+		{
+			cr.Say( SAY_EMOTE, "Наполняет бутылку" );
+		}
+		Map@ map = cr.GetMap();
+		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+		target.LIQUID_LEVEL = target.LIQUID_LEVEL - 500;
+		Item@ bottle = cr.GetItem( PID_BOTTLE_GLASS, -1 );
+		_SubItem( bottle , 1 );
+		Item@ homebrew = cr.AddItem( PID_HOMEBREW, 1 );
+		homebrew.HOMEBREW_TYPE = target.HOMEBREW_TYPE;
+		homebrew.SPIRIT_LEVEL = target.SPIRIT_LEVEL;
+		homebrew.POLUTION_LEVEL = target.POLUTION_LEVEL;
+		if(target.STACH_LEVEL > 250)
+		{
+			target.AddItem( PID_SHIT_SMALL, 1, 0 );
+			target.STACH_LEVEL -= 250;
+		}
+		else if(target.STACH_LEVEL < 250 )
+		{
+			target.AddItem( PID_SHIT_SMALL, 1, 0 );
+			target.STACH_LEVEL = 0;
+		}
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
+		return action_pause;
+    }
+	return 0;
+}
+
+bool DisposeBrew( Critter& cr )
+{
+	Map@ map = cr.GetMap();
+	if(!valid(map)) 
+	{ 
+		Log("Вызов с глобала!"); 
+		return false; 
+	}
+	Item@ target = map.GetItem(cr.StatBase[ST_VAR7]);
+	if(!valid(target)) 
+	{ 
+		Log("Потеря указателя на предмет!"); 
+		return false; 
+	}
+	if( target.CURRENT_CAPACITY <= 0 )
+	{
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы опрокинули чан и убедились, что он пуст." );
+		return false;
+	}
+	_CritAnimateUse(cr);
+	if( target.LIQUID_LEVEL == 0 && target.STACH_LEVEL > 0 )
+	{
+        cr.Say( SAY_EMOTE, "Вытряхивает содержимое кувшина" );
+		map.SetText( target.HexX, target.HexY, COLOR_LGRAY, ":ингридиенты рассыпаются по земле:" );
+		Item@[] dumpedItems;
+        target.GetItems( uint( -1 ), dumpedItems );
+		for( uint i = 0; i < dumpedItems.length(); i++ )
+		{
+			DeleteItem( dumpedItems[i] );
+			uint16 dumpedItemPid = dumpedItems[i].GetProtoId();
+			uint16 dumpedItemsCount = dumpedItems[i].GetCount();
+			uint16 hx=0, hy=0;
+			hx = target.HexX; hy = target.HexY;
+			map.MoveHexByDir( hx, hy, Random( 1, 6 ), 1 );
+			if( map.IsHexPassed( hx, hy ) )
+			{
+				map.AddItem( hx, hy, dumpedItemPid, dumpedItemsCount );
+			}
+			else
+			{	
+				map.AddItem( cr.HexX, cr.HexY, dumpedItemPid, dumpedItemsCount );
+			}
+		}
+	}
+	else if( target.LIQUID_LEVEL >= target.CURRENT_CAPACITY )
+	{
+		map.SetText( target.HexX, target.HexY, COLOR_LGRAY, ":под кувшином образовалась лужа:" );
+		cr.Say( SAY_EMOTE, "Выливает содержимое кувшина" );
+		map.PlaySound( "splash.ogg", target.HexX, target.HexY, 5 );
+	}
+	else
+	{
+		cr.Say( SAY_EMOTE, "Выливает содержимое кувшина" );
+		map.PlaySound( "splash.ogg", target.HexX, target.HexY, 5 );
+		map.SetText( target.HexX, target.HexY, COLOR_LGRAY, ":тошнотворный запах:" );
+		Item@[] dumpedItems;
+        target.GetItems( uint( -1 ), dumpedItems );
+		map.AddItem( target.HexX, target.HexY, PID_SHIT_HUGE, 1 );
+		for(uint i=0;i<dumpedItems.length();i++)
+		{
+			uint16 dumpedItemPid = dumpedItems[i].GetProtoId();
+			uint16 dumpedItemsCount = dumpedItems[i].GetCount();
+			uint16 hx=0, hy=0;
+			hx = target.HexX; hy = target.HexY;
+			map.MoveHexByDir( hx, hy, Random( 1, 6 ), 1 );
+			uint16 amount = dumpedItemsCount - Random ( 1, dumpedItemsCount / 2 );
+			if(amount > 0)
+			{
+				if( map.IsHexPassed( hx, hy ) )
+				{
+					map.AddItem( hx, hy, dumpedItemPid, ( dumpedItemsCount - Random ( 1, dumpedItemsCount ) ) );
+				}
+				else
+				{	
+					map.AddItem( cr.HexX, cr.HexY, dumpedItemPid, ( dumpedItemsCount - Random ( 1, dumpedItemsCount ) ) );
+				}
+			}
+			DeleteItem( dumpedItems[i] );
+		}
+	}
+	target.STATE = STATE_PREPARE;
+	target.CURRENT_CAPACITY = 0;
+	EraseTimeEvent( target.EVENT );
+	target.EVENT = 0;
+	target.LIQUID_LEVEL = 0;
+	target.STACH_LEVEL = 0;
+	target.SUGAR_LEVEL = 0;
+	target.POLUTION_LEVEL = 0;
+	target.HOMEBREW_TYPE = 0;
+	target.SPIRIT_LEVEL = 0;
+	ProtoItem@ proto = GetProtoItem( PID_POT_ALCO );
+	target.PicMap = proto.PicMap;
+	target.Update();
+	return true;
+}
+	
+string MenuInfoClosed( Critter& cr, Item& target)
+{
+	string TXT = "Крышка плотно закрыта, запаха нет.";
+	return TXT;
+}			
+
+string MenuInfoOpen( Critter& cr, Item& target)
+{
+	string TXT = ( target.STATE == STATE_PREPARE ? "Брожение не начнется без" + "\nдрожжей, воды и сахара." + "\nДобавив дрожжи, Вы запустите процесс." : target.STATE == STATE_WORKING ? "Процесс брожения еще идет." : "Похоже, что брожение завершено." );
+	string CURRENT_CAPACITY = target.CURRENT_CAPACITY / 1000;
+	string CAPACITY = target.CAPACITY / 1000;
+	TXT += "\n" + "\nКувшин заполнен на " + CURRENT_CAPACITY + " из " + CAPACITY + " литров.";
+	return TXT;
+}
+
+bool drinkHomebrew( Critter& cr, Item& item ) //export to main
+{
+	cr.AddItem( PID_BOTTLE_GLASS, 1 );
+	Map@ map = cr.GetMap();	
+	map.PlaySound( "water.wav", cr.HexX, cr.HexY, 3 );
+	cr.ParamBase[ ST_POISONING_LEVEL ] += item.POLUTION_LEVEL;
+	cr.ParamBase[ ST_RADIATION_LEVEL ] -= item.SPIRIT_LEVEL;
+	cr.Say( SAY_EMOTE, "Выпил брагу" );
+	if( item.POLUTION_LEVEL > 0 )
+	{
+	cr.Say( SAY_NETMSG, "|0xFFFF00 Вы получили" + " " + item.POLUTION_LEVEL + " пунктов отравления." );
+	}
+	cr.Say( SAY_NETMSG, "|0xFFFF00 Вы потеряли" + " " + item.SPIRIT_LEVEL + " пунктов радиации." );
+	if(item.POLUTION_LEVEL >= 15)
+	{
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вас начало мутить..." );
+		cr.AddTimeEvent( "cte_vomit", REAL_MINUTE(Random( 5, 15 ) ), CTE_VOMIT, 0 );
+	}
+	_SubItem( item , 1 );
+	return true;
+}
+
+uint cte_vomit( Critter& cr, int identifier, uint& rate )
+{
+	if( cr.IsDead() ) 
+	{
+		return 0;
+	}
+	Map@ map = cr.GetMap();
+	if( !valid( map ) ) 
+	{
+		return 0;
+	}
+	_CritAnimatePickup( cr );
+	cr.Say( SAY_EMOTE, "Блюет" );
+	map.PlaySound( "puke.ogg", cr.HexX, cr.HexY, 5 );
+	uint16 hx = cr.HexX, hy = cr.HexY;
+	map.MoveHexByDir( hx, hy, cr.Dir, 1 );
+	map.AddItem( hx, hy, PID_SHIT_SMALL, 1 );
+	cr.ParamBase[ ST_THIRST ] -= 20;
+	cr.ParamBase[ ST_POISONING_LEVEL ] -= 10;
+	if( cr.ParamBase[ ST_POISONING_LEVEL ] > 50 )
+	{
+		cr.AddTimeEvent( "cte_vomit", REAL_MINUTE(Random( 5, 15 ) ), CTE_VOMIT, 0 );
+	}
+	return 0;
+}

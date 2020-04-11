@@ -7,6 +7,8 @@ import void AskCooking( Critter& cr ) from "cooking";
 import void ExplodeEx( Map& map, uint16 hexX, uint16 hexY, uint16 effectPid, uint effectRadius, uint damage, uint damageType, uint damageRadius, uint ownerId )  from "explode";
 import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat"; // Export
 import void SayLog( Map@ map, string@ message ) from "general_unsafe"; //срет дебагом на локале
+import string Centering( string list ) from "mio_control";
+import bool LockInPlace( Critter& cr, Item& targetItem ) from "main";
 
 #define STATE					Val0 								// Статус 0 - потухло, 1 - горит
 #define MAX_FUEL 				Val1 								// Макс допустимый заряд (верхний передел) 
@@ -308,9 +310,15 @@ void BurnIt( Critter& cr, Item& item, Item& target )
 	}
 	else
 	{
-		_SubItem( item, 1 );
 		cr.Say( SAY_EMOTE, "Кидает предмет в огонь" );
-		map.PlaySound( "WAI1XXX2.ACM", target.HexX, target.HexY, 3 );
+		if( item.GetProtoId() == PID_SHIT_SMALL || item.GetProtoId() == PID_SHIT_BIG || item.GetProtoId() == PID_SHIT_HUGE )
+		{
+			uint16 hexX=0, hexY=0;
+			Map @map = target.GetMapPosition( hexX, hexY );
+			map.SetText( target.HexX, target.HexY, COLOR_LGRAY, ":тошнотворный запах:" );
+		}
+		map.PlaySound( "HMXXXXBN.ACM", target.HexX, target.HexY, 3 );
+		_SubItem( item, 1 );
 		return;
 	}
 }
@@ -330,7 +338,7 @@ uint e_Explosives( uint[]@ values )
 		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", values, true );
 		if( target.GetProtoId() == PID_FIREBARREL )
 		{
-			uint16 randomDebree = Random( 2,5 );
+			uint randomDebree = Random( 2,5 );
 			for( uint i = 0; i < randomDebree; i++ )
 			{
 				uint16 hx=0, hy=0;
@@ -445,7 +453,7 @@ uint cte_Hot( Critter& cr, int identifier, uint& rate )
 	rate++;
 	return REAL_SECOND( 1 );
 }
-//==========ТАЙМ-ИВЕНТ ДЛЯ ГОРЕНИЯ ДИКОГО ОГНЯ===============//
+//==========WILDFIRE TIME EVENT ===============//
 uint e_FireBurn( uint[] @ values )
 {
 	if( !valid( values ) || values.length() != 2 ) return 0;
@@ -502,4 +510,128 @@ uint e_FireBurn( uint[] @ values )
 	EraseTimeEvent( item.EVENT );
 	item.EVENT = 0;
     return 0;
+}
+//========== ACTION MENU FOR UNIGNITED BARREL ===============//
+bool ShowMenuFireBarrel( Critter& cr, Item& target ) //exported
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) 
+    {
+        return false;
+	}
+	cr.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_fire_barrel" );
+	cr.Say( SAY_DIALOGBOX_TEXT, MenuInfoFireBarrel( cr, target ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), Centering( "Разжечь огонь" ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), Centering( "Подкинуть горючее" ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), Centering( "Открепить бочку" ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), Centering( "Ничего не делать" ) );
+
+	cr.StatBase[ST_VAR7] = target.Id;
+	return true;	
+}
+
+void answer_fire_barrel( Critter& cr, uint answerI, string& answerS )
+{
+	if( !FireBarrelActions( cr, answerI ) )
+	{
+		cr.Say( SAY_NETMSG, "|0xFF0000 Из этого ничего не вышло." );
+	}
+}
+
+bool FireBarrelActions( Critter& cr, uint answer )
+{
+	switch( answer )
+	{
+		case( 0 ): return TryIgnite( cr );
+		case( 1 ): return TryFeedTheFire( cr );
+		case( 2 ): return TryLockInPlace( cr );
+		case( 3 ): return false;
+	}
+	return false;
+}
+
+bool TryLockInPlace( Critter& cr )
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) 
+    {
+        return false;
+	}	
+	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
+	if( !valid( targetItem ) ) 
+    {
+        return false;
+	}
+	LockInPlace( cr, targetItem );
+	return true;
+}
+
+bool TryIgnite( Critter& cr )
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) 
+    {
+        return false;
+	}		
+	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
+	if( !valid( targetItem ) ) 
+    {
+        return false;
+	}
+	Item@ itemLighter = cr.GetItem( PID_LIGHTER, -1 );
+	Item@ itemFlint = cr.GetItem( PID_FLINT, -1 );
+	if( valid(itemLighter) )
+	{ 
+		Item@ item = itemLighter;
+		Ignite( cr, item, targetItem );
+	}
+	else if( valid(itemFlint) )
+	{ 
+		Item@ item = itemFlint;
+		Ignite( cr, item, targetItem );
+	}
+	else
+	{
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вам нечем разжечь огонь." );
+		ShowMenuFireBarrel( cr, targetItem );
+	}
+	return true;
+}
+
+bool TryFeedTheFire( Critter& cr )
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) 
+    {
+        return false;
+	}		
+	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
+	if( !valid( targetItem ) ) 
+    {
+        return false;
+	}
+	Item@ item = null;
+	for( uint i = 0, j = 9; i < j; i++)
+	{
+		@item = @cr.GetItem( FireFuel[i], -1 );
+		if( valid ( item ) )
+        {
+			break;
+		}
+	}
+	if( valid( item ) )
+	{
+		FeedTheFire(cr, item, targetItem);
+	}
+	ShowMenuFireBarrel( cr, targetItem );
+	return true;
+}
+
+string MenuInfoFireBarrel( Critter& cr, Item& target )
+{
+	string TXT = "Бочка не горит, для розжига понадобится топливо, а так же зажигалка или кремень.";
+	string occupancy_level = (target.CURRENT_FUEL * 100 / target.MAX_FUEL);
+	TXT += "\n";
+	TXT += "\n" "Бочка заполнена горючими материалами на " + occupancy_level + " %";
+	return TXT;
 }
