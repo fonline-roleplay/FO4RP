@@ -106,6 +106,7 @@ import uint ItemsWeight( Item& item ) from "main";
 		
 		switch( skill )
 		{
+			case( SK_FIRST_AID ): return Drag( cr, furniture );			
 			case( SK_TRAPS ): 
 				if( _TryRemoveTrap( furniture, cr ) ) return true;
 				return Rotate( cr, furniture, false );
@@ -257,7 +258,7 @@ import uint ItemsWeight( Item& item ) from "main";
 			UNSETFLAG( furniture.Flags, ITEM_CAN_USE );
 		
 		MoveItem( furniture, 1, cr );
-		LogItemMovement( cr, furniture, "поднимает мебель", 2 );
+		LogItemMovement( cr, furniture, "поднимает мебель (" + cr.HexX + ", " + cr.HexY + ")", 2 );
 		return true;
 	}
 
@@ -307,6 +308,72 @@ import uint ItemsWeight( Item& item ) from "main";
 		return furnitures.rotate( cr, furniture, clockwise );
 	}
 
+	//import bool Drag( Critter@ cr, Item& furniture ) from "furniture";
+	bool Drag( Critter@ cr, Item& furniture ) //exported
+	{
+		InitFurnitures();
+		return furnitures.Drag( cr, furniture );
+	}
+
+	void _InitDragging( Item& item, bool firstTime )
+	{
+		SETFLAG( item.Flags, ITEM_NO_BLOCK );
+		item.SetEvent( ITEM_EVENT_WALK, "e_DragMoving" );
+		
+		_InitFurniture( item, firstTime );
+		item.Update();
+	}
+	
+	void _InitStopped( Item& item, bool firstTime )
+	{
+		UNSETFLAG( item.Flags, ITEM_NO_BLOCK );
+		item.SetEvent( ITEM_EVENT_WALK, null );
+		
+		_InitFurniture( item, firstTime );
+		item.Update();
+	}
+	
+	void e_DragMoving( Item& item, Critter& cr, bool entered, uint8 dir ) 
+	{
+		if( !entered ) return;
+
+		Map@ map = cr.GetMap();
+		uint16   x = cr.HexX, y = cr.HexY;
+		map.MoveHexByDir( x, y, dir, 1 );
+		MoveItem( item, 1, map, x, y );
+	}
+
+	uint cte_DraggingFurniture( Critter& cr, int identifier, uint& rate )
+	{
+		Item@ furniture = GetItem( rate );
+		if( !valid( furniture ) )
+			return 0;
+		
+		uint dist = GetDistantion( cr.HexX, cr.HexY, furniture.HexX, furniture.HexY );
+		
+		Map@ map = cr.GetMap();
+		if( map.Id != furniture.MapId )
+			dist = 0;
+		
+		bool stopped = dist > 2 || !valid( map )
+			|| cr.IsRuning || cr.IsDead() || cr.IsKnockout()
+			|| cr.StatBase[ ST_LAST_CONT_ID ] != int(rate)
+			|| cr.Timeout[ TO_BATTLE ] > 0;
+
+		if( stopped )
+		{
+			cr.Say( SAY_NORM, "*перестаёт толкать*" );
+			furniture.SetScript( "_InitStopped" );
+			return 0;
+		}
+
+		uint16   x = cr.HexX, y = cr.HexY;
+		map.MoveHexByDir( x, y, cr.Dir, 1 );
+		MoveItem( furniture, 1, map, x, y );
+		
+		return REAL_SECOND( 1 );
+	}
+	
 	//import bool isFurniture( Item@ item ) from "furniture";
 	bool isFurniture( Item@ item ) //exported
 	{
@@ -496,6 +563,69 @@ import uint ItemsWeight( Item& item ) from "main";
 				
 			return false;
 		}
+		
+	bool Drag( Critter& cr, Item& furniture ) 
+	{
+		if( cr.GetTimeEvents( CTE_FURNITURE_DRAGGING, null, null, null ) > 0 )
+		{
+			furniture.SetScript( "_InitStopped" );
+			cr.Say( SAY_NORM, "*перестаёт толкать*" );
+			cr.EraseTimeEvents( CTE_FURNITURE_DRAGGING );
+			LogItemMovement( cr, furniture, "перестаёт толкать мебель (" + cr.HexX + ", " + cr.HexY + ")", 2 ); 
+			return true;
+		}
+		
+		if( furniture.GetType() == ITEM_TYPE_DOOR )
+			return false;
+		
+		if( furniture.Holding > 0 && !isGM(cr) )
+		{
+			LogItemMovement( cr, furniture, "не может сдвинуть мебель, специально фиксированную ГМом" );
+			cr.Say( SAY_NETMSG, "Данный объект так просто не сдвинуть. Прийдётся проявить сноровку и фантазию." );	
+			return true;
+		}
+
+		if( ( !FLAG( furniture.Flags, ITEM_CAN_PICKUP ) || furniture.Durability > 0 ) && !isGM(cr) )
+		{
+			LogItemMovement( cr, furniture, "не может толкать вмонтированную мебель", 2 ); 
+			cr.Say( SAY_NETMSG, "Требуется демонтаж." );
+			return true;
+		}
+		
+		if( FLAG( furniture.LockerCondition, LOCKER_JAMMED ) || FLAG( furniture.LockerCondition, LOCKER_BROKEN ) || FLAG( furniture.LockerCondition, LOCKER_NOOPEN ) )
+		{
+			LogItemMovement( cr, furniture, "не может толкать заблокированную мебель", 2 ); 
+			cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
+			return true;
+		}
+		
+		if( ( furniture.Proto.Container_Changeble && !FLAG( furniture.LockerCondition, LOCKER_ISOPEN ) ) || FLAG( furniture.LockerCondition, LOCKER_LOCKED ) )
+		{
+			LogItemMovement( cr, furniture, "пытается укатить закрытую мебель", 2 ); 
+			cr.Say( SAY_NETMSG, "Нельзя перемещать закрытую и запертую мебель." );
+			return true;
+		}
+
+		int freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] - ItemsWeight( cr ),
+			contWeight = ItemsWeight( furniture );
+			
+		if( freeWeight < contWeight && !isGM(cr) )
+		{
+			cr.Say( SAY_NETMSG, "Слишком тяжело." );
+			LogItemMovement( cr, furniture, "не может толкать тяжёлую мебель", 2 );
+			return true;
+		}
+
+		cr.Say( SAY_NORM, "*толкает*" );
+		
+		furniture.SetScript( "_InitDragging" );
+
+		cr.StatBase[ ST_LAST_CONT_ID ] = furniture.Id;
+		cr.AddTimeEvent( "cte_DraggingFurniture", 0, CTE_FURNITURE_DRAGGING, furniture.Id );		
+		
+		LogItemMovement( cr, furniture, "толкает мебель (" + cr.HexX + ", " + cr.HexY + ")", 2 );
+		return true;
+	}
 		
 		bool has( uint pid )
 		{
