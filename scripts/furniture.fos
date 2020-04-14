@@ -1,10 +1,12 @@
 #include "_utils.fos"
+#include "_dialogbox.fos"
 
 #define SK_DESTROY	SK_REPAIR
 #define SK_MIN		100
 
 #define State		Val9
 #define Durability	Val8
+#define HolderCr	Val7
 #define Holding		Val0
 
 #define MAX_POWER	100
@@ -12,11 +14,10 @@
 
 import void LockerBudge( Item& item ) from "lockers";
 import bool IsKeyAviable( Critter& cr, uint lockerId ) from "lockers";
+import bool UseSkillOnLocker( Critter& cr, Item& locker, int skill ) from "lockers";
 import bool _TryRemoveTrap( Item& door, Critter& player ) from "trap";
 import bool UseSkillOnTrappedItem( Item& trappedItem, Critter& cr, int skill ) from "trap";
-import uint ItemsWeight( Critter& cr ) from "main";
-import uint ItemsWeight( Item& item ) from "main";
-
+import void Item_SetFrame( Item& item, uint8 frame ) from "item";
 #ifndef __FURNITURE_DATA_HOLDERS
 	#define __FURNITURE_DATA_HOLDERS
 
@@ -85,6 +86,94 @@ import uint ItemsWeight( Item& item ) from "main";
 	}
 #endif
 
+#ifndef __FURNITURE_DIALOG_MENU
+	#define __FURNITURE_DIALOG_MENU
+	bool MenuFuriture( Critter& cr, Map& map, Item& furniture, iDialogBox& menu )
+	{
+		string info = StyledText( "\n", "Вес: ", ItemsWeight( furniture ) * 0.01 + " / " + cr.Stat[ ST_CARRY_WEIGHT ] * ContainerBonusWeight( furniture ) * 0.01 );
+		
+		if( furniture.Proto.Container_Volume > 0 )
+			info += StyledText( "\n", "Объём: ", ContainmentVolume( furniture ) + " / " + furniture.Proto.Container_Volume );
+		
+		menu.description( info );
+		
+
+		if ( canSwitchLootability( cr, furniture ) ) 
+		{
+			if( menu.ButtonCenter( FLAG( furniture.Flags, ITEM_CAN_PICKUP ) ? "Закрепить" : "Открепить" ) ) 
+			{
+				SwitchLootability( cr, furniture );
+				return true;
+			}
+		}
+		else
+		{
+			if( menu.ButtonCenter("Демонтировать") ) 
+			{
+				_Tools( furniture, cr, cr.GetItem( 0, SLOT_HAND1 ) );
+				return true;
+			}			
+		}
+		
+		if( menu.ButtonCenter("Повернуть") ) 
+		{
+			Rotate( cr, furniture );
+			return true;
+		}
+		
+		if( menu.ButtonCenter("Тащить") ) 
+		{
+			Drag( cr, furniture );	
+			return true;
+		}
+		
+		if( menu.ButtonCenter( canPickup( cr, furniture ) ? "Поднять" : "Открыть" ) ) 
+		{
+			Pickup( cr, furniture );	
+			return true;
+		}
+		
+		if( menu.ButtonCenter( "Содержимое" ) )
+		{
+			UseSkillOnLocker( cr, furniture, SK_STEAL );	
+			return true;
+		}
+		
+		return true;
+	}
+
+	bool StartMenuFuriture( Critter& cr, Item& target)
+	{
+		Map@ map = cr.GetMap();
+		if( map is null ) {
+			return false;
+		}
+		cr.StatBase[ST_VAR7] = target.Id;
+
+		iDialogBox@ menu = OpenMenu(cr, "Мебель");
+		MenuFuriture(cr, map, target, menu);
+		menu.Finish("furniture@answer_MenuFuriture");
+
+		return true;
+	}
+
+	void answer_MenuFuriture( Critter& cr, uint answerI, string& answerS )
+	{
+		Map@ map = cr.GetMap();
+		Item@ target = GetItem(cr.StatBase[ST_VAR7]);
+
+		if( map is null || target is null ) {
+			return;
+		}
+
+		iDialogBox@ menu = CloseMenu(cr, "Мебель", answerI);
+	  
+		if( menu is null || !MenuFuriture( cr, map, target, menu ) ) {
+			cr.Say( SAY_NETMSG, "|0xFF0000 Из этого ничего не вышло." );
+		}
+	}
+#endif
+
 #ifndef __FURNITURE_EVENTS
 	#define __FURNITURE_EVENTS
 	
@@ -112,7 +201,7 @@ import uint ItemsWeight( Item& item ) from "main";
 				return Rotate( cr, furniture, false );
 			case( SK_SCIENCE ): return SwitchLootability( cr, furniture );
 			case( SK_REPAIR ): return Rotate( cr, furniture );
-			case( SKILL_PICK_ON_GROUND ): return Pickup( cr, furniture );
+			case( SKILL_PICK_ON_GROUND ): return StartMenuFuriture( cr, furniture );
 			case( SKILL_PUT_CONT ): return FailedAttempt( cr, "Это сюда не влезет." );
 			default: return false;
 		}
@@ -144,6 +233,25 @@ import uint ItemsWeight( Item& item ) from "main";
 		return true;
 	}
 
+	bool canPickup( Critter& cr, Item& furniture ) 
+	{
+		bool DoorOrContainer = ( ( furniture.GetType() == ITEM_TYPE_CONTAINER && furniture.Proto.Container_Volume > 0 ) || furniture.GetType() == ITEM_TYPE_DOOR );
+		bool isPickingUp = true;
+
+		if( furniture.Holding > 0 && !isGM(cr) ) 
+			return false;
+		
+		if( ( !FLAG( furniture.Flags, ITEM_CAN_PICKUP ) || furniture.Durability > 0 ) && !isGM(cr) )
+		{
+			if( DoorOrContainer )
+				isPickingUp = false;
+			else 
+				return false;
+		}
+		
+		return isPickingUp;
+	}
+	
 	//Должен вернуть false что бы движок поднял предмет обычным путём.
 	bool Pickup( Critter& cr, Item& furniture ) 
 	{
@@ -252,6 +360,17 @@ import uint ItemsWeight( Item& item ) from "main";
 	}
 
 
+	bool canSwitchLootability( Critter& cr, Item& furniture )
+	{
+		if( furniture.Durability > 0 && !isGM(cr) )
+			return false;
+		
+		if( furniture.Holding > 0 && !isGM(cr) )
+			return false;
+		
+		return true;
+	}
+	
 	bool SwitchLootability( Critter& cr, Item& furniture )
 	{
 		if( furniture.Durability > 0 && !isGM(cr) )
@@ -317,6 +436,7 @@ import uint ItemsWeight( Item& item ) from "main";
 	{
 		UNSETFLAG( item.Flags, ITEM_NO_BLOCK );
 		item.SetEvent( ITEM_EVENT_WALK, null );
+		item.HolderCr = 0;
 		
 		_InitFurniture( item, firstTime );
 		item.Update();
@@ -324,11 +444,22 @@ import uint ItemsWeight( Item& item ) from "main";
 	
 	void e_DragMoving( Item& item, Critter& cr, bool entered, uint8 dir ) 
 	{
-		if( !entered ) return;
+		if( !entered || item.HolderCr != int(cr.Id) ) return;
 
 		Map@ map = cr.GetMap();
 		uint16   x = cr.HexX, y = cr.HexY;
 		map.MoveHexByDir( x, y, dir, 1 );
+		
+		if( !map.IsHexPassed( x, y ) )
+		{
+			cr.Say( SAY_NORM, "*перестаёт толкать*" );
+			
+			map.SetText( x, y, COLOR_LGRAY, ":стук:" );
+			
+			item.SetScript( "_InitStopped" );
+			return;
+		}
+		
 		MoveItem( item, 1, map, x, y );
 	}
 
@@ -344,20 +475,30 @@ import uint ItemsWeight( Item& item ) from "main";
 		if( map.Id != furniture.MapId )
 			dist = 0;
 		
+		uint16   x = cr.HexX, y = cr.HexY;
+		map.MoveHexByDir( x, y, cr.Dir, 1 );
+
 		bool stopped = dist > 2 || !valid( map )
 			|| cr.IsRuning || cr.IsDead() || cr.IsKnockout()
 			|| cr.StatBase[ ST_LAST_CONT_ID ] != int(rate)
-			|| cr.Timeout[ TO_BATTLE ] > 0;
+			|| cr.Timeout[ TO_BATTLE ] > 0
+			|| !map.IsHexPassed( x, y )
+			;
 
 		if( stopped )
 		{
 			cr.Say( SAY_NORM, "*перестаёт толкать*" );
+			
+			if( !map.IsHexPassed( x, y ) )
+				map.SetText( x, y, COLOR_LGRAY, ":стук:" );
+			
 			furniture.SetScript( "_InitStopped" );
 			return 0;
 		}
 
-		uint16   x = cr.HexX, y = cr.HexY;
-		map.MoveHexByDir( x, y, cr.Dir, 1 );
+		furniture.PicMap = GetStrHash( "art\\items\\misc\\cart\\cart_dir" + cr.Dir + ".fofrm" );;
+		furniture.Update();
+		
 		MoveItem( furniture, 1, map, x, y );
 		
 		return REAL_SECOND( 1 );
@@ -555,6 +696,12 @@ import uint ItemsWeight( Item& item ) from "main";
 		
 	bool Drag( Critter& cr, Item& furniture ) 
 	{
+		if( furniture.HolderCr != 0 && furniture.HolderCr != int(cr.Id) )
+		{
+			cr.Say( SAY_NORM, "*пытается остановить*" );//TODO: Можно тут роллы сделать, и в случае успеха - забирать управление или останавливать процесс.
+			return true;
+		}
+		
 		if( cr.GetTimeEvents( CTE_FURNITURE_DRAGGING, null, null, null ) > 0 )
 		{
 			furniture.SetScript( "_InitStopped" );
@@ -608,7 +755,8 @@ import uint ItemsWeight( Item& item ) from "main";
 		cr.Say( SAY_NORM, "*толкает*" );
 		
 		furniture.SetScript( "_InitDragging" );
-
+		furniture.HolderCr = cr.Id;
+		
 		cr.StatBase[ ST_LAST_CONT_ID ] = furniture.Id;
 		cr.AddTimeEvent( "cte_DraggingFurniture", 0, CTE_FURNITURE_DRAGGING, furniture.Id );		
 		
