@@ -97,11 +97,13 @@ import void Item_SetFrame( Item& item, uint8 frame ) from "item";
 		
 		menu.description( info );
 		
+		bool isDragging = cr.GetTimeEvents( CTE_FURNITURE_DRAGGING, null, null, null ) > 0;
 
 		if ( canSwitchLootability( cr, furniture ) ) 
 		{
 			if( menu.ButtonCenter( FLAG( furniture.Flags, ITEM_CAN_PICKUP ) ? "Закрепить" : "Открепить" ) ) 
 			{
+				if( isDragging ) StopDragging( cr, furniture );
 				SwitchLootability( cr, furniture );
 				return true;
 			}
@@ -110,6 +112,7 @@ import void Item_SetFrame( Item& item, uint8 frame ) from "item";
 		{
 			if( menu.ButtonCenter("Демонтировать") ) 
 			{
+				if( isDragging ) StopDragging( cr, furniture );
 				_Tools( furniture, cr, cr.GetItem( 0, SLOT_HAND1 ) );
 				return true;
 			}			
@@ -121,25 +124,43 @@ import void Item_SetFrame( Item& item, uint8 frame ) from "item";
 			return true;
 		}
 		
-		if( menu.ButtonCenter("Тащить") ) 
+		if( menu.ButtonCenter( ( isDragging ? "Перестать" : "Начать" ) + " толкать" ) )
 		{
 			Drag( cr, furniture );	
 			return false;
 		}
 		
-		if( menu.ButtonCenter( canPickup( cr, furniture ) ? "Поднять" : "Открыть" ) ) 
+		bool canUse = true;
+		string text = "";
+		if( canPickup( cr, furniture ) )
+			text = "Поднять";
+		else if( furniture.GetType() == ITEM_TYPE_CONTAINER && furniture.Proto.Container_Volume > 0 )
+			text = "Открыть";
+		else
+			canUse = false;
+		if( canUse && menu.ButtonCenter( text ) )
 		{
+			if( isDragging ) StopDragging( cr, furniture );
 			Pickup( cr, furniture );	
 			return false;
 		}
 		
-		if( ( furniture.GetType() == ITEM_TYPE_CONTAINER && furniture.Proto.Container_Volume > 0 ) && menu.ButtonCenter( "Содержимое" ) )
+		if( canPickup( cr, furniture ) && ( furniture.GetType() == ITEM_TYPE_CONTAINER && furniture.Proto.Container_Volume > 0 ) && menu.ButtonCenter( "Содержимое" ) )
 		{
+			if( isDragging ) StopDragging( cr, furniture );
 			UseSkillOnLocker( cr, furniture, SK_STEAL );	
 			return false;
 		}
 		
 		return true;
+	}
+
+	void StopDragging( Critter& cr, Item& item )
+	{
+		item.SetScript( "_InitStopped" );
+		cr.Say( SAY_NORM, "*перестаёт толкать*" );
+		cr.EraseTimeEvents( CTE_FURNITURE_DRAGGING );
+		LogItemMovement( cr, item, "перестаёт толкать мебель (" + cr.HexX + ", " + cr.HexY + ")", 2 ); 
 	}
 
 	bool StartMenuFuriture( Critter& cr, Item& target)
@@ -456,11 +477,9 @@ import void Item_SetFrame( Item& item, uint8 frame ) from "item";
 		
 		if( !map.IsHexPassed( x, y ) )
 		{
-			cr.Say( SAY_NORM, "*перестаёт толкать*" );
-			
 			map.SetText( x, y, COLOR_LGRAY, ":стук:" );
 			
-			item.SetScript( "_InitStopped" );
+			StopDragging( cr, item );
 			return;
 		}
 		
@@ -491,25 +510,31 @@ import void Item_SetFrame( Item& item, uint8 frame ) from "item";
 
 		if( stopped )
 		{
-			cr.Say( SAY_NORM, "*перестаёт толкать*" );
-			
 			if( !map.IsHexPassed( x, y ) )
 				map.SetText( x, y, COLOR_LGRAY, ":стук:" );
 			
-			furniture.SetScript( "_InitStopped" );
+			StopDragging( cr, furniture );
 			return 0;
 		}
 
-		if( furniture.GetProtoId() == PID_CR_CART )
-		{
-			furniture.State = cr.Dir;
-			furniture.PicMap = GetStrHash( "art\\items\\misc\\cart\\cart_dir" + cr.Dir + ".fofrm" );
-			furniture.Update();
-		}
+		
+		setCartPicMap( furniture, cr.Dir );
 		
 		MoveItem( furniture, 1, map, x, y );
 		
 		return REAL_SECOND( 1 );
+	}
+	
+	bool setCartPicMap( Item& furniture, uint dir )
+	{
+		if( furniture.GetProtoId() != PID_CR_CART )
+			return false;
+		
+		furniture.State = dir;
+		furniture.PicMap = GetStrHash( "art\\items\\misc\\cart\\cart_dir" + dir + ".fofrm" );
+		furniture.Update();
+		
+		return true;
 	}
 	
 	//import bool isFurniture( Item@ item ) from "furniture";
@@ -712,10 +737,7 @@ import void Item_SetFrame( Item& item, uint8 frame ) from "item";
 		
 		if( cr.GetTimeEvents( CTE_FURNITURE_DRAGGING, null, null, null ) > 0 )
 		{
-			furniture.SetScript( "_InitStopped" );
-			cr.Say( SAY_NORM, "*перестаёт толкать*" );
-			cr.EraseTimeEvents( CTE_FURNITURE_DRAGGING );
-			LogItemMovement( cr, furniture, "перестаёт толкать мебель (" + cr.HexX + ", " + cr.HexY + ")", 2 ); 
+			StopDragging( cr, furniture );
 			return true;
 		}
 		
@@ -865,13 +887,7 @@ import void Item_SetFrame( Item& item, uint8 frame ) from "item";
 		{
 			if( target.GetProtoId() != basePID || pids.length() == 0 ) return false;
 			
-			if( target.GetProtoId() == PID_CR_CART )
-			{
-				target.State = ( target.State + ( clockwise ? 1 : 6 ) ) % 6;
-				target.PicMap = GetStrHash( "art\\items\\misc\\cart\\cart_dir" + target.State + ".fofrm" );
-				target.Update();
-			}
-			else
+			if( !setCartPicMap( target, ( target.State + ( clockwise ? 1 : 6 ) ) % 6 ) )
 				ChangeState( target, clockwise );
 			
 			setPic( target );
