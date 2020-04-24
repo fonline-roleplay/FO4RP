@@ -2,55 +2,65 @@
 
 #include "_macros.fos"
 #include "FLAMMABLE_H.fos"
+#include "_dialogbox.fos"
 
 import void ExplodeEx( Map& map, uint16 hexX, uint16 hexY, uint16 effectPid, uint effectRadius, uint damage, uint damageType, uint damageRadius, uint ownerId )  from "explode";
 import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat";
+import bool LockInPlace( Critter& cr, Item& targetItem ) from "main";
+import string Centering( string list ) from "mio_control";
 
-const uint PIC_STILL_ANIM_ON = GetStrHash( "art\\items\\misc\\Still\\still_b_working.fofrm" );
+const uint PIC_STILL_ANIM_ON = GetStrHash( "art\\items\\misc\\Still\\still_s_working.fofrm" );
 
-#define STATE						Val0 	// Статус 0 - потух, 1 - заслонка 0%, 2 - заслонка 25%, 3 - заслонка 50%, 4 - заслонка 75%, 5 - заслонка 100%, 6+ - сломан+тип поломки
-#define MAX_FUEL 					Val1 	// Макс допустимый заряд (верхний передел загрузки топлива) 
-#define CURRENT_FUEL				Val2 	// Текущий заряд топлива
-#define EVENT 						Val3 	// Для записи тайм-ивента работы аппарата
-#define CRURRENT_RAW_MATERIAL		Val4	// Текущий загруз браги
-#define CURRENT_TEMPRATURE			Val5	// Текущая температура
-#define	CURRENT_PRESSURE			Val6	// Текущее давление
-#define CRURRENT_PRODUCT			Val7	// Текущий объем спирта
-#define IMPURITIES					Val8	// Уровень загрязнения аппарата
-#define DETERIORATION				Val9	// Уровень износа аппарата
+#define STATE								Val0 	// Статус 0 - потух, 1 - заслонка 0%, 2 - заслонка 25%, 3 - заслонка 50%, 4 - заслонка 75%, 5 - заслонка 100%, 6 - работа завершена
+#define SPIRIT_LEVEL						Val1 	// Уроверь спирта в браге
+#define CURRENT_FUEL						Val2 	// Текущий заряд топлива
+#define EVENT 								Val3 	// Для записи тайм-ивента работы аппарата
+#define CRURRENT_RAW_MATERIAL				Val4	// Текущий загруз браги
+#define CURRENT_TEMPRATURE					Val5	// Текущая температура
+#define	CURRENT_PRESSURE					Val6	// Текущее давление
+#define CRURRENT_PRODUCT					Val7	// Текущий объем спирта
+#define IMPURITIES							Val8	// Уровень загрязнения аппарата
+#define DETERIORATION						Val9	// Уровень износа аппарата
 
-const uint16[] Stills = { PID_STILL_B, PID_STILL_B_ACTIVE, PID_STILL_B_BROKEN, PID_STILL_S, PID_STILL_S_ACTIVE, PID_STILL_S_BROKEN };
+#define MAX_FUEL						( 10000 )	// Максимальный загруз топлива
+#define MAX_RAW_MATERIAL				( 15000 )	// Максимальный загруз браги
+#define MAX_TEMPRATURE					  ( 120 )	// Максимальная температура до возгорания
+#define	MAX_PRESSURE					  ( 320 )	// Максимальное давление до взрыва
+#define MAX_PRODUCT						( 10000 )	// Максимальный выход
+
+#define FIRE_BURNING_TIME		REAL_SECOND( 39 ) 	// Время тика горения огня
+
+#define STATE_PREPARE 						( 0 )
+#define STATE_WORKING_0 				 	( 1 )
+#define STATE_WORKING_25 					( 2 )
+#define STATE_WORKING_50 					( 3 )
+#define STATE_WORKING_75 					( 4 )
+#define STATE_WORKING_100 					( 5 )
+#define STATE_FINISH    					( 6 )
+
+const uint16[] Stills 	= { PID_STILL_B, PID_STILL_B_ACTIVE, PID_STILL_B_BROKEN, PID_STILL_S, PID_STILL_S_ACTIVE, PID_STILL_S_BROKEN };
+const uint16[] Homebrew = { PID_POT_ALCO, PID_HOMEBREW };
 
 bool StillCheck( Critter& cr, Item@ item, Item@ target ) //exported - проверки на разное перед началом работы
 {
     Map@ map = cr.GetMap();
-    if( !valid( map ) ) 
-    {
-        return false;
-    }
-	if( !valid( item ) || !valid(target) )
-    {
-        return false;
-    }
-    if(	Stills.find( target.GetProtoId() ) == -1 )
-    {
-		return false;
-    }
-	if( Igniters.find( item.GetProtoId() ) != -1  )
-	{
-		IgniteStill( cr, item, target );
-		return true;
-	}
+ 	if( !valid( map ) ) { return false; }
+	if( !valid( item ) || !valid(target) ) { return false; }
+	if(	Stills.find( target.GetProtoId() ) == -1 ) { return false; }
+	
+	uint16 itemPid = item.GetProtoId();
+	if( Igniters.find( itemPid ) != -1 ) { IgniteStill( cr, item, target ); return true; }
+	if( Homebrew.find( itemPid ) != -1 ) { AddHomebrew( cr, item, target ); return true; }
+	if( FireFuel.find( itemPid ) != -1 ) { FeedTheFire( cr, item, target ); return true; }
+
 	return true;
 }
 
 bool IgniteStill( Critter& cr, Item& item, Item& target )
 {
 	Map@ map = cr.GetMap();
-    if( !valid( map ) ) 
-    {
-        return false;
-    }
+    if( !valid( map ) ) { return false; }
+	
 	if( target.CURRENT_FUEL == 0 )
 	{
 		cr.Say( SAY_NETMSG, "|0xFFFF00 Тут нечего разжигать, найдите подходящее топливо." );
@@ -68,10 +78,76 @@ bool IgniteStill( Critter& cr, Item& item, Item& target )
 		cr.Say( SAY_EMOTE, "Разжигает огонь" );
 		target.PicMap = PIC_STILL_ANIM_ON;
 		setAnimState( target );
+		uint[] values = {target.Id};
+		target.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "e_StillBurn", values, true );
 	}
 	return true;
 }
 
+uint e_StillBurn( uint[]@ values )
+{
+	uint itemId = values[0];
+	Item@ target = GetItem( itemId );
+	if( valid( target ) )    
+	{
+		target.CURRENT_FUEL = ( target.CURRENT_FUEL - 45 );
+		if( target.CURRENT_FUEL > 0 )
+		{
+			uint16 hexX=0, hexY=0;
+			Map @map = target.GetMapPosition( hexX, hexY );
+			map.PlaySound( "CHEMICAL.ACM", target.HexX, target.HexY, 5 );
+			return FIRE_BURNING_TIME;
+		}
+	
+		target.STATE--;
+		ProtoItem@ proto = GetProtoItem( PID_STILL_S );
+		target.PicMap = proto.PicMap;
+		setAnimState( target );
+		target.Update();
+		uint16 hexX=0, hexY=0;
+		EraseTimeEvent( target.EVENT );
+		target.EVENT = 0;
+	}
+	return 0;
+}
+
+bool FeedTheFire( Critter& cr, Item& item, Item& target )
+{
+	Map@ map = cr.GetMap();
+	if( target.CURRENT_FUEL == MAX_FUEL)
+	{	
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Горючее уже некуда подкладывать, дайте ему прогореть!" );
+		return false;
+	}
+	_SubItem( item, 1 );
+	_CritAnimateUse(cr);
+	if( item.GetProtoId() == PID_COAL )
+	{
+		target.CURRENT_FUEL = MIN(target.CURRENT_FUEL + 5400, MAX_FUEL);
+		cr.Say( SAY_EMOTE, "Подкладывает уголь" );
+		map.PlaySound( "ROCK.ACM", target.HexX, target.HexY, 3 );
+	}
+	else
+	{	
+		target.CURRENT_FUEL = MIN(target.CURRENT_FUEL + 1800, MAX_FUEL);
+		cr.Say( SAY_EMOTE, "Подкладывает топливо" );
+		map.PlaySound( "BRDSWELL.ACM", target.HexX, target.HexY, 3 );
+	}
+
+	int occupancy_rate = ( target.CURRENT_FUEL * 100 / MAX_FUEL );
+	cr.Say( SAY_NETMSG, "|0xFFFF00 Кострище заполнено горючими материалами на " +occupancy_rate+ " %" );
+	
+	return true;
+}
+
+bool AddHomebrew( Critter& cr, Item& item, Item& target )
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) { return false;	}
+	
+	return true;
+}
+//========== TECHNICAL ANIMATION STATE CHANGER ===============//
 void setAnimState( Item& target )
 {
 	if( target.STATE == 1 )
@@ -87,4 +163,123 @@ void setAnimState( Item& target )
 		UNSETFLAG( target.Flags, ITEM_LIGHT );
 	}
 	target.Update();
+}
+
+//========== ACTION_MENU_FOR_UNIGNITED_STILL===============//
+bool ShowMenuStill( Critter& cr, Item& target ) //exported
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) { return false;	}
+	cr.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_still" );
+	cr.Say( SAY_DIALOGBOX_TEXT, MenuInfoStill( cr, target ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), Centering( "Разжечь огонь" ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), Centering( "Подкинуть горючее" ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), Centering( "Открепить аппарат" ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), Centering( "Ничего не делать" ) );
+
+	cr.StatBase[ST_VAR7] = target.Id;
+	return true;	
+}
+
+void answer_still( Critter& cr, uint answerI, string& answerS )
+{
+	if( !StillActions( cr, answerI ) )
+	{
+		cr.Say( SAY_NETMSG, "|0xFF0000 Из этого ничего не вышло." );
+	}
+}
+
+bool StillActions( Critter& cr, uint answer )
+{
+	switch( answer )
+	{
+		case( 0 ): return TryIgnite( cr );
+		case( 1 ): return TryFeedTheFire( cr );
+		case( 2 ): return TryLockInPlace( cr );
+		case( 3 ): return false;
+	}
+	return false;
+}
+
+bool TryLockInPlace( Critter& cr )
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) { return false; }	
+	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
+	if( !valid( targetItem ) ) { return false; }
+	LockInPlace( cr, targetItem );
+	return true;
+}
+
+bool TryIgnite( Critter& cr )
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) { return false; }		
+	
+	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
+	if( !valid( targetItem ) ) { return false; }
+	
+	Item@ itemLighter = cr.GetItem( PID_LIGHTER, -1 );
+	Item@ itemFlint = cr.GetItem( PID_FLINT, -1 );
+	if( valid(itemLighter) )
+	{ 
+		Item@ item = itemLighter;
+		IgniteStill( cr, item, targetItem );
+	}
+	else if( valid(itemFlint) )
+	{ 
+		Item@ item = itemFlint;
+		IgniteStill( cr, item, targetItem );
+	}
+	else
+	{
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вам нечем разжечь огонь." );
+		ShowMenuStill( cr, targetItem );
+	}
+	return true;
+}
+
+bool TryFeedTheFire( Critter& cr )
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) { return false; }		
+	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
+	if( !valid( targetItem ) ) { return false; }
+	
+	Item@ item = null;
+	for( uint i = 0, j = 9; i < j; i++)
+	{
+		@item = @cr.GetItem( FireFuel[i], -1 );
+		if( valid ( item ) )
+        {
+			break;
+		}
+	}
+	if( valid( item ) ) { FeedTheFire(cr, item, targetItem); }
+	else { cr.Say( SAY_NETMSG, "|0xFF0000 У Вас нет подходящего топлива." ); }
+	
+	ShowMenuStill( cr, targetItem );
+	return true;
+}
+
+string MenuInfoStill( Critter& cr, Item& target )
+{
+	string TXT = "";
+	string state = ( target.STATE == STATE_PREPARE ? "Аппарат не работает." : target.STATE == STATE_FINISH ? "Работа аппарата завершена." : "Аппарат работает, заслонка: " );
+	string damper = ( target.STATE == STATE_WORKING_0 ? "закрыта." : target.STATE == STATE_WORKING_25 ? "открыта на четверть." : target.STATE == STATE_WORKING_50 ? "открыта на половину."
+					: target.STATE == STATE_WORKING_75 ? "открыта на три четверти." : "полностью открыта." );
+	string occupancy_level = ( target.CURRENT_FUEL * 100 / MAX_FUEL );
+	string temprature = target.CURRENT_TEMPRATURE;
+	float pressure = target.CURRENT_PRESSURE / 100.0;
+	TXT += state;
+	if( target.STATE != STATE_PREPARE && target.STATE != STATE_FINISH )
+	{
+		TXT += "\n" +damper;
+		TXT += "\n";
+		TXT += "\n" "Температура: " + temprature + " градусов.";
+		TXT += "\n" "Давление: " + pressure + " бар.";
+	}
+	TXT += "\n";	
+	TXT += "\n" "Аппарат заполнен горючим на " + occupancy_level + " %";
+	return TXT;
 }
