@@ -90,118 +90,137 @@ import void Item_SetFrame( Item& item, uint8 frame ) from "item";
 #ifndef __FURNITURE_DIALOG_MENU
 	#define __FURNITURE_DIALOG_MENU
 	import bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param ) from "main";
-	
-	bool MenuFuriture( Critter& cr, Map& map, Item& furniture, iDialogBox& menu )
-	{
-		float max_weight = cr.Stat[ ST_CARRY_WEIGHT ] * ContainerBonusWeight( furniture ) * 0.001;
-		string info = StyledText( "", "Вес: ", ItemsWeight( furniture ) * 0.001 + " / " + max_weight );
-		if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
-		{
-			info += " [" + cr.Stat[ ST_CARRY_WEIGHT ] * 0.001 + " x " + ContainerBonusWeight( furniture ) + "]";
-		}
-		info += "\n";
-		
-		if( isContainer( furniture ) )
-		{		
-			info += StyledText( "\n", "Объём: ", ContainmentVolume( furniture ) + " / " + furniture.Proto.Container_Volume );
-		}
-		menu.description( info );
-		
-		bool isDragging = cr.GetTimeEvents( CTE_FURNITURE_DRAGGING, null, null, null ) > 0;
 
-		if ( canSwitchLootability( cr, furniture ) ) 
-		{
-			if( menu.ButtonCenter( FLAG( furniture.Flags, ITEM_CAN_PICKUP ) ? "Закрепить" : "Открепить" ) ) 
-			{
-				if( isDragging ) { StopDragging( cr, furniture ); }
-				
-				SwitchLootability( cr, furniture );
-				return true;
-			}
+	class MenuFuriture: iMenuHandler {
+		uint m_map_id;
+		uint m_target_id;
+
+		MenuFuriture(Map& map, Item& target) {
+			m_map_id = map.Id;
+			m_target_id = target.Id;
 		}
-		else
+
+		bool MenuUpdate( Critter& cr, iDialogBox& menu )
 		{
-			if( furniture.LockerId != 0 )
+			Map@ map = GetMap(m_map_id);
+			Item@ furniture = GetItem(m_target_id);
+			if( map is null || furniture is null ) {
+				return false;
+			}
+			
+			bool isDragging = cr.GetTimeEvents( CTE_FURNITURE_DRAGGING, null, null, null ) > 0;
+
+			if ( canSwitchLootability( cr, furniture ) ) 
 			{
-				if( menu.ButtonCenter( FLAG( furniture.LockerCondition, LOCKER_LOCKED ) ? "Отпереть" : "Запереть" ) )
+				if( menu.Button( FLAG( furniture.Flags, ITEM_CAN_PICKUP ) ? "Закрепить" : "Открепить" ) ) 
 				{
-					if( !IsKeyAviable( cr, furniture.LockerId ) )
-					{
-						LogItemMovement( cr, furniture, "не может без ключа открыть мебель", 2 ); 
-						cr.Say( SAY_NETMSG, "У вас нет подходящего ключа." );
-						LockerBudge( furniture );
-					}
-					else
-					{
-						Item@ hand = cr.GetItem( 0, SLOT_HAND1 );
-						if( !valid( hand ) )
-							cr.Say( SAY_NETMSG, "Возьмите ключ или ключницу в руку." );
-						else
-							critter_use_item( cr, hand, null, furniture, null, 0 );
-					}
+					if( isDragging ) { StopDragging( cr, furniture ); }
+					
+					SwitchLootability( cr, furniture );
 					return true;
 				}
 			}
-			else if( menu.ButtonCenter( "Демонтировать" ) )
+			else
 			{
-				if( isDragging ) StopDragging( cr, furniture );
-				
-				Item@ hand = cr.GetItem( 0, SLOT_HAND1 );
-				if( !_Tools( furniture, cr, hand ) )
-					critter_use_item( cr, hand, null, furniture, null, 0 );
+				if( furniture.LockerId != 0 )
+				{
+					if( menu.Button( FLAG( furniture.LockerCondition, LOCKER_LOCKED ) ? "Отпереть" : "Запереть" ) )
+					{
+						if( !IsKeyAviable( cr, furniture.LockerId ) )
+						{
+							LogItemMovement( cr, furniture, "не может без ключа открыть мебель", 2 ); 
+							cr.Say( SAY_NETMSG, "У вас нет подходящего ключа." );
+							LockerBudge( furniture );
+						}
+						else
+						{
+							Item@ hand = cr.GetItem( 0, SLOT_HAND1 );
+							if( !valid( hand ) )
+								cr.Say( SAY_NETMSG, "Возьмите ключ или ключницу в руку." );
+							else
+								critter_use_item( cr, hand, null, furniture, null, 0 );
+						}
+						return true;
+					}
+				}
+				else if( menu.Button( "Демонтировать" ) )
+				{
+					if( isDragging ) StopDragging( cr, furniture );
+					
+					Item@ hand = cr.GetItem( 0, SLOT_HAND1 );
+					if( !_Tools( furniture, cr, hand ) )
+						critter_use_item( cr, hand, null, furniture, null, 0 );
 
+					return true;
+				}			
+			}
+			
+			if( menu.Button("Повернуть") ) 
+			{
+				Rotate( cr, furniture );
 				return true;
-			}			
-		}
-		
-		if( menu.ButtonCenter("Повернуть") ) 
-		{
-			Rotate( cr, furniture );
+			}
+			
+			if( menu.Button( ( isDragging ? "Перестать" : "Начать" ) + " толкать" ) )
+			{
+				Drag( cr, furniture );	
+				return false;
+			}
+			
+			bool canUse = true;
+			string text = "";
+			if( canPickup( cr, furniture ) )
+			{
+				if( menu.Button( "Поднять" ) )
+				{
+					if( isDragging ) StopDragging( cr, furniture );
+					Pickup( cr, furniture );	
+					return false;
+				}
+			}
+			else if( isContainer( furniture ) )
+			{
+				string action = "";
+				bool isChangeble = furniture.Proto.Container_Changeble;
+				if( isChangeble )
+					action = FLAG( furniture.LockerCondition, LOCKER_ISOPEN ) ? "Закрыть" : "Открыть";
+				else
+					action = "Содержимое";
+				
+				if( menu.Button( action ) )
+				{
+					if( isDragging ) StopDragging( cr, furniture );
+					UseSkillOnLocker( cr, furniture, SKILL_PICK_ON_GROUND );	
+					return false;
+				}
+				
+				if( menu.Button( "Осмотреть" ) )
+				{
+					if( isDragging ) StopDragging( cr, furniture );
+					UseSkillOnLocker( cr, furniture, SK_LOCKPICK );	
+					return false;
+				}
+			}
+
+			// Описание, в конце - чтобы не составлять его при нажатии кнопки
+			float max_weight = cr.Stat[ ST_CARRY_WEIGHT ] * ContainerBonusWeight( furniture ) * 0.001;
+			string info = StyledText( "", "Вес: ", ItemsWeight( furniture ) * 0.001 + " / " + max_weight );
+			if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
+			{
+				info += " [" + cr.Stat[ ST_CARRY_WEIGHT ] * 0.001 + " x " + ContainerBonusWeight( furniture ) + "]";
+			}
+			info += "\n";
+			
+			if( isContainer( furniture ) )
+			{		
+				info += StyledText( "\n", "Объём: ", ContainmentVolume( furniture ) + " / " + furniture.Proto.Container_Volume );
+			}
+
+			menu.Description( info );
+			menu.Align( true );
+			
 			return true;
 		}
-		
-		if( menu.ButtonCenter( ( isDragging ? "Перестать" : "Начать" ) + " толкать" ) )
-		{
-			Drag( cr, furniture );	
-			return false;
-		}
-		
-		bool canUse = true;
-		string text = "";
-		if( canPickup( cr, furniture ) )
-		{
-			if( menu.ButtonCenter( "Поднять" ) )
-			{
-				if( isDragging ) StopDragging( cr, furniture );
-				Pickup( cr, furniture );	
-				return false;
-			}
-		}
-		else if( isContainer( furniture ) )
-		{
-			string action = "";
-			bool isChangeble = furniture.Proto.Container_Changeble;
-			if( isChangeble )
-				action = FLAG( furniture.LockerCondition, LOCKER_ISOPEN ) ? "Закрыть" : "Открыть";
-			else
-				action = "Содержимое";
-			
-			if( menu.ButtonCenter( action ) )
-			{
-				if( isDragging ) StopDragging( cr, furniture );
-				UseSkillOnLocker( cr, furniture, SKILL_PICK_ON_GROUND );	
-				return false;
-			}
-			
-			if( menu.ButtonCenter( "Осмотреть" ) )
-			{
-				if( isDragging ) StopDragging( cr, furniture );
-				UseSkillOnLocker( cr, furniture, SK_LOCKPICK );	
-				return false;
-			}
-		}
-		
-		return true;
 	}
 
 	void StopDragging( Critter& cr, Item& item )
@@ -218,15 +237,15 @@ import void Item_SetFrame( Item& item, uint8 frame ) from "item";
 		if( map is null ) {
 			return false;
 		}
-		cr.StatBase[ST_VAR7] = target.Id;
+		//cr.StatBase[ST_VAR7] = target.Id;
 
-		iDialogBox@ menu = OpenMenu(cr, "Мебель");
-		MenuFuriture(cr, map, target, menu);
-		menu.Finish("furniture@answer_MenuFuriture");
+		iMenuHandler@ handler = MenuFuriture(map, target);
+		iDialogBox@ menu = OpenMenu(cr, "Мебель", handler);
 
 		return true;
 	}
 
+	/*
 	void answer_MenuFuriture( Critter& cr, uint answerI, string& answerS )
 	{
 		Map@ map = cr.GetMap();
@@ -244,6 +263,7 @@ import void Item_SetFrame( Item& item, uint8 frame ) from "item";
 		if( MenuFuriture( cr, map, target, menu ) )
 			StartMenuFuriture( cr, target );
 	}
+	*/
 #endif
 
 #ifndef __FURNITURE_EVENTS

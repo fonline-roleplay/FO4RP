@@ -1,60 +1,183 @@
 #define __SUCK_LESS__
 
 #include "_defines.fos"
+#include "_math.fos"
 #include "_dialogbox.fos"
 
+
+#define BUTTONS_PER_PAGE_USEFUL (17)
+#define BUTTONS_PER_PAGE_UTILITY (2)
+#define BUTTONS_PER_PAGE ((BUTTONS_PER_PAGE_USEFUL+BUTTONS_PER_PAGE_UTILITY))
+
 import string Centering( string list ) from "mio_control";
+
+ enum MyEnum {
+    eValue0,
+    eValue2 = 2,
+    eValue3,
+    eValue200 = eValue2 * 100
+ }
 
 class Menu: iDialogBox {
     uint m_cr_id;
     uint m_state;
     string m_name;
-	string m_description;
-	string m_cancel_text;
     string[] m_buttons;
+    string[] m_buttons_ext;
+    bool m_align;
+    string m_description;
+    string m_cancel_text;
+    int m_page;
+    iMenuHandler@ m_handler;
 
-    Menu(string& name, uint cr_id) {
+    bool this_multipage;
+    uint this_page_first;
+    uint this_page_last;
+    uint this_page_count;
+
+    Menu(string& name, uint cr_id, iMenuHandler& handler) {
         m_cr_id = cr_id;
         m_state = uint(-1);
         m_name = name;
-		m_description = name;
-		m_cancel_text = "Отмена";
+        m_page = 0;
+        m_align = false;
+        @m_handler = handler;
     }
 
+    // Public Interface:
+
     bool Button(string& text) {
+        return ButtonExt(text, "");
+    }
+
+    bool ButtonExt(string& text, string& ext) {
         if( m_state == uint(-1) ) {
             m_buttons.insertLast(text);
+            m_buttons_ext.insertLast(ext);
             return false;
         }
-        return m_state == uint( m_buttons.find(text) );
+        return m_state == uint(m_buttons.find(text));
     }
-    bool ButtonCenter(string& text) {
-        return Button(Centering(text));
+
+    void Align(bool centering) {
+        m_align = centering;
+    }
+
+    void Description( string& description ) {
+        if( m_state == uint(-1) ) {
+            m_description = description;
+        }
+	}
+    void Cancel( string& text ) {
+        if( m_state == uint(-1) ) {
+            m_cancel_text = text;
+        }
+	}
+
+    // Private:
+
+    string Aligned(string& text) {
+        if( m_align ) {
+            return Centering(text);
+        } else {
+            return text;
+        }
     }
     
-	void description( string& description ) {
-		m_description = description;
-	}
-	
-	void cancel( string& text ) {
-		m_cancel_text = text;
-	}
-	
-	void Finish(string& callback) {
-        Critter@ cr = GetCritter(m_cr_id);
-        if(cr is null || cr.IsNpc()) {
-            //shouldn't be
-            return;
-        }
+    void CalcPagination() {
         uint count = m_buttons.length();
         if( count > 0 ) {
-            cr.ShowScreen( SCREEN_DIALOGBOX, count, callback );
-			cr.Say( SAY_DIALOGBOX_TEXT, m_description );
-            for(uint i = 0; i < count; i++)
-                cr.Say( SAY_DIALOGBOX_BUTTON( i ), m_buttons[i] );
-            cr.Say( SAY_DIALOGBOX_BUTTON( count ), Centering(m_cancel_text) );
+            uint max_page = (count-1)/BUTTONS_PER_PAGE_USEFUL;
+            if( m_page > max_page) {
+                m_page = 0;
+            } else if (m_page < 0) {
+                m_page = max_page;
+            }
+        }
+
+        if( count <= BUTTONS_PER_PAGE  ) {
+            this_page_first = 0;
+            this_page_last = count;
+            this_page_count = count;
+            this_multipage = false;
+        } else {
+            this_page_first = m_page*BUTTONS_PER_PAGE_USEFUL;
+            this_page_last = MIN(this_page_first+BUTTONS_PER_PAGE_USEFUL, count);
+            this_page_count = this_page_last-this_page_first;
+            this_multipage = true;
+        }
+    }
+    void Draw() {
+        Critter@ cr = GetCritter(m_cr_id);
+        if(cr is null || cr.IsNpc()) {
+            return;
+        }
+
+        m_state = uint(-1);
+        m_buttons.resize(0);
+        m_buttons_ext.resize(0);
+        bool keep_open = m_handler.MenuUpdate(cr, this);
+
+        if( keep_open ) {
+            CalcPagination();
+            uint i=0;
+            uint buttons_total = this_page_count + (this_multipage ? BUTTONS_PER_PAGE_UTILITY : 0);
+            cr.ShowScreen( SCREEN_DIALOGBOX, buttons_total, "answer_dialog_box" );
+
+            for(uint j = this_page_first; j < this_page_last; j++) {
+                cr.Say( SAY_DIALOGBOX_BUTTON( i++ ), Aligned(m_buttons[j] + m_buttons_ext[j]) );
+            }
+
+            if( this_multipage ) {
+                cr.Say( SAY_DIALOGBOX_BUTTON( i++ ), "Дальше ->" );
+                cr.Say( SAY_DIALOGBOX_BUTTON( i++ ), "<- Назад" );
+            }
+
+            if( m_cancel_text.length() > 0 ) {
+                cr.Say( SAY_DIALOGBOX_BUTTON( i++ ), Aligned(m_cancel_text) );
+            }
+            if( m_description.length() > 0 ) {
+                cr.Say( SAY_DIALOGBOX_TEXT, m_description );
+            }
         } else {
             cr.ShowScreen(SCREEN_CLOSE, 0, null);
+        }
+    }
+    void Update(uint answerI) {
+        Critter@ cr = GetCritter(m_cr_id);
+        if(cr is null || cr.IsNpc()) {
+            return;
+        }
+
+        if( this_multipage  ) {
+            if( answerI >= this_page_count ) {
+                if( answerI == this_page_count ) {
+                    m_page += 1;
+                } else if( answerI == this_page_count + 1 ) {
+                    m_page -= 1;
+                }
+
+                Draw();
+                return;
+            }
+            m_state = this_page_first+answerI;
+        } else {
+            m_state = answerI;
+        }
+
+        bool keep_open = m_handler.MenuUpdate(cr, this);
+
+        if( keep_open ) {
+            Draw();
+        } else {
+            Forget();
+        }
+    }
+    void Forget() {
+        Menu@ old_menu = null;
+        string@ key = ""+m_cr_id;
+        if( menus.get(key, @old_menu) && old_menu.m_name == m_name) {
+            menus.delete(key);
         }
     }
 }
@@ -62,9 +185,11 @@ class Menu: iDialogBox {
 dictionary menus;
 
 //export
-iDialogBox@ OpenMenu(Critter& cr, string& name) {
+iDialogBox@ OpenMenu(Critter& cr, string& name, iMenuHandler& handler) {
     string@ key = ""+cr.Id;
-    Menu@ menu = Menu(name, cr.Id);
+    Menu@ menu = Menu(name, cr.Id, handler);
+    menu.Draw();
+
     menus.set(key, @menu);
 
     Menu@ menu2 = null;
@@ -72,98 +197,12 @@ iDialogBox@ OpenMenu(Critter& cr, string& name) {
     return menu2;
 }
 
-//export
-iDialogBox@ CloseMenu(Critter& cr, string& name, uint answerI) {
+// движковый колбэк
+void answer_dialog_box( Critter& cr, uint answerI, string& answerS )
+{
     Menu@ menu = null;
     string@ key = ""+cr.Id;
     if( menus.get(key, @menu) ) {
-        menus.delete(key);
-        if( menu.m_name != name ) {
-            return null;
-        }
-        menu.m_state = answerI;
-    }
-    return menu;
-}
-
-
-////
-/*
-bool fired_up = false;
-uint fuel = 0;
-
-bool MenuFireBarrel( Critter& cr, Map& map, Item& target, Menu& menu )
-{
-    if ( fired_up ) {
-        if( menu.Button("Потушить огонь") ) {
-            cr.Say(SAY_EMOTE_ON_HEAD, "Тушит огонь");
-            fired_up = false;
-            return true;
-        }
-    } else {
-        if( menu.Button("Разжечь огонь") ) {
-            cr.Say(SAY_EMOTE_ON_HEAD, "Разжигает огонь");
-            fired_up = true;
-            return true;
-        }
-    }
-    
-    if ( fuel < 5 && menu.Button("Подкинуть горючее") ) {
-        fuel += 1;
-        cr.Say(SAY_EMOTE_ON_HEAD, "Подкидывает горючее, теперь его "+fuel);
-        return true; //TryFeedTheFire( cr );
-    }
-  
-    if ( menu.Button("Открепить бочку") ) {
-        cr.Say(SAY_EMOTE_ON_HEAD, "Открепляет бочку");
-        return true; //TryLockInPlace( cr );
-    }
-  
-    if ( menu.Button("Ничего не делать") ) {
-        cr.Say(SAY_EMOTE_ON_HEAD, "Ничего не делает.");
-        return true;
-    }
-  
-    return true;
-}
-
-bool StartMenuFireBarrel( Critter& cr, Item& target) //exported
-{
-    Map@ map = cr.GetMap();
-    if( map is null ) {
-        return false;
-    }
-    cr.StatBase[ST_VAR7] = target.Id;
-
-    Menu@ menu = OpenMenu(cr, "Бочка");
-    MenuFireBarrel(cr, map, target, menu);
-    menu.Finish("answer_fire_barrel");
-
-    return true;
-}
-
-
-void answer_fire_barrel( Critter& cr, uint answerI, string& answerS )
-{
-    Map@ map = cr.GetMap();
-    Item@ target = GetItem(cr.StatBase[ST_VAR7]);
-
-    if( map is null || target is null ) {
-        return;
-    }
-
-    Menu@ menu = CloseMenu(cr, "Бочка", answerI);
-  
-    if( menu is null || !MenuFireBarrel( cr, map, target, menu ) ) {
-        cr.Say( SAY_NETMSG, "|0xFF0000 Из этого ничего не вышло." );
+        menu.Update(answerI);
     }
 }
-
-void TestBarrel( Critter& player, int param0, int param1, int param2 )  {
-    Item@ item = GetItem(param0);
-    if( item is null ) {
-        return;
-    }
-    StartMenuFireBarrel(player, item);
-}
-*/
