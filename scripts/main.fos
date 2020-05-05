@@ -107,7 +107,7 @@ import void InitCrimsonCaravans() from "crimson_caravans";
 import void SaveCaravans() from "crimson_caravans";
 import void Log_Steal( Critter& player, int target, int item, int succes, string@ param3, int[] @ param4 ) from "gm";
 
-import void ProccessFood( Critter& cr, Item& item ) from "item";
+import void ProccessFood( Critter& cr, Critter& target, Item& item ) from "item";
 
 import void InitTiles() from "cimp";
 
@@ -840,7 +840,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		Critter@ target = useOnSelf ? @cr : @targetCr;
 		if( valid( target ) )
 		{
-			Cleaning( target, pid, 0 );
+			Cleaning( cr, target, pid, 0 );
 			return true;
 		}
 	}
@@ -1162,7 +1162,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
             cr.StatBase[ ST_HUNGER ] += hungerBonus;
             cr.StatBase[ ST_THIRST ] += thristBonus;
             cr.StatBase[ ST_THIRST ] -= hungerBonus / 3;
-            ProccessFood( cr, item );
+            ProccessFood( cr, cr, item );
             UseDrug( cr, item );
             
             cr.Action( ACTION_USE_ITEM, 2, item );
@@ -1172,7 +1172,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
             targetCr.StatBase[ ST_HUNGER ] += hungerBonus;
             targetCr.StatBase[ ST_THIRST ] += thristBonus;
             targetCr.StatBase[ ST_THIRST ] -= hungerBonus / 3;
-            ProccessFood( targetCr, item );
+            ProccessFood( cr, targetCr, item );
             UseDrugOn( cr, targetCr, item );
             
             cr.Action( ACTION_USE_ITEM, 1, item );
@@ -2351,53 +2351,61 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 
 import void start_cleaning( Critter& player, bool handsOnly ) from "test";
 
-//import void Cleaning( Critter& player, uint soap_pid, int water_source ) from "main";
-void Cleaning( Critter& player, uint soap_pid, int water_source ) //exported
+bool useWater( Critter& cr )
+{
+	uint[][] water_bottles = 
+	{
+		{ PID_BOTTLE_DIRTY_FULL, PID_BOTTLE_EMPTY },
+		{ PID_GLASS_BOTTLE_DIRTY_FULL, PID_BOTTLE_GLASS },
+		{ PID_GLASS_BOTTLE_FULL, PID_BOTTLE_GLASS }, 
+		{ PID_BOTTLE_FULL, PID_BOTTLE_EMPTY }, 
+		{ PID_CLEAN_WATER2, PID_BOTTLE_GLASS },
+	};
+	
+	Item@ water = null;
+	int n = -1;
+	
+	for( uint i = 0; i < water_bottles.length(); i++ )
+	{
+		if( water_bottles[i].length() < 2 ) continue;
+		@water = cr.GetItem( water_bottles[i][0], -1 );
+
+		if( valid(water) ) 
+		{	
+			if( water_bottles[i][0] == PID_BOTTLE_DIRTY_FULL || water_bottles[i][0] == PID_GLASS_BOTTLE_DIRTY_FULL )
+				AffectRadiation( cr, 1 );
+
+			cr.AddItem( water_bottles[i][1], 1 );
+
+			Map@ map = cr.GetMap();	
+			map.PlaySound( "splash.ogg", cr.HexX, cr.HexY, 5 );	
+			_SubItem( water, 1 );
+			return true;
+		}
+	}
+	
+	return false;
+}
+
+bool isHandWasher( int water_source )
 {
 	uint[] hand_washers = { 2615, 2619 };
-	bool isHandsOnly = hand_washers.find(water_source) != -1;
+	return hand_washers.find(water_source) != -1;
+}
 
+bool PrepareCleaning( Critter& player, Critter& target, int water_source )
+{
 	if( water_source == 0 ) //Если нет стороннего источника воды
 	{
-		uint[][] water_bottles = 
-		{
-			{ PID_BOTTLE_DIRTY_FULL, PID_BOTTLE_EMPTY },
-			{ PID_GLASS_BOTTLE_DIRTY_FULL, PID_BOTTLE_GLASS },
-			{ PID_GLASS_BOTTLE_FULL, PID_BOTTLE_GLASS }, 
-			{ PID_BOTTLE_FULL, PID_BOTTLE_EMPTY }, 
-			{ PID_CLEAN_WATER2, PID_BOTTLE_GLASS },
-		};
-		
-		Item@ water = null;
-		int n = -1;
-		
-		for( uint i = 0; i < water_bottles.length(); i++ )
-		{
-			if( water_bottles[i].length() < 2 ) continue;
-			
-			@water = player.GetItem( water_bottles[i][0], -1 );
-			if( valid(water) ) 
-			{	
-				if( water_bottles[i][0] == PID_BOTTLE_DIRTY_FULL || water_bottles[i][0] == PID_GLASS_BOTTLE_DIRTY_FULL )
-					AffectRadiation( player, 1 );
-		
-				player.AddItem( water_bottles[i][1], 1 );
-				break;
-			}
-		}
-
-		if( !valid(water) )
+		if( !useWater( player ) && !useWater( target ) )
 		{
 			player.Say( SAY_NETMSG, "У вас нет воды для этого." );
-			return;
+			return false;
 		}
-		Map@ map = player.GetMap();	
-		map.PlaySound( "splash.ogg", player.HexX, player.HexY, 5 );	
-		_SubItem( water, 1 );
 	}
 	else 
 	{
-		if( !isHandsOnly ) //Если моешься в душе, а не просто руки с мылом помыл.
+		if( !isHandWasher( water_source ) ) //Если моешься в душе, а не просто руки с мылом помыл.
 		{
 			//Тут будет выпадение вещей из инвентаря, поломка раций и износ брони/оружия.
 			Map@ map = player.GetMap();	
@@ -2410,6 +2418,90 @@ void Cleaning( Critter& player, uint soap_pid, int water_source ) //exported
 		}
 	}
 	
+	return true;
+}
+
+//import void Cleaning( Critter& player, uint soap_pid, int water_source ) from "main";
+void Cleaning( Critter& player, uint soap_pid, int water_source ) //exported
+{
+	Cleaning( player, player, soap_pid, water_source );
+}
+
+//import void Cleaning( Critter& player, Critter& target, uint soap_pid, int water_source ) from "main";
+void Cleaning( Critter& player, Critter& target, uint soap_pid, int water_source ) //exported
+{
+	if( PrepareCleaning( player, target, water_source ) )
+		SoapEffect( player, target, soap_pid, water_source );
+}
+
+void SoapEffect( Critter& player, Critter& target, uint soap_pid, int water_source )
+{
+	Critter@ owner = @player;
+	Item@ soap = getSoap( player, soap_pid );
+	if( !valid( soap ) )
+	{
+		@soap = getSoap( target, soap_pid );
+		
+		if( valid( soap ) )
+			@owner = @target;
+	}
+	
+	bool isHandsOnly = isHandWasher( water_source );
+	
+	int pid = valid(soap) ? soap.GetProtoId() : 0;
+	switch( pid )
+	{
+		case( PID_ITSOAP01 ):
+			owner.Say( SAY_NETMSG, "Вы используете новый кусок мыла." );
+			_SubItem( soap, 1 );
+			@soap = owner.AddItem( PID_ITSOAP01_PRT, 1 );
+			
+		case( PID_ITSOAP01_PRT ):
+			target.Say( SAY_EMOTE_ON_HEAD, "Моет" + ( isHandsOnly ? " руки" : "ся" ) + " хозяйственным мылом" );
+			target.ParamBase[ CR_DIRTINESS ] = ( target.ParamBase[ CR_DIRTINESS ] * 0.8 ) - 5;
+
+			soap.Val0--;
+			soap.Update();
+			if( soap.Val0 < 1 )
+			{
+				owner.Say( SAY_NETMSG, "Вы использовали последние крохи мыла." );
+				_SubItem( soap, 1 );
+			}
+		break;
+		
+		case( PID_FPSHL6 ):
+			owner.Say( SAY_NETMSG, "Вы используете новый кусок мыла." );
+			_SubItem( soap, 1 );
+			@soap = owner.AddItem( PID_FPSHL6_PRT, 1 );
+			
+		case( PID_FPSHL6_PRT ):
+			target.Say( SAY_EMOTE_ON_HEAD, "Моет" + ( isHandsOnly ? " руки" : "ся" ) + " душистым мылом" );
+			target.ParamBase[ CR_DIRTINESS ] = ( target.ParamBase[ CR_DIRTINESS ] * 0.6 ) - 10;
+			
+			if( target.ParamBase[ CR_DIRTINESS ] <= 0 && target.GetTimeEvents( CTE_ROTTEN, null, null, null ) < 1 )
+				target.AddTimeEvent( "cte_aroma", REAL_SECOND(15), CTE_ROTTEN, 0 );
+
+			soap.Val0--;
+			soap.Update();
+			if( soap.Val0 < 1 )
+			{
+				owner.Say( SAY_NETMSG, "Вы использовали последние крохи мыла." );
+				_SubItem( soap, 1 );
+			}
+		break;
+		
+		default:
+			target.Say( SAY_EMOTE_ON_HEAD, "Ополаскивает" + ( isHandsOnly ? " руки" : "ся" ) );
+			target.ParamBase[ CR_DIRTINESS ] -= 1 + Random( 0, target.ParamBase[ CR_DIRTINESS ] * 0.2 );
+			
+			if( water_source > 0 )
+				start_cleaning( target, isHandsOnly );
+		break;
+	}
+}
+
+Item@ getSoap( Critter& player, uint soap_pid )
+{
 	Item@ soap;
 	uint[] soap_pids = { PID_ITSOAP01_PRT, PID_FPSHL6_PRT, PID_ITSOAP01, PID_FPSHL6 };
 	for( uint i = 0, l = soap_pids.length(); i < l; i++ )
@@ -2418,57 +2510,7 @@ void Cleaning( Critter& player, uint soap_pid, int water_source ) //exported
 		if( valid( soap ) )
 			break;
 	}
-		
-	int pid = valid(soap) ? soap.GetProtoId() : 0;
-	switch( pid )
-	{
-		case( PID_ITSOAP01 ):
-			player.Say( SAY_NETMSG, "Вы используете новый кусок мыла." );
-			_SubItem( soap, 1 );
-			@soap = player.AddItem( PID_ITSOAP01_PRT, 1 );
-			
-		case( PID_ITSOAP01_PRT ):
-			player.Say( SAY_EMOTE_ON_HEAD, "Моет" + ( isHandsOnly ? " руки" : "ся" ) + " хозяйственным мылом" );
-			player.ParamBase[ CR_DIRTINESS ] = ( player.ParamBase[ CR_DIRTINESS ] * 0.8 ) - 5;
-
-			soap.Val0--;
-			soap.Update();
-			if( soap.Val0 < 1 )
-			{
-				player.Say( SAY_NETMSG, "Вы использовали последние крохи мыла." );
-				_SubItem( soap, 1 );
-			}
-		break;
-		
-		case( PID_FPSHL6 ):
-			player.Say( SAY_NETMSG, "Вы используете новый кусок мыла." );
-			_SubItem( soap, 1 );
-			@soap = player.AddItem( PID_FPSHL6_PRT, 1 );
-			
-		case( PID_FPSHL6_PRT ):
-			player.Say( SAY_EMOTE_ON_HEAD, "Моет" + ( isHandsOnly ? " руки" : "ся" ) + " душистым мылом" );
-			player.ParamBase[ CR_DIRTINESS ] = ( player.ParamBase[ CR_DIRTINESS ] * 0.6 ) - 10;
-			
-			if( player.ParamBase[ CR_DIRTINESS ] <= 0 && player.GetTimeEvents( CTE_ROTTEN, null, null, null ) < 1 )
-				player.AddTimeEvent( "cte_aroma", REAL_SECOND(15), CTE_ROTTEN, 0 );
-
-			soap.Val0--;
-			soap.Update();
-			if( soap.Val0 < 1 )
-			{
-				player.Say( SAY_NETMSG, "Вы использовали последние крохи мыла." );
-				_SubItem( soap, 1 );
-			}
-		break;
-		
-		default:
-			player.Say( SAY_EMOTE_ON_HEAD, "Ополаскивает" + ( isHandsOnly ? " руки" : "ся" ) );
-			player.ParamBase[ CR_DIRTINESS ] -= 1 + Random( 0, player.ParamBase[ CR_DIRTINESS ] * 0.2 );
-			
-			if( water_source > 0 )
-				start_cleaning( player, isHandsOnly );
-		break;
-	}
+	return soap;
 }
 
 //import bool inHeaven( Critter& cr ) from "main";
