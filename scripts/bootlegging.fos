@@ -21,7 +21,7 @@ const uint PIC_STILL_ANIM_ON = GetStrHash( "art\\items\\misc\\Still\\still_s_wor
 #define	CURRENT_PRESSURE					Val6	// Текущее давление
 #define CURRENT_PRODUCT						Val7	// Текущий объем спирта
 #define IMPURITIES							Val8	// Уровень загрязнения аппарата
-#define DETERIORATION						Val9	// Уровень износа аппарата
+#define STORED_HEAT							Val9	// Запасенное тепло в системе
 
 #define POT_LIQUID_LEVEL					Val4 	// кол-во жидкостей в кувшине браги
 #define HB_POLUTION_LEVEL					Val7 	// кол-во загрязнения в браге
@@ -29,12 +29,23 @@ const uint PIC_STILL_ANIM_ON = GetStrHash( "art\\items\\misc\\Still\\still_s_wor
 
 #define MAX_FUEL						( 10000 )	// Максимальный загруз топлива
 #define MAX_RAW_MATERIAL				( 15000 )	// Максимальный загруз браги
-#define MAX_TEMPRATURE					  ( 120 )	// Максимальная температура до возгорания
-#define	MAX_PRESSURE					  ( 320 )	// Максимальное давление до взрыва
+#define MAX_TEMPRATURE					( 39500 )	// Максимальная температура до возгорания к
+#define	MAX_PRESSURE					 ( 4000 )	// Максимальное давление до взрыва
 #define MAX_PRODUCT						( 10000 )	// Максимальный выход
 
-#define FIRE_BURNING_TIME		REAL_SECOND( 39 ) 	// Время тика горения огня
+#define FIRE_BURNING_TIME		 REAL_SECOND( 1 ) 	// Время тика горения огня
+#define FUEL_BURN_AMOUNT				   ( 45 )	// Кол-во сжигаемого топлива
 
+//Thermodynamics - export to separate module later
+#define THERM_HECHFS 					 ( 4650 ) 	// Вт/(м2*К) - коэффициент теплоотдачи от горячего флюида к стенке // heat exchange coefficient of hot fluid to surface
+#define THERM_HECSCF					 ( 9.6f ) 	// 9,6, Вт/(м2*К) - коэффициент теплоотдачи стенки к холодному флюиду // heat exchange coefficient of surface to cold fluid
+#define	THERM_STCC						( 52.5f ) 	// 52.5, Вт/(м*К) - коэффициент теплопроводности стенки // surface thermal conductivity coefficient
+#define	THERM_STILL_D_INNER				( 0.30f ) 	// d1, м - внутренний диаметр цилиндра.
+#define	THERM_STILL_D_OUTER				( 0.34f )	// d2, м - наружный диаметр цилиндра.  
+#define THERM_Tf2 						( 29500 )   // Tf2 = 295, К - температура холодного флюида. Окружающей среды. // cold fluid temprature
+#define THERM_WATER_TSP 		  	  ( 4.1806f )   // с = 4,1806, кДж/кг К - теплоемкость воды // water thermal storage property
+
+//Still state
 #define STATE_PREPARE 						( 0 )
 #define STATE_WORKING_0 				 	( 1 )
 #define STATE_WORKING_25 					( 2 )
@@ -72,50 +83,107 @@ bool IgniteStill( Critter& cr, Item& item, Item& target )
 		cr.Say( SAY_NETMSG, "|0xFFFF00 Тут нечего разжигать, найдите подходящее топливо." );
 		return false;
 	}
-	if( target.STATE == 0 && target.CURRENT_FUEL > 0 )
+	if( target.EVENT == 0 && target.CURRENT_FUEL > 0 )
 	{
 		if( item.GetProtoId() == PID_FLINT && Random( 1, 300 ) > cr.Skill[SK_OUTDOORSMAN] )
 		{
 			_SubItem( item, 1 );
 			cr.Say( SAY_NETMSG, "|0xFFFF00 Вы сточили поджиг." );
 		}
-		target.STATE++;
+		target.STATE = STATE_WORKING_100;
 		_CritAnimateUse(cr);
 		cr.Say( SAY_EMOTE, "Разжигает огонь" );
 		target.PicMap = PIC_STILL_ANIM_ON;
 		setAnimState( target );
 		uint[] values = {target.Id};
+		target.CURRENT_TEMPRATURE = THERM_Tf2;
+		target.STORED_HEAT = target.CURRENT_TEMPRATURE * m(target) * THERM_WATER_TSP;
 		target.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "e_StillBurn", values, true );
 	}
 	return true;
+}
+
+float m( Item& target )
+{
+    float result = 0.09f; // масса воздуха в пустом баке на 15л // air mass in empty still
+    if( target.CURRENT_RAW_MATERIAL > 0 ) {
+        result = target.CURRENT_RAW_MATERIAL / 1000.0f;
+    }
+    return result;
 }
 
 uint e_StillBurn( uint[]@ values )
 {
 	uint itemId = values[0];
 	Item@ target = GetItem( itemId );
-	if( valid( target ) )    
-	{
-		target.CURRENT_FUEL -= 45;
-		if( target.CURRENT_FUEL > 0 )
-		{
+	
+	if( valid( target ) ) {
+		if( target.STATE > STATE_PREPARE && target.CURRENT_TEMPRATURE >= THERM_Tf2 ) {
 			uint16 hexX=0, hexY=0;
-			Map @map = target.GetMapPosition( hexX, hexY );
+			Map@ map = target.GetMapPosition( hexX, hexY );
 			map.PlaySound( "CHEMICAL.ACM", target.HexX, target.HexY, 5 );
+
+			//Valve level effects burning time
+			int valve_level = 0;
 			switch( target.STATE ) {
-				case ( 1 ):
+				case( STATE_WORKING_0 ):
+					valve_level = 0;
 					break;
-				case ( 2 ):
+				case( STATE_WORKING_25 ):
+					valve_level = 25;
 					break;
-				case ( 3 ):
+				case( STATE_WORKING_50 ):
+					valve_level = 50;
 					break;
-				case ( 4 ):
+				case( STATE_WORKING_75 ):
+					valve_level = 75;
 					break;
-				case( 5 ):
+				case( STATE_WORKING_100 ):
+					valve_level = 100;
 					break;
 			}
-			target.CURRENT_TEMPRATURE += 30;
-			target.CURRENT_PRESSURE += 100;
+			//RL_Thermodynamics_start_here
+
+			float Q_burning = FUEL_BURN_AMOUNT * valve_level;   // Q-горения = q-горения*t-горения*M-задвижки, q-горения, кДж/с = 45 единиц игрового топлива / 39 секунд таймивента  горения = 1,15;
+			
+			if( target.CURRENT_FUEL <= 0 ) {
+				Q_burning = 0;
+			}
+			
+            //float delta_time = 3;//Три секунды. FIRE_BURNING_TIME
+
+			// float heat_before = target.STORED_HEAT ;            
+            target.STORED_HEAT += Q_burning; // +4500 при 100 valve_level
+            // float heat_after = target.STORED_HEAT ;
+            // float heat_summ = sqrt( pow( heat_before - heat_after, 2 ) + pow( delta_time, 2 )  ); 
+			
+			// R = (1/(a1*d1)) + ((1/2*y)*(Ln(d2/d1))) + (1/(a2*d2)) - linear thermic resistance formula
+			float ti = 1.0 / ( THERM_HECHFS * THERM_STILL_D_INNER ); 										// (1/(a1*d1)) = 0.0007 0.0007;
+			float log_d = log( float( THERM_STILL_D_OUTER / THERM_STILL_D_INNER) );							// (Ln(d2/d1))) = 0.125 10.1251;
+			float tl = ( 1 / ( 2 * THERM_STCC ) ) * log_d; 													// (1/(2*y)*(Ln(d2/d1))) = 0.0012 0.0012;
+			float to = 1.0 / ( THERM_HECSCF * THERM_STILL_D_OUTER ); 										// (1/(a2*d2)) 0.3064 0.3064;
+			float R = ti + tl + to; 																		//  calculation == 0.31
+			
+			float M = m(target); // масса воздуха в пустом баке на 15л // air mass in empty still
+			
+			// float TempK_before = target.CURRENT_TEMPRATURE ;            
+            // float TempK_after = target.CURRENT_TEMPRATURE;
+            // float TempK_summ = sqrt( pow( TempK_before - TempK_after, 2 ) + pow( delta_time, 2 )  ); 
+			
+			float tmc = ( THERM_Tf2 - target.CURRENT_TEMPRATURE ) * M * THERM_WATER_TSP; 						    						// (Tf2*m*c)
+			float rmcl = 1.0f + ( ( R * M * THERM_WATER_TSP ) / ( 3.14f * 1.0f ) ); 						// (1 + (R*m*c/3,14*L)) where L = size of still, 1m
+			float Q_loss = ( target.STORED_HEAT + tmc ) / rmcl;												// calculation
+			
+			target.STORED_HEAT -= Q_loss;
+
+           	float T2 = ( target.STORED_HEAT / ( M * THERM_WATER_TSP ) );
+			target.CURRENT_TEMPRATURE = T2;
+
+			//Log( R + " " + tf2mc + " " + t1mc + " " + rmcl + " " + heat_summ);
+			Log( target.CURRENT_TEMPRATURE * 0.01 + " == " + target.STORED_HEAT + " - " + Q_loss + "[ " + tmc + " / " + rmcl + "]" );
+				
+			target.CURRENT_FUEL -= FUEL_BURN_AMOUNT * valve_level / 100;
+			
 			if( target.CURRENT_PRESSURE >= MAX_PRESSURE ) {
 				CreateTimeEvent( AFTER( REAL_SECOND( Random( 5, 20 ) ) ),"e_Explode", values, true );
 			}
@@ -125,14 +193,20 @@ uint e_StillBurn( uint[]@ values )
 			}
 			return FIRE_BURNING_TIME;
 		}
-		target.STATE--;
+		target.STATE = STATE_PREPARE; // заменить на STATE_FINISH как только будет выделение спирта
 		ProtoItem@ proto = GetProtoItem( PID_STILL_S );
 		target.PicMap = proto.PicMap;
 		setAnimState( target );
-		target.Update();
-		uint16 hexX=0, hexY=0;
-		EraseTimeEvent( target.EVENT );
 		target.EVENT = 0;
+		target.STORED_HEAT = 0;
+		
+		uint16 hexX=0, hexY=0;
+		Map@ map = target.GetMapPosition( hexX, hexY );
+		Item@ fireFX = map.AddItem( target.HexX, target.HexY, PID_STEAM, 1 );
+		uint[] values = {fireFX.Id};
+		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ), "e_stillFX", values, true );
+		EraseTimeEvent( target.EVENT );
+
 	}
 	return 0;
 }
@@ -146,7 +220,6 @@ void GenerateFire( Map@ map, int x, int y, int r ) //exported
 	map.GetItems( x, y, heated );
 	for( uint i = 0; i < heated.length(); i++ )
 	{	
-		uint16[] WildFires = { PID_WILDFIRE_1, PID_WILDFIRE_2, PID_WILDFIRE_3, PID_WILDFIRE_4, PID_WILDFIRE_5 };
 		if( WildFires.find( heated[i].GetProtoId() ) != -1 )
 			continue;
 		FireUp( heated[i], WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
@@ -170,6 +243,7 @@ bool FeedTheFire( Critter& cr, Item& item, Item& target )
 		cr.Say( SAY_NETMSG, "|0xFFFF00 Горючее уже некуда подкладывать, дайте ему прогореть!" );
 		return false;
 	}
+	
 	_SubItem( item, 1 );
 	_CritAnimateUse(cr);
 	if( item.GetProtoId() == PID_COAL )
@@ -200,9 +274,12 @@ bool AddHomebrew( Critter& cr, Item& item, Item& target )
 		target.CURRENT_RAW_MATERIAL += 500;
 		target.SPIRIT_LEVEL = target.SPIRIT_LEVEL + ( 500 * item.HB_SPIRIT_LEVEL / 100 );
 		target.IMPURITIES += item.HB_POLUTION_LEVEL;
+
 		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+		
 		_SubItem( item, 1 );
 		cr.AddItem( PID_BOTTLE_GLASS, 1 );
+
 		if( target.CURRENT_RAW_MATERIAL > MAX_RAW_MATERIAL ) {
 			target.CURRENT_RAW_MATERIAL = MAX_RAW_MATERIAL;
 			map.SetText( target.HexX, target.HexY, COLOR_LGRAY, ":брага переливается через край:" );
@@ -222,18 +299,22 @@ bool TransferToStill( Critter& cr, Item& targetItem, Item& cont ) //export to ma
 {
 	if(!valid(cont)) { Log( "Потеря указателя на контейнер!" ); return false; 
 	}
-	if( cont.STATE > 0 ) { cr.Say( SAY_NETMSG, "|0xFF0000 Аппарат не готов к загрузу браги." ); return false; 
+	if( cont.STATE > STATE_PREPARE ) { cr.Say( SAY_NETMSG, "|0xFF0000 Аппарат не готов к загрузу браги." ); return false; 
 	}
 	if( targetItem.GetProtoId() != PID_HOMEBREW ) { cr.Say( SAY_NETMSG, "|0xFF0000 Вам кажется, что из этого спирт не выделить." ); return false; 
 	}
+	
 	Map@ map = cr.GetMap();
 	uint transferAmount = cr.ItemTransferCount();
 	uint16 targetItemPid = targetItem.GetProtoId();
 	if( Homebrew.find( targetItemPid ) != -1 ) {
 		cr.AddItem( PID_BOTTLE_GLASS, transferAmount );
 		cont.CURRENT_RAW_MATERIAL = cont.CURRENT_RAW_MATERIAL + ( ( targetItem.Proto.Weight - 150 ) * transferAmount );
+		
 		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+		
 		_SubItem( targetItem, 1 );
+		
 		if( cont.CURRENT_RAW_MATERIAL > MAX_RAW_MATERIAL ) {
 			cont.CURRENT_RAW_MATERIAL = MAX_RAW_MATERIAL;
 			cr.Say( SAY_NETMSG, "|0xFFFF00 Похоже, что емкость заполнена под крышку." );
@@ -255,6 +336,7 @@ uint e_Explode( uint[]@ values )
 		ExplodeEx( map, hexX, hexY, PID_EXPLODE_ROCKET, 2, Random( 50, 100 ), DAMAGE_EXPLODE, 2, 0 );
 		map.AddItem( hexX, hexY, Ashes[ Random( 0, Ashes.length() - 1 ) ], 1 );
 		Item@ fireFX = map.AddItem( hexX, hexY, PID_SMOKE, 1 );
+		
 		uint[] values = {fireFX.Id};
 		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", values, true );
 		uint randomDebree = Random( 2,5 );
@@ -302,7 +384,7 @@ bool AddIngrigient( Critter& cr )
 //========== TECHNICAL_ANIMATION_STATE_CHANGER ===============//
 void setAnimState( Item& target )
 {
-	if( target.STATE == 1 ) {	
+	if( target.STATE > STATE_PREPARE ) {	
 		UNSETFLAG( target.Flags, ITEM_SHOW_ANIM_EXT );
 		SETFLAG( target.Flags, ITEM_LIGHT );
 		SETFLAG( target.Flags, ITEM_CAN_USE );
@@ -318,17 +400,20 @@ void setAnimState( Item& target )
 bool ShowMenuStill( Critter& cr, Item& target ) //exported
 {
 	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false;	}
-	cr.ShowScreen( SCREEN_DIALOGBOX, 4, "answer_still" );
+    if( !valid( map ) ) { return false;	
+	}
+	
+	cr.ShowScreen( SCREEN_DIALOGBOX, 5, "answer_still" );
 	cr.Say( SAY_DIALOGBOX_TEXT, MenuInfoStill( cr, target ) );
 	cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), Centering( "Добавить брагу" ) );
 	cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), Centering( "Разжечь огонь" ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), Centering( "Подкинуть горючее" ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), Centering( "Открепить аппарат" ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 4 ), Centering( "Ничего не делать" ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), Centering( "Положение заслонки" ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), Centering( "Подкинуть горючее" ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 4 ), Centering( "Открепить аппарат" ) );
+	cr.Say( SAY_DIALOGBOX_BUTTON( 5 ), Centering( "Ничего не делать" ) );
 
 	cr.StatBase[ST_VAR7] = target.Id;
-	return true;	
+	return true;
 }
 
 void answer_still( Critter& cr, uint answerI, string& answerS )
@@ -343,9 +428,10 @@ bool StillActions( Critter& cr, uint answer )
 	{
 		case( 0 ): return AddIngrigient( cr );
 		case( 1 ): return TryIgnite( cr );
-		case( 2 ): return TryFeedTheFire( cr );
-		case( 3 ): return TryLockInPlace( cr );
-		case( 4 ): return false;
+		case( 2 ): return StartMenuValve( cr );
+		case( 3 ): return TryFeedTheFire( cr );
+		case( 4 ): return TryLockInPlace( cr );
+		case( 5 ): return false;
 	}
 	return false;
 }
@@ -353,9 +439,18 @@ bool StillActions( Critter& cr, uint answer )
 bool TryLockInPlace( Critter& cr )
 {
 	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false; }	
+    if( !valid( map ) ) { return false; 
+	}	
+	
 	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
-	if( !valid( targetItem ) ) { return false; }
+	if( !valid( targetItem ) ) { return false; 
+	}
+	
+	if( targetItem.EVENT != 0 ) { 
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы не хотите переносить работающий аппарат." );
+		return false; 
+	}
+	
 	LockInPlace( cr, targetItem );
 	return true;
 }
@@ -363,10 +458,12 @@ bool TryLockInPlace( Critter& cr )
 bool TryIgnite( Critter& cr )
 {
 	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false; }		
+    if( !valid( map ) ) { return false; 
+	}
 	
 	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
-	if( !valid( targetItem ) ) { return false; }
+	if( !valid( targetItem ) ) { return false; 
+	}
 	
 	Item@ itemLighter = cr.GetItem( PID_LIGHTER, -1 );
 	Item@ itemFlint = cr.GetItem( PID_FLINT, -1 );
@@ -383,12 +480,113 @@ bool TryIgnite( Critter& cr )
 	return true;
 }
 
+bool StartMenuValve( Critter& cr )
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) { return false; 
+	}
+	
+	Item@ target = map.GetItem(cr.StatBase[ST_VAR7]);
+
+    iMenuHandler@ handler = MenuValve( target, map );
+    iDialogBox@ menu = OpenMenu( cr, "Заслонка", handler );
+	
+	return true;
+}
+
+class MenuValve: iMenuHandler {
+    uint target_id;
+    uint map_id;
+
+    bool fired_up;
+    uint fuel;
+    uint more_buttons;
+
+    MenuValve(Item& target, Map& map) {
+        target_id = target.Id;
+        map_id = map.Id;
+
+        fired_up = false;
+        fuel = 0;
+        more_buttons = 0;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Map@ map = GetMap(map_id);
+        Item@ target = GetItem(target_id);
+
+        if( map is null || target is null ) {
+            return false;
+        }
+
+        if ( menu.Button( "Закрыть заслонку" ) ) {
+            target.STATE = STATE_WORKING_0;
+            return true;
+        }
+        if ( menu.Button( "На четверть" ) ) {
+            target.STATE = STATE_WORKING_25;
+            return true;
+        }
+        if ( menu.Button( "На половину" ) ) {
+            target.STATE = STATE_WORKING_50;
+            return true;
+        }
+		if ( menu.Button( "На две трети" ) ) {
+            target.STATE = STATE_WORKING_75;
+            return true;
+        }
+		if ( menu.Button( "Открыть полностью" ) ) {
+            target.STATE = STATE_WORKING_100;
+            return true;
+        }
+		if ( menu.Button( "Назад" ) ) {
+            ShowMenuStill( cr, target );
+            return false;
+        }
+
+        for(uint i=0; i<more_buttons; i++) {
+            if( menu.Button("Кнопка "+i) ) {
+                cr.Say(SAY_EMOTE_ON_HEAD, "Кнопка "+i);
+                return true;
+            }
+        }
+
+        // Описание
+		string info = "";
+		string state = ( target.STATE == STATE_PREPARE ? "Аппарат не работает." : target.STATE == STATE_FINISH ? "Работа аппарата завершена." : "Аппарат работает, заслонка: " );
+		string damper = ( target.STATE == STATE_WORKING_0 ? "Закрыта." : target.STATE == STATE_WORKING_25 ? "Открыта на четверть." : target.STATE == STATE_WORKING_50 ? "Открыта на половину."
+						: target.STATE == STATE_WORKING_75 ? "Открыта на три четверти." : "Полностью открыта." );
+		string occupancy_level = ( target.CURRENT_FUEL * 100 / MAX_FUEL );
+		float temprature = target.CURRENT_TEMPRATURE / 100.0 - 273.15 ;
+		float pressure = target.CURRENT_PRESSURE / 1000.0;
+		float raw_material = target.CURRENT_RAW_MATERIAL / 1000.0;
+		float max_raw_material = MAX_RAW_MATERIAL / 1000.0;
+		info += state;
+		if( target.STATE != STATE_PREPARE && target.STATE != STATE_FINISH )
+		{
+			info += "\n" +damper;
+			info += "\n" "Температура: " + temprature + " градусов С.";
+			info += "\n" "Давление: " + pressure + " бар.";
+		}
+		info += "\nАппарат заполнен брагой на " + raw_material + " из " + max_raw_material + " литров.";
+		info += "\n" "Аппарат заполнен горючим на " + occupancy_level + " %";
+
+        menu.Description( info );
+        menu.Align(true);
+		
+        return true;
+    }
+}
+
 bool TryFeedTheFire( Critter& cr )
 {
 	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false; }		
+    if( !valid( map ) ) { return false; 
+	}		
+	
 	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
-	if( !valid( targetItem ) ) { return false; }
+	if( !valid( targetItem ) ) { return false; 
+	}
 	
 	Item@ item = null;
 	for( uint i = 0, j = 9; i < j; i++)
@@ -399,8 +597,10 @@ bool TryFeedTheFire( Critter& cr )
 			break;
 		}
 	}
-	if( valid( item ) ) { FeedTheFire(cr, item, targetItem); }
-	else { cr.Say( SAY_NETMSG, "|0xFF0000 У Вас нет подходящего топлива." ); }
+	if( valid( item ) ) { FeedTheFire(cr, item, targetItem); 
+	}
+	else { cr.Say( SAY_NETMSG, "|0xFF0000 У Вас нет подходящего топлива." ); 
+	}
 	
 	ShowMenuStill( cr, targetItem );
 	return true;
@@ -413,18 +613,30 @@ string MenuInfoStill( Critter& cr, Item& target )
 	string damper = ( target.STATE == STATE_WORKING_0 ? "Закрыта." : target.STATE == STATE_WORKING_25 ? "Открыта на четверть." : target.STATE == STATE_WORKING_50 ? "Открыта на половину."
 					: target.STATE == STATE_WORKING_75 ? "Открыта на три четверти." : "Полностью открыта." );
 	string occupancy_level = ( target.CURRENT_FUEL * 100 / MAX_FUEL );
-	float temprature = target.CURRENT_TEMPRATURE;
-	float pressure = target.CURRENT_PRESSURE / 100.0;
-	float  raw_material = target.CURRENT_RAW_MATERIAL / 1000.0;
+	float temprature = target.CURRENT_TEMPRATURE / 100.0 - 273.15;
+	float pressure = target.CURRENT_PRESSURE / 1000.0;
+	float raw_material = target.CURRENT_RAW_MATERIAL / 1000.0;
 	float max_raw_material = MAX_RAW_MATERIAL / 1000.0;
 	TXT += state;
 	if( target.STATE != STATE_PREPARE && target.STATE != STATE_FINISH )
 	{
 		TXT += "\n" +damper;
-		TXT += "\n" "Температура: " + temprature + " градусов.";
+		TXT += "\n" "Температура: " + temprature + " градусов C.";
 		TXT += "\n" "Давление: " + pressure + " бар.";
 	}
 	TXT += "\nАппарат заполнен брагой на " + raw_material + " из " + max_raw_material + " литров.";
 	TXT += "\n" "Аппарат заполнен горючим на " + occupancy_level + " %";
 	return TXT;
+}
+
+//=======================ТАЙМ ИВЕНТ ДЛЯ УДАЛЕНИЯ СПЕЦЭФФЕКТОВ========================//
+uint e_stillFX( uint[]@ values )
+{
+	uint itemId = values[0];
+	Item@ e_stillFX = GetItem( itemId );
+	if( valid( e_stillFX ) )  
+	{
+		DeleteItem( e_stillFX );
+	}
+return 0;
 }
