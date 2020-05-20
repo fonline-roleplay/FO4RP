@@ -1,129 +1,198 @@
 /*********Менеджер видимых предметов**************/
+#define __VISIBLE_ITEMS
+
 #include "_utils.fos"
 
-dictionary visible_items;
-
-string formatCords( ItemCl& item ) { return formatCords( item.HexX, item.HexY ); }
-string formatCords( uint hexX, uint hexY ) { return "[" + hexX + "-" + hexY + "]"; }
-
-string VI_name( ItemCl& item ) { return "#" + item.Id + " " + formatCords( item ) + " " + __mapID; }
-
-ItemCl@ getItemByFullName( string fullname )//deprecated by: ItemCl@ VI_get( string name )
+shared class ItemData : iItemData
 {
-	string@[] data;
-	data = split( fullname, " " );
+	uint _id;
+	uint _map;
+	int _x;
+	int _y;
 	
-	int id = 0;
-	if( !StrToInt( data[0], id ) )
-		return null;
-	
-	return id == 0 ? null : GetItem( id );
-}
-
-uint VI_count() { return visible_items.keys(null); }
-
-string VI_enlist() 
-{ 
-	string@[] keys;
-	visible_items.keys( keys );
-	return enlistSTR( keys );
-}
-
-string@[] VI_getAll() 
-{ 
-	string@[] keys;
-	visible_items.keys( keys );
-	return keys;
-}
-
-bool VI_exists( ItemCl@ item )
-{
-	if( !valid( item ) ) return false;
-	return VI_exists( VI_name( item ) );
-}
-bool VI_exists( string name ) { return visible_items.exists( name ); }
-
-ItemCl@ VI_get( string name ) 
-{ 
-	ItemCl@ result = null;
-	visible_items.get( name, @result );
-	return result;
-}
-
-//TODO: string[]@ querry&find(string key)
-ItemCl@ VI_get( uint hexX, uint hexY ) { return VI_get( hexX, hexY, 0 ); }
-ItemCl@ VI_get( uint hexX, uint hexY, uint offset )
-{
-	string[] result = VI_HEX( hexX, hexY );
-	
-	if( offset >= result.length() )
-		return null;
-	
-	return VI_get( result[offset] );
-}
-
-string[] VI_HEX( ItemCl@ item )
-{
-	string[] empty;
-	return valid( item ) ? VI_HEX( item.HexX, item.HexY ) : empty;
-}
-string[] VI_HEX( uint hexX, uint hexY )
-{
-	string[] result;
-	string@[] items = VI_getAll();
-	if( !valid( items ) ) return result;
-
-	string cords = formatCords( hexX, hexY );
-	for( uint i = 0, l = items.length(); i < l; i++ )
-		if( findFirst( items[i], cords ) != -1 )
-			result.insertLast( items[i] );
-		
-	return result;
-}
-
-bool VI_update( ItemCl@ itemBefore, ItemCl@ itemNow ) 
-{
-	if( !valid( itemBefore ) || !valid( itemNow ) ) return false;
-	VI_delete( VI_name( itemBefore ) );
-	VI_set( itemNow );
-	return true;
-}	
-	
-bool VI_set( ItemCl@ item )
-{
-	if( !valid( item ) ) return false;
-	visible_items.set( VI_name( item ), @item );
-	return true;
-}
-
-bool VI_delete( ItemCl@ item )
-{
-	if( !valid( item ) ) return false;
-	return VI_delete( VI_name( item ) );
-}
-bool VI_delete( string name )
-{
-	if( !VI_exists( name ) ) return false;
-	
-	visible_items.delete( name );
-	return true;
-}
-
-void VI_refresh()
-{
-	string@[] items = VI_getAll();
-	if( !valid( items ) ) return;
-	
-	for( uint i = 0, l = items.length(); i < l; i++ )
+	ItemData( uint id, int x, int y )
 	{
-		string@[] data;
-		data = split( items[i], " " );
+		_map = __mapID;
+		_id = id;
+		_x = x;
+		_y = y;
+	}	
+	
+	uint id() { return _id; }
+	uint map() { return _map; }
+	int x()	{ return _x; }
+	int y()	{ return _y; }
+}
+
+iItemDataList@ iList() { return _iList; }
+
+ItemDataList _iList;
+shared class ItemDataList : iItemDataList
+{
+	ItemData[] list;
+	uint[] ids;
+	
+	uint[][] groups;//TODO
+	
+	uint size;
+	uint holes;
+	uint map;
+	
+	bool _updated;
+	
+	ItemDataList()
+	{
+		size = 0;
+		holes = 0;
+		_updated = true;
+		map = __mapID;
+		list.resize(0);
+		ids.resize(0);
+	}
+	
+	int index( uint id ) { return ids.find( id ); }
+	bool updated() { return _updated; }
+	
+	//TODO: Обновлять этот список при изменении списка видимых итемов.
+	//TODO: Хранить кроме айдишника ещё и ПИД итемов, что бы зря не грузить сервер запросами.
+	uint[][] getIDs() 
+	{ 
+		_updated = false;
 		
-		int id = 0;
-		if( data.length() != 3 || !StrToInt( data[2], id ) )
-			continue;
+		uint l = list.length();
 		
-		if( id == 0 || id != int( __mapID ) )
-			VI_delete( items[i] );
+		uint[][] result;
+		result.resize( l );		
+		
+		for( uint i = 0; i < l; i++ )
+		{
+			result[i].insertLast( list[i].id() );
+			
+			for( uint j = i + 1; j < l; j++ )
+				if( list[i].x() == list[j].x() && list[i].y() == list[j].y() )
+					result[i].insertLast( list[j].id() );
+		}
+
+		return result; 
+	}
+
+//bullshit
+	uint[] getIDsAt( uint id ) 
+	{ 
+		uint[] empty; 
+		if( !exists( id ) )
+			return empty;
+		
+		int i = index( id );
+		return getIDsAt( list[i].x(), list[i].y() ); 
+	}
+	uint[] getIDsAt( int x, int y )
+	{
+		uint[] result;
+		
+		for( uint i = 0, l = list.length(); i < l; i++ )
+			if( list[i].x() == x && list[i].y() == y )
+				result.insertLast( list[i].id() );
+			
+		return result;
+	}
+	
+	iItemDataList@ swap( ItemCl@ item )
+	{
+		if( !valid( item ) )
+			return this;
+		
+		if( exists( item.Id ) )
+			return remove( item.Id );
+		
+		return add( item );
+	}
+	
+	iItemDataList@ change( ItemCl& after, ItemCl& before )
+	{
+		remove( before );//even if there were no such item - we must continue
+		return add( after );
+	}
+	
+	bool exists( iItemData@ item ) { return exists( item.id() ); }
+	bool exists( uint id ) { return index( id ) != -1; }
+	//TODO: bool exists( int x, int y ) { return false; }
+	
+	iItemDataList@ add( ItemCl@ item ) 
+	{
+		if( valid( item ) && !exists( item.Id ) )
+			return add( item.Id, item.HexX, item.HexY );
+		
+		return this;
+	}
+	iItemDataList@ add( iItemData@ item ) { return valid( item ) ? add( item.id(), item.x(), item.y() ) : this; }
+	iItemDataList@ add( uint id, int x, int y )
+	{
+		list.insertLast( ItemData( id, x, y ) );
+		ids.insertLast( id );
+		
+		size++;
+		_updated = true;
+		
+		return this;
+	}
+	
+	iItemDataList@ remove( ItemCl@ item ) 
+	{
+		if( valid( item ) && exists( item.Id ) )
+			return remove( item.Id );
+		
+		return this;
+	}
+	iItemDataList@ remove( iItemData@ item ) { return valid( item ) ? remove( item.id() ) : this; }
+	iItemDataList@ remove( uint id )
+	{
+		if( id == 0 ) return this;
+		
+		int i = index( id );
+		if( i == -1 ) return this;
+		
+		ids[i] = 0;
+		
+		holes++;
+		if( size > 64 && holes > size / 2 )
+			cleanup();
+		
+		_updated = true;
+		return this;
+	}
+	
+	int checkMap()
+	{
+		if( map == __mapID )
+			return size;
+		
+		map = __mapID;
+		
+		return cleanup();
+	}
+	
+	int cleanup()
+	{
+		uint[] _ids;
+		ItemData[] _list;
+		
+		size = 0;
+		holes = 0;
+		
+		for( uint i = 0, l = list.length(); i < l; i++ )
+		{
+			if( ids[i] != 0 && list[i].map() == map )
+			{
+				_list.insertLast( list[i] );
+				_ids.insertLast( ids[i] );
+				size++;
+			}
+		}
+		
+		list = _list;
+		ids = _ids;
+		
+		return size;
 	}
 }
