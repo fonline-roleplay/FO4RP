@@ -7,6 +7,7 @@
 import void ExplodeEx( Map& map, uint16 hexX, uint16 hexY, uint16 effectPid, uint effectRadius, uint damage, uint damageType, uint damageRadius, uint ownerId )  from "explode";
 import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, uint attackerId ) from "combat";
 import bool LockInPlace( Critter& cr, Item& targetItem ) from "main";
+import bool PickItem( Critter& cr, Item& targetItem ) from "main";
 import bool FireUp( Item& item, uint pid, int strength ) from "firestarter";
 import bool spawnFire( Map@ map, int x, int y ) from "firestarter";
 
@@ -58,32 +59,47 @@ const uint16[] Stills 	= { PID_STILL_B, PID_STILL_B_ACTIVE, PID_STILL_B_BROKEN, 
 const uint16[] Homebrew = { PID_POT_ALCO, PID_HOMEBREW };
 const uint16[] wreckage = { PID_HLAM_MEH, PID_HLAM2_MEH, PID_METAL_LIST_MEH };
 
-bool StillCheck( Critter& cr, Item@ item, Item@ target ) //exported - проверки на разное перед началом работы
+bool IsStill(Item& still) //export
 {
+	return Stills.find(still.GetProtoId()) != -1;
+}
+
+// Использование предмета на аппарате
+// Вернуть false если target - это не аппарат, иначе true
+bool UseItemOnStill( Critter& cr, Item@ item, Item@ still ) //export
+{
+	if( still is null || !IsStill(still) ) {
+		return false;
+	}
     Map@ map = cr.GetMap();
- 	if( !valid( map ) ) { return false; }
-	if( !valid( item ) || !valid(target) ) { return false; }
-	if(	Stills.find( target.GetProtoId() ) == -1 ) { return false; }
+ 	if( map is null || item is null ) {
+		return true;
+	}
 	
 	uint16 itemPid = item.GetProtoId();
-	if( Igniters.find( itemPid ) != -1 ) { IgniteStill( cr, item, target ); return true; }
-	if( Homebrew.find( itemPid ) != -1 ) { AddHomebrew( cr, item, target ); return true; }
-	if( FireFuel.find( itemPid ) != -1 ) { FeedTheFire( cr, item, target ); return true; }
+	if( Igniters.find( itemPid ) != -1 ) {
+		IgniteStill( cr, item, still );
+	} else if( Homebrew.find( itemPid ) != -1 ) {
+		AddHomebrew( cr, item, still );
+	} else if( FireFuel.find( itemPid ) != -1 ) {
+		FeedTheFire( cr, map, item, still );
+	}
 
 	return true;
 }
 
+bool HasFuel(Item& still) {
+	return still.CURRENT_FUEL > 0;
+}
+
 bool IgniteStill( Critter& cr, Item& item, Item& target )
-{
-	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false; }
-	
-	if( target.CURRENT_FUEL == 0 )
+{	
+	if( !HasFuel(target) )
 	{
 		cr.Say( SAY_NETMSG, "|0xFFFF00 Тут нечего разжигать, найдите подходящее топливо." );
 		return false;
 	}
-	if( target.EVENT == 0 && target.CURRENT_FUEL > 0 )
+	if( target.EVENT == 0 )
 	{
 		if( item.GetProtoId() == PID_FLINT && Random( 1, 300 ) > cr.Skill[SK_OUTDOORSMAN] )
 		{
@@ -174,7 +190,7 @@ uint e_StillBurn( uint[]@ values )
 			float rmcl = 1.0f + ( ( R * M * THERM_WATER_TSP ) / ( 3.14f * 1.0f ) ); 						// (1 + (R*m*c/3,14*L)) where L = size of still, 1m
 			float Q_loss = ( target.STORED_HEAT + tmc ) / rmcl;												// calculation
 			
-			target.STORED_HEAT -= Q_loss;
+			//target.STORED_HEAT -= Q_loss;
 
            	float T2 = ( target.STORED_HEAT / ( M * THERM_WATER_TSP ) );
 			target.CURRENT_TEMPRATURE = T2;
@@ -235,9 +251,8 @@ void GenerateFire( Map@ map, int x, int y, int r ) //exported
 	}
 }
 
-bool FeedTheFire( Critter& cr, Item& item, Item& target )
+bool FeedTheFire( Critter& cr, Map& map, Item& item, Item& target )
 {
-	Map@ map = cr.GetMap();
 	if( target.CURRENT_FUEL == MAX_FUEL)
 	{	
 		cr.Say( SAY_NETMSG, "|0xFFFF00 Горючее уже некуда подкладывать, дайте ему прогореть!" );
@@ -369,19 +384,6 @@ uint e_fireFX( uint[]@ values )
 return 0;
 }
 
-bool AddIngrigient( Critter& cr )
-{
-	Map@ map = cr.GetMap();		
-	Item@ target = map.GetItem(cr.StatBase[ST_VAR7]);
-	if(!valid(target)) 
-	{ 
-		Log("Потеря указателя на предмет!"); 
-		return false; 
-	}
-	cr.ParamBase[ ST_LAST_CONT_ID ] = target.Id;
-	cr.ShowContainer( null, target, TRANSFER_HEX_CONT_UP );
-	return true;
-}
 
 //========== TECHNICAL_ANIMATION_STATE_CHANGER ===============//
 void setAnimState( Item& target )
@@ -398,223 +400,187 @@ void setAnimState( Item& target )
 	target.Update();
 }
 
-//========== ACTION_MENU_FOR_UNIGNITED_STILL===============//
-bool ShowMenuStill( Critter& cr, Item& target ) //exported
+//=============== STILL STATE DESCRIPTION ====================//
+
+string@ GenerateDescription(Item& still) {
+	string@ info;
+	bool is_working = false;
+	switch( still.STATE ) {
+		case STATE_PREPARE:
+			@info = "Аппарат не работает.";
+			break;
+		case STATE_FINISH:
+			@info = "Работа аппарата завершена.";
+			break;
+		default:
+			@info = "Аппарат работает, заслонка: ";
+			is_working = true;
+	}
+	if( is_working ) {
+		switch( still.STATE ) {
+			case STATE_WORKING_0:
+				info += "Закрыта.";
+				break;
+			case STATE_WORKING_25:
+				info += "Открыта на четверть.";
+				break;
+			case STATE_WORKING_50:
+				info += "Открыта на половину.";
+				break;
+			case STATE_WORKING_75:
+				info += "Открыта на три четверти.";
+				break;
+			case STATE_WORKING_100:
+				info += "Полностью открыта.";
+				break;
+		}
+
+		float temprature = still.CURRENT_TEMPRATURE / 100.0 - 273.15;
+		info += "\n" "Температура: " + temprature + " градусов C.";
+
+		float pressure = still.CURRENT_PRESSURE / 1000.0;
+		info += "\n" "Давление: " + pressure + " бар.";
+	}
+
+	float raw_material = still.CURRENT_RAW_MATERIAL / 1000.0;
+	float max_raw_material = MAX_RAW_MATERIAL / 1000.0;
+	info += "\nАппарат заполнен брагой на " + raw_material + " из " + max_raw_material + " литров.";
+
+	string occupancy_level = ( still.CURRENT_FUEL * 100 / MAX_FUEL );
+	info += "\nАппарат заполнен горючим на " + occupancy_level + " %";
+
+	return info;
+}
+
+//=============== MAIN MENU ====================//
+
+void ShowMenuStill( Critter& cr, Item& still ) //exported
 {
 	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false;	
-	}
-	
-	cr.ShowScreen( SCREEN_DIALOGBOX, 5, "answer_still" );
-	cr.Say( SAY_DIALOGBOX_TEXT, MenuInfoStill( cr, target ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), Centering( "Добавить брагу" ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), Centering( "Разжечь огонь" ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), Centering( "Положение заслонки" ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), Centering( "Подкинуть горючее" ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 4 ), Centering( "Открепить аппарат" ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 5 ), Centering( "Ничего не делать" ) );
-
-	cr.StatBase[ST_VAR7] = target.Id;
-	return true;
-}
-
-void answer_still( Critter& cr, uint answerI, string& answerS )
-{
-	if( !StillActions( cr, answerI ) ) { cr.Say( SAY_NETMSG, "|0xFF0000 Из этого ничего не вышло." ); 
-	}
-}
-
-bool StillActions( Critter& cr, uint answer )
-{
-	switch( answer )
-	{
-		case( 0 ): return AddIngrigient( cr );
-		case( 1 ): return TryIgnite( cr );
-		case( 2 ): return StartMenuValve( cr );
-		case( 3 ): return TryFeedTheFire( cr );
-		case( 4 ): return TryLockInPlace( cr );
-		case( 5 ): return false;
-	}
-	return false;
-}
-
-bool TryLockInPlace( Critter& cr )
-{
-	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false; 
-	}	
-	
-	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
-	if( !valid( targetItem ) ) { return false; 
-	}
-	
-	if( targetItem.EVENT != 0 ) { 
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы не хотите переносить работающий аппарат." );
-		return false; 
-	}
-	
-	LockInPlace( cr, targetItem );
-	return true;
-}
-
-bool TryIgnite( Critter& cr )
-{
-	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false; 
-	}
-	
-	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
-	if( !valid( targetItem ) ) { return false; 
-	}
-	
-	Item@ itemLighter = cr.GetItem( PID_LIGHTER, -1 );
-	Item@ itemFlint = cr.GetItem( PID_FLINT, -1 );
-	if( valid(itemLighter) ) { 
-		Item@ item = itemLighter;
-		IgniteStill( cr, item, targetItem );
-	} else if( valid(itemFlint) ) { 
-		Item@ item = itemFlint;
-		IgniteStill( cr, item, targetItem );
-	} else {
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Вам нечем разжечь огонь." );
-		ShowMenuStill( cr, targetItem );
-	}
-	return true;
-}
-
-bool StartMenuValve( Critter& cr )
-{
-	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false; 
-	}
-	
-	Item@ target = map.GetItem(cr.StatBase[ST_VAR7]);
-
-    iMenuHandler@ handler = MenuValve( target, map );
-    iDialogBox@ menu = OpenMenu( cr, "Заслонка", handler );
-	
-	return true;
-}
-
-class MenuValve: CenteredMenuHandler {
-    uint target_id;
-    uint map_id;
-
-    MenuValve(Item& target, Map& map) {
-        target_id = target.Id;
-        map_id = map.Id;
+    if( still is null || map is null ) {
+        return;
     }
 
-    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
-        Map@ map = GetMap(map_id);
-        Item@ target = GetItem(target_id);
+    iMenuHandler@ handler = MenuStill(still, map);
+    iDialogBox@ menu = OpenMenu(cr, "Дестилятор", handler);
+}
 
-        if( map is null || target is null ) {
-            return false;
-        }
+class MenuStill: CenteredMenuHandler {
+	uint m_still_id;
+	uint m_map_id;
+	int m_last_state;
+	
+	MenuStill(Item& still, Map& map) {
+		m_still_id = still.Id;
+		m_map_id = map.Id;
+	}
+	bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+		Item@ still = GetItem(m_still_id);
+		Map@ map = GetMap(m_map_id);
+		if(still is null || map is null) {
+			return false;
+		}
 
-        if ( menu.Button( "Закрыть заслонку" ) ) {
-            target.STATE = STATE_WORKING_0;
-            return true;
-        }
-        if ( menu.Button( "На четверть" ) ) {
-            target.STATE = STATE_WORKING_25;
-            return true;
-        }
-        if ( menu.Button( "На половину" ) ) {
-            target.STATE = STATE_WORKING_50;
-            return true;
-        }
-		if ( menu.Button( "На две трети" ) ) {
-            target.STATE = STATE_WORKING_75;
-            return true;
-        }
-		if ( menu.Button( "Открыть полностью" ) ) {
-            target.STATE = STATE_WORKING_100;
-            return true;
-        }
-		if ( menu.Button( "Назад" ) ) {
-            ShowMenuStill( cr, target );
-            return false;
-        }
+		bool locked_in_place = !FLAG( still.Flags, ITEM_CAN_PICKUP );
 
+		// Все действия которые можно выполнить с закреплённым аппаратом
+		if( locked_in_place ) {
+			if ( still.STATE == STATE_PREPARE ) { // Который не начал работу
+				if( menu.Button("Демонтировать") ) {
+					LockInPlace( cr, still );
+					return true;
+				}
+				if( menu.Button("Добавить брагу") ) {
+					cr.ParamBase[ ST_LAST_CONT_ID ] = still.Id;
+					cr.ShowContainer( null, still, TRANSFER_HEX_CONT_UP );
+					return false; // чтобы не перебивать окно контейнера
+				}
+				if( HasFuel(still) && menu.Button("Разжечь огонь") ) {
+					Item@ lighter = cr.GetItem( PID_LIGHTER, -1 );
+					if( lighter is null ) {
+						@lighter = cr.GetItem( PID_FLINT, -1 );
+					}
+					if( lighter is null ) {
+						cr.Say( SAY_NETMSG, "|0xFFFF00 Вам нечем разжечь огонь." );
+					} else {
+						IgniteStill( cr, lighter, still );
+					}
+					return true;
+				}
+			} else if(still.STATE < STATE_FINISH ) { // Который начал, но не закончил работу
+				if ( menu.Button( "Закрыть заслонку" ) ) {
+					still.STATE = STATE_WORKING_0;
+					return true;
+				}
+				if ( menu.Button( "На четверть" ) ) {
+					still.STATE = STATE_WORKING_25;
+					return true;
+				}
+				if ( menu.Button( "На половину" ) ) {
+					still.STATE = STATE_WORKING_50;
+					return true;
+				}
+				if ( menu.Button( "На две трети" ) ) {
+					still.STATE = STATE_WORKING_75;
+					return true;
+				}
+				if ( menu.Button( "Открыть полностью" ) ) {
+					still.STATE = STATE_WORKING_100;
+					return true;
+				}
+			}
+
+			if ( still.STATE < STATE_FINISH ) { // Который не начал работу или работает
+				if(menu.Button("Подкинуть горючее")) {
+					Item@ fuel = FindStillFuel(cr);
+					if( valid( fuel ) ) {
+						FeedTheFire(cr, map, fuel, still); 
+					} else {
+						cr.Say( SAY_NETMSG, "|0xFF0000 У Вас нет подходящего топлива." ); 
+					}				
+					return true;
+				}
+			}
+		} else {
+			if( menu.Button("Установить") ) {
+				LockInPlace( cr, still );
+				return true;
+			}
+			if( menu.Button("Поднять") ) {
+				PickItem( cr, still );
+				return false; // предмет уже не на земле
+			}
+		}
+		if( menu.Button("Ничего не делать") ) {
+			return false;
+		}
 		return true;
 	}
 
-	// Описание
 	string@ Description(Critter& cr) {
-		Item@ target = GetItem(target_id);
+		Item@ still = GetItem(m_still_id);
+		m_last_state = still.STATE;
+		return GenerateDescription(still);
+	}
 
-		string info = "";
-		string state = ( target.STATE == STATE_PREPARE ? "Аппарат не работает." : target.STATE == STATE_FINISH ? "Работа аппарата завершена." : "Аппарат работает, заслонка: " );
-		string damper = ( target.STATE == STATE_WORKING_0 ? "Закрыта." : target.STATE == STATE_WORKING_25 ? "Открыта на четверть." : target.STATE == STATE_WORKING_50 ? "Открыта на половину."
-						: target.STATE == STATE_WORKING_75 ? "Открыта на три четверти." : "Полностью открыта." );
-		string occupancy_level = ( target.CURRENT_FUEL * 100 / MAX_FUEL );
-		float temprature = target.CURRENT_TEMPRATURE / 100.0 - 273.15 ;
-		float pressure = target.CURRENT_PRESSURE / 1000.0;
-		float raw_material = target.CURRENT_RAW_MATERIAL / 1000.0;
-		float max_raw_material = MAX_RAW_MATERIAL / 1000.0;
-		info += state;
-		if( target.STATE != STATE_PREPARE && target.STATE != STATE_FINISH )
-		{
-			info += "\n" +damper;
-			info += "\n" "Температура: " + temprature + " градусов С.";
-			info += "\n" "Давление: " + pressure + " бар.";
-		}
-		info += "\nАппарат заполнен брагой на " + raw_material + " из " + max_raw_material + " литров.";
-		info += "\n" "Аппарат заполнен горючим на " + occupancy_level + " %";
-		
-        return info;
+	bool ShouldRedraw(Critter& cr) {
+		Item@ still = GetItem(m_still_id);
+		return still is null || IsStillWorking(still) || still.STATE != m_last_state;
     }
 }
 
-bool TryFeedTheFire( Critter& cr )
-{
-	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false; 
-	}		
-	
-	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
-	if( !valid( targetItem ) ) { return false; 
-	}
-	
-	Item@ item = null;
+bool IsStillWorking(Item& still) {
+	return still.STATE > STATE_PREPARE && still.STATE < STATE_FINISH;
+}
+
+Item@ FindStillFuel(Critter& cr) {
+	Item@ fuel = null;
 	for( uint i = 0, j = 9; i < j; i++)
 	{
-		@item = @cr.GetItem( FireFuel[i], -1 );
-		if( valid ( item ) )
-        {
+		@fuel = @cr.GetItem( FireFuel[i], -1 );
+		if( fuel !is null ) {
 			break;
 		}
 	}
-	if( valid( item ) ) { FeedTheFire(cr, item, targetItem); 
-	}
-	else { cr.Say( SAY_NETMSG, "|0xFF0000 У Вас нет подходящего топлива." ); 
-	}
-	
-	ShowMenuStill( cr, targetItem );
-	return true;
-}
-
-string MenuInfoStill( Critter& cr, Item& target )
-{
-	string TXT = "";
-	string state = ( target.STATE == STATE_PREPARE ? "Аппарат не работает." : target.STATE == STATE_FINISH ? "Работа аппарата завершена." : "Аппарат работает, заслонка: " );
-	string damper = ( target.STATE == STATE_WORKING_0 ? "Закрыта." : target.STATE == STATE_WORKING_25 ? "Открыта на четверть." : target.STATE == STATE_WORKING_50 ? "Открыта на половину."
-					: target.STATE == STATE_WORKING_75 ? "Открыта на три четверти." : "Полностью открыта." );
-	string occupancy_level = ( target.CURRENT_FUEL * 100 / MAX_FUEL );
-	float temprature = target.CURRENT_TEMPRATURE / 100.0 - 273.15;
-	float pressure = target.CURRENT_PRESSURE / 1000.0;
-	float raw_material = target.CURRENT_RAW_MATERIAL / 1000.0;
-	float max_raw_material = MAX_RAW_MATERIAL / 1000.0;
-	TXT += state;
-	if( target.STATE != STATE_PREPARE && target.STATE != STATE_FINISH )
-	{
-		TXT += "\n" +damper;
-		TXT += "\n" "Температура: " + temprature + " градусов C.";
-		TXT += "\n" "Давление: " + pressure + " бар.";
-	}
-	TXT += "\nАппарат заполнен брагой на " + raw_material + " из " + max_raw_material + " литров.";
-	TXT += "\n" "Аппарат заполнен горючим на " + occupancy_level + " %";
-	return TXT;
+	return fuel;
 }

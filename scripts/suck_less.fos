@@ -18,6 +18,7 @@ class Menu: iDialogBox {
     int m_page;
     int m_page_max;
     iMenuHandler@ m_handler;
+    bool m_press_handled;
 
     bool this_multipage;
     uint this_page_first;
@@ -33,6 +34,7 @@ class Menu: iDialogBox {
         m_name = name;
         m_page = 0;
         @m_handler = handler;
+        m_press_handled = false;
         @m_child = null;
         m_is_root = true;
     }
@@ -56,7 +58,11 @@ class Menu: iDialogBox {
             m_buttons_ext.insertLast(ext);
             return false;
         }
-        return m_state == uint(m_buttons.find(text));
+        if( m_buttons[m_state] == text) {
+            m_press_handled = true;
+            return true;
+        }
+        return false;
     }
 
     // Private:
@@ -84,15 +90,14 @@ class Menu: iDialogBox {
             this_multipage = true;
         }
     }
-    void Draw() {
+    bool Draw() {
         if( m_child !is null ) {
-            m_child.Draw();
-            return;
+            return m_child.Draw();
         }
 
         Critter@ cr = GetCritter(m_cr_id);
         if(cr is null || cr.IsNpc()) {
-            return;
+            return false;
         }
 
         m_state = uint(-1);
@@ -134,6 +139,7 @@ class Menu: iDialogBox {
         } else {
             cr.ShowScreen(SCREEN_CLOSE, 0, null);
         }
+        return keep_open;
     }
     bool Update(uint answerI) {
         if( m_child !is null ) {
@@ -165,7 +171,13 @@ class Menu: iDialogBox {
             m_state = answerI;
         }
 
+        m_press_handled = false;
+
         bool keep_open = m_handler.MenuUpdate(cr, this);
+
+        if( !m_press_handled ) {
+            m_handler.OnError(cr, m_buttons[m_state], m_buttons_ext[m_state]);
+        }
 
         if( keep_open ) {
             Draw();
@@ -181,6 +193,23 @@ class Menu: iDialogBox {
         string@ key = ""+m_cr_id;
         if( menus.get(key, @old_menu) && old_menu.m_name == m_name) {
             menus.delete(key);
+        }
+    }
+    string@ ChildName() {
+        if( m_child is null ) {
+            return m_name;
+        } else {
+            return m_child.ChildName();
+        }
+    }
+    bool RedrawLoop(Critter& cr) {
+        if( m_child is null ) {
+            if( m_handler.ShouldRedraw(cr) ) {
+                return Draw();
+            }
+            return true;
+        } else {
+            return m_child.RedrawLoop(cr);
         }
     }
 }
@@ -210,15 +239,49 @@ string _debug_menu(Menu& menu) {
 }
 
 //export
-bool RestoreMenu(Critter& cr) {
+bool RestoreMenu(Critter& cr, string@ name) {
     string@ key = ""+cr.Id;
     Menu@ menu = null;
     menus.get(key, @menu);
     if(menu !is null) {
-        menu.Draw();
-        return true;
+        if(name is null || menu.ChildName() == name) {
+            menu.Draw();
+            return true;
+        }
     }
     return false;
+}
+
+bool handle_redraw_loop(string& key) {
+    int result = 0;
+    if ( StrToInt(key, result) ) {
+        Critter@ player = GetCritter(result);
+        if( player !is null && player.IsPlayer() ) {
+            Menu@ menu = null;
+            if( menus.get(key, @menu) ) {
+                return menu.RedrawLoop(player);
+            }
+        }
+    }
+    return false;
+}
+
+uint last_tick = 0;
+//export
+void MenuRedrawLoop(uint tick) {
+    if( (tick - last_tick) < 3000 ) {
+        return;
+    }
+    last_tick = tick;
+
+    string@[] keys;
+    uint count = menus.keys(keys);
+    for(uint i = 0; i<count; i++) {
+        string@ key = keys[i];
+        if( key is null || !handle_redraw_loop(key)) {
+            menus.delete(key);
+        }
+    }
 }
 
 //export
