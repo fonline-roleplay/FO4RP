@@ -400,6 +400,58 @@ void setAnimState( Item& target )
 	target.Update();
 }
 
+//=============== STILL STATE DESCRIPTION ====================//
+
+string@ GenerateDescription(Item& still) {
+	string@ info;
+	bool is_working = false;
+	switch( still.STATE ) {
+		case STATE_PREPARE:
+			@info = "Аппарат не работает.";
+			break;
+		case STATE_FINISH:
+			@info = "Работа аппарата завершена.";
+			break;
+		default:
+			@info = "Аппарат работает, заслонка: ";
+			is_working = true;
+	}
+	if( is_working ) {
+		switch( still.STATE ) {
+			case STATE_WORKING_0:
+				info += "Закрыта.";
+				break;
+			case STATE_WORKING_25:
+				info += "Открыта на четверть.";
+				break;
+			case STATE_WORKING_50:
+				info += "Открыта на половину.";
+				break;
+			case STATE_WORKING_75:
+				info += "Открыта на три четверти.";
+				break;
+			case STATE_WORKING_100:
+				info += "Полностью открыта.";
+				break;
+		}
+
+		float temprature = still.CURRENT_TEMPRATURE / 100.0 - 273.15;
+		info += "\n" "Температура: " + temprature + " градусов C.";
+
+		float pressure = still.CURRENT_PRESSURE / 1000.0;
+		info += "\n" "Давление: " + pressure + " бар.";
+	}
+
+	float raw_material = still.CURRENT_RAW_MATERIAL / 1000.0;
+	float max_raw_material = MAX_RAW_MATERIAL / 1000.0;
+	info += "\nАппарат заполнен брагой на " + raw_material + " из " + max_raw_material + " литров.";
+
+	string occupancy_level = ( still.CURRENT_FUEL * 100 / MAX_FUEL );
+	info += "\nАппарат заполнен горючим на " + occupancy_level + " %";
+
+	return info;
+}
+
 //=============== MAIN MENU ====================//
 
 void ShowMenuStill( Critter& cr, Item& still ) //exported
@@ -432,13 +484,47 @@ class MenuStill: CenteredMenuHandler {
 		// Все действия которые можно выполнить с закреплённым аппаратом
 		if( locked_in_place ) {
 			if ( still.STATE == STATE_PREPARE ) { // Который не начал работу
-				if( MenuForStatePrepare(cr, still, menu) ) {
+				if( menu.Button("Демонтировать") ) {
+					LockInPlace( cr, still );
+					return true;
+				}
+				if( menu.Button("Добавить брагу") ) {
+					cr.ParamBase[ ST_LAST_CONT_ID ] = still.Id;
+					cr.ShowContainer( null, still, TRANSFER_HEX_CONT_UP );
+					return false; // чтобы не перебивать окно контейнера
+				}
+				if( HasFuel(still) && menu.Button("Разжечь огонь") ) {
+					Item@ lighter = cr.GetItem( PID_LIGHTER, -1 );
+					if( lighter is null ) {
+						@lighter = cr.GetItem( PID_FLINT, -1 );
+					}
+					if( lighter is null ) {
+						cr.Say( SAY_NETMSG, "|0xFFFF00 Вам нечем разжечь огонь." );
+					} else {
+						IgniteStill( cr, lighter, still );
+					}
 					return true;
 				}
 			} else if(still.STATE < STATE_FINISH ) { // Который начал, но не закончил работу
-				if(menu.Button("Положение заслонки")) {
-					iMenuHandler@ valve = MenuValve( still, map );
-					return menu.OpenChild("Заслонка", valve);
+				if ( menu.Button( "Закрыть заслонку" ) ) {
+					still.STATE = STATE_WORKING_0;
+					return true;
+				}
+				if ( menu.Button( "На четверть" ) ) {
+					still.STATE = STATE_WORKING_25;
+					return true;
+				}
+				if ( menu.Button( "На половину" ) ) {
+					still.STATE = STATE_WORKING_50;
+					return true;
+				}
+				if ( menu.Button( "На две трети" ) ) {
+					still.STATE = STATE_WORKING_75;
+					return true;
+				}
+				if ( menu.Button( "Открыть полностью" ) ) {
+					still.STATE = STATE_WORKING_100;
+					return true;
 				}
 			}
 
@@ -460,7 +546,7 @@ class MenuStill: CenteredMenuHandler {
 			}
 			if( menu.Button("Поднять") ) {
 				PickItem( cr, still );
-				return true;
+				return false; // предмет уже не на земле
 			}
 		}
 		if( menu.Button("Ничего не делать") ) {
@@ -470,53 +556,9 @@ class MenuStill: CenteredMenuHandler {
 	}
 
 	string@ Description(Critter& cr) {
-		Item@ target = GetItem(m_still_id);
-		string TXT = "";
-		string state = ( target.STATE == STATE_PREPARE ? "Аппарат не работает." : target.STATE == STATE_FINISH ? "Работа аппарата завершена." : "Аппарат работает, заслонка: " );
-		string damper = ( target.STATE == STATE_WORKING_0 ? "Закрыта." : target.STATE == STATE_WORKING_25 ? "Открыта на четверть." : target.STATE == STATE_WORKING_50 ? "Открыта на половину."
-						: target.STATE == STATE_WORKING_75 ? "Открыта на три четверти." : "Полностью открыта." );
-		string occupancy_level = ( target.CURRENT_FUEL * 100 / MAX_FUEL );
-		float temprature = target.CURRENT_TEMPRATURE / 100.0 - 273.15;
-		float pressure = target.CURRENT_PRESSURE / 1000.0;
-		float raw_material = target.CURRENT_RAW_MATERIAL / 1000.0;
-		float max_raw_material = MAX_RAW_MATERIAL / 1000.0;
-		TXT += state;
-		if( target.STATE != STATE_PREPARE && target.STATE != STATE_FINISH )
-		{
-			TXT += "\n" +damper;
-			TXT += "\n" "Температура: " + temprature + " градусов C.";
-			TXT += "\n" "Давление: " + pressure + " бар.";
-		}
-		TXT += "\nАппарат заполнен брагой на " + raw_material + " из " + max_raw_material + " литров.";
-		TXT += "\n" "Аппарат заполнен горючим на " + occupancy_level + " %";
-		return TXT;
+		Item@ still = GetItem(m_still_id);
+		return GenerateDescription(still);
 	}
-}
-
-// Все действия которые можно выполнить с закреплённым аппаратом, который не начал работу
-bool MenuForStatePrepare(Critter& cr, Item& still, iDialogBox& menu) {
-	if( menu.Button("Демонтировать") ) {
-		LockInPlace( cr, still );
-		return true;
-	}
-	if( menu.Button("Добавить брагу") ) {
-		cr.ParamBase[ ST_LAST_CONT_ID ] = still.Id;
-		cr.ShowContainer( null, still, TRANSFER_HEX_CONT_UP );
-		return true;
-	}
-	if( HasFuel(still) && menu.Button("Разжечь огонь") ) {
-		Item@ lighter = cr.GetItem( PID_LIGHTER, -1 );
-		if( lighter is null ) {
-			@lighter = cr.GetItem( PID_FLINT, -1 );
-		}
-		if( lighter is null ) {
-			cr.Say( SAY_NETMSG, "|0xFFFF00 Вам нечем разжечь огонь." );
-		} else {
-			IgniteStill( cr, lighter, still );
-		}
-		return true;
-	}
-	return false;
 }
 
 Item@ FindStillFuel(Critter& cr) {
@@ -534,37 +576,42 @@ Item@ FindStillFuel(Critter& cr) {
 //=============== VALVE MENU ====================//
 
 class MenuValve: CenteredMenuHandler {
-    uint target_id;
+    uint m_still_id;
 
-    MenuValve(Item& target, Map& map) {
-        target_id = target.Id;
+    MenuValve(Item& still) {
+        m_still_id = still.Id;
     }
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu ) {\
-        Item@ target = GetItem(target_id);
+        Item@ still = GetItem(m_still_id);
 
-        if( target is null ) {
+        if( still is null ) {
             return false;
         }
 
+		if( still.STATE == STATE_PREPARE || still.STATE == STATE_FINISH ) {
+			cr.Say( SAY_NETMSG, "|0xFFFF00 Аппарат перестал работать." );
+			return false;
+		}
+
         if ( menu.Button( "Закрыть заслонку" ) ) {
-            target.STATE = STATE_WORKING_0;
+            still.STATE = STATE_WORKING_0;
             return true;
         }
         if ( menu.Button( "На четверть" ) ) {
-            target.STATE = STATE_WORKING_25;
+            still.STATE = STATE_WORKING_25;
             return true;
         }
         if ( menu.Button( "На половину" ) ) {
-            target.STATE = STATE_WORKING_50;
+            still.STATE = STATE_WORKING_50;
             return true;
         }
 		if ( menu.Button( "На две трети" ) ) {
-            target.STATE = STATE_WORKING_75;
+            still.STATE = STATE_WORKING_75;
             return true;
         }
 		if ( menu.Button( "Открыть полностью" ) ) {
-            target.STATE = STATE_WORKING_100;
+            still.STATE = STATE_WORKING_100;
             return true;
         }
 		if ( menu.Button( "Назад" ) ) {
@@ -576,27 +623,7 @@ class MenuValve: CenteredMenuHandler {
 
 	// Описание
 	string@ Description(Critter& cr) {
-		Item@ target = GetItem(target_id);
-
-		string info = "";
-		string state = ( target.STATE == STATE_PREPARE ? "Аппарат не работает." : target.STATE == STATE_FINISH ? "Работа аппарата завершена." : "Аппарат работает, заслонка: " );
-		string damper = ( target.STATE == STATE_WORKING_0 ? "Закрыта." : target.STATE == STATE_WORKING_25 ? "Открыта на четверть." : target.STATE == STATE_WORKING_50 ? "Открыта на половину."
-						: target.STATE == STATE_WORKING_75 ? "Открыта на три четверти." : "Полностью открыта." );
-		string occupancy_level = ( target.CURRENT_FUEL * 100 / MAX_FUEL );
-		float temprature = target.CURRENT_TEMPRATURE / 100.0 - 273.15 ;
-		float pressure = target.CURRENT_PRESSURE / 1000.0;
-		float raw_material = target.CURRENT_RAW_MATERIAL / 1000.0;
-		float max_raw_material = MAX_RAW_MATERIAL / 1000.0;
-		info += state;
-		if( target.STATE != STATE_PREPARE && target.STATE != STATE_FINISH )
-		{
-			info += "\n" +damper;
-			info += "\n" "Температура: " + temprature + " градусов С.";
-			info += "\n" "Давление: " + pressure + " бар.";
-		}
-		info += "\nАппарат заполнен брагой на " + raw_material + " из " + max_raw_material + " литров.";
-		info += "\n" "Аппарат заполнен горючим на " + occupancy_level + " %";
-		
-        return info;
+		Item@ still = GetItem(m_still_id);
+		return GenerateDescription(still);
     }
 }
