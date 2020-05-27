@@ -1,0 +1,773 @@
+#include "_utils.fos"
+
+//Сегмент кода, выполняющий роль диздока. Все комментарии, гайды, объяснения, вопросы и рассуждения для не-кодеров должны жить тут.
+#ifndef __NPC_MANAGER
+	#define __NPC_MANAGER
+	
+	/* Постановка задачи от Анури:
+	
+		1) Разбор всех багов, котрые есть сейчас у нпц (нахер убирание всего что не понятно или не работает)
+		2) Прототип для бездомных - добавление для диалогов и хождение по точкам
+		3) Атака по указке??? хождение нпц??? добавление нпц имени??? 
+		
+	*/
+		
+	/* Открытые вопросы (требуют изучения и тестов):
+		- Как запустить отложенный план, не используя cr.Wait или тайимвенты (криттера или общие)?
+		- Как лучше сделать обработку "смены цели движения", при наступании/подходе к текущей цели движения?
+			Т.к. текущая обработка "наступания" как у мины - ужасная костовщина. Бе!
+	*/
+
+	/* Организация поведения НПЦ.
+		Нужно иметь точное описание модели поведения - ПЛАНОВ.
+			Как НПЦ обрабатывает свои планы?
+			Как они хранятся, что такое приоритеты?
+
+	*/
+	
+	/* Вспомогательные тулзы для дебага:
+		1) Подсветка и редактор ДЕЙСТВИЙ: планов НПЦ, точек интереса, точек пути.
+		1.1) Подсветка должна окрашивать в разные цвета разные типы ДЕЙСТВИЙ.
+
+	*/
+
+	//**********************************
+			//Рассуждения:
+	//**********************************
+	
+	/* Заметки по ГМке:
+		#delitem radius
+			Удаляет итемы в радиусе вокруг курсора.
+		#delmob radius
+			Удаляет мобов в радиусе вокруг курсора.
+	
+	*/
+
+	/*[1] Список инструментов необходимых для работы с планами:
+		1. просмотр планов -  который что-то показывает(отображатель)
+			- по карте
+			- в чат
+			- предметами
+			1) Выводить текст над гексами пути. Создавать предметы-метки и т.п.
+			2) Или текст в чат NET_MSG Гма.
+			3) Или рисовать что-либо в интерфейсе (сложней).
+		2. редактор планов (просмотрщик)
+		3. менеджер планов -  
+			(
+				возможность создание новых планов, 
+				сохранение шаблонов планов
+			)
+		4. ИИ, фракции, агрессия, модели поведения, реакция на события
+		
+	*/
+
+	/*[2] Устройства планов:
+		Ходьба: 
+			координаты к которому должен идти криттер
+			направление, в котором криттер повернется после того как сделает план
+			за сколько до указанного гексагона должен остановиться криттер
+		Атака:
+			ID атакуемого криттера, гекс по которому можно атаковать
+			ДО какого значения ХР можно атаковать
+		Взять предмет:
+			координаты геска, где находится предмет
+			ID прототипа предмета
+			использовать предмет?
+			бежать ли криттеру при выполнении плана
+		План разнообразный:
+			Misc_WaitSecond - Определяет, до какой игровой секунды ждать. 
+			Misc_ScriptId -  номер скрипта(scripts.lst или _scripts.fos. )
+			Misc_SetScript - Устанавливает имя вызываемой после ожидания функции
+	*/
+				
+	/*[3] Техзадание по фиче "добавления подконтрольным НПЦ точки движения, где после прихода они будут ждать некоторое время":
+		была нажата клавиша shift_X
+		вызвана ф-ия unsafe
+		записано событие
+			записан план для NPC в список планов
+			установить задержку для исполнения плана - 5,30 секунд
+		ждать 5,30 секунд
+		сработало событие
+		вызван следующий план NPC 
+	*/
+		
+	/*[4] Структуры данных:
+		1. NpcPlane - это класс, который содержит поля:
+			- identifier - это иденификатор плана
+			- дополнительный идентификатор плана(зачем?)
+			- Тип плана:  attack, walk, misk, pick, patrol, courier
+			- приоритет:  attack, walk, misk, pick, patrol, courier
+		Test: 
+			1) Как приоритет влияет на последовательность?
+			 - child  - дочерний план(не понятно)
+			 - Run - бежать critter при выполнении плана или нет
+			2) Как работать с разными типами планов?
+	*/
+	
+	/*[5] Изучение/обучение/тесты:
+		1. изучить возможности нпц
+			РЕЖИМЫ:
+				- вернуться на домашний гекс - то есть к началу пути
+				- запомнить врагов
+				- нелутаемость
+				- неворуемость
+				- непихаемость - не работает
+				- стоять
+				- нет бега - только ходьба - 
+				- нет травм
+				- несбиваемость
+				- неторгует
+				- только наличные
+				- не разговаривает
+				- бесконечные патроны
+				- неворуемость
+			найти как прописываются диалоги нпц 	
+			найти где прописано все для нпц
+					
+			когда нпц атакует ему пофиг на параметры стоять, за пол минуты встает
+			после того как нпц убили он постепенно восстанавливает свои параметры до 100%
+		
+		2. добавить возможность прописать диалог для ГМа
+
+		3. добавит возсожность сделать квест. Т.е выдача квеста для героя и чтобы потом можно было выполнить условие
+
+	*/	
+
+	/*[6] Заметки на полях:
+		последовательность - приоритеты + ?
+		приоритеты - не знаю
+		менеджер планов - не знаю
+	
+		Как работают события?
+		Данный механизм нужнен для того, чтобы отследить момент наступления определенных событий у карт, персонажей, предметов.
+		SetEvent(int eventType, string@ funcName)
+		- куда добавляются
+		- как они коррелируют со стандарными обработчиками
+		{critter_use_item, critter_use_skill}
+		
+		funcName == null || "" -> событие выключается
+		задержки
+		приоритеты
+		последовательности	
+	
+		по курсору - взять данные
+		#run npc_manager f 0 0 0
+		if ( npc.IsNoPlanes() )
+
+		таймивенты -> менеджер -> проверка на граф
+		Say( npc, "planes = " +  npc.GetPlanes(null) );
+
+		Описать что нпц уже может делать - говорить.
+		стек планов для нпц, например подойти к криттеру, что нибудь ему сказать, пойти к бочке написать "бухает"
+		
+		если задаешь 1 план то в итоге 1 нпц ему следует, а другой уже не идет, т.к. гекс занят???
+		добавление стека задач для нпц
+		интерфейс
+			
+		опистаь занятость гекса.
+		npc встал на гекс и в итоге сделал что-то 
+		выбрана группа npc -  сожно установить им что они должны атаковать цель.
+		npc должен выполнять список планов, который задет гм: в итоге через run:
+		- #run - подойти к гексу, сказать что-то, взять итем на карте, диалог с игроком
+		разбор run
+		1ю подойти к гексу
+		типо добавить план,
+		добавить список планов,
+		выполнение планов,
+		выполнить план автоматически через t
+
+		короче нужено написать TImeEvent
+		1. при наступании на гекс непесем, непись никуда больше не идет. StayHex - хранится в гексе - вызов ф-ии
+		с аргументами 
+		2. 
+	*/	
+		
+#endif
+
+//Утилиты, которые нужно будет вынести в "_utils.fos".
+#ifndef __NPC_MANAGER_UTILS
+	#define __NPC_MANAGER_UTILS
+
+	//Микро-утилиты:
+	//Дубли, нужно будет объединить с другими копиями в единую логику.
+	void Inform( Critter& cr, string @text = null ) { cr.Say( SAY_NETMSG, checkNull(text) ); }
+	void Say( Critter& cr, string @text = null, bool onHead = false ) {	cr.Say( onHead ? SAY_NORM_ON_HEAD : SAY_NORM, checkNull(text) ); }
+	void Emote( Critter& cr, string @text = null, bool onHead = false ) { cr.Say( onHead ? SAY_EMOTE_ON_HEAD : SAY_EMOTE, checkNull(text) ); }
+
+	string checkNull( string@ data, string _default = "[null]" ) { return valid( data ) ? data : _default; }
+	uint[]@ checkNull( uint[]@ data ) { return valid( data ) ? data : uintArray(); }
+
+	//(null, "") == пустой
+	bool empty( string @text ) { return !valid( text ) || text.length() == 0; } 
+	bool empty( int[]  @data ) { return !valid( data ) || data.length() == 0; } 
+
+	bool CheckTimeEventArgs( uint[]@ args, uint len ) {	return( !valid(args) || args.length() != len ); }
+	uint StopTimeEvent( string info ) {	Log( info ); return 0; }
+
+	uint[] uintArray(
+		int value1 = -1, int value2 = -1, int value3 = -1, int value4 = -1, int value5 = -1, int value6 = -1, int value7 = -1, 
+		int value8 = -1, int value9 = -1, int value10 = -1, int value11 = -1, int value12 = -1, int value13 = -1, int value14 = -1, 
+		int value15 = -1, int value16 = -1, int value17 = -1, int value18 = -1, int value19 = -1, int value20 = -1, int value21 = -1 )
+	{
+		uint[] result = {};
+		
+		if( value1 != -1 ) result.insertLast( uint(value1) );
+		if( value2 != -1 ) result.insertLast( uint(value2) );
+		if( value3 != -1 ) result.insertLast( uint(value3) );
+		if( value4 != -1 ) result.insertLast( uint(value4) );
+		if( value5 != -1 ) result.insertLast( uint(value5) );
+		if( value6 != -1 ) result.insertLast( uint(value6) );
+		if( value7 != -1 ) result.insertLast( uint(value7) );
+		if( value8 != -1 ) result.insertLast( uint(value8) );
+		if( value9 != -1 ) result.insertLast( uint(value9) );
+		if( value10 != -1 ) result.insertLast( uint(value10) );
+		if( value11 != -1 ) result.insertLast( uint(value11) );
+		if( value12 != -1 ) result.insertLast( uint(value12) );
+		if( value13 != -1 ) result.insertLast( uint(value13) );
+		if( value14 != -1 ) result.insertLast( uint(value14) );
+		if( value15 != -1 ) result.insertLast( uint(value15) );
+		if( value16 != -1 ) result.insertLast( uint(value16) );
+		if( value17 != -1 ) result.insertLast( uint(value17) );
+		if( value18 != -1 ) result.insertLast( uint(value18) );
+		if( value19 != -1 ) result.insertLast( uint(value19) );
+		if( value20 != -1 ) result.insertLast( uint(value20) );
+		if( value21 != -1 ) result.insertLast( uint(value21) );
+		
+		return result;
+	}	
+
+
+#endif
+
+//Тест-кейсы, планы на изучение и примеры работы кода:
+#ifndef __NPC_MANAGER_EXAMPLES
+	#define __NPC_MANAGER_EXAMPLES
+	
+	class TestCase
+	{
+		bool isLogging;
+		bool isSaying;
+		
+		string name;
+		string info;
+		
+		int index;
+		int startIndex;
+		
+		string Create( Critter& cr, int n, int startIndex = 0 )
+		{
+			this.startIndex = startIndex;
+			index = startIndex;
+			
+			setName();
+			setInfo( cr, n );
+			
+			run( cr, n );
+			
+			if( n < startIndex || n >= index )
+				info += " [ WARNING: Case unhandled! ]";
+
+			if( isLogging ) log();
+			if( isSaying )	say( cr );
+			
+			return info;
+		}
+		
+		TestCase@ logging( bool state ) { isLogging = state; return this; }
+		TestCase@ saying( bool state ) { isSaying = state; return this; }
+		
+		string setName() { name = "Generic test case"; return name; }
+		string setInfo( Critter& cr, int n ) { info = "[" + name + "] Critter #" + cr.Id + " caused test case #" + n + "."; return info; }
+		
+		void log() { Log( info ); }
+		void say( Critter& cr ) { Inform( cr, info ); }
+		
+		bool next( int n ) { return n == index++; }
+		string run( Critter& cr, int n ) { return info; }
+	}
+	
+	//Примеры использования утилитарных методов вывода данных:
+	class TC_Output : TestCase
+	{
+		string run( Critter& cr, int n ) override
+		{
+			if( next(n) )//[null]
+				Inform( cr, null );
+			if( next(n) )//text
+				Inform( cr, "text" );
+
+			if( next(n) )//[null]
+				Say( cr, null );
+			if( next(n) )//[null] - over head
+				Say( cr, null, true );
+
+			if( next(n) )//say1
+				Say( cr, "say1" );
+			if( next(n) )//say2 - over head
+				Say( cr, "say2", true );
+
+			if( next(n) )//[null]
+				Emote( cr, null );
+			if( next(n) )//[null] - over head
+				Emote( cr, null, true );
+
+			if( next(n) )//emote1
+				Emote( cr, "emote1" );
+			if( next(n) )//emote2 - over head
+				Emote( cr, "emote2", true );
+				
+			return info;
+		}
+	}
+
+	class TC_Movement : TestCase 
+	{
+		//Понять, как двигаются НПЦ. Почему приход в занятый гекс не работает. +
+		//Научить НПЦ недоходить до "непроходимой" точки. А по приходу на цель - отходить в сторону, что бы не занимать проход.
+		//Вообще, нужно подумать над тем, что бы НПЦ "защитить" от столпотворения в узних проходах и т.п.
+	}
+
+	class TC_FastCheck : TestCase 
+	{
+		//Цель теста проста - сделать итемы, которые при наступании на них добавляют НПЦ два плана:
+			// 1) Если Random(0,100) < val0 - отобразить над головой фразу из лексемы предмета.
+			// 2) Ждать val1 секунд;
+			// 3) Если val2 больше нуля - увеличить "внутренний параметр-счетчик" в голове у НПЦ и вернуться к П.1;
+			// 4) Идти к другому итему с id val3;
+			// 5) Если val4 больше нуля - уменьшить его на 1, иначе - удалить итем;
+		//Затем добавить в ГМку хоткей и команду создания этих итемов под курсором. 
+			//Что бы при этом по хоткею сразу открывалась менюшка с редактированием их параметров.
+				//Либо создаваемому итему давались бы параметры такие же, как и у итема на котором стоит ГМ.
+			//А команда - позволяла сразу создавать полностью заготовленные менюшки с лексемой и валками.
+	}
+
+	class TC_AddNpc : TestCase 
+	{
+			//map.AddNpc( uint16  protoId, uint16  hexX, uint16  hexY, uint8  dir );
+			//map.AddNpc( uint16  protoId, uint16  hexX, uint16  hexY, uint8  dir );
+			//Critter@ target = map.AddNpc( pid, cr.HexX + 3, cr.HexY, Random( 0, 5 ), null, null, null );
+		//Что это за три последних параметра? Нужно будет выяснить.
+	}
+	
+	class TC_Planes : TestCase 
+	{
+			// NpcPlane@ plane = CreatePlane();
+			// npc.AddPlane( plane );
+		// 1) Как живёт и исполняется план: атаки, ожидания, ходьбы, поднятия/взаимодействия с предметом?
+			//Почему хождение в занятый гекс не выполняется? Как избежать этой "тупости" НПЦ?
+		// 1.1) Как работают приоритеты? Стоит-ли хранить в приоритетах действия, не создаёт-ли это утечек целостности планов?
+		// 1.2) Каким образом лучше всего контроллировать планы?
+			// - создавать;
+			// - отображать;
+			// - редачить;
+			// - отслеживать целостность;
+		// 2) Можно-ли имитировать действие НПЦ, не тратя время на ожидание его "реального" исполнения?
+		// 2.1) Нужны четкие тест-кейсы, доказывающие что имитация достоверна.	
+				// Лучше всего - сравнивая работу скриптованной функции (ТПшащей НПЦ, перемещающей предмет) и самого плана-действий НПЦ.
+	}
+
+	class TC_Town_Manager : TestCase 
+	{
+		//Как удобней всего хранить данные о планах и действиях НПЦ в поселении?
+		//Как лучше всего управлять точками интереса и отображать текущие потребности НПЦ на локации?
+	}
+		
+#endif
+
+//Точки входа в данный модуль: вызовы хоткеями и командами из под ГМки/админки.
+#ifndef __NPC_MANAGER_MAIN
+	#define __NPC_MANAGER_MAIN
+	
+	//#run npc_manager test p0 x y
+	void unsafe_test( Critter& cr, int p0, int mouseX, int mouseY, string@, int[]@ controlled )
+	{
+		TC_Output().logging(false).Create( cr, p0 );
+	}
+	
+	//~run npc_manager addNPC pid 0 0
+	void addNPC( Critter& cr, int pid, int count, int ){
+		Map@ map = cr.GetMap(); 
+		Critter@ target = map.AddNpc( pid, cr.HexX + 3, cr.HexY, Random( 0, 5 ), null, null, null );
+	}
+
+	//#run npc_manager MovingNPC p0 x y
+	int[] empty_list = {};
+	int[] controlled_mobs;
+	void unsafe_moving_npc( Critter& cr, int current_group, int mouseX, int mouseY, string@ , int[]@ controlled) 
+	{	
+		if( !isGM( cr ) )  return;
+		controlled_mobs = valid( controlled ) ? controlled : empty_list;
+		if (controlled_mobs.length() != 31 )  controlled_mobs.insertLast(current_group);
+		
+		CreatePlane( cr, current_group, mouseX, mouseY );
+	}
+
+	//FIND:
+	void unsafe_add_item( Critter& cr, int current_group, int mouseX, int mouseY, string@ , int[]@ ) 
+	{	
+		if( !isGM( cr ) )  return;
+		Map@ map = cr.GetMap();
+		map.AddItem(mouseX, mouseY, 8186, 1);
+	}
+
+	//#run npc_manager MovingNPC 0 0 0
+	void unsafe_MovingNPC( Critter& cr, int p0, int p1, int p2, string@ str, int[]@ args) 
+	{ if( isGM( cr ) ) MovingNPC( cr, p0, p1, p2 ); }
+		
+	import bool AddWalkPlane( Critter& npc, uint priority, uint16 hexX, uint16 hexY, uint8 dir, bool run, uint cut ) from "npc_planes";
+	//~run npc_manager MovingNPC 0 0 0
+	//#run npc_manager MovingNPC
+	void MovingNPC( Critter& cr, int p0, int p1, int p2 ){
+		
+		uint16 hx = cr.HexX, hy = cr.HexY;
+		uint16 dx = 5, dy = 5;
+		Map@ map = cr.GetMap();
+		Critter@ npc = map.AddNpc( 1, hx, hy, 5, null, null, null);
+		if (!valid(npc)) {	Log("Не удалось добавить НПЦ"); 	return;		}
+		
+		Point point = Point(npc.HexX, npc.HexY);
+		npc.ModeBase[MODE_NO_HOME] = 1;
+		point.Move(dx, dy);
+		for (int i = 0;  i < 10; i++){
+		
+			if (!map.IsHexPassed( point.x, point.y) ) {
+				point.Move(1,1);
+				Say(npc, "Надо идти спать");
+			}
+			else continue;
+		}
+		AddWalkPlane(npc, 0 , point.x, point.y, 1, true, 0);		
+	}
+	
+#endif
+
+//Ядро менеджера - управление планами НПЦ.
+#ifndef __NPC_MANAGER_PLANES
+	#define __NPC_MANAGER_PLANES
+
+	import bool AddMiscPlane( Critter& npc, uint priority, uint waitSecond, string@ funcName ) from "npc_planes";
+			
+	bool AddMiscPlaneWithChildWalk
+	( Critter& npc, uint priority, uint waitSecond, string@ funcName, uint16 hexX, uint16 hexY, uint8 dir, bool run )
+	{
+		if( npc.IsPlayer() ) 		return false;
+		
+		if( not npc.IsCanWalk() ) 	return false;
+
+		NpcPlane@ plane = CreatePlane();
+		plane.Type = AI_PLANE_MISC;
+		plane.Priority = priority;
+		plane.Misc_WaitSecond = waitSecond;
+		if( valid( funcName ) && not plane.Misc_SetScript( funcName ) )
+		{
+			Log( "Set script <" + funcName + "> fail" );
+			return false;
+		}
+		
+		NpcPlane@ child = CreatePlane();
+		child.Type = AI_PLANE_WALK;
+		child.Priority = 0;
+		child.Walk_HexX = hexX;
+		child.Walk_HexY = hexY;
+		child.Walk_Dir = dir;
+		child.Run = run;
+		
+		plane.SetChild( child );
+
+		return npc.AddPlane( plane );
+	}
+
+
+	bool CreatePlane( Critter& cr, int current_group, int mouseX, int mouseY ){
+		int l = controlled_mobs.length() - 1;
+		if( l <= 0 ) return false;
+		
+		Map@ map = cr.GetMap();		
+		Item@ last = null;
+		
+		if( cr.ParamBase[CR_VAL5] != 0 )
+			@last = GetItem( cr.ParamBase[CR_VAL5] );
+		
+		cr.ParamBase[CR_VAL6]++;
+		
+		Item@ item = map.AddItem( mouseX, mouseY, PID_ACTIVE_HEX, 1 );
+		item.SetLexems( "Точка #" + cr.ParamBase[CR_VAL6] );
+		item.SetScript( "_InitItem" );
+		
+		cr.ParamBase[CR_VAL5] = item.Id;
+		
+		if( valid( last ) )
+		{
+			last.Val0 = item.Id;	
+			return true;
+		}		
+		
+		cr.ParamBase[CR_VAL6] = 1;
+		item.SetLexems( "Точка #" + cr.ParamBase[CR_VAL6] );
+		
+		int group = controlled_mobs[l];
+		for( uint k = 0; k < 10; k++ )
+		{	
+			if (controlled_mobs[group * 10 + k] == 0) continue;
+			Critter@ mob = GetCritter( controlled_mobs[group * 10 + k] );
+			if (!valid(mob)) continue;
+			
+			mob.ParamBase[CR_HEXX] = mouseX;
+			mob.ParamBase[CR_HEXY] = mouseY;
+			
+			AddMiscPlane( mob, 1, 0, "npc_manager@_Walk");
+			//Say( mob, "[ГМ] Иду в [" + mob.Param[CR_HEXX] + ", " + mob.Param[CR_HEXY] + "]" );
+		}
+		return true;
+	}
+
+	void _Walk(Critter& mob)
+	{
+		if( mob.IsBusy() || mob.IsDead() || mob.IsKnockout() )
+			return;
+		
+		if( mob.Param[CR_HEXX] == mob.HexX && mob.Param[CR_HEXY] == mob.HexY )
+			return;
+		
+		int dist = GetDistantion( mob.Param[CR_HEXX], mob.Param[CR_HEXY], mob.HexX, mob.HexY );
+		//Emote( mob, "Осталось пройти " + dist + " шагов" );
+		
+		mob.ErasePlane( -1, true );
+		AddWalkPlane( mob, 3, mob.Param[CR_HEXX], mob.Param[CR_HEXY], mob.Dir, true, 0 );	
+		
+		AddMiscPlane( mob, 2, 0, "npc_manager@_Walk");
+		mob.Wait(1000);
+	}
+	
+	void _InitItem( Item& item, bool firstTime )
+	{
+		item.SetEvent( ITEM_EVENT_WALK, "e_ModSay" );
+	}
+	
+	void e_ModSay( Item& item, Critter& mob, bool entered, uint8 dir) 
+	{
+		
+		if( entered ) 
+		{	
+			string@ lexems = Item_GetLexems(item);
+			if( lexems !is null) 
+			{
+				Say(mob, lexems);	
+			} 
+			if (item.Val0 != 0) {
+				Item@ next =  GetItem( item.Val0 );
+				if (valid (next)){
+					
+					mob.ParamBase[CR_HEXX] = next.HexX;
+					mob.ParamBase[CR_HEXY] = next.HexY;
+					
+					AddMiscPlane( mob, 1, 0, "npc_manager@_Walk");//AFTER(REAL_SECOND(1))
+					//Say( mob, "[Точка] Иду в [" + mob.Param[CR_HEXX] + ", " + mob.Param[CR_HEXY] + "]" );//InfoMobPlanes(mob)); 
+				}
+			}
+		}
+		return;
+	}
+
+	string InfoMobPlanes(Critter& mob){
+		string Info;
+		NpcPlane@[]  planes; 
+		NpcPlane@ child = CreatePlane();	
+		Info = "\n";
+		planes.resize(0);
+		for(int i = 0, l = mob.GetPlanes(planes); i < l; i++)
+		{	
+			Info += planes[i].Identifier + "-" + planes[i].IdentifierExt + "-" + planes[i].Priority +" ";
+			Info += planes[i].Run + " ";
+			switch(planes[i].Type) 
+			{
+				case AI_PLANE_MISC : Info += "MISC" ; 		
+					break;
+				case AI_PLANE_ATTACK : Info += "ATTACK";	
+					break;
+				case AI_PLANE_WALK :Info += "WALK";			
+					break;
+				case AI_PLANE_PICK :Info += "PICK";
+					break;
+			}
+			Info += "\n";
+		}
+		return Info;
+	}
+	
+#endif
+
+//Вспомогательно-экспериментальный сегмент разработок тайимвентов, которые бы выполняли ф-ии менеджеров поведения НПЦ планов.
+#ifndef __NPC_MANAGER_TIME_EVENTS
+	#define __NPC_MANAGER_TIME_EVENTS
+
+	//~run npc_manager TestTE 0 0 0
+	void TestTE( Critter& cr, int set, int, int )
+	{
+		uint num = CreateTimeEvent( __FullSecond + REAL_SECOND( 10 ), "e_TestTE", -8, true );
+		Log( "created " + num );
+
+		uint duration = 0;
+		uint[] values;
+		if( GetTimeEvent( num, duration, values ) )
+		{
+			Log( "get ok+ duration " + duration );
+			for( uint i = 0; i < values.length(); i++ )
+				Log( i + ") " + values[ i ] );
+			Log( "get ok-" );
+
+			if( set != 0 )
+			{
+				values[ 0 ] = 123;
+				uint value = 456;
+				values.insertLast( value );
+				if( SetTimeEvent( num, duration, values ) )
+				{
+					Log( "set ok+" );
+					for( uint i = 0; i < values.length(); i++ )
+						Log( i + ") " + values[ i ] );
+					Log( "set ok-" );
+				}
+			}
+		}
+	}
+
+	uint e_TestTE( int[] @ values )
+	{
+		Log( "e_TestTE+" );
+		for( uint i = 0; i < values.length(); i++ )
+			Log( i + ") " + values[ i ] );
+		Log( "e_TestTE-" );
+		return 0;
+	}
+	
+	
+#endif
+
+//Экспериментальный класс "точка", созданный для упрощения работы с 2Д гексагональным пространством.
+#ifndef __NPC_MANAGER_POINT
+	#define __NPC_MANAGER_POINT
+
+	class Point
+	{
+	  int x;
+	  int y;
+
+	  Point( int x, int y ) { this.x = x; this.y = y; }
+
+	  Point@ Move( int dx, int dy ) { this.x += dx; this.y += dy; return this;}
+	  
+	  int distance( Point@ other ) { return valid( other ) ? distance( other.x, other.y ) : -1; }
+	  int distance( int x2, int y2 ) { return sqrt( POW2( x - x2 ) + POW2( y - y2 ) ); }
+	  
+	}	
+	//void DrawTextAboveHex( string@ text, int hexX, int hexY, Color@ color, bool underline = false )
+	Point@ CalculateFreeHex(Critter@ cr, Map@ map, Point@ point){
+		int i = 0;
+		for (i = 0;  i < 10; i++){
+			if ( map.IsHexPassed( point.x, point.y ) ) {
+				point.Move(1,1);
+				Log("Pass " + point.x);
+			}
+			else{
+				Log("( " + point.x +", " + point.y + " )");
+				return point;
+			}
+			
+		}
+		Say(cr, "All Hex is Busy");
+		return null;
+	}
+	
+	Point@ SetHex(Map@ map, int x, int y, int count){
+		Point point = Point(x, y);
+		for (int i = 0; i < count; i++)
+		{
+			if (!map.IsHexPassed( point.x, point.y ) ) {
+				point.Move(1,1);
+				//if (!map.IsHexPassed( point.x, point.y ) ) point.Move(0,1);	
+			}
+			else return @point;
+		}
+		return @point;
+	}
+
+	Point@ CheckHex(Critter@ mob, int x, int y){
+		Point point = Point(x, y);
+		Map@ map = mob.GetMap();
+		if (!map.IsHexPassed( point.x, point.y ) ) {
+			point.Move(1,1);
+			return @point;
+		}
+		return @point;
+	}
+	
+#endif
+
+//Закомментированные куски кода, которые полезны лишь для потрошения и быстрого поиска по ctrl-f.
+#ifndef __NPC_MANAGER_UNSORTED
+	#define __NPC_MANAGER_UNSORTED
+
+	//рабочий пример CreatePlane
+	// bool CreatePlane( Critter& cr, int current_group, int mouseX, int mouseY ){
+		// int l = controlled_mobs.length() - 1;
+		// if( l <= 0 ) return false;
+		
+		// NpcPlane@[]  planes;  
+		// NpcPlane@ child = CreatePlane();
+		// child.Type = AI_PLANE_WALK;
+		// child.Priority = 0;
+		
+		// int priority = 0, count = 0;
+		// int dir = Random( 0, 5 );
+		// bool run = true;
+		// int StopWhenDist = 0;
+		// string Info;
+		// int group = controlled_mobs[l];
+		// for( uint k = 0; k < 10; k++ )
+		// {
+			// if (controlled_mobs[group * 10 + k] == 0) continue;
+			// Critter@ mob = GetCritter( controlled_mobs[group * 10 + k] );
+			// if (!valid(mob)) continue;
+			// AddMiscPlane( mob, 2, AFTER(REAL_SECOND(5)), null);
+			// AddWalkPlane( mob, 1, mouseX, mouseY, dir, run, StopWhenDist );		
+			// Info = "\n";
+			// planes.resize(0);
+			// for(int i = 0, l = mob.GetPlanes(planes); i < l; i++)
+			// {	
+				// Info += planes[i].Identifier + "-" + planes[i].IdentifierExt + "-" + planes[i].Priority +" ";
+				// planes[i].SetChild( child );
+				// @child = planes[i].GetChild(0);
+				// if (valid(child)) Info += child.Identifier + " ";
+				// else Info += "#123#" + " ";
+				
+				// Info += planes[i].Run + " ";
+				// switch(planes[i].Type) 
+				// {
+					// case AI_PLANE_MISC : Info += "MISC" ; 		
+						// break;
+					// case AI_PLANE_ATTACK : Info += "ATTACK";	
+						// break;
+					// case AI_PLANE_WALK :Info += "WALK";			
+						// break;
+					// case AI_PLANE_PICK :Info += "PICK";
+						// break;
+				// }
+				// Info += "\n";
+			// }
+			// Say(mob, Info); 
+		// }
+		// //Say(cr, "count" + count + "; tempPlanes = " + enlistINT(tempPlanes));
+		// return true;
+	// }
+	
+	/*void SayRand(Critter& mob){
+		//DrawTextAboveHex( "test", g_mouseX, g_mouseY, COLOR_CONTOUR_YELLOW, false); - сделать такую подсветку
+		//AddWalkPlane( mob, priority, g_mouseX, g_mouseY, dir, run, StopWhenDist );
+		//Say(mob, "гекс " + t);
+	}*/
+	
+	//map.SetText( last.HexX, last.HexY, COLOR_LGRAY, ":" + "отсюда" + ":" );
+	//map.SetText( item.HexX, item.HexY, COLOR_LGRAY, ":" + "сюда" + ":" );
+	
+#endif
