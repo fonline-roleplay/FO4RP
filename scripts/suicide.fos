@@ -1,0 +1,234 @@
+// Author: Anuri
+
+#include "_ltp.fos"
+#include "_utils.fos"
+#include "_defines.fos"
+
+import void ExplodeEx( Map& map, uint16 hexX, uint16 hexY, uint16 effectPid, uint effectRadius, uint damage, uint damageType, uint damageRadius, uint ownerId )  from "explode";
+import void GenerateFire( Map@ map, int x, int y, int r ) from "combat";
+import void FlushScreen(Critter& cr, bool fadeOut, uint timeMs) from "effects";
+import void QuakeScreen2( Critter& cr ) from "effects";
+import void ApplyFlashEff( Critter& target, uint8 dist ) from "flash_grenade";
+
+bool another_ltp_inited = false;
+void another_ltp_init()
+{
+    LTPREG( LTP_SUICIDE, process_suicide )
+    another_ltp_inited = true;
+}
+
+void unsafe_killself( Critter& player, int param0, int param1, int param2, string@ param3, int[]@ param4 ) //exported
+{
+	if( !valid( player ) || player.IsBusy() || player.IsDead() || player.IsKnockout() || player.StatBase[ ST_CURRENT_HP ] <= 0 ) { return;
+	}
+	
+	Map@ map = player.GetMap();
+	if(!valid(map)) { return;
+	}
+	
+	uint8 mode = 0;
+    ProtoItem@ suicide_toolProto = player.GetSlotProto( SLOT_HAND1, mode );
+	if( suicide_toolProto is null ) {
+		player.Say( SAY_EMOTE, "Пытается душить себя голыми руками" );
+		return;
+	}
+			
+	Item@[] suicide_tools;
+	
+	if(  player.GetItems( SLOT_HAND1, suicide_tools ) == 0 ) return;
+
+	Item@ suicide_tool = suicide_tools[suicide_tools.length() -1];
+	start_suicide( player, suicide_tool );
+}
+	
+bool start_suicide( Critter& player, Item& suicide_tool )
+{
+	if( !another_ltp_inited )
+		another_ltp_init();
+
+	if( valid( suicide_tool ) )
+	{	
+		StartProcess( player, LTP_SUICIDE, 0, suicide_tool.Id, 0, 5000 );
+		return true;
+	}
+	return false;
+}
+	
+uint process_suicide( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESSD( LTP_SUICIDE )
+	
+	Map@ map = cr.GetMap();
+	if(!valid(map)) { return 0;
+	}
+
+    if( param0 == 0 )
+    {	
+	
+		Item@ suicide_tool = GetItem( param1 );
+		//mode = GetItem( param2 );
+		uint8 tool_Subtype = suicide_tool.Proto.Item_Subtype;
+		
+		if( tool_Subtype >= 1 && tool_Subtype <= 42 && suicide_tool.AmmoCount > 0 ) {
+			
+			switch(tool_Subtype)
+			{
+				case( 1 ):
+				case( 3 ):
+					cr.Say( SAY_EMOTE, "Стреляет себе в рот" );
+					cr.ToDead( ANIM2_DEAD_BACK, null );
+					break;
+				case( 2 ):
+					cr.Say( SAY_EMOTE, "Раскрутив барабан, приставляет револьвер к виску" );
+					start_russianRoulette( cr, suicide_tool );
+					break;
+				case( 15 ):
+				case( 17 ):
+					cr.Say( SAY_EMOTE, "Стреляет себе в грудь" );
+					cr.ToDead( ANIM2_DEAD_LASER, null );
+					break;
+				case( 25 ):
+				case( 27 ):
+					cr.Say( SAY_EMOTE, "Стреляет себе в голову" );
+					cr.ToDead( ANIM2_DEAD_FUSED, null );
+					break;
+				case( 35 ):
+				case( 37 ):
+					cr.Say( SAY_EMOTE, "Стреляет себе в висок" );
+					cr.ToDead( ANIM2_DEAD_PULSE, null );
+					break;
+				default:
+					cr.Say( SAY_EMOTE, "Пытается застерлиться тратя заряд, неудобное оружие падает" );
+					break;
+			}
+			if( tool_Subtype != 2 ) {
+
+				string sound = "WAX1XXX1.ACM";
+				sound[ 2 ] = _WeaponSoundId( suicide_tool.Proto, _WeaponModeUse( suicide_tool.Mode ) );
+				map.PlaySound( sound );
+
+				
+
+				suicide_tool.AmmoCount --;
+				suicide_tool.Update();
+				cr.MoveItem( suicide_tool.Id, 1, SLOT_GROUND );
+			}
+		}
+		
+		else if( tool_Subtype >= 45 && tool_Subtype <= 50 || tool_Subtype >= 52 && tool_Subtype <= 54 ) {
+			cr.Say( SAY_EMOTE, "Прижал гранату к груди и выдернул чеку" );
+			QuakeScreen2( cr );
+			_SubItem( suicide_tool, 1 );
+			switch(tool_Subtype)
+			{
+				case( 45 ):
+					cr.ToDead( ANIM2_DEAD_EXPLODE, null );
+					ExplodeEx( map, cr.HexX, cr.HexY, PID_EXPLODE_ROCKET, 2, Random( 30, 70 ), DAMAGE_EXPLODE, 2, 0 );
+					break;
+				case( 47 ):
+					map.SetText( cr.HexX, cr.HexY, COLOR_GRAY, ":вспышка:" );
+					cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 150, cr.HexX, cr.HexY );
+					ApplyFlashEff( cr, 2 );
+					break;
+				case( 49 ):
+					cr.ToDead( ANIM2_DEAD_EXPLODE, null );
+					ExplodeEx( map, cr.HexX, cr.HexY, PID_EXPLODE_PLASMA, 2, Random( 50, 90 ), DAMAGE_PLASMA, 2, 0 );
+					break;
+				case( 50 ):
+					cr.ToDead( ANIM2_DEAD_EXPLODE, null );
+					ExplodeEx( map, cr.HexX, cr.HexY, PID_EXPLODE_EMP, 2, Random( 70, 110 ), DAMAGE_ELECTR, 2, 0 );
+					break;
+				case( 52 ):
+					cr.ToDead( ANIM2_DEAD_BURN, null );
+					ExplodeEx( map, cr.HexX, cr.HexY, PID_EXPLODE_ROCKET, 2, Random( 20, 50 ), DAMAGE_FIRE, 1, 0 );
+					GenerateFire( map, cr.HexX, cr.HexY, 1 );
+					break;
+				default:
+					map.SetText( cr.HexX, cr.HexY, COLOR_GRAY, ":вспышка:" );
+					cr.Say( SAY_NETMSG, "|0xFFFF00 Граната сработала без особого эффекта." );
+					break;
+					
+			}
+		}
+		
+		else if( cr.CountItem(PID_LIGHTER) > 0 && tool_Subtype == 51 ) {
+			cr.Say( SAY_EMOTE, "Облившись горючим поджигает себя" );
+			cr.ToDead( ANIM2_DEAD_BURN_RUN, null );
+			Item@[] droppedItems;
+			cr.GetItems( -1, droppedItems );
+			MoveItems( droppedItems, map, cr.HexX, cr.HexY );
+			GenerateFire( map, cr.HexX, cr.HexY, 2 );
+		}
+		
+		else if( tool_Subtype == 44 || tool_Subtype == 55 || tool_Subtype == 56 || tool_Subtype == 61 ) {
+			cr.Say( SAY_EMOTE, "Вспарывает себе живот" );
+			cr.ToDead( ANIM2_DEAD_BLOODY_SINGLE, null );
+			cr.MoveItem( suicide_tool.Id, 1, SLOT_GROUND );
+		}
+		
+		else if ( suicide_tool.GetProtoId() == PID_CHEMICALS ) {
+			cr.Say( SAY_EMOTE, "Выпивает пузырек" );
+			cr.ToDead( ANIM2_DEAD_FRONT, null );
+		}
+		
+		else
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вам нечем убить себя." );
+	}
+	return 0;
+}
+
+bool ltp_inited = false;
+void ltp_init()
+{
+	LTPREG( LTP_RUSSROUL, process_russianRoulette )
+	ltp_inited = true;
+}
+#define STR_RUSS_ROULL_LOSE_M    	( 9000 )
+#define STR_RUSS_ROULL_WIN_M   		( 9001 )
+#define STR_RUSS_ROULL_LOSE_F    	( 9002 )
+#define STR_RUSS_ROULL_WIN_F   		( 9003 )
+
+bool start_russianRoulette( Critter& player, Item& revolver )
+{
+	if(!ltp_inited) 
+		ltp_init();
+
+	if( valid( revolver ) )
+	{	
+		StartProcess( player, LTP_RUSSROUL, 0, revolver.Id, 0, 3000 );
+		return true;
+	}
+	return false;
+}
+
+uint process_russianRoulette( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESSD( LTP_RUSSROUL )
+
+	Map@ map = cr.GetMap();
+	if(!valid(map)) { return 0;
+	}
+
+    if( param0 == 0 )
+    {
+        Item@ revolver = GetItem( uint( param1 ) );
+        if( valid( revolver ) )
+        {
+            int chance = revolver.AmmoCount * 1000 / revolver.Proto.Weapon_MaxAmmoCount;
+			bool isFemale = ( cr.Stat[ ST_GENDER ] == GENDER_FEMALE );
+			if( Random( 1, 1000 ) < chance ) {
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, isFemale ? STR_RUSS_ROULL_LOSE_F : STR_RUSS_ROULL_LOSE_M );
+				string sound = "WAX1XXX1.ACM";
+				sound[ 2 ] = _WeaponSoundId( revolver.Proto, _WeaponModeUse( revolver.Mode ) );
+				map.PlaySound( sound );
+				revolver.AmmoCount--;
+				revolver.Update();
+				cr.MoveItem( revolver.Id, 1, SLOT_GROUND );
+				cr.ToDead( ANIM2_DEAD_FRONT, null );
+			} else {
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, isFemale ? STR_RUSS_ROULL_WIN_F : STR_RUSS_ROULL_WIN_M );
+			}
+        }
+    }
+    return 0;
+}
