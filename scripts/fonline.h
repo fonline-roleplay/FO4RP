@@ -700,7 +700,8 @@ struct ProtoItem
     const uint   Armor_CrTypeMale;
     const uint   Armor_CrTypeFemale;
     const int    Armor_AC;
-    const uint   Armor_Perk;
+    const uint  Armor_Perk;
+	const uint  HeadItem_Perk;
     const int    Armor_DRNormal;
     const int    Armor_DRLaser;
     const int    Armor_DRFire;
