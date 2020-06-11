@@ -28,6 +28,15 @@
 	#define PID_LAZER_FENCE_NS                                                        // лазерный забор север-юг
 	#define PID_LAZER_FENCE_WE                                                     // лазерный забор запад-восто
 	cr.ToDead( ANIM2_DEAD_LASER, null );
+		
+		Уточнение задачи:
+			вход в зону:
+			ОХРАНА (НАД ГОЛОВОЙ): 
+				НЕСАНКЦИОНИРОВАННЫЙ ДОСТУП! У вас 20 секунд на уход из охраняемой зоны 
+				У ВАС 10 секунд на уход из охраняемой зоны 
+				ОБСТРЕЛ ИЗ ВСЕХ ОРУДИЙ ОХРАНЫ + ЛАЗЕРНЫЙ ЗАБОР
+			
+			Добавить терминал.
 	*/
 	
 	/* То что можно будет доделать, мысли вслух
@@ -59,7 +68,26 @@
 		- сделать так, чтобы лазер исчезал полностью после того как сработает DelItem
 			- для этого: сделать указатели из id следующих лазеров. Зациклить. Сделать граф или очередь
 		- отработать рекурсию для удаления всех лазеров при проходе через них 
-		- спросить у анури где другие ворота
+		- спросить у анури где другие ворота - их нет
+		- Добавить скрипт на добавление забора вкл
+			- для этого изучить как добавить меню на карту по нажатию мышки.
+				- при нажатии на терминал сделать точку входа логики
+				- изучить qthree меню для добавления меню по нажатию клавиши.				
+				- создать свой класс для переключения кнопок
+				
+				- при нажатии на терминал сделать точку входа логики
+			- добавление функции переноса любых живых cr из зоны ворот при активации лазера
+			
+		- 15 секунд на лазеры после начала работы турели
+		- Добавить скрипт на удаление забора выкл
+		- Добавить скрипты в терминал на карте.
+		- установить задержку 20 секунд для охраны + появление надписи
+			"НЕСАНКЦИОНИРОВАННЫЙ ДОСТУП! У вас 20 секунд на уход из охраняемой зоны" 
+		- установить задержку 10 секунд для охраны + появление надписи
+			"У ВАС 10 секунд на уход из охраняемой зоны"
+		- Надпись "НАРУШИТЕЛЬ!!!". + добавление лазерного забора + обстрел из орудий охраны 
+		
+			
 	*/
 	//TODO: Переделать логику в/вы-ключения лазеров, возможно сделать без рекурсии
 #endif
@@ -67,11 +95,12 @@
 #ifndef __GATEWAY_UTILS
 	
 	#define __GATEWAY_UTILS
+	#define COUNT_LAZERS 4
+	#define LENGTH_LAZER 3
 	
 	void DelItem( Critter@ cr, Item@ item, uint length){
 		uint _id = item.Val0;	
 		Map@ map = cr.GetMap();
-		//cr.Say(SAY_NETMSG,  "val0 = " + item.Val0);
 		
 		if (length != 0){
 			DeleteItem(item);
@@ -83,26 +112,33 @@
 		}
 		else return;
 	}
-
-#endif
-
-#ifndef __GATEWAY_LAZER
-	#define __GATEWAY_LAZER
-	#define COUNT_LAZERS 4
-	#define LENGTH_LAZER 3
-	void LazerGates(Critter@ cr, uint hexX, uint hexY, int threatLevel = 1){
+	
+	
+	bool CheckPalceOfLazer(Map@ map, int x, int y){
+		Critter@[] crs;
+		int countCr = map.GetCritters(0, FIND_LIFE, crs); 
+		if (countCr == 0) return false;
+		
+		uint16 hexX = x, hexY = y;
+		
+		for (int i = 0; i < countCr; i++){		
+			if ((hexX == crs[i].HexX) && (hexY == crs[i].HexY)){
+				map.MoveHexByDir( hexX, hexY, ( crs[i].Dir + 3 ) % 6, 2 );
+				crs[i].TransitToHex( hexX, hexY, crs[i].Dir );
+			}
+		}
+		return true;
+	} 
+	
+	//import void AddLazerGate(Map@ map, int hexX, int hexY) from "gateway";
+	void AddLazerGate(Map@ map, int hexX, int hexY){
+		Item@[] lazers;
 		
 		int length = COUNT_LAZERS * LENGTH_LAZER;
-		cr.ParamBase[CR_THREAT_LEVEL] = threatLevel;
-		
-		Item@[] lazers;
-		Map@ map = cr.GetMap(); 
-		
 		for(int i = 0 ; i < length; i++)
 		{
 			uint pid = i % 3 == 1 ? PID_LAZER_FENCE_NS : PID_SHADOW;
-			Item@ lazer = map.AddItem( hexX, hexY + i, pid, 1 );
-			
+			Item@ lazer = map.AddItem( hexX, hexY + i, pid, 1 );	
 			if( !valid( lazer ) ) 
 			{
 				Log( "Failed to create lazer #" + i + " at [" + hexX + ", " + (hexY + i) + "].");
@@ -112,85 +148,112 @@
 			lazers.insertLast( lazer );
 			if (i > 0) 			lazers[i].Val0 = lazers[i - 1].Id; 
 			if (i == length-1) 	lazers[0].Val0 = lazers[i].Id;	
-
+			
+			CheckPalceOfLazer(map, hexX, hexY + i);
 			lazers[i].SetScript( "_InitLazer" );
 			lazers[i].Update();
 		}	
 	}
-	
+
+#endif
+
+
+#ifndef __GATEWAY_LAZER
+	#define __GATEWAY_LAZER
+	#define COUNT_LAZERS 4
+	#define LENGTH_LAZER 3
+
 	void _InitLazer( Item& item, bool firstTime )
 	{
 		item.SetEvent( ITEM_EVENT_WALK, "_CrossLazer" );
 	}
-	
-	
+		
 	void _CrossLazer(Item& item, Critter& cr, bool entered, uint8 dir)
 	{
 		if(entered) 
 		{	
-			if( !isGM( cr ) && cr.Param[CR_THREAT_LEVEL] != 0)
+			if( !isGM( cr ) )//&& cr.Param[CR_THREAT_LEVEL] != 0)
 			{			
 				cr.Say(SAY_NETMSG, "Вас нарезало как селедь.");
 				cr.ToDead( ANIM2_DEAD_LASER, null );
 				uint length = COUNT_LAZERS * LENGTH_LAZER;
 				DelItem(cr, item, length );
 			}
-			else 
-			{
-				Map@ map = cr.GetMap();
-				uint16 hexX = item.HexX, hexY = item.HexY;
-				map.MoveHexByDir( hexX, hexY, ( cr.Dir + 3 ) % 6, 2 );
-				cr.TransitToHex( hexX, hexY, cr.Dir );
-			}
 		}	
 	}
 #endif
 
 //модуль необходимый для быстрой отладки лазерных ворот, можно использовать для дальнейших изменений
-#ifndef __GATEWAY_TESTS
-	#define __GATEWAY_TESTS
+#ifndef __GATEWAY_RUN
+	#define __GATEWAY_RUN
 	
 	#define HEXX 472
 	#define HEXY 340
+	#define PID_TURRET 2021
 	#define COUNT_LAZERS 4
 	#define LENGTH_LAZER 3
 	
-	//~run gateway test_lazer 0 0 0
-	void test_lazer( Critter& cr, int p0, int p1, int p2 )
+	
+	bool SwitchON_Lazer = false;
+	
+	//~run gateway add_lazer 0 0 0
+	void add_lazer( Critter& cr, int p0 = 0, int p1 = 0 , int p2 = 0  )
 	{
-		Item@[] lazers;
+		if (SwitchON_Lazer) 
+		{
+			cr.Say( SAY_NETMSG, "Лазер включен");
+			return;
+		}
 		
-		int count = COUNT_LAZERS * LENGTH_LAZER;
-		Log("запущен тестовый скрипт для лазера");
 		Map@ map = cr.GetMap();
-			
-		for(int i = 0 ; i < count; i++)
-		{
-			uint pid = i % 3 == 1 ? PID_LAZER_FENCE_NS : PID_SHADOW;
-			Item@ lazer = map.AddItem( HEXX, HEXY + i, pid, 1 );
-			
-			if( !valid( lazer ) ) 
-			{
-				Log( "Failed to create lazer #" + i + " at [" + HEXX + ", " + (HEXY + i) + "].");
-				continue;
-			}
-			
-			lazers.insertLast( lazer );
-			if (i > 0) 			lazers[i].Val0 = lazers[i - 1].Id; 
-			if (i == count-1) 	lazers[0].Val0 = lazers[i].Id;	
-
-			lazers[i].SetScript( "_InitLazer" );
-			lazers[i].Update();
-		}
+		AddLazerGate(map, HEXX, HEXY);
 		
-		for(int i = 0, l = lazers.length(); i < l; i++)
+		SwitchON_Lazer = true;	
+		
+		// for(int i = 0, l = lazers.length(); i < l; i++)
+		// {
+			// cr.Say( SAY_NETMSG, "lazer[" + i + "].Val0 = " + lazers[i].Val0 + " :: #" + lazers[i].Id );
+		// }
+	}
+	
+	//~run gateway del_lazer 0 0 0
+	void del_lazer( Critter& cr, int p0 = 0, int p1 = 0 , int p2 = 0 )
+	{
+		Item@[] list;
+		Map@ map = cr.GetMap();
+		map.GetItems(HEXX, HEXY, list);
+		if (list.length() == 0) 
 		{
-			cr.Say( SAY_NETMSG, "lazer[" + i + "].Val0 = " + lazers[i].Val0 + " :: #" + lazers[i].Id );
-		}
+			cr.Say( SAY_NETMSG, "Лазер выключен");
+			return;
+		}	
+		
+		uint length = COUNT_LAZERS * LENGTH_LAZER;
+		DelItem( cr, list[0], length);
+		
+		SwitchON_Lazer = false;
+	}
+	
+#endif
+
+#ifndef __TERMINAL_MENU
+	#define __TERMINAL_MENU
+
+	//~run gateway TEST_MENU 0 0 0
+	void TEST_MENU( Critter& cr, int p0, int p1, int p2 )
+	{
+		string descTerminnal = "Здесь вы можете вкл/выкл систему защиты ворот города";
+		string[] data = { "answer_GM_MENU", descTerminnal, "Лазерные ворота: ВКЛ",  "Турели: ВКЛ"};
+		DIALOG_MENU( cr, data );
+	}
+
+	void answer_GM_MENU( Critter& cr, uint answerI, string& answerS )
+	{		
+		cr.Say( SAY_EMOTE, "доволен" );
+		cr.Say( SAY_NETMSG, answerS );
 	}
 
 #endif
-
 #ifndef __GATEWAY_TODO_CLASSES
 	
 	#define __GATEWAY_TODO_CLASSES
@@ -227,6 +290,7 @@
 #ifndef __GATEWAY_ROBOT
 	
 	#define __GATEWAY_ROBOT
+	#define PID_TURRET 2021
 	#define HEXX 472
 	#define HEXY 340
 	//NOTE: WTF IS IT?!
@@ -342,9 +406,10 @@
 				if( cr.Dir >= 0 && cr.Dir <= 2 )
 				{
 					Critter@[] turrets;
-					map.GetCritters( 2021, FIND_LIFE | FIND_ONLY_NPC, turrets );
+					//map.GetCritters( 1904, FIND_LIFE | FIND_ONLY_NPC, turrets );
+					map.GetCritters( PID_TURRET, FIND_LIFE | FIND_ONLY_NPC, turrets );
 					if( turrets.length() < 1 ) { Log( "Робо-лерой куда-то проебался!" ); return; }
-					Critter@ turret = turrets[Random(0,turrets.length()-1)];
+					Critter@ turret = turrets[ Random( 0, turrets.length()-1 )];
 
 					GameVar@ robot_access = ::GetUnicumVar( UVAR_loyality, turret.Id, cr.Id );
 					if( val == 5 && robot_access == 6 ) return; //Не реагирует на авторизованных
@@ -354,7 +419,7 @@
 					uint8 dir = GetDirection( turret.HexX, turret.HexY, cr.HexX, cr.HexY );
 					turret.SetDir( dir );
 					cr.SetEvent( CRITTER_EVENT_IDLE, null );
-					cr.Wait( 1000 );
+					cr.Wait( 500 );
 					//PlaySound( cr, "Alarm.ogg" );
 					//PlayMusic( cr, "Alarm.ogg", 1, 0 );
 
@@ -366,15 +431,14 @@
 					}
 					else
 					{
+						
 						if( val == 5 )
 						{
 							//cr.Say( SAY_EMOTE_ON_HEAD, "СЪЕбываем!!!" );
 							turret.Say( SAY_SHOUT_ON_HEAD, "НАРУШИТЕЛЬ !!! УНИЧТОЖИТЬ" );
 							AddAttackPlane( turret, 0, cr, -10 );
-							LazerGates(cr, HEXX, HEXY);
-							
-							
-							
+							AddLazerGate(map, HEXX, HEXY);
+									
 							if( cr.Param[ QST_GAMEMODE ] != GAME_ARCADE && cr.Stat[ ST_BODY_TYPE ] != BT_ZOMBIE )
 								cr.SetEvent( CRITTER_EVENT_KNOCKOUT, "_KoAndCatch2" );
 						}
@@ -574,7 +638,7 @@
 
 			if(valid(toCont))
 			{
-					Item@[] items;
+					Item@[] FI;
 					cr.GetItems(SLOT_INV,items);
 					cr.GetItems(SLOT_HAND1,items);
 					cr.GetItems(SLOT_HAND2,items);
