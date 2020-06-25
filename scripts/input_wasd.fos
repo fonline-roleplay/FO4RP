@@ -7,10 +7,13 @@
  *    Space + Shift + S + D - run bottom-right
  *    Space + Q - rotate left
  *    Space + E - rotate right
+ *    Space + Z - toggle full time mode (so that you need not to hold Space anymore)
+ *    Space + Ctrl - toggle attack/use cursor
  *
  *  EXPORTS:
  *   void WASDInputLoop()  // EXPORT -> loop()
  *   bool WASDInputKeyState(int key, bool state) // EXPORT -> key_down|key_up(...)
+ *   WASDInputLost() // EXPORT -> input_lost()
  */
 
 #ifdef __CLIENT
@@ -51,10 +54,12 @@
         LShift = 0x2A,
         RShift = 0x36,
 
-        LAlt = 0x38,
-        RAlt = 0xB8,
+        Z = 0x2C,
 
         Space = 0x39,
+
+        LControl = 0x1D,
+        RControl = 0x9D,
 
         //Down = 0xD0,
         //Up = 0xC8,
@@ -64,7 +69,6 @@
 
     class WASDInputController 
     {
-        bool isAlt;
         bool isEnabled; // WASD movement enabled
         bool isAlwaysEnabled;
         bool isN; // Moving north (top)
@@ -97,8 +101,9 @@
         // Controller constructor
         WASDInputController() 
         {
-            this.isEnabled = this.isAlt = this.isAlwaysEnabled = this.isRotateLeft = this.isRotateRight = this.isN = this.isE = this.isS = this.isW = this.isRun = this.isGeometryViolated = false;
+            this.isEnabled = this.isAlwaysEnabled = this.isRotateLeft = this.isRotateRight = this.isN = this.isE = this.isS = this.isW = this.isRun = this.isGeometryViolated = false;
             this.lastRunTick = GetTick();
+            this.verticalMovementOffset = GetTick() % 1;
         }
 
         // Returns desirable direction based on is* properties
@@ -139,16 +144,14 @@
         // Processes key press, true if should be intercepted and not processed by anyone else
         bool KeyState(int keyCode, bool isDown) 
         {
-            if (__ConsoleActive || __IsTextInput) {
+            CritterCl@ player = GetChosen();
+
+            if (__ConsoleActive || __IsTextInput || null is player) {
                 return false;
             }
 
             // Always enabled switching
-            if (KeyCode::LAlt == keyCode || KeyCode::RAlt == keyCode) {
-                this.isAlt = isDown;
-                return false;
-            }
-            else if (KeyCode::W == keyCode && isDown && this.isAlt) {
+            if (this.isEnabled && KeyCode::Z == keyCode && isDown) {
                 this.SwitchAlwaysEnabled();
                 return true;
             }
@@ -173,6 +176,10 @@
                         }
                         break;                    
                 }
+            }
+
+            if (this.GetEnabled() && isDown && (KeyCode::LControl == keyCode || KeyCode::RControl == keyCode)) {
+                return this.SwitchCursor(player);
             }
 
             switch (keyCode) {
@@ -249,11 +256,32 @@
             SetChosenActions(action);
         }
 
-        // Stop all current actions (most likely not working, with leading 0 as well)
-        void Stop() 
+        void Stop()
         {
-            uint[] action = { 3, 0, 0, 0, 0, 0, 0 };
+            uint[] action = { 0, 0, 0, 0, 0, 0, 0 };
             SetChosenActions(action);
+        }
+
+        bool SwitchCursor(CritterCl@ player) 
+        {
+            int cursor = GetCurrentCursor();
+
+            if (cursor != 2 && cursor != 3) {
+                uint8 mode = 0;
+                ProtoItem@ proto = player.GetSlotProto(1, mode);
+                if (proto !is null) {
+                    if (proto.Type == ITEM_TYPE_WEAPON)  {
+                        ChangeCursor(3);
+                        return true;
+                    } else if (0 != proto.Flags & ITEM_CAN_USE_ON_SMTH) {
+                        ChangeCursor(2);
+                        return true;
+                    }
+                }
+            }
+
+            ChangeCursor(0);
+            return true;
         }
 
         // Process movement
@@ -270,13 +298,12 @@
                 case Direction::NE: {
                     this.isGeometryViolated = false;
                     MoveHexByDir(HexX, HexY, 0, 1);
-                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::NE, 100);
+                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::NE, 500);
                     this.MoveCritter(player, HexX, HexY);
                 } return;
                 case Direction::E: {
                     this.isGeometryViolated = false;
                     MoveHexByDir(HexX, HexY, 1, 1);
-                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::E, 100);
                     this.MoveCritter(player, HexX, HexY);
                 } return;
                 case Direction::SE: {
@@ -321,17 +348,19 @@
                 case Direction::N: {
                     this.isGeometryViolated = true;
                     // Move aim one hex to top
-                    MoveHexByDir(HexX, HexY, 5, 1);
-                    MoveHexByDir(HexX, HexY, 0, 1);
-                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::N, 100);
+                    //MoveHexByDir(HexX, HexY, 5, 1);
+                    //MoveHexByDir(HexX, HexY, 0, 1);
+                    //GetHexCoord(player.HexX, player.HexY, HexX, HexY, DirectionDegree::N, 2);
+                    this.FindVerticalPath(player, HexX, HexY, true);
                     this.MoveCritter(player, HexX, HexY);
                 } return;
                 case Direction::S: {
                     this.isGeometryViolated = true;
                     // Move aim one hex to bottom
-                    MoveHexByDir(HexX, HexY, 3, 1);
-                    MoveHexByDir(HexX, HexY, 2, 1);
-                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::S, 100);
+                    //MoveHexByDir(HexX, HexY, 3, 1);
+                    //MoveHexByDir(HexX, HexY, 2, 1);
+                    //GetHexCoord(player.HexX, player.HexY, HexX, HexY, DirectionDegree::S, 2);
+                    this.FindVerticalPath(player, HexX, HexY, false);
                     this.MoveCritter(player, HexX, HexY);
                 } return;
             }
@@ -344,26 +373,105 @@
             GetChosenActions(currentAction);
 
             uint isRun = this.isRun ? 1 : 0;
-            uint iHexX = uint(hexX), iHexY = uint(hexY);
-
             // Skip call if already moving there
             if (
                 currentAction.length >= 4 
                 && 1 == currentAction[0]
-                && iHexX == currentAction[1]
-                && iHexY == currentAction[2]
+                && uint(hexX) == currentAction[1]
+                && uint(hexY) == currentAction[2]
                 && isRun == currentAction[3]
             ) return;
 
             // "Do not try to move half of the map around some zero width obstacle"
             int pathLength = GetPathLength(player, hexX, hexY, 0);
-            if (
-                0 == pathLength
-                || 4 < pathLength
-            ) return;
+            if (pathLength > 4) return;
 
-            uint[] action = {1, iHexX, iHexY, isRun, 0, 0, 0};
+            if (
+                !this.CanMoveTo(player, hexX, hexY)
+                && !(this.isRun && this.FindWayAround(player, hexX, hexY))
+            ) {
+                QuakeScreen(1,30);
+                return;
+            }
+
+            uint[] action = {1, int(hexX), int(hexY), isRun, 0, 0, 0};
             SetChosenActions(action);
+        }
+
+        void WASDInputLost() 
+        {
+            this.isEnabled = this.isRotateLeft = this.isRotateRight = this.isW = this.isN = this.isS = this.isE = false;
+        }
+
+        bool CanMoveTo(CritterCl@ player, uint16 hexX, uint16 hexY) 
+        {
+            return (player.HexX != hexX || player.HexY != hexY) && 0 != GetPathLength(player, hexX, hexY, 0);
+        }
+
+        uint8 verticalMovementOffset;
+
+        void FindVerticalPath(CritterCl@ player, uint16& hexX, uint16& hexY, bool north)
+        {
+            uint16 leftHexX = player.HexX, rightHexX = player.HexX;
+            uint16 leftHexY = player.HexY, rightHexY = player.HexY;
+            
+            if (north) {
+                MoveHexByDir(leftHexX, leftHexY, 5, 1);
+                MoveHexByDir(rightHexX, rightHexY, 0, 1);
+            } else {
+                MoveHexByDir(leftHexX, leftHexY, 3, 1);
+                MoveHexByDir(rightHexX, rightHexY, 2, 1);
+            }
+
+            bool leftPossible = this.CanMoveTo(player, leftHexX, leftHexY);
+            bool rightPossible = this.CanMoveTo(player, rightHexX, rightHexY);
+           
+            if (leftPossible && (!rightPossible || 2 > this.verticalMovementOffset)) 
+            {
+                this.verticalMovementOffset+=1;
+                if (this.verticalMovementOffset == 2) {
+                    this.verticalMovementOffset = 3;
+                }
+                hexX = leftHexX;
+                hexY = leftHexY;
+            }
+            else if (rightPossible && (!leftPossible || 2 <= this.verticalMovementOffset)) {
+                this.verticalMovementOffset-=1;
+                if (this.verticalMovementOffset == 1) {
+                    this.verticalMovementOffset = 0;
+                }
+                hexX = rightHexX;
+                hexY = rightHexY;
+            }
+        }
+
+        bool FindWayAround(CritterCl@ player, uint16& hexX, uint16& hexY) 
+        {
+            uint16 nHexX = player.HexX, neHexX = player.HexX, nwHexX = player.HexX;
+            uint16 nHexY = player.HexY, neHexY = player.HexY, nwHexY = player.HexY;
+            
+            MoveHexByDir(nHexX, nHexY, player.Dir, 1);
+            if (this.CanMoveTo(player, nHexX, nHexY)) {
+                hexX = nHexX;
+                hexY = nHexY;
+                return true;
+            }
+
+            MoveHexByDir(neHexX, neHexY, player.Dir + 1 > 5 ? 0 : player.Dir + 1, 1);
+            if (this.CanMoveTo(player, neHexX, neHexY)) {
+                hexX = neHexX;
+                hexY = neHexY;
+                return true;
+            }
+
+            MoveHexByDir(nwHexX, nwHexY, int(player.Dir) - 1 < 0 ? 5 : player.Dir - 1, 1);
+            if (this.CanMoveTo(player, nwHexX, nwHexY)) {
+                hexX = nwHexX;
+                hexY = nwHexY;
+                return true;
+            }
+
+            return false;
         }
     }   
 
@@ -379,10 +487,15 @@
     bool WASDInputKeyState(int key, bool state) // EXPORT -> key_down|key_up(...)
     {
         if (wasdController.KeyState(key, state)) {
-            wasdController.Run();
+            //wasdController.Run();
             return true;
         }
         return false;
+    }
+
+    void WASDInputLost() // EXPORT -> input_lost()
+    {
+        wasdController.WASDInputLost();
     }
 
 #endif
