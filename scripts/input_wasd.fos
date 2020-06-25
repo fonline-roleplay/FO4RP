@@ -1,0 +1,361 @@
+#include "_defines.fos"
+/** 
+ *  Module allows you to use WASD action-like keyboard based movement.
+ *
+ *  Eg:
+ *    Space + W - walk up
+ *    Space + Shift + S + D - run bottom-right
+ *    Space + Q - rotate left
+ *    Space + E - rotate right
+ *
+ *  EXPORTS:
+ *   void WASDInputLoop()  // EXPORT -> loop()
+ *   bool WASDInputKeyState(int key, bool state) // EXPORT -> key_down|key_up(...)
+ */
+
+#ifdef __CLIENT
+    // Direction offsets (these are not engine Critter.Dir like directions!)
+    enum Direction {
+        N = 0,
+        NE = 1,
+        E = 2,
+        SE = 3,
+        S = 4,
+        SW = 5,
+        W = 6,
+        NW = 7
+    };
+
+    // Direction angle offsets
+    enum DirectionDegree {
+        N  = 45.0f * 5,
+        NE = 45.0f * 4,
+        E  = 45.0f * 3,
+        SE = 45.0f * 2,
+        S  = 45.0f * 1,
+        SW = 45.0f * 0,
+        W  = 45.0f * 7,
+        NW = 45.0f * 6,
+    }
+
+    // Used key codes
+    enum KeyCode {
+        W = 0x11,
+        A = 0x1E,
+        S = 0x1F,
+        D = 0x20,
+
+        Q = 0x10,
+        E = 0x12,
+
+        LShift = 0x2A,
+        RShift = 0x36,
+        Space = 0x39,
+
+        //Down = 0xD0,
+        //Up = 0xC8,
+        //Left = 0xCB,
+        //Right = 0xCD,
+    }
+
+    class WASDInputController 
+    {
+        bool isEnabled; // WASD movement enabled
+        bool isN; // Moving north (top)
+        bool isE; // Moing east (left)
+        bool isS; // Moving south (down)
+        bool isW; // Moving west (left)
+        bool isRun; // Is running
+        bool isRotateLeft; // Is rotating left
+        bool isRotateRight; // Is rotating right
+        bool isGeometryViolated; // True if critter moves north or south (so 8-directions are "emulated" in 6-direction geometry)
+
+        uint lastRotateTick; // See Rotate()
+        uint lastRunTick;
+
+        // Controller constructor
+        WASDInputController() 
+        {
+            this.isEnabled = this.isRotateLeft = this.isRotateRight = this.isN = this.isE = this.isS = this.isW = this.isRun = this.isGeometryViolated = false;
+            this.lastRotateTick = this.lastRunTick = GetTick();
+        }
+
+        // Returns desirable direction based on is* properties
+        int GetDirection() 
+        {
+            if (this.isN) {
+                if (this.isE) {
+                    return Direction::NE;
+                } 
+                else if(this.isW) {
+                    return Direction::NW;
+                }
+                else {
+                    return Direction::N;
+                }
+            }
+            else if (this.isS) {
+                if (this.isE) {
+                    return Direction::SE;
+                }
+                else if (this.isW) {
+                    return Direction::SW;
+                }
+                else {
+                    return Direction::S;
+                }
+            }
+            else if (this.isW) {
+                return Direction::W;
+            }
+            else if (this.isE) {
+                return Direction::E;
+            }
+
+            return -1;
+        }
+
+        // Processes key press, true if should be intercepted and not processed by anyone else
+        bool KeyState(int keyCode, bool isDown) 
+        {
+            if (__ConsoleActive || __IsTextInput) {
+                return false;
+            }
+
+            if (KeyCode::Space == keyCode) {
+                this.isEnabled = isDown;
+                return false;
+            }
+
+            if (!isDown) {
+                // Remove delay in reaction between keypresses
+                this.lastRunTick = 0;
+                this.lastRotateTick = 0;
+
+                switch(keyCode) {
+                    case KeyCode::A:
+                    case KeyCode::D:
+                    case KeyCode::W:
+                    case KeyCode::S: 
+                        if (!this.isN && !this.isS && !this.isW && !this.isE) {
+                            this.Stop();
+                        }
+                        break;                    
+                }
+            }
+
+            switch (keyCode) {
+                case KeyCode::A:
+                    this.isW = isDown;
+                    return true;
+                case KeyCode::D:
+                    this.isE = isDown;
+                    return true;
+                case KeyCode::W:
+                    this.isN = isDown;
+                    return true;
+                case KeyCode::S:
+                    this.isS = isDown;
+                    return true;
+                case KeyCode::Q:
+                    this.isRotateLeft = isDown;
+                    return true;
+                case KeyCode::E:
+                    this.isRotateRight = isDown;
+                    return true;
+                case KeyCode::LShift:
+                case KeyCode::RShift:
+                    this.isRun = isDown;
+                    return true;
+            }
+
+            return false;
+        }
+
+        // Runs controller within event loop
+        void Run()
+        {
+            CritterCl@ player = GetChosen();
+
+            // Die if outside allowed time window
+            uint tick = GetTick();
+            if (this.lastRunTick + 100 >= tick) {
+                return;
+            }
+            this.lastRunTick = tick;
+
+            // Die if not enabled
+            if (null is player || !this.isEnabled) {
+                return;
+            }
+
+            // Process movement
+            if (this.isE || this.isN || this.isS || this.isW) {
+                this.Move(player);
+            }
+
+            // Process rotation
+            else if (this.isRotateRight || this.isRotateLeft) {
+                this.isGeometryViolated = false;
+                this.Rotate(player);
+            }
+        }
+
+        // Process rotation
+        void Rotate(CritterCl@ player) 
+        {
+            // Drop if already running
+            uint[] currentAction;
+            GetChosenActions(currentAction);
+            if (
+                currentAction.length > 1
+                && currentAction[1] == 3
+            ) return;
+
+            // Prevent from running to frequently
+            if (this.lastRotateTick + 200 > GetTick()) return;
+            this.lastRotateTick = GetTick();
+
+            // Rotate left (1) or right (0)
+            int dir = this.isRotateRight ? 0 : 1;
+            uint[] action = { 3, dir, 0, 0, 0, 0, 0 };
+            SetChosenActions(action);
+        }
+
+        // Stop all current actions (most likely not working, with leading 0 as well)
+        void Stop() 
+        {
+            uint[] action = { 3, 0, 0, 0, 0, 0, 0 };
+            SetChosenActions(action);
+        }
+
+        // Process movement
+        void Move(CritterCl@ player) 
+        {
+            uint16 HexX = player.HexX, HexY = player.HexY;
+            int direction = this.GetDirection();
+            if (direction < 0) {
+                return;
+            }
+            
+            // Move critter position to 1-2 hexes in specified direction 
+            switch (direction) {
+                case Direction::NE: {
+                    this.isGeometryViolated = false;
+                    MoveHexByDir(HexX, HexY, 0, 1);
+                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::NE, 100);
+                    this.MoveCritter(player, HexX, HexY);
+                } return;
+                case Direction::E: {
+                    this.isGeometryViolated = false;
+                    MoveHexByDir(HexX, HexY, 1, 1);
+                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::E, 100);
+                    this.MoveCritter(player, HexX, HexY);
+                } return;
+                case Direction::SE: {
+                    this.isGeometryViolated = false;
+                    MoveHexByDir(HexX, HexY, 2, 1);
+                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::SE, 100);
+                    this.MoveCritter(player, HexX, HexY);
+                } return;
+                case Direction::SW: {
+                    this.isGeometryViolated = false;
+                    MoveHexByDir(HexX, HexY, 3, 1);
+                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::SW, 100);
+                    this.MoveCritter(player, HexX, HexY);
+                } return;
+                case Direction::W: {
+                    this.isGeometryViolated = false;
+                    MoveHexByDir(HexX, HexY, 4, 1);
+                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::W, 100);
+                    this.MoveCritter(player, HexX, HexY);
+                } return;
+                case Direction::NW: {
+                    this.isGeometryViolated = false;
+                    MoveHexByDir(HexX, HexY, 5, 1);
+                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::NW, 100);
+                    this.MoveCritter(player, HexX, HexY);
+                } return;
+            }
+
+            uint[] currentAction;
+            GetChosenActions(currentAction);
+
+            // Handle UP and DOWN movements (emulate 8-direction movement in 6-direction geometry)
+            if (
+                this.isGeometryViolated
+                && currentAction.length >= 4
+                && currentAction[0] == 1
+            ) {
+                // Is already moving in such way
+                return;
+            } 
+            else switch (direction) {
+                case Direction::N: {
+                    this.isGeometryViolated = true;
+                    // Move aim one hex to top
+                    MoveHexByDir(HexX, HexY, 5, 1);
+                    MoveHexByDir(HexX, HexY, 0, 1);
+                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::N, 100);
+                    this.MoveCritter(player, HexX, HexY);
+                } return;
+                case Direction::S: {
+                    this.isGeometryViolated = true;
+                    // Move aim one hex to bottom
+                    MoveHexByDir(HexX, HexY, 3, 1);
+                    MoveHexByDir(HexX, HexY, 2, 1);
+                    //GetHexCoord(HexX, HexY, HexX, HexY, DirectionDegree::S, 100);
+                    this.MoveCritter(player, HexX, HexY);
+                } return;
+            }
+        }
+
+        // Asks critter to move to specified hex
+        void MoveCritter(CritterCl@ player, uint16 hexX, uint16 hexY) 
+        {
+            uint[] currentAction;
+            GetChosenActions(currentAction);
+
+            uint isRun = this.isRun ? 1 : 0;
+            uint iHexX = uint(hexX), iHexY = uint(hexY);
+
+            // Skip call if already moving there
+            if (
+                currentAction.length >= 4 
+                && 1 == currentAction[0]
+                && iHexX == currentAction[1]
+                && iHexY == currentAction[2]
+                && isRun == currentAction[3]
+            ) return;
+
+            // "Do not try to move half of the map around some zero width obstacle"
+            int pathLength = GetPathLength(player, hexX, hexY, 0);
+            if (
+                0 == pathLength
+                || 4 < pathLength
+            ) return;
+
+            uint[] action = {1, iHexX, iHexY, isRun, 0, 0, 0};
+            SetChosenActions(action);
+        }
+    }   
+
+    // EXPORTS
+
+    WASDInputController wasdController(); // singleton
+
+    void WASDInputLoop()  // EXPORT -> loop()
+    {
+        wasdController.Run();
+    }
+
+    bool WASDInputKeyState(int key, bool state) // EXPORT -> key_down|key_up(...)
+    {
+        if (wasdController.KeyState(key, state)) {
+            wasdController.Run();
+            return true;
+        }
+        return false;
+    }
+
+#endif
