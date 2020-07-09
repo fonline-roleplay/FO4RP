@@ -312,6 +312,7 @@ bool _release( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scen
             DeleteItems( items );
             Item@ cuffs = crit.AddItem( PID_HANDCUFFS, 1 );
             cuffs.Val1 = keynum;
+			cuffs.Val2 = 0;
             cuffs.SetLexems( "$number" + cuffs.Val1 );
             DeleteItem( item );
 			onCritter.StatBase [ST_FOLLOW_CRIT] = 0;
@@ -322,6 +323,9 @@ bool _release( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scen
                 onCritter.ModeBase[ MODE_NO_FAVORITE_ITEM ] = 0;
             }
         }
+		else
+			crit.Say( SAY_NETMSG, "Ключ не подошёл." );
+		
         return true;
     }
 
@@ -338,12 +342,20 @@ bool _release( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scen
             crit.DeleteItem( PID_HANDCUFFS_USED, 1 );
             Item@ cuffs = crit.AddItem( PID_HANDCUFFS, 1 );
             cuffs.Val1 = keynum;
+			cuffs.Val2 = 0;
             cuffs.SetLexems( "$number" + cuffs.Val1 );
 			cuffs.SetScript( "_HandcuffsRefresh" );
-            return true;
+            
+			return true;
         }
+		else
+			crit.Say( SAY_NETMSG, "Ключ не подошёл." );
+		
+		return true;
     }
-    return false;
+    
+	crit.Say( SAY_NETMSG, "Ни цель ни вы не одеты в наручники." );
+	return true;
 }
 
 void putOnHandcuffs( Item& item, Critter& crit, Critter@ onCritter )
@@ -412,6 +424,12 @@ void putOnHandcuffs( Item& item, Critter& crit, Critter@ onCritter )
 
     onCritter.SetEvent( CRITTER_EVENT_DEAD, "_drop" );
 }
+void _HandcuffsUsed( Item& item, bool FirstTime )
+{
+	item.SetEvent( ITEM_EVENT_SKILL, "_unlock" );
+	item.SetEvent( ITEM_EVENT_MOVE, "_hellno1" );
+	item.SetEvent( ITEM_EVENT_DROP, "_hellno3" );
+}
 
 void TieUp( Item& item, Critter& crit, Critter@ onCritter )
 {
@@ -423,12 +441,20 @@ void TieUp( Item& item, Critter& crit, Critter@ onCritter )
         onCritter.ParamBase[ HANDCUFFS ] = onCritter.ParamBase[ HANDCUFFS ] | ( item.Val1 << 16 ) | ( escape << 29 ) | ( onCritter.ModeBase[ MODE_NO_HOME ] << 30 ) | ( follow << 31 );
     bool  handCuffs = ( item.GetProtoId() == PID_HANDCUFFS );
 
-    Item@ key;
+    uint keyId = 0;
+	Item@ key;
     if( handCuffs )
     {
-        @key = crit.AddItem( PID_CUFFS_KEY, 1 );
-        key.Val1 = item.Val1;
-        key.SetLexems( "$keynum" + key.Val1 );
+        if( item.Val2 == 0 )
+		{
+			@key = crit.AddItem( PID_CUFFS_KEY, 1 );
+			keyId = key.Id;
+			key.Val1 = item.Val1;
+			key.SetLexems( "$keynum" + key.Val1 );
+			key.SetEvent( ITEM_EVENT_USE, "_release" );//setscript?
+		}
+		else
+			keyId = item.Val2;
     }
 
     _SubItem( item, 1 );
@@ -436,28 +462,19 @@ void TieUp( Item& item, Critter& crit, Critter@ onCritter )
     Item@ hands = onCritter.GetItem( 0, SLOT_HAND1 );
     if( valid( hands ) )
 		onCritter.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
-    @ hands = onCritter.AddItem( handCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
+	
+    @hands = onCritter.AddItem( handCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
     onCritter.MoveItem( hands.Id, 1, SLOT_HAND1 );
-    hands.Val1 = 1;
-    hands.Update();
-    hands.SetEvent( ITEM_EVENT_SKILL, "_unlock" );
-    hands.SetEvent( ITEM_EVENT_MOVE, "_hellno1" );
-    hands.SetEvent( ITEM_EVENT_DROP, "_hellno3" );
+    
+	hands.Val1 = 1;
+	hands.SetScript( "_HandcuffsUsed" );
 
-	/*
-    @hands = onCritter.GetItem( 0, SLOT_HAND2 );
-    if( valid( hands ) )
-		onCritter.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
-    @ hands = onCritter.AddItem( handCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
-    onCritter.MoveItem( hands.Id, 1, SLOT_HAND2 );
-    hands.Val1 = 0;
+	if( handCuffs )
+		hands.Val2 = keyId;
+	
     hands.Update();
-    hands.SetEvent( ITEM_EVENT_SKILL, "_unlock" );
-    hands.SetEvent( ITEM_EVENT_MOVE, "_hellno1" );
-    hands.SetEvent( ITEM_EVENT_DROP, "_hellno3" );
-	*/
-
-    if( crit.Id != onCritter.Id )
+	
+	if( crit.Id != onCritter.Id )
     {
         string name;
         if( onCritter.IsPlayer() )
@@ -472,27 +489,7 @@ void TieUp( Item& item, Critter& crit, Critter@ onCritter )
 			onCritter.SayMsg( SAY_NETMSG, TEXTMSG_GAME, handCuffs ? 12942 : 12992 );
     }
 
-
-    if( handCuffs )
-    {
-        key.SetEvent( ITEM_EVENT_USE, "_release" );
-    }
-
     onCritter.SetEvent( CRITTER_EVENT_DEAD, "_drop" );
-
-	//onCritter.StatBase [ST_FOLLOW_CRIT] = crit.Id;
-    // if( onCritter.IsNpc() )
-    // {
-        // Map@ homemap = onCritter.GetMap();
-        // onCritter.AddTimeEvent( "come_to_daddy", 30, EVENT_ID );
-        // onCritter.SetEvent( CRITTER_EVENT_ATTACKED, "_kickme" );
-        // onCritter.SetEvent( CRITTER_EVENT_RESPAWN, "_respawn" );
-        // onCritter.ModeBase[ MODE_NO_FAVORITE_ITEM ] = 1;
-        // onCritter.ModeBase[ MODE_NO_HOME ] = 1;
-        // onCritter.ModeBase[ MODE_GECK ] = 1;
-        // onCritter.ErasePlane( -1, true );
-        // onCritter.ClearEnemyStack();
-    // }
 }
 
 
@@ -562,14 +559,21 @@ uint process_unlock( Critter@ cr, int& param0, int& param1, int& param2 )
 	
     cr.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( cr );
 	
-	cr.DeleteItem( PID_HANDCUFFS_USED, 1 );
+	Item@ usedCuffs = GetItem( param1 );
+	if( !valid( usedCuffs ) )
+	{
+		cr.Say( SAY_NETMSG, "Наручники заклинило." );
+		return 0;
+	}
 	
-	cr.DeleteItem( PID_HANDCUFFS_USED, 1 );
 	Item@ cuffs = cr.AddItem( PID_HANDCUFFS, 1 );
 	cuffs.Val1 = ( cr.ParamBase[ HANDCUFFS ] >> 16 ) & 0x1FFF;
-	cr.ParamBase[ HANDCUFFS ] = 0;
+	cuffs.Val2 = usedCuffs.Val2;
 	cuffs.SetLexems( "$number" + cuffs.Val1 );
 	cuffs.SetScript( "_HandcuffsRefresh" );
+	
+	cr.ParamBase[ HANDCUFFS ] = 0;
+	cr.DeleteItem( PID_HANDCUFFS_USED, 1 );	
 
 	cr.StatBase [ST_FOLLOW_CRIT] = 0;
 	if( cr.IsNpc() )
@@ -676,7 +680,7 @@ bool _unlock( Item& item, Critter& crit, int skill )
         }
         if( ( crit.Skill[ SK_LOCKPICK ] + Random( 0, 150 ) ) > 300 - Random( 0, 50 ) )
         {
-            StartProcess( crit, LTP_ROPECUFFS, 0, 0, 0, 1000 );
+            StartProcess( crit, LTP_ROPECUFFS, 0, item.Id, 0, 1000 );
             return true;
         }
         else
