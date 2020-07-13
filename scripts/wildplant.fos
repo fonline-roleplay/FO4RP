@@ -4,27 +4,34 @@
 
 import uint8 checkSand( Map& map, uint16 tx, uint16 ty ) from "qmap_sand";
 
-#define AMOUNT 						Val2 		// валка для записи кол-ва полезных плодов
+//PLANT_PARAMETERS
+#define GROWTH_STAGE				Val0 		// Стадия роста растения
+#define RESOURCE_CAPACITY 			Val1 		// валка для записи кол-ва полезных плодов
+#define DEATH_STAGE					Val2 		// Стадия смерти растения
 #define EVENT 						Val3 		// валка для записи тайм-ивента
 
-#define MAP_TIME_DATA   			( 1 )
+//PLANT_RESOURCE_CAPACITY
+#define BROC_RESOURCE_CAPACITY 		( Random( 1, 2 ) )
+#define XANDER_RESOURCE_CAPACITY 	( 1 )
+#define MUSH_LOW_RESOURCE_CAPACITY 	( 1 )
+#define DEFAULT_RESOURCE_CAPACITY 	( 1 )
 
+//MAP_DATA
+#define MAP_TIME_DATA   			( 1 )
 #define MAP_EDGE_ENTIRE				( 255 )  	// Точка края карты
 #define MAP_SIZE               		( 150 ) 	// по аналогии CIMP
 
-// Дефайны пидов карт
+//MAP_PIDS
 #define riverdale1_2				( 107 )
 #define riverdale1_3				( 109 )
 #define riverdale2_2				( 111 )
 #define riverdale2_3				( 113 )
 
-const uint16[] PlantList = 		{ PID_BROC_FLOWER, PID_XANDER_ROOT, PID_MUSH_LOW }; // PID_PLANT_BROC, PID_PLANT_XANDER 
+const uint16[] PlantList = 		{ PID_PLANT_BROC, PID_PLANT_XANDER, PID_MUSH_LOW }; 
 const uint16[] map_pids =   	{ riverdale1_2, riverdale1_3, riverdale2_2, riverdale2_3 };
 const uint16[] plant_amount = 	{	  20, 			  20, 			7, 		      7      };
 
 
- //ChangeFrame( target, 1 );
- 
 //===============PLANT_SPAWNER_MECHANIC===============//
 
 void PlantAutoInit() //export to gameplay.fos
@@ -78,28 +85,33 @@ bool SpawnPlants( Map& map )
 	
 	Log( hexX + ":" + hexY );
 	
-	for( int k = 0; k < extraPlants; k++ )
-	{
+	for( int k = 0; k < extraPlants; k++ ) {
+		
         uint16 x = Random( ( hexX + 1 ), ( hexX + MAP_SIZE - 1  ) );
         uint16 y = Random( ( hexY + 1 ), ( hexY + MAP_SIZE - 1  ) );
 
 		bool sand = checkSand( map, H2T( x ), H2T( y ) ) != 0;
 		bool passed = map.IsHexPassed( x, y );
 		
-		if( sand && passed )
-		{
+		if( sand && passed ) {
 			Item@ wildplant = map.AddItem( x, y, PlantList[ Random( 0, PlantList.length() - 1 ) ], 1 );
 			
-            if( wildplant is null )
+            if( !valid( wildplant ) ) {
 				Log( "PLANT IS NULL" );
-		}
-        else
-		{
+			} else {
+			
+				uint[] values = { wildplant.Id };
+				wildplant.EVENT = CreateTimeEvent( AFTER( REAL_HOUR( 1 ) ),"e_PlantGrowth", values, true );
+			}
+		} else {
+			
 			k--;            
 			failed++;
-			Log( "Не удалось заспаунить(" + failed + ") #" + k + " в кордах " + x + ":" + y );
-			if( failed > plant_amount[index] )
+			Log( "Не удалось заспаунить(" + failed + ") #" + k + " в координатах " + x + ":" + y );
+			
+			if( failed > plant_amount[index] ) {
 				break;
+			}
 		}
     }
     
@@ -111,6 +123,50 @@ bool SpawnPlants( Map& map )
 
     Log( "Не удалось заспаунить " + failed + " растений. Итого на карте: " + wildplants.length() + " из " + plant_amount[index] + "." );
     return true;
+}
+
+uint e_PlantGrowth( uint[]@ values )
+{
+	uint itemId = values[0];
+	Item@ wildplant = GetItem( itemId );
+	if( valid( wildplant ) )    
+	{
+		uint lifetime = 1;
+		int stages = 0;
+		uint16 wildplantPid = wildplant.GetProtoId();
+		switch( wildplantPid )
+		{
+			case(PID_PLANT_BROC):
+				stages = 6;
+				wildplant.RESOURCE_CAPACITY = BROC_RESOURCE_CAPACITY;
+				break;
+			case(PID_PLANT_XANDER):
+				stages = 4;
+				wildplant.RESOURCE_CAPACITY = XANDER_RESOURCE_CAPACITY;
+				break;
+			case(PID_MUSH_LOW):
+				stages = 1;
+				lifetime = 3;
+				wildplant.RESOURCE_CAPACITY = MUSH_LOW_RESOURCE_CAPACITY;
+			default:
+				stages = 1;
+				break;
+		}
+		
+		wildplant.DEATH_STAGE = stages;
+		if( wildplant.GROWTH_STAGE < wildplant.DEATH_STAGE ) {
+
+			wildplant.GROWTH_STAGE ++;
+			uint8 i = wildplant.GROWTH_STAGE;
+			ChangeFrame( wildplant, i );
+			return REAL_HOUR( lifetime );
+		}
+		
+		EraseTimeEvent( wildplant.EVENT );
+		wildplant.EVENT = 0;
+		DeleteItem( wildplant );
+	}
+	return 0;
 }
 
 void _PlantsInit( Critter& player, int param0, int param1, int param2 )
