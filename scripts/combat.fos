@@ -306,7 +306,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
 			dmgType = ammoDmgType;
 	}
 	
-	string attack_info = crInfo( cr, true ) + " атакует используя " + itemName( weapPid ) + " на [" + tx + ":" + ty + "]";
+	string attack_info = crInfo( cr, true ) + " атакует" + ( isBurst ? " очередью" : "" ) + " используя " + itemName( weapPid ) + " на [" + tx + ":" + ty + "]";
 	if( valid( target ) )
 		attack_info += ", где находится " + crInfo( target );
 	SayLog( map, attack_info + "." );
@@ -1884,12 +1884,12 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
         {
             HookMeleeAttack( attacker, target );
             attacker.Say( SAY_EMOTE_ON_HEAD, "хватает" );
-			SayLog( map, crInfo( attacker ) + " хватает " + crInfo( target ) + "." );
+			SayLog( map, crInfo( attacker, true ) + " хватает " + crInfo( target ) + "." );
         }
 		else
 		{
 			attacker.Say( SAY_EMOTE_ON_HEAD, "пытается схватить" );
-			SayLog( map, crInfo( attacker ) + " пытается схватить " + crInfo( target ) + "." );
+			SayLog( map, crInfo( attacker, true ) + " пытается схватить " + crInfo( target ) + "." );
 		}
     return;
     }
@@ -1918,6 +1918,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
         uint8 dist = GetDistantion( attack.Hx, attack.Hy, target.HexX, target.HexY );
         // Применяем flash эффект, ослепляем цели на определенное время.
         ApplyFlashEff( target, dist );
+		SayLog( map, crInfo( target, true ) + " ослепляется попаданием флешки [" + attack.Hx + ":" + attack.Hy + "]." );
         return;
     }
 // /////////////////////////////////////////////////////////
@@ -2232,8 +2233,8 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     // 0x00008000 - lose next turn
 
     // code for dropping weapon, adapted from critical failures
- 
- if( FLAG( eff, HF_DROPPED_WEAPON ) )
+ bool droppedWeapon = FLAG( eff, HF_DROPPED_WEAPON );
+ if( droppedWeapon )
     {
         Item@ realWeaponTarget = _CritGetItemHand( target );
         if( valid( realWeaponTarget ) )
@@ -2315,19 +2316,34 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 
     // Clipped LLeg
     if( FLAG( eff, HF_CRIPPLED_LEFT_LEG ) )
+	{
         target.DamageBase[ DAMAGE_LEFT_LEG ] = 1;
+		SayLog( map, crInfo( target, true ) + " ломает левую ногу." );
+	}
     // Clipped RLeg
     if( FLAG( eff, HF_CRIPPLED_RIGHT_LEG ) )
+	{
         target.DamageBase[ DAMAGE_RIGHT_LEG ] = 1;
+		SayLog( map, crInfo( target, true ) + " ломает правую ногу." );
+	}
     // Clipped LArm
     if( FLAG( eff, HF_CRIPPLED_LEFT_ARM ) )
+	{
         target.DamageBase[ DAMAGE_LEFT_ARM ] = 1;
+		SayLog( map, crInfo( target, true ) + " ломает левую руку." );
+	}
     // Clipped RArm
     if( FLAG( eff, HF_CRIPPLED_RIGHT_ARM ) )
+	{
         target.DamageBase[ DAMAGE_RIGHT_ARM ] = 1;
+		SayLog( map, crInfo( target, true ) + " ломает правую руку." );
+	}
     // Blinded
     if( FLAG( eff, HF_BLINDED ) )
+	{
         target.DamageBase[ DAMAGE_EYE ] = 1;
+		SayLog( map, crInfo( target, true ) + " ослепляется атакой." );
+	}
 
     // all legs clipped, can't move //pm added
     uint8 noMove = target.DamageBase[ DAMAGE_LEFT_LEG ] > 0 && target.DamageBase[ DAMAGE_RIGHT_LEG ] > 0 ? 1 : 0;
@@ -2354,9 +2370,6 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             totalDmg = target.Stat[ ST_CURRENT_HP ];
             
     if (target.Stat [ST_BODY_TYPE] == BT_ROBOT && FLAG(target.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG)) totalDmg *= 1.2;
-    bool safeMode = (valid (realWeapon) && (realWeapon.GetProtoId() == PID_BOXING_GLOVES || realWeapon.GetProtoId() == PID_RING_BOXING_GLOVES ));
-
-	SayLog( map, crInfo( attacker ) + " наносит " + totalDmg + " урона " + crInfo( target ) );
 
 	bool bloodyAttack = isBloodyMess;
     if( totalDmg > 0 )
@@ -2402,7 +2415,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     if( valid( armor ) && targetIsPlayer )
         DeteriorateItem( target, armor, ( ( 100 - armorDr ) * rounds + int( totalDmg ) ) / 3 );
 
-    // Dead
+	bool fatalDeath = false;
     if( isDead )
     {
         bool burst = attack.IsBurst;
@@ -2427,7 +2440,8 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 			}
 			else
 			{
-				if( isCritical || bloodyAttack )
+				bool safeMode = (valid (realWeapon) && (realWeapon.GetProtoId() == PID_BOXING_GLOVES || realWeapon.GetProtoId() == PID_RING_BOXING_GLOVES ));
+				if( !safeMode && ( isCritical || bloodyAttack ) )
 					anim2Dead = ANIM2_DEAD_BLOODY_SINGLE;
 			}
 			break;
@@ -2465,6 +2479,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 		}
 		else
 		{
+			fatalDeath = true;
 			target.Say( SAY_NETMSG, "Полученные повреждения слишком обширны, вас уже не спасти. Разум постепенно покидает ваше тело." );
 		}
 
@@ -2554,11 +2569,8 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             target.StatBase[ ST_CURRENT_AP ] = 100 * targetAp;
 		*/
     }
-
-    // Damage
     else 
-    {
-		
+    {		
 		// target.Wait( GetActionTime(ACTION_DAMAGE, target) );
 		target.Action( ACTION_DAMAGE_FORCE, int(attack.WeaponPid << 16 ) | (attackFront ? 0 : 1), realWeapon );
 		
@@ -2599,6 +2611,20 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             }
         }
     }
+
+	string[] aim_names = { "целом", "голову", "левую руку", "правую руку", "торс", "левую ногу", "правую ногу", "глаза", "пах", "тело" };
+	string attack_info = crInfo( attacker ) + " наносит " + int( totalDmg ) + " урона " + crInfo( target ) + ( isBelow ? "[в минусах]" : "" ) + " в " + aim_names[aim] +
+		( attackFront ? " спереди" : " сзади" ) + 
+			( isCritical ? " критом" : "" ) +
+		( isKo ? ", уронив" : "" ) +
+			( knockOut ? " в нокаут" : "" ) +
+			( knockDown ? " в нокдаун" : "" ) +
+		( droppedWeapon ? ", выбив оружие из рук" : "" ) +		
+		( isDead ? ", убивая цель" : "" ) +
+			( fatalDeath ? " в пермач" : "" ) +	
+		( loseTurn ? ", вызвав пропуск хода" : "" ) +
+		".";
+	SayLog( map, attack_info );
 
     bool isAimed = ( aim != HIT_LOCATION_NONE ) && ( aim != HIT_LOCATION_TORSO ) && ( aim != HIT_LOCATION_UNCALLED );
 
@@ -2726,12 +2752,6 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
         }
     }
 
-    // if( attacker.CountItem( PID_COLLAR ) >= 1 && target.Karma[ KARMA_SLAVER ] != 0 )
-    // {
-        // attacker.StatBase[ ST_CURRENT_HP ] -= Random( 1, 4 );
-        // if( !attacker.IsDead() )
-			// attacker.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 50, attacker.HexX, attacker.HexY );
-    // }                                                                                                                                                                                                             // проверка на атаку рабом работорговца
     if( target.CountItem( PID_PACKAGE ) >= 1 && ( !target.IsDead() || !target.IsKnockout() ) )
     {
         Item@package = target.GetItem( PID_PACKAGE, 0 );
@@ -2779,6 +2799,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 			map.PlaySound( Random( 0, 1 ) == 0 ? "WHN1XXX1.ACM" : "WHN1XXX2.ACM" );
 			QuakeScreen2( target );
 			DeleteItem( _CritGetItemHand( target ) );
+			SayLog( map, "У " + crInfo( attacker ) + " взорвался огнемёт от попадания в руку." );
 			}
 		}
     if( attack.WeaponPid == PID_SOUND_BLASTER && target.ParamBase[ MODE_NO_KNOCK ] <= 0  )                                         // TabaK. Акустическое ружье.
@@ -2790,7 +2811,10 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             if( roll > 0 )
             {
 				if( !target.IsDead() )
+				{
 					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll * 10, target.HexX, target.HexY );
+					SayLog( map, crInfo( target, true ) + " застанили звуковой пушкой." );
+				}
                 //target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 30 );
             }
         }
@@ -2802,13 +2826,16 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             ( target.Param[ ST_BODY_TYPE ] < BT_BRAHMIN ) && ( attacker.Param[ ST_BODY_TYPE ] < BT_BRAHMIN ) && ( !target.IsDead() || !target.IsKnockout() ) )
         {
             attacker.Say( SAY_EMOTE_ON_HEAD, "подсечка" );
-			SayLog( map, crInfo( attacker ) + " делает подсечку " + crInfo( target ) + "." );
+			SayLog( map, crInfo( attacker, true ) + " делает подсечку " + crInfo( target ) + "." );
 								   
             int roll = Random( 10, 25 ) - target.Stat[ ST_ENDURANCE ];
             if( roll > 0 )
             {
 				if( !target.IsDead() )
+				{
 					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll * 10, target.HexX, target.HexY );
+					SayLog( map, crInfo( target, true ) + " падает от подсечки." );
+				}
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_SECOND( 10 );
             }
             target.StatBase[ ST_BLOCK ] = 0;
@@ -2823,7 +2850,10 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             if( roll > 0 )
             {
 				if( !target.IsDead() )
+				{
+					SayLog( map, crInfo( target, true ) + " падает от удара шокером." );
 					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll * 10, target.HexX, target.HexY );
+				}
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 15 );
             }
         }
@@ -2851,7 +2881,10 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
                 else if( aim == HIT_LOCATION_LEFT_LEG )
                     target.DamageBase[ DAMAGE_LEFT_LEG ] = 1;
                 if( Random( 0, 10 ) - target.Stat[ ST_STRENGTH ] > 0 && !target.IsDead() )
+				{
+					SayLog( map, crInfo( target, true ) + " падает от удара пилой." );
                     target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 100, target.HexX, target.HexY );
+				}
             }
         }
     }
@@ -2945,6 +2978,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 				//При этом, стрельба неприцельными, в голову или торс - даёт неплохой бонус к шансу кнока.
 				//Но это - лишь "ВПРИТЫК"!
 				target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), AP2, target.HexX, target.HexY );
+				SayLog( map, crInfo( target, true ) + " падает от попадания из дробовика." );
                 target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( cooldown ); //Повторный кнок не чаще чем через 15 секунд.
             }
 		}
@@ -2986,6 +3020,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 			
             if( target.IsRuning && target.Stat[ ST_CURRENT_HP ] < Random( aimmod, totalDmg * 4 + aimmod * 2 ) && dist >= 3 )
             {
+				SayLog( map, crInfo( target, true ) + " падает от попадания брошенным дробящим оружием." );
 				target.Say( SAY_EMOTE, "Падает от столкновения с кувалдой" );
 				if( !target.IsDead() )
 					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), knock_AP, target.HexX, target.HexY );
@@ -2993,6 +3028,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             }
             else if( target.Stat[ ST_CURRENT_HP ] < Random( aimmod, totalDmg * 2 + aimmod ) && dist >= 3 )
             {
+				SayLog( map, crInfo( target, true ) + " падает от попадания брошенным дробящим оружием." );
 				target.Say( SAY_EMOTE, "Падает от столкновения с кувалдой" );
 				if( !target.IsDead() )
 					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), knock_AP, target.HexX, target.HexY );
@@ -3002,6 +3038,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
             {
 				if( target.Mode[ MODE_NO_WALK ] == 0 && target.Mode[ MODE_NO_PUSH ] == 0 )
 				{					
+					SayLog( map, crInfo( target, true ) + " падает от удара дробящим оружием." );
 					target.Say( SAY_EMOTE, "Падает от мощного удара" );
 					if( !target.IsDead() )
 						target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), knock_AP, target.HexX, target.HexY );
@@ -3011,7 +3048,9 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
         }
     }
 	
-	if( item_Subtype == 14 ) { attacker.Say( SAY_SHOUT_ON_HEAD, "ВЫСТРЕЛ" );
+	if( item_Subtype == 14 ) 
+	{ 
+		attacker.Say( SAY_SHOUT_ON_HEAD, "ВЫСТРЕЛ" );
 	}
 	/*
     if( ( aim == HIT_LOCATION_RIGHT_LEG || aim == HIT_LOCATION_LEFT_LEG ) && ( !target.IsDead() || !target.IsKnockout() ) && target.Timeout[ TO_STEALING ] <= REAL_MINUTE( 2 ) ) // leg shot удар по ноге
@@ -3162,7 +3201,10 @@ uint e_DelayedExplosion( uint[]@ values )
 	*/
 
 	if( pid == PID_FLASH_GRENADE )
+	{
 		map.SetText( x, y, COLOR_GRAY, ":вспышка:" );
+		SayLog( map, "Вспылка флешки в [" + x + ":" + y + "]." );
+	}
 
 	if( type > 0 ) 
 	{
@@ -3193,6 +3235,7 @@ uint e_DelayedExplosion( uint[]@ values )
 		float mul = 1.0 - distance * ( 1.0 / maxDist );
 		int dmg = Random( DmgMin, ( critsHit[ k ].IsKnockout() ? DmgMax * 0.5 : DmgMax ) );
 		InjureCritter( critsHit[ k ], dmg * mul, DmgType, dir, 0 );
+		
     }
 	return 0;
 }
@@ -3956,6 +3999,7 @@ void Dodge( Critter& cr, string text )
 {
 	cr.Say( SAY_EMOTE, text );
 	cr.Action( ACTION_DODGE, Random( 0, 1 ), null );
+	SayLog( cr, crInfo( cr, true ) + text + "." );	
 }
 
 bool CheckEvasion( Critter& cr, Critter@ target, string action, int power, bool mainHand = false )
@@ -3965,6 +4009,7 @@ bool CheckEvasion( Critter& cr, Critter@ target, string action, int power, bool 
 		return testInfo( cr, "Вам нечем опутывать цель." );
 
 	cr.Say( SAY_EMOTE, action );
+	SayLog( cr, crInfo( cr, true ) + action + "." );	
 
 	if( !valid( target ) )
 		return testInfo( cr, "Цели нет." );
@@ -4000,7 +4045,10 @@ bool CheckEvasion( Critter& cr, Critter@ target, string action, int power, bool 
 	}
 
 	HookHoldAttack( target, power );
-	target.Say( SAY_EMOTE, "Опутан" + genderEnding( target ) );
+	
+	string emote = "Опутан" + genderEnding( target );
+	target.Say( SAY_EMOTE, emote );
+	SayLog( target, crInfo( target, true ) + emote + "." );	
 	target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( power * 5 );
 		
 	return true;
