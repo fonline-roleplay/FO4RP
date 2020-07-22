@@ -1,70 +1,140 @@
 #ifndef __SUI__
     #define __SUI__
 
+    #include "sui_defines.fosh"
+    #include "sui_events.fosh"
+    #include "sui_event_listeners.fosh"
+
     #ifdef __CLIENT
         #include "sui_input.fosh"
     #endif
 
-    shared interface EventListenerSUI {
-        void OnEvent(EventSUI@ event);
-    }
-
-    shared interface LoopListenerSUI {
-        void OnLoop();
-    }
-
-    shared class EventSUI {
-        bool StopPropagation;
-
-        EventSUI() { 
-            this.StopPropagation = false;
-        }
-    }
-
-    shared class EngineEventSUI : EventSUI {
-        bool StopProcessing;
-
-        EngineEventSUI() {
-            super();
-            this.StopProcessing = false;
-        }
-    }
-
+    //
+    // Main module that is returned as SUI and is also injected in every submodule class as .SUI
+    // Provides access from submodules to submodules
+    // Connects engine events & misc calls into SUI-events, manages loaded modules
+    //
     shared class ModuleSUI
     {
+        // Generic event listeners collection
         EventListenerSUI@[] EventListeners;
 
-        #ifdef __CLIENT
-        HotkeyListenerSUI@ Hotkeys;
+        // loop() event listeners collection - separate from generic events in order to reduce load
+        LoopListenerSUI@[] LoopListeners;
+
+        #ifdef __CLIENT 
+            // render_iface() & render_map() listeners collection - separate from generic & loop events in order to reduce load
+            RenderListenerSUI@[] RenderListeners;
+            
+            HotkeyListenerSUI@ Hotkeys;
         #endif
 
+        // Limited amount of loop listeners that are fired on every loop() call
+        uint LoopChunkSize;
+        
+        // Current offset of that amount within the whole event listeners group
+        uint LoopChunkOffset;
+
+        //
+        // Constructor
+        //
         ModuleSUI() final {
+            this.EventListeners.resize(0);
+            this.LoopListeners.resize(0);
+
+            this.LoopChunkSize = 32;
+            this.LoopChunkOffset = 0;
+
             #ifdef __CLIENT
-            @this.Hotkeys = HotkeyListenerSUI();
-            this.EventListeners.insertLast(this.Hotkeys);
+                this.RenderListeners.resize(0);
+            #endif 
+
+            // Built-in submodules registration
+            #ifdef __CLIENT
+                @this.Hotkeys = HotkeyListenerSUI(this);
             #endif
         }
 
-        bool Start() { return false;}
+        // 
+        // Event methods
+        //
 
-        void Loop() {
-            // todo
+        bool Dispatch(EventSUI@ event) final {
+            EngineEventSUI@ engineEvent = cast<EngineEventSUI>(event);
+
+            for (uint i = 0, l = this.EventListeners.length; i < l; i++) {
+                this.EventListeners[i].OnEvent(event);
+                if (event.StopPropagation) break;
+            }
+
+            return null is engineEvent ? false : engineEvent.StopProcessing;
         }
 
-        //void Finish() {}
+        //
+        // Subscriber methods
+        //
 
-        // Engine hooks
+        void AddEventListener(EventListenerSUI@ eventListener) final {
+            this.EventListeners.insertLast(eventListener);
+        }
+
+        void AddLoopListener(LoopListenerSUI@ loopListener) final {
+            this.EventListeners.insertLast(loopListener);
+        }
+
+        #ifdef __CLIENT
+            void AddRenderListener(RenderListenerSUI@ renderListener) final {
+                this.RenderListeners.insertLast(renderListener);
+            }
+        #endif
+
+        //
+        // Event & engine callback hooks
+        //
+
+        bool Start() { 
+            return false;
+        }
+
+        void Loop() {
+            for (
+                uint i = 0, 
+                     l = this.LoopListeners.length > this.LoopChunkSize ? this.LoopChunkSize : this.LoopListeners.length;
+                i < l;
+                i++
+            ) {
+                this.LoopListeners[i].OnLoop();
+            }
+
+            if (this.LoopChunkOffset + this.LoopChunkSize > this.LoopListeners.length) {
+                this.LoopChunkOffset = 0;
+            } else {
+                this.LoopChunkOffset += this.LoopChunkSize;
+            }
+        }
+
+        // Seems like sometimes module is unloaded before finish, so we wont use it for now
+        // void Finish() {}
+
         #ifdef __SERVER
-            void Init() {}
+
+            void Init() {
+                // ...
+            }
+
         #endif
 
         #ifdef __CLIENT
+
             bool MouseDown(int key) {
                 EngineEventSUI@ event = MouseStateEventSUI(key, true);
                 this.Dispatch(event);
-                if (3 == key || 4 == key) { // engine productes no /up/ events for mouse scroll
+
+                // FOnline productes no /up/ events for mouse scroll and so we mimick them
+                if (3 == key || 4 == key) { 
                     this.Dispatch(MouseStateEventSUI(key, false));
                 }
+
                 return event.StopProcessing;
             }
 
@@ -95,23 +165,12 @@
                 InputEventSUI@ event = InputLostEventSUI();
                 this.Dispatch(event);
             }
+
         #endif
-
-        bool Dispatch(EventSUI@ event) final {
-            EngineEventSUI@ engineEvent = cast<EngineEventSUI>(event);
-
-            for (uint i = 0, l = this.EventListeners.length; i < l; i++) {
-                this.EventListeners[i].OnEvent(event);
-                if (event.StopPropagation) break;
-            }
-
-            return null is engineEvent ? false : engineEvent.StopProcessing;
-        }
-
-        void AddEventListener(EventListenerSUI@ eventListener) final {
-            this.EventListeners.insertLast(eventListener);
-        }
     }
+
+    // Exports sui.fos' ModuleSUI preconfigured implementation so that it is available as SUI virtual variable 
+    // in a current context outside of SUI modules
 
     #ifndef __MODULE_SUI__
         #define __MODULE_SUI__
