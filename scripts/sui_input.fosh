@@ -1,0 +1,351 @@
+#ifndef __SUI_INPUT__
+    #define __SUI_INPUT__
+    #include "sui.fosh"
+    #include "sui_input_converter.fosh"
+
+    // Generic input abstract event
+    shared class InputEventSUI : EngineEventSUI {}
+
+    // Keyboard button down/up event
+    shared class KeyboardStateEventSUI : InputEventSUI {
+        uint8 Key;
+        bool IsPressed;
+        KeyboardStateEventSUI(uint8 key, bool isPressed) {
+            super();
+            this.Key = key;
+            this.IsPressed = isPressed;
+        }
+    }
+
+    // Mouse button down/up event
+    shared class MouseStateEventSUI : InputEventSUI {
+        int Key;
+        bool IsPressed;
+        MouseStateEventSUI(int key, bool isPressed) {
+            super();
+            this.Key = key;
+            this.IsPressed = isPressed;
+        }
+    }
+
+    // Mouse move event
+    shared class MouseMoveEventSUI : InputEventSUI {
+        int X;
+        int Y;
+        MouseMoveEventSUI(int x, int y) {
+            super();
+            this.X = x;
+            this.Y = y;
+        }
+    }
+
+    // Input lost event
+    shared class InputLostEventSUI : InputEventSUI {}
+
+    // Key state event
+    shared class KeyStateEventSUI : InputEventSUI {
+        KeyStateSUI@ KeyState;
+        KeyStateEventSUI(KeyStateSUI@ keyState) {
+            super();
+            @this.KeyState = keyState;
+        }
+    }
+
+    // Hotkey base class to be extended by children hotkeys
+    shared class HotkeyActionSUI : EventListenerSUI, LoopListenerSUI
+    {
+        int ID;
+
+        // Compatible key states to check against current keyboard state
+        KeyStateSUI@[] KeyStates;
+
+        // Is in pressed state
+        bool IsActive;
+
+        HotkeyActionSUI() final {
+            this.IsActive = false;
+            this.KeyStates.resize(0);
+            this.ID = 0;
+        }
+
+        // Loop ticker
+        void OnLoop() final {
+            this.Run(null);
+        }
+
+        // Key state event handler
+        void OnEvent(EventSUI@ event) final {
+            // Skip non key state events
+            KeyStateEventSUI@ keyStateEvent = cast<KeyStateEventSUI>(event);
+            if (null is keyStateEvent) return;
+
+            // Check if received key state matches any of whitelist key states
+            KeyStateSUI@ match = null;
+            bool isActive = false;
+            for (uint i = 0, l = this.KeyStates.length; i < l; i++) {
+                if (this.KeyStates[i].Has(keyStateEvent.KeyState)) {
+                    match = this.KeyStates[i];
+                    break;
+                }
+            }
+
+            // Switch hotkey state
+            if (this.IsActive != isActive) {
+                this.IsActive = isActive;
+                this.Run(match);
+            }
+        }
+
+        // Override this with your action
+        void Run(KeyStateSUI@ keyState) {}
+
+        string GetNameLabel() {
+            return "Unnamed";
+        }
+
+        string GetDescriptionLabel() {
+            return "Please, add name and description for this hotkey action";
+        }
+
+        string@[] GetHotkeyLabels(string delimiter = " + ") final {
+            string@[] result;
+            for (uint i = 0, l = this.KeyStates.length; i < l; i++) {
+                result.insertLast(this.KeyStates[i].GetName(delimiter));
+            }
+            return result;
+        }
+    }
+
+    shared class HotkeyListenerSUI : EventListenerSUI, LoopListenerSUI
+    {
+        HotkeyActionSUI@[] HotkeyActions;
+        KeyStateSUI@ KeyState;
+
+        // Maximum amount of hotkey actions fired on every loop tick
+        uint LoopChunkSize;
+        uint LoopChunkOffset;
+
+        HotkeyListenerSUI() final {
+            this.LoopChunkSize = 32;
+            this.LoopChunkOffset = 0;
+        }
+
+        uint AddHotkeyAction(HotkeyActionSUI@ hotkeyAction) {
+            this.HotkeyActions.insertLast(hotkeyAction);
+            hotkeyAction.ID = this.HotkeyActions.length - 1;
+            return hotkeyAction.ID;
+        }
+
+        void RemoveHotkeyActionByIndex(int index) {
+            this.HotkeyActions.removeAt(index);
+        }
+
+        void OnEvent(EventSUI@ event) final {
+            // Drop all non-input events
+            if (null is cast<InputEventSUI>(event)) {
+                Message("*non input");
+                return;
+            }
+
+            MouseMoveEventSUI@ mouseMoveEvent = cast<MouseMoveEventSUI@>(event);
+            if (null !is mouseMoveEvent) {
+                Message("MMOVE");
+                // @todo
+                return;
+            }
+
+            KeyboardStateEventSUI@ keyboardStateEvent = cast<KeyboardStateEventSUI@>(event);
+            if (null !is keyboardStateEvent) {
+                Message("KEY STATE");
+                this.KeyState.SetKeyState(keyboardStateEvent.Key, keyboardStateEvent.IsPressed);
+            }
+
+            MouseStateEventSUI@ mouseStateEvent = cast<MouseStateEventSUI@>(event);
+            if (null !is mouseStateEvent) {
+                Message("MOSUESTATE");
+                this.KeyState.SetMouseState(mouseStateEvent.Key, mouseStateEvent.IsPressed);
+            }
+
+            InputLostEventSUI@ inputLostEvent = cast<InputLostEventSUI@>(event);
+            if (null !is inputLostEvent) {
+                Message("LOSS");
+                this.KeyState.Flush();
+            }
+
+            // Propagate event to hotkeys as a key state event
+            KeyStateEventSUI@ keyStateEvent = KeyStateEventSUI(this.KeyState);
+            for (uint i = 0, l = this.HotkeyActions.length; i < l; i++) {
+                this.HotkeyActions[i].OnEvent(keyStateEvent);
+
+                bool doBreak = false;
+                if (keyStateEvent.StopPropagation) {
+                    cast<EngineEventSUI>(event).StopPropagation = doBreak = true;
+                }
+                if (keyStateEvent.StopProcessing) {
+                    cast<EngineEventSUI>(event).StopProcessing = doBreak = true;
+                }
+                if (doBreak) break;
+            }
+        }
+
+        void OnLoop() final {
+            for (
+                uint i = 0, 
+                    l = this.HotkeyActions.length > this.LoopChunkSize ? this.LoopChunkSize : this.HotkeyActions.length;
+                i < l;
+                i++
+            ) {
+                this.HotkeyActions[i].OnLoop();
+            }
+
+            if (this.LoopChunkOffset + this.LoopChunkSize > this.HotkeyActions.length) {
+                this.LoopChunkOffset = 0;
+            } else {
+                this.LoopChunkOffset += this.LoopChunkSize;
+            }
+        }
+    }
+
+    shared class KeyStateSUI
+    {
+        // Current key combination hash
+        string KeyStateHash;
+
+        // Zero preset constructor
+        KeyStateSUI() final {
+            this.Flush();
+        }
+
+        // By string name constructor
+        KeyStateSUI(string name, string delimiter = " + ") {
+            this.Flush();
+            string@[] keyNames = splitEx(name, delimiter);
+            // note: beware splitEx does not trim values, so remove excess spaces manually
+            this.AddFromKeyNames(keyNames);
+        }
+
+        // By array of key names constructor
+        KeyStateSUI(string@[] keyNames) {
+            this.Flush();
+            this.AddFromKeyNames(keyNames);
+        }
+
+        // Add from array of key names
+        void AddFromKeyNames(string@[] keyNames) {
+            InputConverterSUI@ ic = InputConverterSUI();
+            for (uint8 i = 0, l = keyNames.length; i < l; i++) {
+                this.KeyDown(ic.GetKeyCodeFromName(keyNames[i]));
+            }
+        }
+
+        // By keyboard & mouse keys array constructor
+        KeyStateSUI(uint8[]@ keyboardKeys, int[]@ mouseKeys) {
+            this.Flush();       
+            if (null !is keyboardKeys) this.AddFromKeys(keyboardKeys);
+            if (null !is mouseKeys) this.AddFromMouseKeys(mouseKeys);
+        }
+
+        // Add pressed keys from array
+        void AddFromKeys(uint8[] keys) {
+            for (uint8 i = 0, l = keys.length; i < l; i++) {
+                this.KeyDown(keys[i]);
+            }
+        }
+
+        // Add pressed mouse keys from array
+        void AddFromMouseKeys(int[] keys) {
+            for (uint8 i = 0, l = keys.length; i < l; i++) {
+                this.MouseDown(keys[i]);
+            }
+        }
+
+        // Returns if mouse button is pressed
+        bool GetMouseState(int key) final {
+            return this.GetKeyState(key + 0xEE);
+        }
+
+        // Returns if key is pressed
+        bool GetKeyState(uint8 key) final {
+            uint8 sectionOffset = key % 8;
+            uint8 innerOffset = key - sectionOffset;
+            return 1 == (this.KeyStateHash[sectionOffset] >> innerOffset);
+        }
+
+        // Sets mouse button state
+        void SetMouseState(int key, bool state) final {
+            this.SetKeyState(key + 0xEE, state);
+        }
+
+        // Sets key state
+        void SetKeyState(uint8 key, bool state) final {
+            uint8 sectionOffset = key / 8;
+            uint8 innerOffset = key % 8;
+            this.KeyStateHash[sectionOffset] = state ? ( this.KeyStateHash[sectionOffset] | 1 << innerOffset) : (this.KeyStateHash[sectionOffset] & ~(1 << innerOffset));
+        }
+
+        // Press mouse button
+        void MouseDown(int key) final {
+            this.SetMouseState(key, true);
+        }
+
+        // Free mouse button
+        void MouseUp(int key) final {
+            this.SetMouseState(key, false);
+        }
+
+        // Press key
+        void KeyDown(uint8 key) final {
+            this.SetKeyState(key, true);
+        }
+
+        // Free key
+        void KeyUp(uint8 key) final {
+            this.SetKeyState(key, false);
+        }
+
+        // Checks if current key combination includes specified one
+        bool Has(KeyStateSUI@ keyState) final {
+            for (uint8 i = 0, l = this.KeyStateHash.length(); i < l; i++) {
+                if (0 != keyState.KeyStateHash[i] && 0 == this.KeyStateHash[i] & keyState.KeyStateHash[i]) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // Checks if current key combination is complete match for specified one
+        bool Is(KeyStateSUI@ keyState) final {
+            return this.KeyStateHash == keyState.KeyStateHash;
+        }
+
+        // Free up all keys
+        void Flush() final {
+            this.KeyStateHash.resize(0);
+            this.KeyStateHash.resize(32);
+        }
+
+        // Dumps key state name as readable key names array (aka {"F10", "MMB"})
+        string@[] GetKeyNames() {
+            string@[] keyNames;
+
+            InputConverterSUI@ ic = InputConverterSUI();
+
+            for (uint8 i = 0, l = this.KeyStateHash.length(); i < l; i++) {
+                for (uint8 y = 0; y < 8; y++) {
+                    if (0 != this.KeyStateHash[i] & (1 << y)) {
+                        uint keyCode = 8 * i + y;
+                        string name = ic.GetNameFromKeyCode(keyCode);
+                        keyNames.insertLast(name);
+                    }
+                }
+            }
+
+            return keyNames;
+        }
+
+        // Dumps key state name as readable string (aka "F10 + MMB")
+        string GetName(string delimiter = " + ") {
+            return join(this.GetKeyNames(), delimiter);
+        }
+    }
+#endif
