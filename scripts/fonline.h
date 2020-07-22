@@ -743,7 +743,8 @@ struct ProtoItem
 	const uint16 Wait_Time_2;      // -> 328"
 	const uint16 Wait_Time_3;      // -> 330"
 	const uint16 Item_UseAp;
-    const uint8  UnusedEnd[ 166 ]; // SUKA
+	const uint8  Partial_Item;     // -> 338 кусочки 
+    const uint8  UnusedEnd[ 164 ];  // SUKA
 
     // Type specific data
     const bool   Weapon_IsUnarmed;
