@@ -5,46 +5,333 @@ ModuleSUI@ InstallWASDInputSUI(FrameworkSUI@ sui) {
     return ModuleWASD(sui);
 }
 
+enum Direction {N = 0, NE = 1, E = 2, SE = 3, S = 4, SW = 5, W = 6, NW = 7};
+
 final class ModuleWASD : ModuleSUI, LoopListenerSUI
 {
     bool IsEnabled;
+
+    uint8 VerticalMovementOffset;
+
+    MoveActionWASD@ CurrentAction;
 
     ModuleWASD(FrameworkSUI@ sui) {
         super(sui);
         sui.AddLoopListener(this);
 
         this.IsEnabled = false;
-        sui.Hotkeys.Add(SwitchEnabledHotkeyWASD(this));
+        this.VerticalMovementOffset = GetTick() % 1;
+        @this.CurrentAction = null;
+
+        sui.Hotkeys.Add(SwitchEnabledActionWASD(this, "SPACE + Z"));
+
+        sui.Hotkeys.Add(NorthEastMoveAction(this, "LSHIFT + W + D", true));
+        sui.Hotkeys.Add(NorthWestMoveAction(this, "LSHIFT + W + A", true));
+        sui.Hotkeys.Add(SouthEastMoveAction(this, "LSHIFT + S + D", true));
+        sui.Hotkeys.Add(SouthWestMoveAction(this, "LSHIFT + S + W", true));
+
+        sui.Hotkeys.Add(NorthMoveAction(this, "LSHIFT + W", true));
+        sui.Hotkeys.Add(SouthMoveAction(this, "LSHIFT + S", true));
+        sui.Hotkeys.Add(WestMoveAction(this, "LSHIFT + A", true));
+        sui.Hotkeys.Add(EastMoveAction(this, "LSHIFT + D", true));
+
+        sui.Hotkeys.Add(NorthEastMoveAction(this, "W + D", false));       
+        sui.Hotkeys.Add(NorthWestMoveAction(this, "W + A", false));        
+        sui.Hotkeys.Add(SouthEastMoveAction(this, "S + E", false));        
+        sui.Hotkeys.Add(SouthWestMoveAction(this, "S + W", false));    
+          
+        sui.Hotkeys.Add(NorthMoveAction(this, "W", false));
+        sui.Hotkeys.Add(SouthMoveAction(this, "S", false));
+        sui.Hotkeys.Add(WestMoveAction(this, "A", false));
+        sui.Hotkeys.Add(EastMoveAction(this, "D", false));
     }
 
     void OnLoop() {
-        // ...
+        if (null !is this.CurrentAction) {
+            this.CurrentAction.Continue();
+        }
+    }
+
+    void MoveCritter(CritterCl@ player, bool isRun, uint16 hexX, uint16 hexY) {
+        uint isRunParam = isRun ? 1 : 0;
+
+        uint[] currentAction;
+        GetChosenActions(currentAction);
+
+        // Skip if we are already moving there
+        if (
+            currentAction.length >= 4 
+            && 1 == currentAction[0]
+            && uint(hexX) == currentAction[1]
+            && uint(hexY) == currentAction[2]
+            && isRunParam == currentAction[3]
+        ) return;
+
+        // "Do not try to move half of the map around some zero width obstacle"
+        int pathLength = GetPathLength(player, hexX, hexY, 0);
+        if (pathLength > 4) return;
+
+        // Process obstacles
+        if (
+            !this.CanMoveCritter(player, hexX, hexY)
+            && !(isRun && this.FindWayAround(player, hexX, hexY))
+        ) {
+            QuakeScreen(1, 30);
+            return;
+        }
+
+        // Move!
+        uint[] action = {1, int(hexX), int(hexY), isRunParam, 0, 0, 0};
+        SetChosenActions(action);
+    }
+
+    bool CanMoveCritter(CritterCl@ player, uint16 hexX, uint16 hexY) {
+        return (player.HexX != hexX || player.HexY != hexY) && 0 != GetPathLength(player, hexX, hexY, 0);
+    }
+
+    void FindVerticalPath(CritterCl@ player, uint16& hexX, uint16& hexY, bool north)
+    {
+        uint16 leftHexX = player.HexX, rightHexX = player.HexX;
+        uint16 leftHexY = player.HexY, rightHexY = player.HexY;
+        
+        if (north) {
+            MoveHexByDir(leftHexX, leftHexY, 5, 1);
+            MoveHexByDir(rightHexX, rightHexY, 0, 1);
+        } else {
+            MoveHexByDir(leftHexX, leftHexY, 3, 1);
+            MoveHexByDir(rightHexX, rightHexY, 2, 1);
+        }
+
+        bool leftPossible = this.CanMoveCritter(player, leftHexX, leftHexY);
+        bool rightPossible = this.CanMoveCritter(player, rightHexX, rightHexY);
+        
+        if (leftPossible && (!rightPossible || 2 > this.VerticalMovementOffset)) 
+        {
+            this.VerticalMovementOffset+=1;
+            if (this.VerticalMovementOffset == 2) {
+                this.VerticalMovementOffset = 3;
+            }
+            hexX = leftHexX;
+            hexY = leftHexY;
+        }
+        else if (rightPossible && (!leftPossible || 2 <= this.VerticalMovementOffset)) {
+            this.VerticalMovementOffset-=1;
+            if (this.VerticalMovementOffset == 1) {
+                this.VerticalMovementOffset = 0;
+            }
+            hexX = rightHexX;
+            hexY = rightHexY;
+        }
+    }
+
+    bool FindWayAround(CritterCl@ player, uint16& hexX, uint16& hexY) 
+    {
+        uint16 nHexX = player.HexX, neHexX = player.HexX, nwHexX = player.HexX;
+        uint16 nHexY = player.HexY, neHexY = player.HexY, nwHexY = player.HexY;
+        
+        MoveHexByDir(nHexX, nHexY, player.Dir, 1);
+        if (this.CanMoveCritter(player, nHexX, nHexY)) {
+            hexX = nHexX;
+            hexY = nHexY;
+            return true;
+        }
+
+        MoveHexByDir(neHexX, neHexY, player.Dir + 1 > 5 ? 0 : player.Dir + 1, 1);
+        if (this.CanMoveCritter(player, neHexX, neHexY)) {
+            hexX = neHexX;
+            hexY = neHexY;
+            return true;
+        }
+
+        MoveHexByDir(nwHexX, nwHexY, int(player.Dir) - 1 < 0 ? 5 : player.Dir - 1, 1);
+        if (this.CanMoveCritter(player, nwHexX, nwHexY)) {
+            hexX = nwHexX;
+            hexY = nwHexY;
+            return true;
+        }
+
+        return false;
     }
 }
 
-class HotkeyWASD : HotkeyActionSUI
+class ActionWASD : HotkeyActionSUI
 {
     ModuleWASD@ Module;
     
-    HotkeyWASD(ModuleWASD@ module) {
+    ActionWASD(ModuleWASD@ module, string keyState) {
         @this.Module = module;
         super(module.SUI);
+
+        this.AddKeyState(keyState);
     }
 }
 
-final class SwitchEnabledHotkeyWASD : HotkeyWASD
+final class SwitchEnabledActionWASD : ActionWASD
 {
-    SwitchEnabledHotkeyWASD(ModuleWASD@ module) {
-        super(module);
-
-        this.AddKeyState("SPACE + Z");
+    SwitchEnabledActionWASD(ModuleWASD@ module, string keyState) {
+        super(module, keyState);
     }
 
-    void Run(KeyStateSUI@ keyState) override {
+    void Run(KeyStateEventSUI@ event, KeyStateSUI@ keyState) override {
         if (!this.IsDown) return;
 
         this.Module.IsEnabled = !this.Module.IsEnabled;
-        
+
         Message("WASD-раскладка " + (this.Module.IsEnabled ? "включена" : "отключена"));
+    }
+}
+
+class MoveActionWASD : ActionWASD 
+{
+    CritterCl@ Player;
+    uint16 HexX;
+    uint16 HexY;
+    bool IsRun;
+
+    MoveActionWASD(ModuleWASD@ module, string keyState, bool isRun) {
+        super(module, keyState);
+        this.IsRun = isRun;
+    }
+
+    void Run(KeyStateEventSUI@ event, KeyStateSUI@ keyState) override {
+        if (!this.IsDown) {
+            if (this.Module.CurrentAction is this && this.Module.CurrentAction.IsRun == this.IsRun) {
+                @this.Module.CurrentAction = null;
+            }
+            return;
+        }
+
+        if (this.Module.IsEnabled) {
+            event.StopProcessing = event.StopPropagation = true;
+            if (@this.Module.CurrentAction !is this) {
+                @this.Module.CurrentAction = this;
+            }
+            this.Continue();
+        }
+    }
+
+    // Continue movement
+    void Continue() {
+        @this.Player = GetChosen();
+        // Prevent from running on non-game screens
+        if (null is this.Player) return;
+
+        this.HexX = this.Player.HexX;
+        this.HexY = this.Player.HexY;
+    }
+}
+
+class VerticalMoveAction : MoveActionWASD
+{
+    bool IsNorth;
+
+    VerticalMoveAction(ModuleWASD@ module, string keyState, bool isRun) {
+        super(module, keyState, isRun);
+    }
+
+    void Continue() {
+        MoveActionWASD::Continue();
+
+        uint[] currentAction;
+        GetChosenActions(currentAction);
+
+        if (
+            this.Module.CurrentAction is this
+            && this.IsRun == this.Module.CurrentAction.IsRun
+            && currentAction.length >= 4
+            && currentAction[0] == 1
+        ) {
+            // Already moving that way
+            return;
+        }
+
+        this.Module.FindVerticalPath(this.Player, this.HexX, this.HexY, this.IsNorth);
+        this.Module.MoveCritter(this.Player, this.IsRun, this.HexX, this.HexY);
+    }
+}
+
+final class NorthMoveAction : VerticalMoveAction
+{
+    NorthMoveAction(ModuleWASD@ module, string keyState, bool isRun) {
+        super(module, keyState, isRun);
+        this.IsNorth = true;
+    }
+}
+
+final class SouthMoveAction : VerticalMoveAction
+{
+    SouthMoveAction(ModuleWASD@ module, string keyState, bool isRun) {
+        super(module, keyState, isRun);
+        this.IsNorth = false;
+    }
+}
+
+class HexagonalMoveAction : MoveActionWASD
+{
+    uint8 Dir;
+    uint  Steps;
+
+    HexagonalMoveAction(ModuleWASD@ module, string keyState, bool isRun) {
+        super(module, keyState, isRun);
+    }
+
+    void Continue() {
+        MoveActionWASD::Continue();
+        MoveHexByDir(this.HexX, this.HexY, this.Dir, this.Steps);
+        this.Module.MoveCritter(this.Player, this.IsRun, this.HexX, this.HexY);
+    }
+}
+
+class NorthEastMoveAction : HexagonalMoveAction 
+{
+    NorthEastMoveAction(ModuleWASD@ module, string keyState, bool isRun) {
+        super(module, keyState, isRun);
+        this.Dir = 0;
+        this.Steps = 1;
+    }
+}
+
+class EastMoveAction : HexagonalMoveAction 
+{
+    EastMoveAction(ModuleWASD@ module, string keyState, bool isRun) {
+        super(module, keyState, isRun);
+        this.Dir = 1;
+        this.Steps = 1;
+    }
+}
+
+class SouthEastMoveAction : HexagonalMoveAction 
+{
+    SouthEastMoveAction(ModuleWASD@ module, string keyState, bool isRun) {
+        super(module, keyState, isRun);
+        this.Dir = 2;
+        this.Steps = 1;
+    }
+}
+
+class SouthWestMoveAction : HexagonalMoveAction 
+{
+    SouthWestMoveAction(ModuleWASD@ module, string keyState, bool isRun) {
+        super(module, keyState, isRun);
+        this.Dir = 3;
+        this.Steps = 1;
+    }
+}
+
+class WestMoveAction : HexagonalMoveAction 
+{
+    WestMoveAction(ModuleWASD@ module, string keyState, bool isRun) {
+        super(module, keyState, isRun);
+        this.Dir = 4;
+        this.Steps = 1;
+    }
+}
+
+class NorthWestMoveAction : HexagonalMoveAction 
+{
+    NorthWestMoveAction(ModuleWASD@ module, string keyState, bool isRun) {
+        super(module, keyState, isRun);
+        this.Dir = 5;
+        this.Steps = 1;
     }
 }
