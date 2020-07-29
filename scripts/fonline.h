@@ -735,15 +735,16 @@ struct ProtoItem
     const uint   Ammo_DmgMult;
     const uint   Ammo_DmgDiv;
     // Other
-    const uint16 Food_Thirst;      // pm
-    const uint16 Food_Restore;     // pm
-    const uint   Food_Flags;       // pm
-	const uint16 Wait_Time_0;      // -> 324"
-	const uint16 Wait_Time_1;      // -> 326"
-	const uint16 Wait_Time_2;      // -> 328"
-	const uint16 Wait_Time_3;      // -> 330"
+    const uint16 Food_Thirst;       // pm
+    const uint16 Food_Restore;      // pm
+    const uint   Food_Flags;        // pm
+	const uint16 Wait_Time_0;       // -> 324"
+	const uint16 Wait_Time_1;       // -> 326"
+	const uint16 Wait_Time_2;       // -> 328"
+	const uint16 Wait_Time_3;       // -> 330"
 	const uint16 Item_UseAp;
-	const uint8  Partial_Item;     // -> 338 кусочки 
+	const uint8  Partial_Item;      // -> 338 кусочки 
+	const uint8  Fuel_Efficiency;	// -> 340 эффективность энергоресурса
     const uint8  UnusedEnd[ 164 ];  // SUKA
 
     // Type specific data
