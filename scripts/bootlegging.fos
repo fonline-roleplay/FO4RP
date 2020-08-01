@@ -27,22 +27,24 @@ const uint PIC_STILL_ANIM_ON = GetStrHash( "art\\items\\misc\\Still\\still_s_wor
 #define HB_POLUTION_LEVEL					Val7 	// кол-во загрязнения в браге
 #define HB_SPIRIT_LEVEL						Val9 	// Градус спирта в браге
 
-#define MAX_FUEL						( 10000 )	// Максимальный загруз топлива
-#define MAX_RAW_MATERIAL				( 15000 )	// Максимальный загруз браги
-#define MAX_TEMPRATURE					( 39500 )	// Максимальная температура до возгорания к
-#define	MAX_PRESSURE					 ( 4000 )	// Максимальное давление до взрыва
-#define MAX_PRODUCT						( 10000 )	// Максимальный выход
+#define MAX_FUEL					 ( 10000.0f )	// Максимальный загруз топлива
+#define MAX_RAW_MATERIAL			 ( 15000.0f )	// Максимальный загруз браги
+#define MAX_TEMPRATURE				 ( 39500.0f )	// Максимальная температура до возгорания к
+#define	MAX_PRESSURE				  ( 4000.0f )	// Максимальное давление до взрыва
+#define MAX_PRODUCT					 ( 10000.0f )	// Максимальный выход
 
-#define FIRE_BURNING_TIME		 REAL_SECOND( 1 ) 	// Время тика горения огня
-#define FUEL_BURN_AMOUNT				   ( 45 )	// Кол-во сжигаемого топлива
+#define FIRE_BURNING_TIME	  REAL_SECOND( 1.0f ) 	// Время тика горения огня
+#define FUEL_BURN_AMOUNT				( 45.0f )	// Кол-во сжигаемого топлива
 
 //Thermodynamics - export to separate module later
-#define THERM_HECHFS 					 ( 4650 ) 	// Вт/(м2*К) - коэффициент теплоотдачи от горячего флюида к стенке // heat exchange coefficient of hot fluid to surface
+#define THERM_HECHFS 				  ( 4650.0f ) 	// Вт/(м2*К) - коэффициент теплоотдачи от горячего флюида к стенке // heat exchange coefficient of hot fluid to surface
 #define THERM_HECSCF					 ( 9.6f ) 	// 9,6, Вт/(м2*К) - коэффициент теплоотдачи стенки к холодному флюиду // heat exchange coefficient of surface to cold fluid
 #define	THERM_STCC						( 52.5f ) 	// 52.5, Вт/(м*К) - коэффициент теплопроводности стенки // surface thermal conductivity coefficient
-#define	THERM_STILL_D_INNER				( 0.30f ) 	// d1, м - внутренний диаметр цилиндра.
-#define	THERM_STILL_D_OUTER				( 0.34f )	// d2, м - наружный диаметр цилиндра.  
-#define THERM_Tf2 						( 29500 )   // Tf2 = 295, К - температура холодного флюида. Окружающей среды. // cold fluid temprature
+#define	THERM_STILL_D_INNER				 ( 0.3f ) 	// d1, м - внутренний диаметр цилиндра.
+#define	THERM_STILL_D_OUTER				( 0.34f )	// d2, м - наружный диаметр цилиндра. 
+#define	THERM_STILL_HIGHT				 ( 1.0f )	// высота цилиндра. 
+#define L_RESIST 						( 100 * 0.31f )	// Линейное термическое сопротивление цилиндрической стенки
+#define ENVIROMENT_TEMPRATURE_K 	   ( 295.0f )   // Tf2 = 295, К - температура холодного флюида. Окружающей среды. // cold fluid temprature
 #define THERM_WATER_TSP 		  	  ( 4.1806f )   // с = 4,1806, кДж/кг К - теплоемкость воды // water thermal storage property
 
 //Still state
@@ -75,15 +77,19 @@ bool UseItemOnStill( Critter& cr, Item@ item, Item@ still ) //export
 		return true;
 	}
 	
-	uint16 itemPid = item.GetProtoId();
-	if( Igniters.find( itemPid ) != -1 ) {
+	if( hasItems( cr, Igniters ) ) {
+		
 		IgniteStill( cr, item, still );
-	} else if( Homebrew.find( itemPid ) != -1 ) {
+		
+	} else if( hasItems( cr, Homebrew ) ) {
+		
 		AddHomebrew( cr, item, still );
-	} else if( FireFuel.find( itemPid ) != -1 ) {
+		
+	} else if( hasItems( cr, FireFuel ) ) {
+		
 		FeedTheFire( cr, map, item, still );
+		
 	}
-
 	return true;
 }
 
@@ -106,19 +112,19 @@ bool IgniteStill( Critter& cr, Item& item, Item& target )
 			cr.Say( SAY_NETMSG, "|0xFFFF00 Вы сточили поджиг." );
 		}
 		target.STATE = STATE_WORKING_100;
-		_CritAnimateUse(cr);
+		_CritAnimateUse( cr );
 		cr.Say( SAY_EMOTE, "Разжигает огонь" );
 		target.PicMap = PIC_STILL_ANIM_ON;
 		setAnimState( target );
-		uint[] values = {target.Id};
-		target.CURRENT_TEMPRATURE = THERM_Tf2;
-		target.STORED_HEAT = target.CURRENT_TEMPRATURE * m(target) * THERM_WATER_TSP;
+		uint[] values = { target.Id };
+		target.STORED_HEAT = FloatToBits( 1 );
+		target.CURRENT_PRESSURE = FloatToBits( 1 );
 		target.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "e_StillBurn", values, true );
 	}
 	return true;
 }
 
-float m( Item& target )
+float Mass( Item& target )
 {
     float result = 0.09f; // масса воздуха в пустом баке на 15л // air mass in empty still
     if( target.CURRENT_RAW_MATERIAL > 0 ) {
@@ -127,109 +133,105 @@ float m( Item& target )
     return result;
 }
 
+float last_temp = 0;
+
 uint e_StillBurn( uint[]@ values )
 {
 	uint itemId = values[0];
 	Item@ target = GetItem( itemId );
 	
 	if( valid( target ) ) {
-		if( target.STATE > STATE_PREPARE && target.CURRENT_TEMPRATURE >= THERM_Tf2 ) {
-			uint16 hexX=0, hexY=0;
+		float System_heat = FloatFromBits( target.STORED_HEAT );
+		float M = Mass(target);
+		float T1 = FloatFromBits( target.CURRENT_TEMPRATURE );
+
+		if( target.STATE > STATE_PREPARE && System_heat >= 0.5f ) {
+			
+			uint16 hexX = 0, hexY = 0;
 			Map@ map = target.GetMapPosition( hexX, hexY );
 			map.PlaySound( "CHEMICAL.ACM", target.HexX, target.HexY, 5 );
 
 			//Valve level effects burning time
-			int valve_level = 0;
+			float valve_level = 0.0f;
 			switch( target.STATE ) {
 				case( STATE_WORKING_0 ):
-					valve_level = 0;
+					valve_level = 0.0f;
 					break;
 				case( STATE_WORKING_25 ):
-					valve_level = 25;
+					valve_level = 0.25f;
 					break;
 				case( STATE_WORKING_50 ):
-					valve_level = 50;
+					valve_level = 0.50f;
 					break;
 				case( STATE_WORKING_75 ):
-					valve_level = 75;
+					valve_level = 0.75f;
 					break;
 				case( STATE_WORKING_100 ):
-					valve_level = 100;
+					valve_level = 1.0f;
 					break;
 			}
-			//RL_Thermodynamics_start_here
+			//RL_Thermodynamics_start_here MAX_RAW_MATERIAL
 
-			/*float Q_burning = FUEL_BURN_AMOUNT * valve_level;   // Q-горения = q-горения*t-горения*M-задвижки, q-горения, кДж/с = 45 единиц игрового топлива / 39 секунд таймивента  горения = 1,15;
+			float Q_burning = FUEL_BURN_AMOUNT * valve_level; //const 45
 			
 			if( target.CURRENT_FUEL <= 0 ) {
 				Q_burning = 0;
 			}
 			
-            //float delta_time = 3;//Три секунды. FIRE_BURNING_TIME
-
-			// float heat_before = target.STORED_HEAT ;            
-            target.STORED_HEAT += Q_burning; // +4500 при 100 valve_level
-            // float heat_after = target.STORED_HEAT ;
-            // float heat_summ = sqrt( pow( heat_before - heat_after, 2 ) + pow( delta_time, 2 )  ); 
+			System_heat += Q_burning;
 			
-			// R = (1/(a1*d1)) + ((1/2*y)*(Ln(d2/d1))) + (1/(a2*d2)) - linear thermic resistance formula
-			float ti = 1.0 / ( THERM_HECHFS * THERM_STILL_D_INNER ); 										// (1/(a1*d1)) = 0.0007 0.0007;
-			float log_d = log( float( THERM_STILL_D_OUTER / THERM_STILL_D_INNER) );							// (Ln(d2/d1))) = 0.125 10.1251;
-			float tl = ( 1 / ( 2 * THERM_STCC ) ) * log_d; 													// (1/(2*y)*(Ln(d2/d1))) = 0.0012 0.0012;
-			float to = 1.0 / ( THERM_HECSCF * THERM_STILL_D_OUTER ); 										// (1/(a2*d2)) 0.3064 0.3064;
-			float R = ti + tl + to; 																		//  calculation == 0.31
+			float TSP = ( THERM_WATER_TSP * M );
 			
-			float M = m(target); // масса воздуха в пустом баке на 15л // air mass in empty still
+			float HOTTNESS = ( System_heat / TSP ) + ENVIROMENT_TEMPRATURE_K;
+	
+			float Q_loss = ( HOTTNESS / L_RESIST ) * 3.14f * THERM_STILL_HIGHT;
 			
-			// float TempK_before = target.CURRENT_TEMPRATURE ;            
-            // float TempK_after = target.CURRENT_TEMPRATURE;
-            // float TempK_summ = sqrt( pow( TempK_before - TempK_after, 2 ) + pow( delta_time, 2 )  ); 
+			System_heat -= Q_loss;
 			
-			float tmc = ( THERM_Tf2 - target.CURRENT_TEMPRATURE ) * M * THERM_WATER_TSP; 						    						// (Tf2*m*c)
-			float rmcl = 1.0f + ( ( R * M * THERM_WATER_TSP ) / ( 3.14f * 1.0f ) ); 						// (1 + (R*m*c/3,14*L)) where L = size of still, 1m
-			float Q_loss = ( target.STORED_HEAT + tmc ) / rmcl;												// calculation
+			target.STORED_HEAT = FloatToBits( System_heat );
 			
-			//target.STORED_HEAT -= Q_loss;
-
-           	float T2 = ( target.STORED_HEAT / ( M * THERM_WATER_TSP ) );
-			target.CURRENT_TEMPRATURE = T2;
-
-			//Log( R + " " + tf2mc + " " + t1mc + " " + rmcl + " " + heat_summ);
-			Log( target.CURRENT_TEMPRATURE * 0.01 + " == " + target.STORED_HEAT + " - " + Q_loss + "[ " + tmc + " / " + rmcl + "]" );
-				
-			target.CURRENT_FUEL -= FUEL_BURN_AMOUNT * valve_level / 100; */
+			float T2 = ( System_heat / TSP ) + ENVIROMENT_TEMPRATURE_K;
 			
-			target.CURRENT_TEMPRATURE += 500;
+			target.CURRENT_TEMPRATURE = FloatToBits( T2 );
 			
-			if( target.CURRENT_PRESSURE >= MAX_PRESSURE ) {
-				CreateTimeEvent( AFTER( REAL_SECOND( Random( 5, 20 ) ) ),"e_Explode", values, false );
+			if( FloatFromBits( target.CURRENT_PRESSURE ) >= MAX_PRESSURE ) {
+				CreateTimeEvent( AFTER( REAL_SECOND( Random( 5, 20 ) ) ), "e_Explode", values, true );
 			}
-			if( target.CURRENT_TEMPRATURE >= 37500 ) {
+
+			if( FloatFromBits( target.CURRENT_TEMPRATURE ) >= 375 ) {
 				Item@ steamFX = map.AddItem( target.HexX, target.HexY, PID_STILL_STEAM, 1 );
-				uint[] values = {steamFX.Id};
-				steamFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_steamFX", values, false );
+				uint[] values = { steamFX.Id };
+				steamFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_steamFX", values, true );
 			}
-			if( target.CURRENT_TEMPRATURE >= MAX_TEMPRATURE ) {
+
+			if( FloatFromBits( target.CURRENT_TEMPRATURE ) >= MAX_TEMPRATURE ) {
 				spawnFire( map, target.HexX, target.HexY );
 				GenerateFire( map, target.HexX, target.HexY, 1 );
 			}
-
+			
+			float Sys_ST = FloatFromBits( target.STORED_HEAT );
+			float Cur_temp = FloatFromBits( target.CURRENT_TEMPRATURE ) - 273.15;
+			
+			Log( "TSP: "+ TSP + ", Горение: " + Q_burning + ", Потери: " + Q_loss + ", Накопл Тепло: " + Sys_ST + ", Т-текущая: " + Cur_temp + " dT: " + ( Cur_temp - last_temp ) );
+			last_temp = Cur_temp;
+			
 			return FIRE_BURNING_TIME;
 		}
+		
 		target.STATE = STATE_PREPARE; // заменить на STATE_FINISH как только будет выделение спирта
 		ProtoItem@ proto = GetProtoItem( PID_STILL_S );
 		target.PicMap = proto.PicMap;
 		setAnimState( target );
 		target.EVENT = 0;
+		target.CURRENT_TEMPRATURE = 0;
 		target.STORED_HEAT = 0;
 		
 		uint16 hexX=0, hexY=0;
 		Map@ map = target.GetMapPosition( hexX, hexY );
 		Item@ fireFX = map.AddItem( target.HexX, target.HexY, PID_STEAM, 1 );
-		uint[] values = {fireFX.Id};
-		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ), "e_fireFX", values, false );
+		uint[] values = { fireFX.Id };
+		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ), "e_fireFX", values, true );
 		EraseTimeEvent( target.EVENT );
-
 	}
 	return 0;
 }
@@ -360,7 +362,7 @@ uint e_Explode( uint[]@ values )
 		Item@ fireFX = map.AddItem( hexX, hexY, PID_SMOKE, 1 );
 		
 		uint[] values = {fireFX.Id};
-		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", values, false );
+		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", values, true );
 		uint randomDebree = Random( 2,5 );
 		for( uint i = 0; i < randomDebree; i++ )
 		{
@@ -462,11 +464,11 @@ string@ GenerateDescription(Item& still) {
 				info += "Полностью открыта.";
 				break;
 		}
-
-		float temprature = still.CURRENT_TEMPRATURE / 100.0 - 273.15;
+		
+		float temprature = FloatFromBits( still.CURRENT_TEMPRATURE ) - 273.15;
 		info += "\n" "Температура: " + temprature + " градусов C.";
 
-		float pressure = still.CURRENT_PRESSURE / 1000.0;
+		float pressure = FloatFromBits( still.CURRENT_PRESSURE );
 		info += "\n" "Давление: " + pressure + " бар.";
 	}
 
