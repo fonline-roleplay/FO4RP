@@ -1,0 +1,112 @@
+// Author: Anuri
+
+#include "_utils.fos"
+#include "_ltp.fos"
+#include "STAT_MODS_H.fos"
+
+import void AffectPoison( Critter& cr, int value ) from "poison";
+import void AffectRadiation( Critter& cr, int value ) from "radiation";
+import void SetDrug( Critter& cr, uint16 drugPid ) from "drugs";
+
+#define POLUTION_LEVEL							Val7 	// кол-во загрязнения
+#define HOMEBREW_TYPE							Val8	// Тип получившейся браги	
+#define SPIRIT_LEVEL							Val9 	// Градус спирта в браге
+
+bool drinkHomebrew( Critter& cr, Item& item ) //export to main
+{
+	if( cr.IsDead() ) { return false;
+	}
+	
+	if( !valid( cr ) ) { return false;
+	}
+	
+	cr.AddItem( PID_BOTTLE_GLASS, 1 );
+	Map@ map = cr.GetMap();	
+	map.PlaySound( "water.wav", cr.HexX, cr.HexY, 3 );
+	
+	cr.ParamBase[ ST_POISONING_LEVEL ] += item.POLUTION_LEVEL;
+	cr.ParamBase[ ST_RADIATION_LEVEL ] -= item.SPIRIT_LEVEL;
+	
+	cr.Say( SAY_EMOTE, "Пьет брагу" );
+	
+	if( item.POLUTION_LEVEL > 0 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы получили" + " " + item.POLUTION_LEVEL + " пунктов отравления." );
+	}
+	
+	cr.Say( SAY_NETMSG, "|0xFFFF00 Вы потеряли" + " " + item.SPIRIT_LEVEL + " рад." );
+
+	_SubItem( item , 1 );
+	return true;
+}
+
+void ProccessFood( Critter& cr, Critter& target, Item& item )
+{
+	if( cr.Id != target.Id && !target.IsDead() && !target.IsKnockout() && target.StatBase[ ST_CURRENT_HP ] > 0 )
+	{
+		cr.Say( SAY_NETMSG, "Цель сопротивляется." );
+		SayLog( cr, crInfo( cr ) + " безуспешно пытается применить " + itemDesc( item ) + " на " + crInfo( target ) + "." );
+		return;
+	}
+	
+    uint flag = item.Proto.Food_Flags;
+	
+	uint pid = item.GetProtoId();
+	
+	if( find_glassed_drinks( item ) ) { // search.fos
+		cr.AddItem( PID_BOTTLE_GLASS, 1 );
+	}
+	
+	if ( pid == PID_NUKA_COLA ) cr.AddItem( PID_REAL_BOTTLE_CAPS, 1 );
+	if ( pid == PID_CANNED_MEAT ) cr.AddItem( PID_BANKA_MEH, 1 );
+	if ( pid == PID_lavshtin ) cr.AddItem( PID_BANKA_MEH, 1 );
+	if ( pid == PID_DinkiDa ) cr.AddItem( PID_BANKA_MEH, 1 );
+	
+    if( flag != 0 )
+    {
+        if( FLAG( FOOD_KNOCKOUT, flag ) )
+        {
+           target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 100, target.HexX, target.HexY ); // Кнок от грибов на 100 од.
+        }
+        if( FLAG( FOOD_POISONED, flag ) )
+        {
+            AffectPoison( target, Random( 25, 55 ) );
+        }
+        if( FLAG( FOOD_RADIOACTIVE, flag ) )
+        {
+            AffectRadiation( target, Random( 20, 55 ) );
+        }
+    }
+}
+
+//import bool ConsumeMeal( Critter& cr, uint water_pid, uint amount ) from "food";
+bool ConsumeMeal( Critter& cr, uint water_pid, uint amount )//exported
+{
+	ProtoItem@ proto = GetProtoItem( water_pid );
+	if( !valid( proto ) ) return testInfo( cr, "drinkWater: !valid pid " + water_pid );
+	cr.Say( SAY_EMOTE, "Пьет воду" );
+	cr.StatBase[ ST_HUNGER ] += amount * proto.Food_Restore;
+	cr.StatBase[ ST_THIRST ] += amount * proto.Food_Thrist;
+	cr.StatBase[ ST_THIRST ] -= amount * proto.Food_Restore / 3;//TODO: Проверить, нужно-ли это вообще в нашей логике потребления пищи.
+	
+	affectFoodEffects( cr, water_pid, amount );
+	
+	SetDrug( cr, water_pid );
+	
+	return true;
+}
+
+bool affectFoodEffects( Critter& cr, uint food_pid, uint amount = 1 )
+{
+	ProtoItem@ proto = GetProtoItem( food_pid );
+	if( !valid( proto ) ) return testInfo( cr, "affectFoodEffects: !valid pid " + food_pid );
+
+	uint flag = proto.Food_Flags;
+    if( flag == 0 ) return true;
+
+	if( FLAG( FOOD_POISONED, flag ) )
+		AffectPoison( cr, Random( 25, 55 ) * amount );
+	if( FLAG( FOOD_RADIOACTIVE, flag ) )
+		AffectRadiation( cr, Random( 20, 55 ) * amount );
+	
+	return true;
+}
