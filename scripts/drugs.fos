@@ -485,6 +485,7 @@ int GetDrugTableIndex( uint16 drugPid )
 
 //—делал двойные отступы что бы подчеркнуть потребность вынести куски логики в отдельные самодостаточные ф-ии. 
 //‘ункци€ полностью дублирует логику uint ProcessDrug( Critter& cr, uint16 drugPid, uint& rate ), но не вли€ет на статы целевого криттера.
+//~run drugs checkDrugsEffects crID drugPID stage
 void checkDrugsEffects( Critter& cr, int crId, int drugPID, int stage )
 {
 	if( crId == 0 && drugPID == 0 && stage == 0 )
@@ -633,7 +634,11 @@ uint ProcessDrug( Critter& cr, uint16 drugPid, uint& rate )
     {
         for( uint i = 0; i < 4; i++ )
         {
-            int stat = DrugEffects[ index + TABLE_STAT( i ) ];
+			
+			string stat_before = "";
+			string stat_after = "";
+			
+			int stat = DrugEffects[ index + TABLE_STAT( i ) ];
             int amount = DrugEffects[ index + TABLE_AMOUNT( i, stage ) ];
             if( i == 1 && DrugEffects[ index + TABLE_STAT( 0 ) ] == -2 )
                 amount = Random( DrugEffects[ index + TABLE_AMOUNT( 0, stage ) ], amount );                                              // Take first
@@ -642,19 +647,43 @@ uint ProcessDrug( Critter& cr, uint16 drugPid, uint& rate )
 			if (stat <= STAT_END) {
             	int statVal = cr.Stat[ stat ];
             	if( stat < STAT_EXT_BEGIN )
+				{
+					stat_before = cr.Stat[ stat ] + "/" + cr.StatBase[ stat ];
+					
              	  	cr.StatBase[ STAT_EXT_BEGIN + stat ] += amount;
+					
+					stat_after = cr.Stat[ stat ] + "/" + cr.StatBase[ stat ];
+				}
             	else if( stat == ST_CURRENT_HP )
             	{
+					stat_before = cr.Stat[ ST_CURRENT_HP ] + "/" + cr.Stat[ ST_MAX_LIFE ];
+					
                 	cr.StatBase[ ST_CURRENT_HP ] = CLAMP( statVal + amount, -9999, cr.Stat[ ST_MAX_LIFE ] );
                 	if( amount < 0 && cr.Stat[ ST_CURRENT_HP ] < DeathBehaviour( cr ).get() )
                     	cr.ToDead( Random( 0, 1 ) == 0 ? ANIM2_DEAD_FRONT : ANIM2_DEAD_BACK, null );
+					
+					stat_after = cr.Stat[ ST_CURRENT_HP ] + "/" + cr.Stat[ ST_MAX_LIFE ];
             	}
            	 	else if( stat == ST_POISONING_LEVEL )
-               		AffectPoison( cr, amount );                                        // cr.SetStat(ST_POISONING_LEVEL,CLAMP(statVal+amount,0,2000));
+				{
+					stat_before = cr.StatBase[ ST_POISONING_LEVEL ];
+               		
+					AffectPoison( cr, amount );                                        // cr.SetStat(ST_POISONING_LEVEL,CLAMP(statVal+amount,0,2000));
+					
+					stat_after = cr.StatBase[ ST_POISONING_LEVEL ];
+				}
             	else if( stat == ST_RADIATION_LEVEL )
+				{
+					stat_before = cr.StatBase[ ST_RADIATION_LEVEL ];
+					
                		AffectRadiation( cr, amount );                                     // cr.SetStat(ST_RADIATION_LEVEL,CLAMP(statVal+amount,0,2000));
+					
+					stat_after = cr.StatBase[ ST_RADIATION_LEVEL ];
+				}
             	else if( stat == ST_BLOOD_TOXIC )
 				{
+					SayLog( cr, crInfo( cr ) + " получает +" + amount + " интоксикации." );
+					
 					cr.StatBase[ ST_BLOOD_TOXIC ] += amount;
 					if( cr.GetTimeEvents( CTE_BLOOD_TOXIC, null, null, null ) == 0 )
 						cr.AddTimeEvent( "critter_status@cte_blood_toxic", 0, CTE_BLOOD_TOXIC, 0 );
@@ -679,10 +708,21 @@ uint ProcessDrug( Critter& cr, uint16 drugPid, uint& rate )
             	else if( statVal < 0 )
                 	cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DRUG_STAT_LOSE, "$name @msg game " + STR_PARAM_NAME( stat ) + "@$value" + ( -statVal ) );
             } else { //Instant Parameter change hotfix
+				stat_before = cr.Param[ stat ] + "/" + cr.ParamBase[ stat ];
+			
             	cr.ParamBase [stat] += DrugEffects [index + TABLE_AMOUNT (i, 0)];
+				
 				if( cr.ParamBase[BP_BLOOD_LOSS] < 0 )
 					cr.ParamBase[BP_BLOOD_LOSS] = 0; //Ёх, это ж каждому параметру геттеры-сеттеры писать надо...
+
+				stat_after = cr.Param[ stat ] + "/" + cr.ParamBase[ stat ];			
             }
+
+			string@ paramName_str = GetGameMsgStr( STR_PARAM_NAME( stat ) );
+			string paramName = valid( paramName_str ) ? paramName_str : ( "параметру #" + stat );
+			
+			string action = amount >= 0 ? "получает +" : "тер€ет ";
+			SayLog( cr, crInfo( cr ) + " " + action + amount + " к " + paramName + ", итого было: " + stat_before + " стало: " + stat_after );
         }
 
         int addict = DrugEffects[ index + TABLE_DRUG_ADDICT ];
@@ -698,13 +738,20 @@ uint ProcessDrug( Critter& cr, uint16 drugPid, uint& rate )
             if( FLAG( flags, DRUG_EFFECT_DIV2_ADDICTION ) )
                 addictProc /= 2;
             if( stage == 0 && addict >= 0 && Random( 1, 100 ) <= addictProc )
+			{
                 cr.AddictionBase[ addict ] = 1;
+				SayLog( cr, crInfo( cr ) + " получает зависимость от " + itemName( drugPid ) + "." );
+			}
+			
+			SayLog( cr, crInfo( cr ) + " ловит кайф от " + itemName( drugPid ) + "." );
         }
         else if( stage == 1 )     // To normalize
         {
             duration = DrugEffects[ index + TABLE_DURATION( stage ) ];
             if( FLAG( flags, DRUG_EFFECT_DIV2_DURATION ) )
                 duration /= 2;
+			
+			SayLog( cr, crInfo( cr ) + " ловит откаты от " + itemName( drugPid ) + "." );
         }
         else if( stage == 2 && addict >= 0 && cr.Addiction[ addict ] != 0 ) // To addiction
         {
@@ -722,18 +769,25 @@ uint ProcessDrug( Critter& cr, uint16 drugPid, uint& rate )
             }
             if( not isPresent )
                 duration = DrugEffects[ index + TABLE_DURATION( stage ) ];
+			
+			SayLog( cr, crInfo( cr ) + " начинает страдать от привыкани€ к " + itemName( drugPid ) + "." );
         }
         else if( stage == 3 )     // To end of addiction
         {
             duration = DrugEffects[ index + TABLE_DURATION( stage ) ];
             if( FLAG( flags, DRUG_EFFECT_DIV2_WITHDRAWAL ) )
                 duration /= 2;
+
+			SayLog( cr, crInfo( cr ) + " перестаЄт страдать от привыкани€ к " + itemName( drugPid ) + "." );
         }
         else if( stage == 4 )     // End of addiction
         {
             cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DRUG_ADDICTION_END );
             if( addict >= 0 && cr.Addiction[ addict ] != 0 )
+			{
                 cr.AddictionBase[ addict ] = 0;
+				SayLog( cr, crInfo( cr ) + " перебарывает зависимость от " + itemName( drugPid ) + "." );
+			}
         }
     }
 
@@ -781,8 +835,21 @@ void DropDrug( Critter& cr, uint16 drugPid, uint stage )
             int amount = DrugEffects[ index + TABLE_AMOUNT( i, stage + ( stage == 1 ? -1 : 0 ) ) ]; // Turn
             if( stage == 1 )
                 amount = -amount;
-            if( stat < STAT_EXT_BEGIN )
+			
+			if( stat < STAT_EXT_BEGIN )
+			{
+				string stat_before = cr.Stat[ stat ] + "/" + cr.StatBase[ stat ];
+				
                 cr.StatBase[ STAT_EXT_BEGIN + stat ] += amount;
+			
+				string stat_after = cr.Stat[ stat ] + "/" + cr.StatBase[ stat ];
+				
+				string@ paramName_str = GetGameMsgStr( STR_PARAM_NAME( stat ) );
+				string paramName = valid( paramName_str ) ? paramName_str : ( "параметру #" + stat );
+				
+				string action = amount >= 0 ? "получа€ +" : "тер€€ ";
+				SayLog( cr, crInfo( cr ) + " сбрасывает эффект от " + itemName( drugPid ) + " (стади€ #" + stage + "), " + action + amount + " от " + paramName + ". Ѕыло: " + stat_before + " стало: " + stat_after );
+			}
         }
     }
 }
