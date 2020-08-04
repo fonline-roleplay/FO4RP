@@ -10,6 +10,7 @@ import void SetDrug( Critter& cr, uint16 drugPid ) from "drugs";
 import void AffectParalysis( Critter& cr, int value ) from "paralysis";
 
 #define REMAINING_USES							Val0 	// Кол-во оставшихся использований
+#define EXTRA_WEIGHT							Val2	// Дополнительный вес жидкости
 #define POLUTION_LEVEL							Val7 	// Кол-во загрязнения
 #define TOXIN_LEVEL								Val8 	// Уровень токсичности
 #define SPIRIT_LEVEL							Val9 	// Градус спирта
@@ -41,12 +42,14 @@ void ProccessDrink( Critter& cr, Critter& target, Item& item )
 	
     uint flag = item.Proto.Food_Flags;
 	
+	CheckSpiritLevel( target, item );
     CheckFoodFlags( target, flag );
 	CheckToxins( target, item );
 	ApplyFoodEffects( target, item );
 	
 	if( item.Proto.Partial_Item > 0 && item.REMAINING_USES > 1 ) {
 		item.REMAINING_USES --;
+		item.EXTRA_WEIGHT = item.REMAINING_USES * 100;
 		item.Update();
 		
 		Emote( target, item );
@@ -136,42 +139,59 @@ void ApplyFoodEffects( Critter& target, Item& item )
     uint8  ThirstModifier = item.Proto.Food_Thrist;
 	target.StatBase[ ST_HUNGER ] += hungerModifier; //* SATURATION_SIMPLIFIER; пока отключено для напитков
 	target.StatBase[ ST_THIRST ] += ThirstModifier; //* SATURATION_SIMPLIFIER;
+	target.ParamBase[ ST_POISONING_LEVEL ] += item.POLUTION_LEVEL;
+	if( target.ParamBase[ ST_RADIATION_LEVEL ] > 0 ) {
+		target.ParamBase[ ST_RADIATION_LEVEL ] -= item.SPIRIT_LEVEL;
+	}
 }
 
 void Emote( Critter& target, Item& consumed )
 {
 	target.Say( SAY_EMOTE_ON_HEAD, "Пьет из бутылки" );
 
+	string consumedTaste = "";
+	string radLevel = "";
+	string poisonLevel = "";
+	
+	if( target.ParamBase[ ST_RADIATION_LEVEL ] > 0 && consumed.SPIRIT_LEVEL != 0 ) {
+		int amount = consumed.SPIRIT_LEVEL;
+		radLevel = " Вы потеряли: " + "|0xFFFF00 " + amount + " |0x3CF800 рад";
+	}
+	
+	if( consumed.POLUTION_LEVEL != 0 ) {
+		int poison = consumed.POLUTION_LEVEL;
+		poisonLevel = " Вы получили: " + "|0xFFFF00 " + poison + " |0x3CF800 пунктов отравления.";
+	}
+	
 	uint16 consumedPid = consumed.GetProtoId();
-	string consumedTaste = " " + GetMsgStr( 0, TEXTMSG_ITEM, consumedPid * 100 );
-	target.Say( SAY_NETMSG, "Вы употребили: " + "|0xFFFF00" + consumedTaste ); 	
+	consumedTaste = " " + GetMsgStr( 0, TEXTMSG_ITEM, consumedPid * 100 );
+	
+	target.Say( SAY_NETMSG, "Вы употребили: " + "|0xFFFF00" + consumedTaste + "|0x3CF800 . " + radLevel  + "|0x3CF800 . " + poisonLevel ); 	
+	
+
 }
 
-bool drinkHomebrew( Critter& cr, Item& item ) //export to main
+void CheckSpiritLevel( Critter& target, Item& consumed )
 {
-	if( cr.IsDead() ) { return false;
+	if( consumed.SPIRIT_LEVEL != 0 ) { return;
 	}
 	
-	if( !valid( cr ) ) { return false;
+	const uint8 item_Subtype = consumed.Proto.Item_Subtype;
+	switch( item_Subtype )
+	{
+		case( ITEM_SUBTYPE_DRUG_ALCOHOL_LIGHT ):
+			consumed.SPIRIT_LEVEL = 1;
+			break;
+		case( ITEM_SUBTYPE_DRUG_ALCOHOL_MEDIUM ):
+			consumed.SPIRIT_LEVEL = 3;
+			break;
+		case( ITEM_SUBTYPE_DRUG_ALCOHOL_HEAVY ):
+			consumed.SPIRIT_LEVEL = 8;
+			break;
+		default:
+			consumed.SPIRIT_LEVEL = 0;
+			break;
 	}
-	
-	cr.AddItem( PID_BOTTLE_GLASS, 1 );
-	Map@ map = cr.GetMap();	
-	map.PlaySound( "water.wav", cr.HexX, cr.HexY, 3 );
-	
-	cr.ParamBase[ ST_POISONING_LEVEL ] += item.POLUTION_LEVEL;
-	cr.ParamBase[ ST_RADIATION_LEVEL ] -= item.SPIRIT_LEVEL;
-	
-	cr.Say( SAY_EMOTE, "Пьет брагу" );
-	
-	if( item.POLUTION_LEVEL > 0 ) {
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы получили" + " " + item.POLUTION_LEVEL + " пунктов отравления." );
-	}
-	
-	cr.Say( SAY_NETMSG, "|0xFFFF00 Вы потеряли" + " " + item.SPIRIT_LEVEL + " рад." );
-
-	_SubItem( item , 1 );
-	return true;
 }
 
 bool ltp_install_inited = false;
@@ -186,7 +206,7 @@ bool start_consuming( Critter& cr, Item& consumed )
 	if(!ltp_install_inited) 
 		ltp_install_init();
 	
-	cr.ParamBase[ CR_IS_USING ] = 1;
+	//cr.ParamBase[ CR_IS_USING ] = 1;
 	//cr.SetAnims( COND_LIFE, 0, ANIM2_DRINKING ); - не хватает технологии выбора фрейма
 	
 	StartProcess( cr, LTP_CONSUMING, 0, 0, consumed.Id, 0 );
@@ -204,7 +224,7 @@ uint process_consuming( Critter@ cr, int& param0, int& param1, int& param2 )
     {
 		param0++;
 		
-		if( param0 > 3 )
+		if( param0 > 4 )
 		{
 					
 			/*cr.ParamBase[ CR_IS_USING ] = 0;
@@ -216,7 +236,7 @@ uint process_consuming( Critter@ cr, int& param0, int& param1, int& param2 )
 		
 		return 1000;
 	}
-	cr.ParamBase[ CR_IS_USING ] = 0;
+	//cr.ParamBase[ CR_IS_USING ] = 0;
 	/*if(cr.Anim2Life == ANIM2_DRINKING ) {		
 		cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
 	}*/
