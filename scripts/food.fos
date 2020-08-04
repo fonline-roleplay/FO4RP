@@ -7,10 +7,145 @@
 import void AffectPoison( Critter& cr, int value ) from "poison";
 import void AffectRadiation( Critter& cr, int value ) from "radiation";
 import void SetDrug( Critter& cr, uint16 drugPid ) from "drugs";
+import void AffectParalysis( Critter& cr, int value ) from "paralysis";
 
-#define POLUTION_LEVEL							Val7 	// кол-во загрязнения
-#define HOMEBREW_TYPE							Val8	// Тип получившейся браги	
-#define SPIRIT_LEVEL							Val9 	// Градус спирта в браге
+#define REMAINING_USES							Val0 	// Кол-во оставшихся использований
+#define POLUTION_LEVEL							Val7 	// Кол-во загрязнения
+#define TOXIN_LEVEL								Val8 	// Уровень токсичности
+#define SPIRIT_LEVEL							Val9 	// Градус спирта
+
+const string[] ConsumptionSounds = {"water.wav"}; //"gulp1.ogg"
+
+void ProccessFood( Critter& cr, Critter& target, Item& item )
+{
+	if( cr.Id != target.Id && !target.IsDead() && !target.IsKnockout() && target.StatBase[ ST_CURRENT_HP ] > 0 )
+	{
+		cr.Say( SAY_NETMSG, "Цель сопротивляется." );
+		SayLog( cr, crInfo( cr ) + " безуспешно пытается применить " + itemDesc( item ) + " на " + crInfo( target ) + "." );
+		return;
+	}
+	
+	uint flag = item.Proto.Food_Flags;
+	
+    CheckFoodFlags( target, flag );
+}
+
+void ProccessDrink( Critter& cr, Critter& target, Item& item )
+{
+	if( cr.Id != target.Id && !target.IsDead() && !target.IsKnockout() && target.StatBase[ ST_CURRENT_HP ] > 0 )
+	{
+		cr.Say( SAY_NETMSG, "Цель сопротивляется." );
+		SayLog( cr, crInfo( cr ) + " безуспешно пытается применить " + itemDesc( item ) + " на " + crInfo( target ) + "." );
+		return;
+	}
+	
+    uint flag = item.Proto.Food_Flags;
+	
+    CheckFoodFlags( target, flag );
+	CheckToxins( target, item );
+	ApplyFoodEffects( target, item );
+	
+	if( item.Proto.Partial_Item > 0 && item.REMAINING_USES > 1 ) {
+		item.REMAINING_USES --;
+		item.Update();
+		
+		Emote( target, item );
+		start_consuming( target, item );
+		
+		return;
+	}
+	
+	if( find_opened_drinks( item ) ) { // search.fos
+		cr.AddItem( PID_BOTTLE_GLASS, 1 );
+	}
+	
+	Emote( target, item );
+	start_consuming( target, item );
+	
+	_SubItem( item, 1);
+}
+
+//import bool ConsumeMeal( Critter& cr, uint water_pid, uint amount ) from "food";
+bool ConsumeMeal( Critter& cr, uint water_pid, uint amount )//exported
+{
+	ProtoItem@ proto = GetProtoItem( water_pid );
+	if( !valid( proto ) ) return testInfo( cr, "drinkWater: !valid pid " + water_pid );
+	cr.Say( SAY_EMOTE, "Пьет воду" );
+	cr.StatBase[ ST_HUNGER ] += amount * proto.Food_Restore;
+	cr.StatBase[ ST_THIRST ] += amount * proto.Food_Thrist;
+	cr.StatBase[ ST_THIRST ] -= amount * proto.Food_Restore / 3;//TODO: Проверить, нужно-ли это вообще в нашей логике потребления пищи.
+	
+	affectFoodEffects( cr, water_pid, amount );
+	
+	SetDrug( cr, water_pid );
+	
+	return true;
+}
+
+bool affectFoodEffects( Critter& cr, uint food_pid, uint amount = 1 )
+{
+	ProtoItem@ proto = GetProtoItem( food_pid );
+	if( !valid( proto ) ) return testInfo( cr, "affectFoodEffects: !valid pid " + food_pid );
+
+	uint flag = proto.Food_Flags;
+    CheckFoodFlags( cr, flag );
+	
+	return true;
+}
+
+void CheckFoodFlags( Critter& target, uint flag )
+{
+	if( flag != 0 )
+    {
+        if( FLAG( FOOD_KNOCKOUT, flag ) ) {
+           target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 100, target.HexX, target.HexY );
+        }
+        
+		if( FLAG( FOOD_POISONED, flag ) ) {
+            AffectPoison( target, Random( 25, 55 ) );
+        }
+		
+        if( FLAG( FOOD_RADIOACTIVE, flag ) ) {
+            AffectRadiation( target, Random( 20, 55 ) );
+        }
+    }
+}
+
+void CheckToxins( Critter& target, Item& item )
+{
+	if( item.TOXIN_LEVEL >= 100 ) {
+		
+		if( target.Param[ QST_GAMEMODE ] == GAME_TEST ) {
+			target.Say( SAY_NETMSG, "Вы чувствуете нейротоксин в употребляемом продукте. Его сила ~" + item.TOXIN_LEVEL + "." );
+		}
+		
+		target.ParamBase[CR_VAL9] = 1; //Быстрый режим паралича.
+		AffectParalysis( target, item.TOXIN_LEVEL );
+		
+	} else {
+		
+		if( target.Param[ QST_GAMEMODE ] == GAME_TEST ) {
+			target.Say( SAY_NETMSG, "Употребляемый продукт недостаточно вреден, что бы подействовать как нейротоксин. Его сила ~" + item.TOXIN_LEVEL + "." );
+		}
+	}
+}
+
+void ApplyFoodEffects( Critter& target, Item& item )
+{
+	uint8  hungerModifier = item.Proto.Food_Restore;
+    uint8  ThirstModifier = item.Proto.Food_Thrist;
+	target.StatBase[ ST_HUNGER ] += hungerModifier; //* SATURATION_SIMPLIFIER; пока отключено для напитков
+	target.StatBase[ ST_THIRST ] += ThirstModifier; //* SATURATION_SIMPLIFIER;
+}
+
+void Emote( Critter& target, Item& consumed )
+{
+	target.Say( SAY_EMOTE_ON_HEAD, "Пьет из бутылки" );
+
+	uint16 consumedPid = consumed.GetProtoId();
+	string consumedTaste = " " + GetMsgStr( 0, TEXTMSG_ITEM, consumedPid * 100 );
+	target.Say( SAY_NETMSG, "Вы употребили: " + "|0xFFFF00" + consumedTaste ); 	
+}
 
 bool drinkHomebrew( Critter& cr, Item& item ) //export to main
 {
@@ -39,74 +174,59 @@ bool drinkHomebrew( Critter& cr, Item& item ) //export to main
 	return true;
 }
 
-void ProccessFood( Critter& cr, Critter& target, Item& item )
+bool ltp_install_inited = false;
+void ltp_install_init()
 {
-	if( cr.Id != target.Id && !target.IsDead() && !target.IsKnockout() && target.StatBase[ ST_CURRENT_HP ] > 0 )
-	{
-		cr.Say( SAY_NETMSG, "Цель сопротивляется." );
-		SayLog( cr, crInfo( cr ) + " безуспешно пытается применить " + itemDesc( item ) + " на " + crInfo( target ) + "." );
-		return;
-	}
+	LTPREG( LTP_CONSUMING, process_consuming )
+	ltp_install_inited = true;
+}
+
+bool start_consuming( Critter& cr, Item& consumed )
+{
+	if(!ltp_install_inited) 
+		ltp_install_init();
 	
-    uint flag = item.Proto.Food_Flags;
+	cr.ParamBase[ CR_IS_USING ] = 1;
+	//cr.SetAnims( COND_LIFE, 0, ANIM2_DRINKING ); - не хватает технологии выбора фрейма
 	
-	uint pid = item.GetProtoId();
+	StartProcess( cr, LTP_CONSUMING, 0, 0, consumed.Id, 0 );
+	uint[] values = { cr.Id };
+	CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ConsumptionSound", values, true);
+	return true;
+}
+
+uint process_consuming( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+	LTPROCESS( cr, param0, LTP_CONSUMING )
 	
-	if( find_glassed_drinks( item ) ) { // search.fos
-		cr.AddItem( PID_BOTTLE_GLASS, 1 );
-	}
-	
-	if ( pid == PID_NUKA_COLA ) cr.AddItem( PID_REAL_BOTTLE_CAPS, 1 );
-	if ( pid == PID_CANNED_MEAT ) cr.AddItem( PID_BANKA_MEH, 1 );
-	if ( pid == PID_lavshtin ) cr.AddItem( PID_BANKA_MEH, 1 );
-	if ( pid == PID_DinkiDa ) cr.AddItem( PID_BANKA_MEH, 1 );
-	
-    if( flag != 0 )
+  	Item@ consumed = GetItem( param2 );
+	if( valid( consumed ) )
     {
-        if( FLAG( FOOD_KNOCKOUT, flag ) )
-        {
-           target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 100, target.HexX, target.HexY ); // Кнок от грибов на 100 од.
-        }
-        if( FLAG( FOOD_POISONED, flag ) )
-        {
-            AffectPoison( target, Random( 25, 55 ) );
-        }
-        if( FLAG( FOOD_RADIOACTIVE, flag ) )
-        {
-            AffectRadiation( target, Random( 20, 55 ) );
-        }
-    }
+		param0++;
+		
+		if( param0 > 3 )
+		{
+					
+			/*cr.ParamBase[ CR_IS_USING ] = 0;
+			if(cr.Anim2Life == ANIM2_DRINKING) {		
+				cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+			}*/
+			return 0;
+		}
+		
+		return 1000;
+	}
+	cr.ParamBase[ CR_IS_USING ] = 0;
+	/*if(cr.Anim2Life == ANIM2_DRINKING ) {		
+		cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+	}*/
+	return 0;
 }
 
-//import bool ConsumeMeal( Critter& cr, uint water_pid, uint amount ) from "food";
-bool ConsumeMeal( Critter& cr, uint water_pid, uint amount )//exported
+uint e_ConsumptionSound( uint[]@ values )
 {
-	ProtoItem@ proto = GetProtoItem( water_pid );
-	if( !valid( proto ) ) return testInfo( cr, "drinkWater: !valid pid " + water_pid );
-	cr.Say( SAY_EMOTE, "Пьет воду" );
-	cr.StatBase[ ST_HUNGER ] += amount * proto.Food_Restore;
-	cr.StatBase[ ST_THIRST ] += amount * proto.Food_Thrist;
-	cr.StatBase[ ST_THIRST ] -= amount * proto.Food_Restore / 3;//TODO: Проверить, нужно-ли это вообще в нашей логике потребления пищи.
-	
-	affectFoodEffects( cr, water_pid, amount );
-	
-	SetDrug( cr, water_pid );
-	
-	return true;
-}
-
-bool affectFoodEffects( Critter& cr, uint food_pid, uint amount = 1 )
-{
-	ProtoItem@ proto = GetProtoItem( food_pid );
-	if( !valid( proto ) ) return testInfo( cr, "affectFoodEffects: !valid pid " + food_pid );
-
-	uint flag = proto.Food_Flags;
-    if( flag == 0 ) return true;
-
-	if( FLAG( FOOD_POISONED, flag ) )
-		AffectPoison( cr, Random( 25, 55 ) * amount );
-	if( FLAG( FOOD_RADIOACTIVE, flag ) )
-		AffectRadiation( cr, Random( 20, 55 ) * amount );
-	
-	return true;
+	Critter@ cr = GetCritter(values[0]);
+	Map@ map = cr.GetMap();
+	map.PlaySound( ConsumptionSounds[ Random( 0, ConsumptionSounds.length() -1 ) ], cr.HexX, cr.HexY, 5 );
+	return 0;
 }
