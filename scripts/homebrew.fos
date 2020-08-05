@@ -31,8 +31,9 @@ const string[] SoundNames = { "Slicing1.ogg", "Slicing2.ogg", "Slicing3.ogg", "S
 #define SUGAR_FERMENTING_AMOUNT		           ( 10 )	// 10 грамм
 #define FERMENTING_MODIFIER					   ( 60 )   // 60 % от сахара == спирт
 
-#define USES									Val0 	// Кол-во глотков в бутылке браги
+#define REMAINING_USES							Val0 	// Кол-во глотков в бутылке браги
 #define BOTTLE_MARKER							Val1	// Маркер свежезаспавненой бутылки с неполной брагой
+#define EXTRA_WEIGHT							Val2	// Дополнительный вес жидкости
 
 const uint16[] glass_bottled_drinks 	= { PID_CLEAN_WATER2, PID_GLASS_BOTTLE_FULL, PID_GLASS_BOTTLE_DIRTY_FULL, PID_ATOM_COLA_SEA, PID_ATOM_COLA, PID_ROOTBEER, PID_BEER_LIGHT, PID_BEER_DARK, 
 											PID_TURBO_COLA, PID_NUKA_COLA, PID_ATOM_COLA_CHERRY, PID_ATOM_COLA_CRAFT, PID_BEER, PID_GAMMA_GULP_BEER, PID_ATOMIC_COCTAIL, PID_GROG, PID_BLOODMARRY,
@@ -741,14 +742,17 @@ bool start_pouring( Critter& cr )
 	Map@ map = cr.GetMap();		
 	Item@ target = map.GetItem(cr.StatBase[ST_VAR7]);
 	if( valid( target ) ) {
-		if( ( target.LIQUID_LEVEL / 500 ) < 1 ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Недостаточно жидкости для перелива." ); return false;
+		if( ( target.LIQUID_LEVEL / 100 ) < 1 ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Недостаточно жидкости для перелива." ); return false;
 		}
-		if( cr.CountItem( PID_BOTTLE_GLASS ) < 1 ) { cr.Say( SAY_NETMSG, "|0xFFFF00 У вас нет подходящей тары." ); return false;
+		
+		if( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, PID_HOMEBREW_PRT ) ) { cr.Say( SAY_NETMSG, "|0xFFFF00 У вас нет подходящей тары." ); return false;
 		}
+		
 		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
 		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
 		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);	
+		
 		StartProcess( cr, LTP_POURING, 0, 0, target.Id, action_pause );
 		return true;
 	}
@@ -761,33 +765,78 @@ uint process_pouring( Critter@ cr, int& param0, int& param1, int& param2 )
 	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
 	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
   	Item@ target = GetItem( param2 );
+	
   	if( valid( target ) ) {
-      	if( cr.CountItem( PID_BOTTLE_GLASS ) == 0 || ( target.LIQUID_LEVEL / 100 ) < 1 ) {
-			string TXT = cr.CountItem( PID_BOTTLE_GLASS ) == 0 ? "У Вас закончилась тара." : "Вы разлили всю брагу по бутылкам.";
+		
+      	if( ( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, PID_HOMEBREW_PRT ) ) || ( target.LIQUID_LEVEL / 100 ) < 1 ) {
+			string TXT = ( !hasItem( cr, PID_BOTTLE_GLASS ) || !hasItem( cr, PID_HOMEBREW_PRT ) ) ? "У Вас закончилась тара." : "Вы разлили всю брагу по бутылкам.";
 			cr.Say( SAY_NETMSG, "|0xFFFF00" + TXT );
 			return 0;
 		}
+		
 		_CritAnimateUse(cr);
-		uint autoemote = Random( 0, 4 );
-		if( autoemote == 4 ) { cr.Say( SAY_EMOTE, "Наполняет бутылку" );
+		uint autoemote = Random( 1, 10 );
+		if( autoemote == 10 ) { cr.Say( SAY_EMOTE, "Наполняет бутылку" );
 		}
-		Map@ map = cr.GetMap();
-		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
-		target.LIQUID_LEVEL = target.LIQUID_LEVEL - 100;
-		Item@ bottle = cr.GetItem( PID_BOTTLE_GLASS, -1 );
-		_SubItem( bottle , 1 );
-		Item@ homebrew = cr.AddItem( PID_HOMEBREW_PRT, 1 );
-		homebrew.HOMEBREW_TYPE = target.HOMEBREW_TYPE;
-		homebrew.SPIRIT_LEVEL = target.SPIRIT_LEVEL;
-		homebrew.POLUTION_LEVEL = target.POLUTION_LEVEL;
-		if(target.STACH_LEVEL >= 100) {
-			target.AddItem( PID_SHIT_BIG, 1, 0 );
-			target.STACH_LEVEL -= 100;
+		
+		if( hasItem( cr, PID_HOMEBREW_PRT ) ) {
+			
+			Item@ homebrewPrt = getItem( cr, PID_HOMEBREW_PRT );
+			if( homebrewPrt.REMAINING_USES < homebrewPrt.Proto.Partial_Item ) {
+				
+				target.LIQUID_LEVEL -= 100;
+				homebrewPrt.REMAINING_USES ++;
+				homebrewPrt.EXTRA_WEIGHT = homebrewPrt.REMAINING_USES * 100;
+
+				Map@ map = cr.GetMap();
+				map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+				
+				homebrewPrt.HOMEBREW_TYPE = target.HOMEBREW_TYPE;
+				homebrewPrt.SPIRIT_LEVEL = target.SPIRIT_LEVEL;
+				homebrewPrt.POLUTION_LEVEL = target.POLUTION_LEVEL;
+				
+				homebrewPrt.Update();
+				
+			} else {
+			
+				Item@ homebrew = cr.AddItem( PID_HOMEBREW, 1 );
+				
+				homebrew.HOMEBREW_TYPE = homebrewPrt.HOMEBREW_TYPE;
+				homebrew.SPIRIT_LEVEL = homebrewPrt.SPIRIT_LEVEL;
+				homebrew.POLUTION_LEVEL = homebrewPrt.POLUTION_LEVEL;
+				
+				_SubItem( homebrewPrt , 1 );
+				
+				homebrew.Update();
+			}
+
+			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
+			
+			return action_pause;
+			
 		} else {
-			target.AddItem( PID_SHIT_SMALL, 1, 0 );
-			target.STACH_LEVEL = 0;
+		
+			Item@ bottle = cr.GetItem( PID_BOTTLE_GLASS, -1 );
+			_SubItem( bottle , 1 );
+		
+			Item@ homebrewPrt = cr.AddItem( PID_HOMEBREW_PRT, 1 );
+		
+			target.LIQUID_LEVEL -= 100;
+			homebrewPrt.REMAINING_USES ++;
+			homebrewPrt.EXTRA_WEIGHT = homebrewPrt.REMAINING_USES * 100;
+
+			Map@ map = cr.GetMap();
+			map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+				
+			homebrewPrt.HOMEBREW_TYPE = target.HOMEBREW_TYPE;
+			homebrewPrt.SPIRIT_LEVEL = target.SPIRIT_LEVEL;
+			homebrewPrt.POLUTION_LEVEL = target.POLUTION_LEVEL;
+			
+			homebrewPrt.Update();
 		}
+		
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
+		
 		return action_pause;
     }
 	return 0;
