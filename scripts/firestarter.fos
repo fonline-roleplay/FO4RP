@@ -8,14 +8,18 @@ import void ExplodeEx( Map& map, uint16 hexX, uint16 hexY, uint16 effectPid, uin
 import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attackerId ) from "combat"; // Export
 import bool LockInPlace( Critter& cr, Item& targetItem ) from "main";
 
-#define STATE					Val0 								// Статус 0 - потухло, 1 - горит
-#define MAX_FUEL 				Val1 								// Макс допустимый заряд (верхний передел) 
-#define CURRENT_FUEL			Val2 								// Текущий заряд
-#define EVENT 					Val3 								// Для записи тайм-ивента горения костров и бочек, дыма и пара
-#define FIRE_STR 				Val5 								// для горения дикого огня
-#define FIRE_BURNING_TIME		REAL_SECOND( 39 ) 					// Время тика горения рукотворного огня
-#define WILD_FIRE_BURNING_TIME 	REAL_SECOND( Random( 4, 10 ) )  	// Время тика горения дикого огня
-#define EXPLOSION_TIMEOUT		Val6 								// Для записи тайм-ивента взрыва
+#define STATE						Val0 								// Статус 0 - потухло, 1 - горит
+#define MAX_FUEL 					Val1 								// Макс допустимый заряд (верхний передел) 
+#define CURRENT_FUEL				Val2 								// Текущий заряд
+#define EVENT 						Val3 								// Для записи тайм-ивента горения костров и бочек, дыма и пара
+#define FIRE_STR 					Val5 								// для горения дикого огня
+#define FIRE_BURNING_TIME			REAL_SECOND( 39 ) 					// Время тика горения рукотворного огня
+#define WILD_FIRE_BURNING_TIME 		REAL_SECOND( Random( 4, 10 ) )  	// Время тика горения дикого огня
+#define EXPLOSION_TIMEOUT			Val6 								// Для записи тайм-ивента взрыва
+
+#define REMAINING_USES 				Val0								// Кол-во юзов у воды / фляги
+#define DNA							Val1								// Proto содержимого фляги
+#define EXTRA_WEIGHT				Val2								// доп вес
 
 const uint PIC_BARREL_ANIM_ON = GetStrHash( "art\\items\\firebarrel\\firebarrel.fofrm" );
 const uint PIC_BARREL_FULL = GetStrHash( "art\\scenery\\BARREL09.frm" );
@@ -37,7 +41,7 @@ bool FireCheck( Critter& cr, Item@ item, Item@ target ) //exported - проверки на
     }
 
 	uint16 itemPid = item.GetProtoId();
-    if( FireFuel.find( itemPid ) == -1 && Igniters.find( itemPid ) == -1 && WaterSource.find( itemPid ) == -1) {
+    if( FireFuel.find( itemPid ) == -1 && Igniters.find( itemPid ) == -1 && WaterSource.find( itemPid ) == -1 && Flasks.find( itemPid ) == -1 ) {
 		BurnIt( cr, item, target );
 		return true;
 	}
@@ -47,7 +51,7 @@ bool FireCheck( Critter& cr, Item@ item, Item@ target ) //exported - проверки на
 		return true;
 	}
 	
-	if( WaterSource.find( itemPid ) != -1  ) {
+	if( WaterSource.find( itemPid ) != -1 || Flasks.find( itemPid ) != -1 )  {
 		Extinguish( cr, item, target );
 		return true;
 	}
@@ -113,27 +117,52 @@ bool Extinguish( Critter& cr, Item& item, Item& target )
     if( !valid( map ) ) { return false;
     }
 	
-	if( target.STATE == 0 && target.CURRENT_FUEL == 0)
-	{
-		_SubItem( item, 1 );
+	uint16 itemPid = item.GetProtoId();
+	if( WaterSource.find( itemPid ) != -1 ) {
 		
-		cr.AddItem( PID_BOTTLE_GLASS, 1 );
-		cr.Say( SAY_EMOTE, "Выливает воду" );
-		map.PlaySound( "splash.ogg", target.HexX, target.HexY, 5 );
-		cr.Say( SAY_NETMSG, "|0xFF0000 Вы попусту вылили воду, разве так стоит обращаться со столь ценной жидкостью?" );
-		return false;
+		if( item.REMAINING_USES == 1 ) {
+			
+			_SubItem( item, 1 );
+			cr.AddItem( PID_BOTTLE_GLASS, 1 );
+		
+		} else {
+			item.REMAINING_USES --;
+			item.EXTRA_WEIGHT = item.REMAINING_USES * 100;
+		}
 	}
 	
-	if( target.STATE == 0 && target.CURRENT_FUEL > 0)
-	{
-		_SubItem( item, 1 );
-
-		cr.AddItem( PID_BOTTLE_GLASS, 1 );
+	if( Flasks.find( itemPid ) != -1 && item.REMAINING_USES > 0 ) {	
+		
+		item.REMAINING_USES --;
+		item.EXTRA_WEIGHT = item.REMAINING_USES * 100;
+		
+		if( item.REMAINING_USES == 0 ) { 
+		
+			item.DNA = 0;
+			item.EXTRA_WEIGHT = 0;
+			
+			if( itemPid == PID_FLASK_FULL ) {
+				
+				item.ChangeProto( PID_FLASKB );
+			}
+		}
+	} else if( item.REMAINING_USES == 0 ){ cr.Say( SAY_NETMSG, "|0xFFFF00 Фляга пуста." ); return false;
+	}
+	
+	item.Update();
+		
+	if( target.STATE == 0 && target.CURRENT_FUEL >= 0 ) {
+		
 		cr.Say( SAY_EMOTE, "Выливает воду" );
-
 		map.PlaySound( "splash.ogg", target.HexX, target.HexY, 5 );
-		cr.Say( SAY_NETMSG, "|0xFF0000 Вы залили водой топливо! Теперь часть непригодна для розжига..." );
-		target.CURRENT_FUEL = MAX( target.CURRENT_FUEL - Random( 1800, 5400 ), 0 );
+		
+		if( target.CURRENT_FUEL == 0 ) {
+			cr.Say( SAY_NETMSG, "|0xFF0000 Вы попусту вылили воду, разве так стоит обращаться со столь ценной жидкостью?" );
+		} else {
+			cr.Say( SAY_NETMSG, "|0xFF0000 Вы залили водой топливо! Теперь часть непригодна для розжига..." );
+			target.CURRENT_FUEL = MAX( target.CURRENT_FUEL - Random( 1800, 5400 ), 0 );
+		}
+		
 		return false;
 	}
 	
@@ -143,45 +172,36 @@ bool Extinguish( Critter& cr, Item& item, Item& target )
 		target.CURRENT_FUEL = MAX( target.CURRENT_FUEL - Random( 1800, 5400 ), 0 );
 		cr.Say( SAY_EMOTE, "Тушит пламя" );
 		map.PlaySound( "STEAM1.ACM", target.HexX, target.HexY, 5 );
-		if( target.GetProtoId() == PID_FIREBARREL )
-		{
-			if( target.CURRENT_FUEL > 0 )
-			{
+		
+		if( target.GetProtoId() == PID_FIREBARREL ) {
+
+			if( target.CURRENT_FUEL > 0 ) {
 				target.PicMap = PIC_BARREL_FULL;
-			}	
-			else
-			{
+				
+			} else {
 				ProtoItem@ proto = GetProtoItem( PID_FIREBARREL );
 				target.PicMap = proto.PicMap;
 			}
-		}
-		
-		else if( target.GetProtoId() == PID_BRAZIER )
-		{
+			
+		} else if( target.GetProtoId() == PID_BRAZIER ) {
 			ProtoItem@ proto = GetProtoItem( PID_BRAZIER );
 			target.PicMap = proto.PicMap;
-		}	
 		
-		else if( WildFires.find( target.GetProtoId() ) != -1 )
-		{
+		} else if( WildFires.find( target.GetProtoId() ) != -1 ) {
 			target.ChangeProto( Ashes[ Random( 0, Ashes.length() - 1 ) ] );
-		}
 		
-		else 
-		{
+		} else {
 			target.ChangeProto( PID_FIREPLACE_OFF );
 			ProtoItem@ proto = GetProtoItem( PID_FIREPLACE_OFF );
 			target.PicMap = proto.PicMap;
 		}
 
-		_SubItem( item, 1 );
-
-		cr.AddItem( PID_BOTTLE_GLASS, 1 );
-		
 		EraseTimeEvent( target.EVENT );
 		target.EVENT = 0;
 		setAnimState( target );
+		
 		Item@ fireFX = map.AddItem( target.HexX, target.HexY, PID_STEAM, 1 );
+		
 		uint[] values = {fireFX.Id};
 		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", values, true );
 	}
