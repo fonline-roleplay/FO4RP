@@ -1,4 +1,5 @@
 #include "_utils.fos"
+#include "_ltp.fos"
 
 import void AffectRadiation( Critter& cr, int value ) from "radiation";
 import void AffectPoison( Critter& cr, int value ) from "poison";
@@ -61,8 +62,10 @@ void go( Critter& cr, int, int, int )
 	cr.AddItem( PID_CABBAGE_SEED, 5 );
 	cr.AddItem( PID_CORN_SEED, 	  5 );
 	cr.AddItem( PID_SHOVEL, 1 );
-	cr.AddItem( PID_BOTTLE_FULL, 20 );
+	cr.AddItem( PID_GLASS_BOTTLE_FULL, 20 );
 	cr.AddItem( PID_SHIT_SMALL, 20 );
+	
+	cr.ChangeCrType( CRTYPE_FARMER_UGLY );
 }
 
 void _InitShit(Item& item, bool firstTime)
@@ -321,8 +324,8 @@ void _InitShit(Item& item, bool firstTime)
 			"Информация о растении:\n" 
 			+ "\nСтадия роста: " + stage
 			+ "\nУрожайность: " + item.PLANT_GAIN, 
-				"Поли" + ( item.WATERING < 1 ? "ть" : "то" ),
-				"Удобр" + ( item.FERTILITY < 1 ? "ить" : "ено" ),
+				"Поли" + ( item.WATERING < 5 ? "ть" : "то" ),
+				"Удобр" + ( item.FERTILITY < 5 ? "ить" : "ено" ),
 				"Собрать" };
 		DIALOG_MENU( cr, data );
 		
@@ -340,7 +343,7 @@ void _InitShit(Item& item, bool firstTime)
 		
 		switch( answerI )
 		{
-			case( 0 ): Watering( cr, plant, null ); break;
+			case( 0 ): Watering( cr, plant, null ); return;
 			case( 1 ): Fertilize( cr, plant );		break;
 			case( 2 ): AskRemove( cr, plant.Id ); 	return;
 			default: break;
@@ -398,121 +401,87 @@ void _InitShit(Item& item, bool firstTime)
 		MoveItem( plant, plant.GetCount(), cr );
 		return true;
 	}
+
 #endif
 
 #ifndef __PLANT_WATERING
 	#define __PLANT_WATERING
 	
+	bool ltp_install_inited = false;
+	void ltp_install_init()
+	{
+		LTPREG( LTP_POURING, process_pouring )
+		ltp_install_inited = true;
+	}
+
+	bool start_pouring( Critter& cr, Item& plant, Item@ usedItem, bool TMI = true )
+	{
+		if(!ltp_install_inited) 
+			ltp_install_init();
+		
+		int used_id = valid( usedItem ) ? usedItem.Id : 0;
+		StartProcess( cr, LTP_POURING, 0, used_id, plant.Id, 250 );//TODO: передать отсюда ещё и TMI
+		
+		///NOTE: Анури - звуки сюда.
+		// uint[] values = { cr.Id };
+		// CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ConsumptionSound", values, true);
+		return true;
+	}
+
+	uint process_pouring( Critter@ cr, int& param0, int& param1, int& param2 )
+	{
+		LTPROCESS( cr, param0, LTP_POURING )
+		
+		Item@ plant = GetItem( param2 );
+		Item@ usedItem = param1 != 0 ? GetItem( param1 ) : null;
+
+		param0--;
+			
+		if( param0 < 0 )
+		{
+			bool TMI = true;//TODO: передать сюда ещё и TMI
+			if( !pouring_iteration( cr, plant, usedItem, TMI ) )
+				return 0;
+			
+			param1 = 0; //Что бы стакаемые закупоренные ёмкости не тратились одна-за-одной.
+			param0 = Random( 0, 2 ) + Random( 0, 2 );
+		}
+
+		return 250;
+	}
+	
+	bool pouring_iteration( Critter& cr, Item& plant, Item@ usedItem, bool TMI = true )
+	{		
+		if( !valid( usedItem ) )
+		{
+			Item@[] open_bottles = getItems( cr, glass_bottles[2] );
+			@usedItem = open_bottles.length() > 0 ? open_bottles[0] : null;
+			if( !valid( usedItem ) )
+			{
+				Item@[] closed_bottles = getItems( cr, glass_bottles[1] );
+				@usedItem = closed_bottles.length() > 0 ? closed_bottles[0] : null;
+			}
+			if( !valid( usedItem ) )
+				return inform( cr, "Вам нечем полить растение.", false, TMI );
+		}
+
+		if( plant.WATERING >= 5 )
+			return inform( cr, "Растение полито.", false, TMI );
+		
+		if( !SpillOut( usedItem, 1 ) )
+			return inform( cr, "Вы не смогли нормально полить растение. " + itemDesc( usedItem ), false, TMI );		
+		
+		plant.WATERING++;
+		
+		Map@ map = cr.GetMap();	
+		map.PlaySound( "splash.ogg", cr.HexX, cr.HexY, 3 );
+		
+		return action( cr, "Поливает растение" );
+	}
+	
 	bool Watering( Critter& cr, Item& plant, Item@ usedItem, bool TMI = true )
 	{
-		InitWaterSourceList();	
-		return WaterSources.watering( cr, plant, usedItem, TMI );
-	}
-	
-	WaterSourceList@ WaterSources;
-	void InitWaterSourceList()
-	{
-		if( valid( WaterSources ) ) return;
-		
-		@WaterSources = CreateWaterSourceList( "Источники воды" )
-		//  .add( PID_полный, PID_пустой )
-			.add( PID_GLASS_BOTTLE_FULL, PID_BOTTLE_GLASS )
-			.add( PID_GLASS_BOTTLE_DIRTY_FULL, PID_BOTTLE_GLASS )
-		;
-	}
-	
-	class WaterSource
-	{
-		//uint power; //TODO: Различная ценность/сила источников воды. Или можно сделать логику, по которой вода не тратится сразу вся за 1 юз.
-		uint pidFull;
-		uint pidEmpty;
-		
-		WaterSource( uint pidFull, uint pidEmpty )
-		{
-			this.pidFull = pidFull;
-			this.pidEmpty = pidEmpty;
-		}
-		
-		bool use( Critter& cr )
-		{
-			if( cr.CountItem( pidFull ) < 1 ) return false;
-			
-			cr.DeleteItem( pidFull, 1 );
-			cr.AddItem( pidEmpty, 1 );
-			
-			return true;
-		}
-		
-		bool isSource( Item@ source )
-		{
-			if( !valid( source ) ) return false;
-			
-			return source.GetProtoId() == pidFull;
-		}
-		
-		bool watering( Critter& cr, Item@ plant )
-		{
-			if( !valid(plant) || !use( cr ) ) return false;
-			
-			plant.WATERING++;
-			
-			Map@ map = cr.GetMap();	
-			map.PlaySound( "splash.ogg", cr.HexX, cr.HexY, 3 );
-			return action( cr, "Поливает растение" );
-		}
-	}
-
-	WaterSourceList@ CreateWaterSourceList( string name )
-	{
-		return WaterSourceList( name );	
-	}
-
-	class WaterSourceList
-	{
-		string name;
-		WaterSource[] list;
-		
-		WaterSourceList( string name )
-		{
-			this.name = name;
-		}
-		
-		WaterSourceList@ add( uint pidFull, uint pidEmpty )
-		{
-			return this.add( WaterSource( pidFull, pidEmpty ) );
-		}
-
-		WaterSourceList@ add( WaterSource@ item )
-		{
-			list.insertLast( item );
-			return this;
-		}
-		
-		bool watering( Critter& cr, Item@ plant, Item@ item, bool TMI = true )
-		{
-			if( !valid( item ) )
-				return watering( cr, plant );
-			
-			for( uint i = 0; i < list.length(); i++ )
-				if( list[i].isSource( item ) )
-				{
-					if( list[i].watering( cr, plant ) )
-						return true;
-					else
-						break;
-				}
-				
-			return inform( cr, "У вас не вышло нормально полить растение.", false, TMI );
-		}
-		
-		bool watering( Critter& cr, Item@ plant, bool TMI = true )
-		{
-			for( uint i = 0; i < list.length(); i++ )
-				if( list[i].watering( cr, plant ) )
-					return true;
-			
-			return inform( cr, "Вы не смогли полить растение.", false, TMI );
-		}
+		return start_pouring( cr, plant, usedItem, TMI );
 	}
 #endif
 
