@@ -2,6 +2,8 @@
 // powermagic
 
 #include "_utils.fos"
+#include "_ltp.fos"
+#include "STAT_MODS_H.fos"
 
 import void DropBleed( Critter& cr ) from "critter_status";
 import void DropToxic( Critter& cr ) from "critter_status";
@@ -13,25 +15,20 @@ import void RottenFood( Map@ map ) from "rotting";
 import void RottenFood( Critter& cr ) from "rotting";
 
 import void Cleaning( Critter& player, uint soap_pid, int water_source ) from "main";
-import bool ConsumeMeal( Critter& cr, uint water_pid, uint amount ) from "food";
+import void ProccessDrink( Critter& cr, Critter& target, Item& item ) from "food";
 
-/* в _itempid.fos
-#define PID_OBJECT_WATERPUMP    ( 1300 )
-#define PID_OBJECT_WATTS        ( 1303 )
-#define PID_OBJECT_AIRLOCK      ( 1302 )
-#define PID_OBJECT_DOC          ( 1304 )
-#define PID_OBJECT_LIGHT        ( 1305 )
-*/
-
-#define Switch Val2
-#define Indicator Val3
-#define MissingPart Val4
-#define Repair Val5
-#define Research Val6
-#define Multiplier Val7
+#define Switch 									Val2
+#define REMAINING_CHARGE					 	Val3
+#define MissingPart 							Val4
+#define Repair 									Val5
+#define Research 								Val6
+#define Multiplier 								Val7
 
 #define DATA_POWER	            ( 24 )
 #define DATA_DYSPNEA            ( 25 )
+
+#define REMAINING_USES							Val0 	// Кол-во оставшихся использований
+#define EXTRA_WEIGHT							Val2	// Дополнительный вес жидкости
 
 void WaterPumpInit( Item& item, bool firstTime )
 {
@@ -39,8 +36,6 @@ void WaterPumpInit( Item& item, bool firstTime )
     item.SetEvent( ITEM_EVENT_USE_ON_ME, "_WaterPumpOnMe" );
 }
 
-const uint[] bottlePid = { PID_BOTTLE_GLASS };
-const uint[] bottleFull = { PID_GLASS_BOTTLE_FULL };
 const uint[] ALLamapPids = { MAP_SUTTER_CENTER_DN, MAP_SUTTER_CENTER_DN_2, MAP_PHOENIX_DN, MAP_PHOENIX_DN, MAP_MARIP_1, MAP_MARIP_2, MAP_MARIP_3, MAP_MARIP_4};
 const uint[] Phoenix_mapPids = { /*MAP_PHOENIX_DN */ };
 const uint[] mapPids = { 
@@ -77,7 +72,7 @@ int getPowerValue( Critter& cr )
 
 void WaterpumpMenu( Critter& cr, Item& item )
 {
-	string state = ( item.Switch > 0 ? "в" : "вы" ) + "ключена, индикатор показывает " + item.Indicator;
+	string state = ( item.Switch > 0 ? "в" : "вы" ) + "ключена, индикатор показывает " + item.REMAINING_CHARGE;
 	
 	bool isBroken = false;
 	
@@ -156,7 +151,7 @@ void answer_WaterpumpMenu( Critter& cr, uint answerI, string& answerS )
 		return;
 	}
 	
-	if( item.Indicator < 1 )
+	if( item.REMAINING_CHARGE < 1 )
 	{
 		cr.Say( SAY_NETMSG, "Воды больше нет." );
 		return;
@@ -164,19 +159,27 @@ void answer_WaterpumpMenu( Critter& cr, uint answerI, string& answerS )
 	
 	if( answerI == 1 )
 	{
-		collectWater( item, cr, null );
+		cr.ParamBase[ CR_VAL0 ] = item.Id;
+		start_pouring( cr );
 		return;
 	}
-	
-	item.Indicator--;
-		
+
 	switch( answerI )
 	{
-		case(2): ConsumeMeal( cr, PID_GLASS_BOTTLE_FULL, 1 ); break;
+		case(2): 
+		{
+			Item@ consumedDrink = cr.AddItem( PID_GLASS_BOTTLE_FULL_PRT, 1 );
+			consumedDrink.REMAINING_USES = 2;
+			ProccessDrink( cr, cr, consumedDrink );
+	
+			_SubItem( consumedDrink, 1 );
+			break;
+		}
 		case(3): Cleaning( cr, 0, -1 );	break;
 	}
 	
 	WaterpumpMenu( cr, item );
+	item.REMAINING_CHARGE --;
 }
 
 void setAnimState( Item& item, bool state )
@@ -191,13 +194,9 @@ void setAnimState( Item& item, bool state )
 		UNSETFLAG(item.Flags, ITEM_SHOW_ANIM);
 		SETFLAG(item.Flags, ITEM_SHOW_ANIM_EXT);
 	}
-	//Это костыль, т.к. иначе на стороне клиента не обновлялось состояние анимации.
+
 	item.Update();
 	item.Animate(0,0);
-	/*SETFLAG( item.Flags, ITEM_HIDDEN );
-	item.Update();
-	uint[] values = { item.Id };
-	CreateTimeEvent( __FullSecond + 1, "e_ChangeAnims", values, true );*/
 }
 
 void switchWaterpump( Critter& cr, Item& item )
@@ -223,7 +222,7 @@ void switchWaterpump( Critter& cr, Item& item )
 
 void waterpumpInfo( Critter& cr, Item& item )
 {
-	string state = ( item.Switch > 0 ? "в" : "вы" ) + "ключена, индикатор показывает " + item.Indicator;
+	string state = ( item.Switch > 0 ? "в" : "вы" ) + "ключена, индикатор показывает " + item.REMAINING_CHARGE;
 	cr.Say( SAY_NETMSG, "Помпа " + state + "." );
 
 	check_science( item, cr );
@@ -241,53 +240,147 @@ bool _WaterPumpSkill( Item& item, Critter& cr, int skill )
 	return true;
 }
 
-bool collectWater( Item& item, Critter& cr, Item@ bottle )
+bool _WaterPumpOnMe( Item& item, Critter& cr, Item@ usedItem )
 {
-	if( !valid( bottle ) )
-	{
-		@bottle = _CritGetItemHand( cr );
-		if( !valid( bottle ) ) 
-			return testInfo( cr, "Возьмите предмет в руки!" );
-	}
-
-	int8 index = bottlePid.find( bottle.GetProtoId() );
-
-    if( index == -1 )
-	{
-		check_parts( item, cr, bottle );
-		return true;
-	}
-
-	if( item.Indicator < 1 )
-	{
-		cr.Say( SAY_NETMSG, "Воды больше нет." );
-		return true;
-	}
-	
-	if( item.Switch < 1 )
-	{
-		cr.Say( SAY_NETMSG, "Помпа отключена. Включите ее сначала." );
-		return true;
-	}
-	
-	if( getPowerValue(cr) <= 0 )
-	{
-		cr.Say( SAY_NETMSG, "Энергия отключена. Включите генератор." );
-		return true;
-	}
-	
-	_SubItem( bottle, 1 );
-	cr.AddItem( bottleFull[index], 1 );
-	cr.Say( SAY_EMOTE, "набирает воду" );
-	item.Indicator--; 
-	
+	cr.ParamBase[ CR_VAL0 ] = item.Id;
+	start_pouring( cr );
 	return true;
 }
 
-bool _WaterPumpOnMe( Item& item, Critter& cr, Item@ usedItem )
+bool ltp_inited = false;
+void ltp_init()
 {
-	collectWater( item, cr, usedItem );
-	return true;
+	LTPREG( LTP_POURING, process_pouring )
+	ltp_inited = true;
+}
+
+bool start_pouring( Critter& cr )
+{
+	if(!ltp_inited) { 
+		ltp_init();
+	}
+	
+	Map@ map = cr.GetMap();		
+	Item@ target = GetItem( cr.ParamBase[ CR_VAL0 ] );
+	
+	if( valid( target ) ) {
+		
+		if( target.REMAINING_CHARGE < 1 ) {
+			cr.Say( SAY_NETMSG, "|0xFFFF00 Воды больше нет." );
+			return false;
+		}
+	
+		if( target.Switch < 1 ) {
+			cr.Say( SAY_NETMSG, "|0xFFFF00 Помпа отключена. Включите ее сначала." );
+			return false;
+		}
+	
+		if( getPowerValue(cr) <= 0 ) {
+			cr.Say( SAY_NETMSG, "|0xFFFF00 Энергия отключена. Включите генератор." );
+			return false;
+		}
+		
+		if( !hasItem( cr, PID_BOTTLE_GLASS, SLOT_HAND1 ) && !hasItem( cr, PID_GLASS_BOTTLE_FULL_PRT, SLOT_HAND1 ) ) { cr.Say( SAY_NETMSG, "|0xFFFF00 У вас нет подходящей тары в руках." ); return false;
+		}
+		
+		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);	
+		
+		StartProcess( cr, LTP_POURING, 0, 0, target.Id, action_pause );
+		return true;
+	}
+	return false;
+}
+
+uint process_pouring( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_POURING )
+	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+  	Item@ target = GetItem( param2 );
+	
+  	if( valid( target ) ) {
+		
+      	if( ( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, PID_GLASS_BOTTLE_FULL_PRT ) ) || target.REMAINING_CHARGE < 1 ) {
+			string TXT = ( !hasItem( cr, PID_BOTTLE_GLASS ) || !hasItem( cr, PID_GLASS_BOTTLE_FULL_PRT ) ) ? " У Вас закончилась тара." : " Вы разлили всю воду по бутылкам.";
+			cr.Say( SAY_NETMSG, "|0xFFFF00" + TXT );
+			return 0;
+		}
+		
+		_CritAnimateUse(cr);
+		uint autoemote = Random( 1, 10 );
+		if( autoemote == 10 ) { cr.Say( SAY_EMOTE, "Наполняет бутылку" );
+		}
+		
+		if( hasItem( cr, PID_GLASS_BOTTLE_FULL_PRT ) ) {
+			
+			Item@ waterBottlePrt = getItem( cr, PID_GLASS_BOTTLE_FULL_PRT );
+			if( waterBottlePrt.REMAINING_USES < waterBottlePrt.Proto.Partial_Item ) {
+				
+				target.REMAINING_CHARGE --;
+				waterBottlePrt.REMAINING_USES ++;
+				waterBottlePrt.EXTRA_WEIGHT = waterBottlePrt.REMAINING_USES * 100;
+
+				Map@ map = cr.GetMap();
+				map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+								
+				waterBottlePrt.Update();
+				
+			} else {
+			
+				Item@ waterBottle = cr.AddItem( PID_GLASS_BOTTLE_FULL, 1 );
+				
+				_SubItem( waterBottlePrt , 1 );
+				
+				cr.Say( SAY_NETMSG, "|0xFFFF00 Вы полностью наполнили бутылку водой" );
+				
+				waterBottle.Update();
+			}
+
+			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
+			
+			return action_pause;
+			
+		} else {
+		
+			Item@ bottle = cr.GetItem( PID_BOTTLE_GLASS, -1 );
+			_SubItem( bottle , 1 );
+		
+			Item@ waterBottlePrt = cr.AddItem( PID_GLASS_BOTTLE_FULL_PRT, 1 );
+			
+			Item@ hands = cr.GetItem( 0, SLOT_HAND1 );
+			if( valid( hands ) ) {
+				cr.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
+			}
+			
+			cr.MoveItem( waterBottlePrt.Id, waterBottlePrt.GetCount(), SLOT_HAND1 );
+		
+			target.REMAINING_CHARGE --;
+			waterBottlePrt.REMAINING_USES ++;
+			waterBottlePrt.EXTRA_WEIGHT = waterBottlePrt.REMAINING_USES * 100;
+
+			Map@ map = cr.GetMap();
+			map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+				
+			waterBottlePrt.Update();
+		}
+		
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
+		
+		return action_pause;
+    }
+	return 0;
+}
+
+uint e_TiredenessTimeout(uint[]@ values)
+{
+	Critter@ cr = GetCritter( values[0] ); 
+	uint fatigue_per_action = ACTION_FATIGUE_BASE - ( cr.Stat[ST_ENDURANCE] * ACTION_FATIGUE_RATE );
+	uint fatigue = CLAMP( fatigue_per_action, ACTION_FATIGUE_MIN, ACTION_FATIGUE_MAX);
+	cr.TimeoutBase[ TO_TIREDNESS ] = __FullSecond + cr.Timeout[ TO_TIREDNESS ] + REAL_SECOND( fatigue );
+	return 0;
 }
 
 void WattsInit( Item& item, bool firstTime )
@@ -649,7 +742,7 @@ bool _DocSkill( Item& item, Critter& cr, int skill )
 		if ( parts > 0 ) {cr.Say( SAY_NETMSG, "Требуется деталь:" ); cr.SayMsg( SAY_NETMSG, TEXTMSG_ITEM, parts*100 ); return true;}
 		if ( repair > 0 ) {cr.Say( SAY_NETMSG, "Требуется ремонт." ); return true;}		
 		
-        uint8 charge = item.Indicator;
+        uint8 charge = item.REMAINING_CHARGE;
 
         if( power.GetValue() > 0 )
         {
@@ -659,7 +752,7 @@ bool _DocSkill( Item& item, Critter& cr, int skill )
 
                 charge--;
                 charge = CLAMP( charge, 0, 100 );
-                item.Indicator = charge;
+                item.REMAINING_CHARGE = charge;
             }
             else
             {
@@ -678,7 +771,7 @@ bool _DocSkill( Item& item, Critter& cr, int skill )
 		GameVar@ power = GetGlobalVar( GVAR_Sutter_Power );
 		if ( cr.GetMap().GetProtoId() == 31 ) @ power = GetGlobalVar( GVAR_Phoenix_Power );
 
-        uint8  charge = item.Indicator;
+        uint8  charge = item.REMAINING_CHARGE;
 
         string msg = "", addMsg = "";
 
@@ -714,12 +807,12 @@ bool _DocOnMe( Item& item, Critter& cr, Item@ usedItem )
 
 	GameVar@ power = GetGlobalVar( GVAR_Sutter_Power );
 
-    uint8 charge = item.Indicator;
+    uint8 charge = item.REMAINING_CHARGE;
 
     if( charge == 0 )
     {
 
-        item.Indicator = 100;
+        item.REMAINING_CHARGE = 100;
         _SubItem( usedItem, 1 );
 
         cr.Say( SAY_NETMSG, "Вы залили биогель в резервуар." );
@@ -828,7 +921,7 @@ void ObjectTimeLoop()
 				if( item.Switch > 0 )
 				{
 					int gain = item.Multiplier == 0 ? 1 : item.Multiplier;
-					item.Indicator = CLAMP( item.Indicator + gain, 0, 100 );
+					item.REMAINING_CHARGE = CLAMP( item.REMAINING_CHARGE + gain, 0, 100 );
 				}
 			}
 			GameVar @ dyspnea = GetLocalVar( LMVAR_Dyspnea, map.Id );
@@ -856,12 +949,12 @@ void ObjectTimeLoop()
                 continue;
 
             uint8 switcher = item.Switch;
-            uint8 water = item.Indicator;
+            uint8 water = item.REMAINING_CHARGE;
 
             if( Phoenixpower.GetValue() > 0 )
             {
 				int gain = item.Multiplier == 0 ? 1 : item.Multiplier;
-				item.Indicator = CLAMP( item.Indicator + gain, 0, 100 );
+				item.REMAINING_CHARGE = CLAMP( item.REMAINING_CHARGE + gain, 0, 100 );
             }
         }
     }
