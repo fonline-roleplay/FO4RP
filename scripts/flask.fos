@@ -20,34 +20,33 @@ bool FlaskCheck( Critter& cr, Item@ drink, Item@ flask )
     if( !valid( drink ) || !valid( flask ) ) { return false;
     }
 	
-	uint16 flaskPid = flask.GetProtoId();
-	if( Flasks.find( flaskPid ) == -1 ) { return false;
+	if( find_flask( flask ) == false ) { return false;
     }
 	
 	uint16 drinkPid = drink.GetProtoId();
-	if( flask.DNA != 0 && flask.DNA != drinkPid ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Фляга заполнена чем-то другим." ); return false;
+	
+	if( ( drinkPid == PID_BOTTLE_GLASS || drinkPid == PID_GLASS_BOTTLE_DIRTY_FULL ) ) {
+		if( flask.DNA == PID_GLASS_BOTTLE_DIRTY_FULL ) {
+			start_pouring_out( cr, flask );
+		}
+		return true;
 	}
 	
-	//if( flask.REMAINING_USES != 0 ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Фляга чем-то уже заполнена." ); return false;
-	//}
 	
-	if( find_opened_drinks( drink ) ) { //search.fos
-		cr.Say( SAY_EMOTE, "Наполняет флягу" );
+	if( flask.DNA != 0 && flask.DNA != drinkPid ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Емкость заполнена чем-то другим." ); return false;
+	}
+	
+	if( find_opened_drinks( drink ) || find_flask( drink ) == true ) { //search.fos
 		
-		if( flaskPid == PID_FLASKB ) {
-			flask.ChangeProto( PID_FLASK_FULL );
-			flask.Update();
-		}
+		string text = "Наполняет ";
+		text += actionString(flask);
+		cr.Say( SAY_EMOTE, text );
+
+		flask.Update();
 		
 		start_pouring( cr, drink, flask );
-		
-		/*flask.DNA = drink.GetProtoId();
-		flask.REMAINING_USES = drink.REMAINING_USES;
-		flask.EXTRA_WEIGHT = flask.REMAINING_USES * 100;
-		_SubItem( drink, 1 );
-		cr.AddItem( PID_BOTTLE_GLASS, 1 );*/
-
 	}
+	
 	return true;
 }
 
@@ -57,29 +56,25 @@ bool DrinkFlask( Critter& cr, Item& flask )
 	if( !valid( map ) || !valid( flask ) ) { return false;
     }
 	
-	if( flask.CritSlot != SLOT_HAND1 ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Возьмите фляжку в руку." ); return false;
+	if( flask.CritSlot != SLOT_HAND1 ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Возьмите предмет в руку." ); return false;
 	}
 	
-	if( flask.REMAINING_USES <= 0 ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Фляга пуста." ); return false;
+	if( flask.REMAINING_USES <= 0 ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Емкость пуста." ); return false;
 	}
 	
 	flask.REMAINING_USES --;
 	flask.EXTRA_WEIGHT = flask.REMAINING_USES * 100;
 	
-	cr.Say( SAY_EMOTE_ON_HEAD, "Пьет из фляги" );
-	
 	Item@ consumedDrink = cr.AddItem( flask.DNA, 1 );
 	consumedDrink.REMAINING_USES = 2;
 	ProccessDrink( cr, cr, consumedDrink );
-	
 	_SubItem( consumedDrink, 1 );
 	
 	if( flask.REMAINING_USES == 0 ) { 
 		flask.DNA = 0;
 		flask.EXTRA_WEIGHT = 0;
-		if( flask.GetProtoId() == PID_FLASK_FULL ) {
-			flask.ChangeProto( PID_FLASKB );
-		}
+	
+		ChangeProto( flask );
 	}
 	
 	flask.Update();
@@ -92,19 +87,20 @@ bool PourFlask( Critter& cr, Item& flask )
 	if( !valid( map ) || !valid( flask ) ) { return false;
     }
 	
-	if( flask.REMAINING_USES <= 0) { cr.Say( SAY_NETMSG, "|0xFFFF00 Фляга пуста." ); return false;
+	if( flask.REMAINING_USES <= 0) { cr.Say( SAY_NETMSG, "|0xFFFF00 Емкость пуста." ); return false;
 	}
 	
 	flask.REMAINING_USES = 0;
 	flask.EXTRA_WEIGHT = 0;
 	flask.DNA = 0;
 	
-	cr.Say(SAY_EMOTE, "Выливает флягу" );
 	map.PlaySound( "splash.ogg", cr.HexX, cr.HexY, 5 );
 	
-	if( flask.GetProtoId() == PID_FLASK_FULL ) {
-		flask.ChangeProto( PID_FLASKB );
-	}
+	string text = "Выливает ";
+	text += actionString(flask);
+	cr.Say( SAY_EMOTE, text );
+	
+	ChangeProto( flask );
 	
 	flask.Update();
 	return true;
@@ -127,7 +123,7 @@ bool start_pouring( Critter& cr, Item& drink, Item& flask )
 	
 	if( valid( flask ) ) {
 		
-		if( flask.REMAINING_USES == flask.Proto.Partial_Item ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Фляга уже заполнена." ); return false;
+		if( flask.REMAINING_USES == flask.Proto.Partial_Item ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Емкость уже заполнена." ); return false;
 		}
 
 		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
@@ -140,7 +136,7 @@ bool start_pouring( Critter& cr, Item& drink, Item& flask )
 		cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP_UNARMED );
 		
 		StartProcess( cr, LTP_POURING, 0, drink.Id, flask.Id, action_pause );
-		
+
 		return true;
 	}
 	return false;
@@ -160,40 +156,49 @@ uint process_pouring( Critter@ cr, int& param0, int& param1, int& param2 )
 		
 		Map@ map = cr.GetMap();
 		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
-			
-		drink.REMAINING_USES --;
+		
+		if( find_flask( flask ) == true && flask.REMAINING_USES == 0 ) {
+			ChangeProto( flask );
+		}
+		
 		flask.REMAINING_USES ++;
-			
-		drink.EXTRA_WEIGHT = drink.REMAINING_USES * 100;
 		flask.EXTRA_WEIGHT = flask.REMAINING_USES * 100;
-			
-		drink.Update();
 		flask.Update();
 			
-		flask.DNA = drink.GetProtoId();
-
+		if( find_flask( drink ) == true ) {
+			flask.DNA = drink.DNA;
+		} else {
+			flask.DNA = drink.GetProtoId();
+		}
+		
+		SpillOut( drink );
+		
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
 		
 		if( flask.Proto.Partial_Item - flask.REMAINING_USES == 0 ) {
-			cr.Say( SAY_NETMSG, "|0xFFFF00 Вы наполнили флягу." );
+			
+			string itemDisc;
+			itemDisc += actionString(flask);
+			cr.Say( SAY_NETMSG, "Вы наполнили " + "|0xFFFF00 " + itemDisc + "|0x3CF800." );
 			
 			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
 			
 			if( drink.REMAINING_USES == 0 ) {
-				_SubItem( drink, 1 );
-				cr.AddItem( PID_BOTTLE_GLASS, 1 );
+				drink.DNA = 0;
+				ChangeProto( drink );
 			}
 			
 			return 0;
 		}
 		
 		if( drink.REMAINING_USES == 0 ) {
-			cr.Say( SAY_NETMSG, "|0xFFFF00 Бутылка опустела." );
-			_SubItem( drink, 1 );
-			cr.AddItem( PID_BOTTLE_GLASS, 1 );
+			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+			cr.Say( SAY_NETMSG, "|0xFFFF00 Тара опустела." );
+			drink.DNA = 0;
 			
 			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
 			
+			ChangeProto( drink );
 			return 0;
 		}
 		
@@ -211,5 +216,181 @@ uint e_TiredenessTimeout(uint[]@ values)
 	uint fatigue_per_action = ACTION_FATIGUE_BASE - ( cr.Stat[ST_ENDURANCE] * ACTION_FATIGUE_RATE );
 	uint fatigue = CLAMP( fatigue_per_action, ACTION_FATIGUE_MIN, ACTION_FATIGUE_MAX);
 	cr.TimeoutBase[ TO_TIREDNESS ] = __FullSecond + cr.Timeout[ TO_TIREDNESS ] + REAL_SECOND( fatigue );
+	return 0;
+}
+
+//Info 
+string actionString( Item& item )
+{
+	string text;
+	uint16 itemPid = item.GetProtoId();
+	switch( itemPid )
+	{
+		case( PID_WATER_BUCKET ):
+		case( PID_EMPTY_BUCKET ): 
+			text += "ведро";
+			break;
+		default:
+			text += "флягу";
+			break;
+	}
+	return text;
+}
+//Proto Changer
+void ChangeProto( Item& item )
+{
+	if( find_flask( item ) == true ) {
+		uint16 itemPid = item.GetProtoId();
+		switch( itemPid )
+		{
+			case( PID_FLASK_FULL ):
+				item.ChangeProto( PID_FLASKB );
+				break;
+			case( PID_WATER_BUCKET ): 
+				item.ChangeProto( PID_EMPTY_BUCKET );
+				break;
+			case( PID_FLASKB ):
+				item.ChangeProto( PID_FLASK_FULL );
+				break;
+			case( PID_EMPTY_BUCKET ): 
+				item.ChangeProto( PID_WATER_BUCKET );
+				break;
+			default:
+				break;
+		}
+	}
+}
+
+bool find_flask( Item& item ) {
+	if( valid( item ) ) {
+		uint16 flaskPid = item.GetProtoId();
+		if ( Flasks.find( flaskPid ) != -1 ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+bool another_ltp_inited = false;
+void another_ltp_init()
+{
+	LTPREG( LTP_POURING_OUT, process_pouring_out )
+	another_ltp_inited = true;
+}
+
+bool start_pouring_out( Critter& cr, Item& target )
+{
+	if(!another_ltp_inited) { 
+		another_ltp_init();
+	}
+	
+	Map@ map = cr.GetMap();		
+	
+	if( valid( target ) ) {
+		
+		if( target.REMAINING_USES < 1 ) {
+			cr.Say( SAY_NETMSG, "|0xFFFF00 Воды больше нет." );
+			return false;
+		}
+		
+		if( !hasItem( cr, PID_BOTTLE_GLASS, SLOT_HAND1 ) && !hasItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT, SLOT_HAND1 ) ) { cr.Say( SAY_NETMSG, "|0xFFFF00 У вас нет подходящей тары в руках." ); return false;
+		}
+		
+		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);	
+		
+		StartProcess( cr, LTP_POURING_OUT, 0, 0, target.Id, action_pause );
+		return true;
+	}
+	return false;
+}
+
+uint process_pouring_out( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_POURING_OUT )
+	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+  	Item@ target = GetItem( param2 );
+	
+  	if( valid( target ) ) {
+		
+      	if( ( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) ) || target.REMAINING_USES < 1 ) {
+			string TXT = ( !hasItem( cr, PID_BOTTLE_GLASS ) || !hasItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) ) ? " У Вас закончилась тара." : " Вы разлили всю воду по бутылкам.";
+			cr.Say( SAY_NETMSG, "|0xFFFF00" + TXT );
+			if( target.REMAINING_USES < 1 ) {
+				target.DNA = 0;
+				ChangeProto( target );
+			}
+			return 0;
+		}
+		
+		_CritAnimateUse(cr);
+		uint autoemote = Random( 1, 10 );
+		if( autoemote == 10 ) { cr.Say( SAY_EMOTE, "Наполняет бутылку" );
+		}
+		
+		if( hasItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) ) {
+			
+			Item@ waterBottlePrt = getItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT );
+			if( waterBottlePrt.REMAINING_USES < waterBottlePrt.Proto.Partial_Item ) {
+				
+				target.REMAINING_USES --;
+				target.EXTRA_WEIGHT = target.REMAINING_USES * 100;
+				waterBottlePrt.REMAINING_USES ++;
+				waterBottlePrt.EXTRA_WEIGHT = waterBottlePrt.REMAINING_USES * 100;
+
+				Map@ map = cr.GetMap();
+				map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+								
+				target.Update();
+				waterBottlePrt.Update();
+				
+			} else {
+			
+				Item@ waterBottle = cr.AddItem( PID_GLASS_BOTTLE_DIRTY_FULL, 1 );
+				
+				_SubItem( waterBottlePrt , 1 );
+				
+				cr.Say( SAY_NETMSG, "|0xFFFF00 Вы полностью наполнили бутылку водой" );
+				
+				waterBottle.Update();
+			}
+
+			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
+			
+			return action_pause;
+			
+		} else {
+		
+			Item@ bottle = cr.GetItem( PID_BOTTLE_GLASS, -1 );
+			_SubItem( bottle , 1 );
+		
+			Item@ waterBottlePrt = cr.AddItem( PID_GLASS_BOTTLE_DIRTY_FULL_PRT, 1 );
+			
+			Item@ hands = cr.GetItem( 0, SLOT_HAND1 );
+			if( valid( hands ) ) {
+				cr.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
+			}
+			
+			cr.MoveItem( waterBottlePrt.Id, waterBottlePrt.GetCount(), SLOT_HAND1 );
+		
+			target.REMAINING_USES --;
+			target.EXTRA_WEIGHT = target.REMAINING_USES * 100;
+			waterBottlePrt.REMAINING_USES ++;
+			waterBottlePrt.EXTRA_WEIGHT = waterBottlePrt.REMAINING_USES * 100;
+
+			Map@ map = cr.GetMap();
+			map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+				
+			target.Update();
+			waterBottlePrt.Update();
+		}
+		
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
+		
+		return action_pause;
+    }
 	return 0;
 }
