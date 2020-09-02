@@ -32,7 +32,7 @@ const uint PIC_STILL_ANIM_ON = GetStrHash( "art\\items\\misc\\Still\\still_s_wor
 
 #define MAX_FUEL					 ( 10000.0f )	// Максимальный загруз топлива
 #define MAX_RAW_MATERIAL			 ( 15000.0f )	// Максимальный загруз браги
-#define MAX_TEMPRATURE				 ( 39500.0f )	// Максимальная температура до возгорания к
+#define MAX_TEMPRATURE				   ( 575.0f )	// Максимальная температура до возгорания к
 #define	MAX_PRESSURE				  ( 4000.0f )	// Максимальное давление до взрыва
 #define MAX_PRODUCT					 ( 10000.0f )	// Максимальный выход
 
@@ -51,6 +51,7 @@ const uint PIC_STILL_ANIM_ON = GetStrHash( "art\\items\\misc\\Still\\still_s_wor
 #define THERM_WATER_TSP 		  	  ( 4.1806f )   // с = 4,1806, кДж/кг К - теплоемкость воды // water thermal storage property
 
 #define ALCOHOL_GAIN					( 10.0f )	// Прирост спирта за один "тик" таймивента, гр
+#define RAW_MATERIAL_LOSS 				( 40.0f )   // Скорость испарения жидкости
 #define BOILING_MULTIPLIER				 ( 1.0f )	// Мультипликатор давления при достижении температуры кипения
 
 //Still state
@@ -204,12 +205,6 @@ uint e_StillBurn( uint[]@ values )
 				CreateTimeEvent( AFTER( REAL_SECOND( Random( 5, 20 ) ) ), "e_Explode", values, true );
 			}
 
-			if( FloatFromBits( still.CURRENT_TEMPRATURE ) >= 375 ) {
-				Item@ steamFX = map.AddItem( still.HexX, still.HexY, PID_STILL_STEAM, 1 );
-				uint[] values = { steamFX.Id };
-				steamFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_steamFX", values, true );
-			}
-
 			if( FloatFromBits( still.CURRENT_TEMPRATURE ) >= MAX_TEMPRATURE ) {
 				spawnFire( map, still.HexX, still.HexY );
 				GenerateFire( map, still.HexX, still.HexY, 1 );
@@ -221,27 +216,28 @@ uint e_StillBurn( uint[]@ values )
 			Log( "TSP: "+ TSP + ", Горение: " + Q_burning + ", Потери: " + Q_loss + ", Накопл Тепло: " + Sys_ST + ", Т-текущая: " + Cur_temp + " dT: " + ( Cur_temp - last_temp ) );
 			last_temp = Cur_temp;
 			
-			Boiling_Temperature_Calc( still );
-			
-			boiling_Pressure_Mod = BOILING_MULTIPLIER;
+			float CurrentTemp = FloatFromBits( still.CURRENT_TEMPRATURE );
+			if(  CurrentTemp >= Boiling_Temperature_Calc( still ) ) {
+				Item@ steamFX = map.AddItem( still.HexX, still.HexY, PID_STILL_STEAM, 1 );
+				uint[] values = { steamFX.Id };
+				steamFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_steamFX", values, true );
 				
-			if( FloatFromBits( still.CURRENT_RAW_MATERIAL ) > 0.0f && FloatFromBits( still.SPIRIT_LEVEL ) > 0.0f ) 
-			{
-				fluid_Consumption( still );
-				
-				alcohol_Separation( still );
+				if( still.CURRENT_RAW_MATERIAL > 0.0f && still.SPIRIT_LEVEL > 0.0f ) {
+					
+					still.CURRENT_RAW_MATERIAL -= RAW_MATERIAL_LOSS;
+					still.SPIRIT_LEVEL -= ALCOHOL_GAIN;
+					
+					still.CURRENT_PRODUCT += ALCOHOL_GAIN;					
+				}
 			}
 			
-			if( FloatFromBits( still.CURRENT_RAW_MATERIAL ) < 0.0f ) 
-			{
-				still.CURRENT_RAW_MATERIAL = FloatToBits( 0.0f );
+			if( still.CURRENT_RAW_MATERIAL <= 0.0f ) {
+				still.CURRENT_RAW_MATERIAL = 0.0f;
 			}
 			
-			if( FloatFromBits( still.SPIRIT_LEVEL ) < 0.0f ) 
-			{
-				still.SPIRIT_LEVEL = FloatToBits( 0.0f );
+			if( still.SPIRIT_LEVEL <= 0.0f ) {
+				still.SPIRIT_LEVEL = 0.0f;
 			}
-			
 			
 			return FIRE_BURNING_TIME;
 		}
@@ -272,7 +268,7 @@ uint Boiling_Temperature_Calc( Item& still )
 	float maxAlcoholPercentage = 20.0f;					//Максимальный процент спирта в браге
 	float maxBoilingTemperature = 273.15f + 80.0f;		//Температура кипения рабочего тела при заправке брагой с максимальной крепостью
 	
-	float currentAlcoholPercentage = still.SPIRIT_LEVEL;
+	float currentAlcoholPercentage = still.CURRENT_RAW_MATERIAL != 0 ? ( still.SPIRIT_LEVEL / still.CURRENT_RAW_MATERIAL ) : 0;
 	float targetBoilingTemperature;
 	
 	float borderAlcoholBoilingTemperature = 273.15f + 78.37f;
@@ -291,39 +287,11 @@ uint Boiling_Temperature_Calc( Item& still )
 		targetBoilingTemperature = borderAlcoholBoilingTemperature;
 	}
 	
-	Log( "Температура кипения: " + targetBoilingTemperature );
+	float tempForLog = targetBoilingTemperature - 273.15f;
+	Log( "Температура кипения: " + tempForLog + " С" );
 	
 	return targetBoilingTemperature;
 }
-
-//Функция расхода рабочего тела при перегонке
-void fluid_Consumption( Item& still ) 
-{
-	float temp_Fluid_Volume_Var;		
-	float temp_Fluid_Alcohol_Percent_Var;
-	float temp_Fluid_Alcohol_Volume_Var;
-	
-	temp_Fluid_Volume_Var = FloatFromBits( still.CURRENT_RAW_MATERIAL );								//Общий объем смеси
-	temp_Fluid_Alcohol_Percent_Var = FloatFromBits( still.SPIRIT_LEVEL );								//Процент спирта в смеси
-	
-	temp_Fluid_Alcohol_Volume_Var = temp_Fluid_Volume_Var * temp_Fluid_Alcohol_Percent_Var / 100.0f;	//Объем спирта в смеси до отбора
-	temp_Fluid_Volume_Var -= ALCOHOL_GAIN;																//Общий объем смеси после отбора
-	temp_Fluid_Alcohol_Volume_Var -= ALCOHOL_GAIN;														//Объем спирта в смеси после отбора
-	
-	temp_Fluid_Alcohol_Percent_Var = temp_Fluid_Alcohol_Volume_Var * 100.0f / temp_Fluid_Volume_Var;	//Перерасчет процента спирта в смести после отбора
-	
-	still.CURRENT_RAW_MATERIAL = FloatToBits( temp_Fluid_Volume_Var );	
-	still.SPIRIT_LEVEL = FloatToBits( temp_Fluid_Alcohol_Percent_Var );							
-}
-
-//Функция выделения спирта из смеси
-void alcohol_Separation( Item& still ) 
-{
-	float temp_alcohol_var = FloatFromBits( still.CURRENT_PRODUCT );
-	temp_alcohol_var += ALCOHOL_GAIN;
-	still.CURRENT_PRODUCT = FloatToBits( temp_alcohol_var );
-}
-
 
 void GenerateFire( Map@ map, int x, int y, int r ) //exported
 {
@@ -417,33 +385,42 @@ bool AddHomebrew( Critter& cr, Item& homebrew, Item& still )
 	return true;
 }
 
-bool TransferToStill( Critter& cr, Item& targetItem, Item& cont ) //export to main
+bool TransferToStill( Critter& cr, Item& homebrew, Item& still ) //export to main
 {
-	if(!valid(cont)) { Log( "Потеря указателя на контейнер!" ); return false; 
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) { return false;
 	}
-	if( cont.STATE > STATE_PREPARE ) { cr.Say( SAY_NETMSG, "|0xFF0000 Аппарат не готов к загрузу браги." ); return false; 
+	if( !valid( still ) ) { Log( "Потеря указателя на контейнер!" ); return false; 
 	}
-	if( targetItem.GetProtoId() != PID_HOMEBREW && targetItem.GetProtoId() != PID_HOMEBREW_PRT	) { cr.Say( SAY_NETMSG, "|0xFF0000 Вам кажется, что из этого спирт не выделить." ); return false; 
+	if( still.STATE > STATE_PREPARE ) { cr.Say( SAY_NETMSG, "|0xFF0000 Аппарат не готов к загрузу браги." ); return false; 
+	}
+	if( homebrew.GetProtoId() != PID_HOMEBREW && homebrew.GetProtoId() != PID_HOMEBREW_PRT	) { cr.Say( SAY_NETMSG, "|0xFF0000 Вам кажется, что из этого спирт не выделить." ); return false; 
 	}
 	
-	Map@ map = cr.GetMap();
-	uint transferAmount = cr.ItemTransferCount();
-	uint16 targetItemPid = targetItem.GetProtoId();
-	if( Homebrew.find( targetItemPid ) != -1 ) {
-		cr.AddItem( PID_BOTTLE_GLASS, transferAmount );
-		cont.CURRENT_RAW_MATERIAL = cont.CURRENT_RAW_MATERIAL + ( ( targetItem.Proto.Weight - 150 ) * transferAmount );
+	map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+	
+	if( homebrew.GetProtoId() == PID_HOMEBREW ) {
 		
-		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+		still.CURRENT_RAW_MATERIAL += 500;
+		still.SPIRIT_LEVEL += 500 * homebrew.SPIRIT_LEVEL / 100;
+		still.IMPURITIES += homebrew.POLUTION_LEVEL;
 		
-		_SubItem( targetItem, 1 );
+	} else if( homebrew.GetProtoId() == PID_HOMEBREW_PRT ) {
 		
-		if( cont.CURRENT_RAW_MATERIAL > MAX_RAW_MATERIAL ) {
-			cont.CURRENT_RAW_MATERIAL = MAX_RAW_MATERIAL;
-			cr.Say( SAY_NETMSG, "|0xFFFF00 Похоже, что емкость заполнена под крышку." );
-			map.SetText( cont.HexX, cont.HexY, COLOR_LGRAY, ":брага переливается через край:" );
-		}
+		still.CURRENT_RAW_MATERIAL += homebrew.REMAINING_USES * 100;
+		still.SPIRIT_LEVEL += homebrew.REMAINING_USES * 100 * homebrew.HB_SPIRIT_LEVEL / 100;
+		still.IMPURITIES += homebrew.REMAINING_USES * 100 * homebrew.POLUTION_LEVEL / 100;
 	}
-	ShowContainer( cr, cont, TRANSFER_HEX_CONT_UP );
+		
+	_SubItem( homebrew, 1 );
+	cr.AddItem( PID_BOTTLE_GLASS, 1 );
+
+	if( still.CURRENT_RAW_MATERIAL > MAX_RAW_MATERIAL ) {
+		still.CURRENT_RAW_MATERIAL = MAX_RAW_MATERIAL;
+		map.SetText( still.HexX, still.HexY, COLOR_LGRAY, ":брага переливается через край:" );
+	}
+	
+	ShowContainer( cr, still, TRANSFER_HEX_CONT_UP );
 	return true;
 }
 
@@ -562,19 +539,22 @@ string@ GenerateDescription(Item& still) {
 				break;
 		}
 		
-		float temprature = FloatFromBits( still.CURRENT_TEMPRATURE ) - 273.15;
+		float temprature = FloatFromBits( still.CURRENT_TEMPRATURE ) - 273.15f;
 		info += "\n" "Температура: " + temprature + " градусов C.";
 
 		float pressure = FloatFromBits( still.CURRENT_PRESSURE );
 		info += "\n" "Давление: " + pressure + " бар.";
 	}
 
-	float raw_material = still.CURRENT_RAW_MATERIAL / 1000.0;
-	float max_raw_material = MAX_RAW_MATERIAL / 1000.0;
-	info += "\nАппарат заполнен брагой на " + raw_material + " из " + max_raw_material + " литров.";
+	float raw_material = still.CURRENT_RAW_MATERIAL / 1000.0f;
+	float max_raw_material = MAX_RAW_MATERIAL / 1000.0f;
+	info += "\nСырье: " + raw_material + " из " + max_raw_material + " литров.";
 
-	string occupancy_level = ( still.CURRENT_FUEL * 100 / MAX_FUEL );
+	string occupancy_level = ( still.CURRENT_FUEL * 100.0f / MAX_FUEL );
 	info += "\nАппарат заполнен горючим на " + occupancy_level + " %";
+
+	float product = still.CURRENT_PRODUCT / 1000.0f;
+	info += "\nВыделено " + product + " литров спирта.";
 
 	return info;
 }
@@ -617,7 +597,7 @@ class MenuStill: CenteredMenuHandler {
 					LockInPlace( cr, still );
 					return true;
 				}
-				if( menu.Button("Добавить брагу") ) {
+				if( menu.Button( "Добавить брагу" ) ) {
 					ShowContainer( cr, still, TRANSFER_HEX_CONT_UP );
 					return false; // чтобы не перебивать окно контейнера
 				}
