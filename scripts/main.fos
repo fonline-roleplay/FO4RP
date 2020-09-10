@@ -528,7 +528,7 @@ void critter_attacked( Critter& cr, Critter& attacker )
 // Call on something critter steal another.
 bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 {
-	if(cr.IsKnockout() || cr.Param[ST_CURRENT_HP] <= 0){
+	if( cr.IsKnockout() || cr.Param[ST_CURRENT_HP] <= 0 ){
 		return true;
 	}
 	
@@ -837,8 +837,92 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		}
 	}
 	
+	if( pid == PID_WELDING || pid == PID_ENERGY_WELDIN )
+	{
+		Critter@ target = useOnSelf ? @cr : @targetCr;
+		if( valid( target ) )
+		{
+			Item@ shackles = target.GetItem( 0, SLOT_MISC );
+			if( valid( shackles ) && shackles.GetProtoId() == PID_SHACKLES )
+			{
+				if( !useOnSelf )
+				{
+					cr.Say( SAY_NETMSG, "Вы сняли кандалы с цели." );
+					target.Say( SAY_NETMSG, "Вас освободили от кандалов." );
+				}
+				else
+					cr.Say( SAY_NETMSG, "Вы сняли с себя кандалы." );
+
+				LogItemMovement( cr, shackles, "снимает кандалы с " + crInfo( target ) + ", используя сварку" + itemDesc( item ) );
+				
+				//shackles.Val2 = 0;
+				shackles.Val3 = 1;
+				shackles.SetScript( "_InitDefaultShackles" );
+				target.MoveItem( shackles.Id, shackles.GetCount(), SLOT_INV );				
+				
+				return true;
+			}
+		}
+		else
+			cr.Say( SAY_NETMSG, ( valid( cr ) ? cr.Id : 0 ) + " " + ( valid( targetCr ) ? targetCr.Id : 0 ) );
+	}
+	
+	if( pid == PID_SHACKLES )
+	{
+        if( item.Val1 == 0 )
+			item.Val1 = Random( 1, 8191 );
+		
+		if( item.Val3 != 0 )
+		{
+			cr.Say( SAY_NETMSG, "Эти кандалы сломаны." );
+			return true;
+		}
+		
+		if( item.Val2 != 0 )
+		{
+			return false;
+		}
+
+		if( !valid( targetCr ) && !useOnSelf )	return false;
+		bool noResistance = useOnSelf || !CanResist( targetCr );
+		Critter@ target = useOnSelf ? @cr : @targetCr;
+
+		Item@ slot = target.GetItem( 0, SLOT_MISC );
+		if( valid( slot ) )
+		{
+			if( slot.GetProtoId() == PID_SHACKLES && slot.Val2 != 0 )
+			{
+				cr.Say( SAY_NETMSG, "На цели уже одеты кандалы." );
+				return true;
+			}
+			
+			target.MoveItem( slot.Id, slot.GetCount(), SLOT_INV );
+		}
+
+		Item @key = cr.AddItem( PID_SHACKLES_KEY, 1 );
+		key.Val1 = item.Val1;
+		key.SetLexems( "$keynum" + key.Val1 );
+		key.SetScript( "_HandcuffsKeyUsed" );
+		key.Update();
+		
+		item.Val2 = key.Id;
+		item.SetScript( "_InitUsedShackles" );
+		target.MoveItem( item.Id, item.GetCount(), SLOT_MISC );
+		
+		if( !useOnSelf )
+		{
+			cr.Say( SAY_NETMSG, "Вы одели кандалы на цель." );
+			target.Say( SAY_NETMSG, "Вас заковали в кандалы." );
+		}
+		else
+			cr.Say( SAY_NETMSG, "Вы одели кандалы на себя." );
+		
+		LogItemMovement( cr, item, "одевает кандалы на " + crInfo( target ) + ", запирая их ключом " + itemDesc( key ) );
+		return true;
+	}
+	
 	//Traps on items
-	if( valid( targetItem) && SetTrapOnItem( cr, item, targetItem ) )
+	if( valid( targetItem ) && SetTrapOnItem( cr, item, targetItem ) )
 		return true;
 	
 	//Shovel
@@ -2320,7 +2404,34 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
         }
     break; }
     case SK_LOCKPICK: {
-        if( ( ( valid( targetCr ) ) && ( targetCr.Param[ HANDCUFFS ] != 0 ) ) || ( ( onSelf ) && ( cr.Param[ HANDCUFFS ] != 0 ) ) )         // Взлом наручников. TabaK
+        if( valid( targetCr ) || onSelf )
+		{
+			Critter@ target = onSelf ? @cr : @targetCr;
+			Item@ ball_gag = target.GetItem( 0, SLOT_HEAD );
+			if( valid( ball_gag ) && ball_gag.GetProtoId() == PID_BALL_GAG )
+			{
+				if( onSelf && ball_gag.Val0 != 0 )
+				{
+					InformWarning( cr, "Вы не можете вынуть кляп в данный момент." );
+					return true;
+				}
+				
+				ball_gag.Val0 = 0;
+				target.MoveItem( ball_gag.Id, 1, SLOT_INV );
+
+				if( !onSelf )
+				{
+					cr.Say( SAY_NETMSG, "Вы вынули кляп." );
+					targetCr.Say( SAY_NETMSG, "Вам вынули кляп изо рта, теперь вы снова можете говорить." );
+				}
+				else
+					cr.Say( SAY_NETMSG, "Вы самостоятельно избавились от кляпа во рту." );
+				
+				return true;
+			}
+		}
+	
+		if( ( ( valid( targetCr ) ) && ( targetCr.Param[ HANDCUFFS ] != 0 ) ) || ( ( onSelf ) && ( cr.Param[ HANDCUFFS ] != 0 ) ) )         // Взлом наручников. TabaK
         {
             if( cr.Timeout[ TO_SK_LOCKPICK ] > 0 )
             {
@@ -2449,8 +2560,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				CrimeLog( cr, crInfo( cr ) + " пытается что-то отобрать у " + crInfo( targetCr ) );
 				return true;
 			}
-			bool CanResist = true;
-			
+
 			Item@[] items;
 			Item@[] items0;
 			Item@[] items1;
@@ -2462,40 +2572,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			uint itemscount2 = targetCr.GetItems( SLOT_BACK, items2 );
 			uint itemscount3 = targetCr.GetItems( SLOT_MISC, items3 );
 			
-			if( itemscount > 0 )
-			{
-				Item@ hand = items[0];
-				if(valid(hand)) {
-					int pid = hand.GetProtoId();
-					if( pid == PID_HANDCUFFS || pid == PID_ROPE_USED ) {
-						CanResist = false;
-					}
-				}
-			}
-			
-			if( itemscount0 > 0 )
-			{
-				Item@ hand = items0[0];
-				if(valid(hand)) {
-					int pid = hand.GetProtoId();
-					if( pid == PID_HANDCUFFS || pid == PID_ROPE_USED ) {
-						CanResist = false;
-					}
-				}
-			}
-			
-			if( itemscount1 > 0 )
-			{
-				Item@ head = items1[0];
-				if(valid(head)) {
-					int pid = head.GetProtoId();
-					if( pid == PID_COLLAR ) {
-						CanResist = false;
-					}
-				}
-			}
-			
-			if( targetCr.IsKnockout() || targetCr.IsDead() || targetCr.Stat[ HANDCUFFS ] != 0 || !CanResist || isGM( cr ) ) 
+			if( targetCr.IsKnockout() || targetCr.IsDead() || targetCr.Stat[ HANDCUFFS ] != 0 || !CanResist( targetCr ) || isGM( cr ) ) 
 			{
 				if( itemscount > 0 )
 				{
@@ -5424,5 +5501,115 @@ uint e_DelayedRemoval( uint[]@ values )
 	return 0;
 }
 
+//import bool CanResist( Critter@ targetCr ) from "main";
+bool CanResist( Critter@ targetCr )
+{
+	if( !valid( targetCr ) ) return true;
+	
+	if( targetCr.IsKnockout() || targetCr.Param[ST_CURRENT_HP] <= 0 )
+		return false;
+	
+	uint pid = 0;
+	Item@ item;
+
+	@item = targetCr.GetItem( 0, SLOT_HAND1 );
+	pid = valid( item ) ? item.GetProtoId() : 0;
+	if( pid == PID_ROPE_USED || pid == PID_HANDCUFFS_USED )
+		return false;
+	
+	@item = targetCr.GetItem( 0, SLOT_HAND2 );
+	pid = valid( item ) ? item.GetProtoId() : 0;
+	if( pid == PID_ROPE_USED || pid == PID_HANDCUFFS_USED )
+		return false;
+	
+	@item = targetCr.GetItem( 0, SLOT_HEAD );
+	pid = valid( item ) ? item.GetProtoId() : 0;
+	if( pid == PID_COLLAR )
+		return false;
+	
+	return true;
+}
+
+void _HandcuffsKeyUsed( Item& item, bool FirstTime )
+{
+	item.SetEvent( ITEM_EVENT_USE, "_release" );
+}
+
+void _InitUsedShackles( Item& item, bool firstTime )
+{
+    item.SetEvent( ITEM_EVENT_MOVE, "_hellno1" );
+    item.SetEvent( ITEM_EVENT_DROP, "_hellno3" );
+}
+
+void _hellno1( Item& item, Critter& crit, uint8 fromSlot )
+{
+    if( item.CritSlot != SLOT_MISC )
+    {
+		InformWarning(crit, "Это просто не могло быть так просто." );
+        crit.MoveItem( item.Id, 1, SLOT_MISC );
+        item.Update();
+    }
+}
+
+void _hellno3( Item& item, Critter& crit )
+{
+	InformWarning(crit, "Это просто не могло быть так просто. " );
+    MoveItem( item, 1, crit );
+    crit.MoveItem( item.Id, 1, SLOT_MISC );
+    item.Update();
+}
+
+void _InitDefaultShackles( Item& item, bool firstTime )
+{
+    item.SetEvent( ITEM_EVENT_MOVE, null );
+    item.SetEvent( ITEM_EVENT_DROP, null );
+}
+
+bool _release( Item& key, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
+{
+    bool onSelf = ( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) );
+	int  cuffs_state;
+    int  keynum;
+    int  nohome;
+
+    Critter@ target = onSelf ? @cr : @onCritter;
+
+	Item@ shackles = target.GetItem( 0, SLOT_MISC );
+	if( !valid( shackles ) || shackles.GetProtoId() != PID_SHACKLES )
+	{
+		cr.Say( SAY_NETMSG, "На цели не одеты кандалы." );
+		return true;
+	}
+	
+	if( shackles.Val3 != 0 )
+	{
+		cr.Say( SAY_NETMSG, "Кандалы сломаны." );
+		return true;
+	}
+	
+	if( shackles.Val1 != key.Val1 )
+	{
+		cr.Say( SAY_NETMSG, "Ключ не подошёл." );
+		return true;
+	}
+		
+	if( !onSelf )
+	{
+		cr.Say( SAY_NETMSG, "Вы сняли кандалы с цели." );
+		target.Say( SAY_NETMSG, "Вас освободили от кандалов." );
+	}
+	else
+		cr.Say( SAY_NETMSG, "Вы сняли с себя кандалы." );
+
+	LogItemMovement( cr, shackles, "снимает кандалы с " + crInfo( target ) + ", используя ключ " + itemDesc( key ) );
+	
+	DeleteItem( key );
+	
+	shackles.Val2 = 0;
+	shackles.SetScript( "_InitDefaultShackles" );
+	target.MoveItem( shackles.Id, shackles.GetCount(), SLOT_INV );
+	
+	return true;
+}
 
 #include "behaviours.fos"
