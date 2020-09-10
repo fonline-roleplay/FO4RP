@@ -1076,6 +1076,8 @@ void run_answer_GM_PANNEL_SELF( Critter& player, uint answerI, string& answerS )
 			"Телепорты", "Склады", "Мобо-спауны", "Монстро-спауны", "Обновить спауны", "Всевиденье", "Музыка", "Дождь", "Инфовидение", "Тестовидение", GetLocationTimeString( player ), arena, "Открыть контейнер №", "debug mode", "Мио-ГМка", "Фракции" };
 		BackParse( player, @run_answer_GM_PANNEL_SELF, answerI, answerS );
 		DIALOG_MENU( player, data );
+		
+		player.ParamBase[ CR_VAL0 ] = 0;
 	}
 }
 
@@ -1331,39 +1333,87 @@ void answer_GM_PANNEL_SELF( Critter& player, uint answerI, string& answerS )
 	}
 	else if( answerI == answerN++ ) //Фракции
 	{
-		array<string> data = {"answer_GM_PANNEL_FACTION_LIST", "Выберите фракцию"};
-		array<string@> list = GetList();
-		for( uint i = 0, iend = list.length(); i < iend; i++ )
-			data.insertLast( list[i] );
-		data.insertLast( "Создать фракцию" );
-		data.insertLast( "Назад" );
-		BackParse( player, @answer_GM_PANNEL_SELF, answerI, answerS );
-		DIALOG_MENU( player, data );
+		show_faction_list( player );
+		BackParse( player, @answer_GM_PANNEL_SELF, 15, "" );
 	}
+}
+
+#define SHOW_FRACTIONS_LIST_COUNT	7
+
+void show_faction_list( Critter& player )
+{
+	array<string> data = {"answer_GM_PANNEL_FACTION_LIST", "Выберите фракцию"};
+	array<string@> list = GetList();
+	
+	uint start = CLAMP( uint( player.ParamBase[ CR_VAL0 ] ), 0, list.length / SHOW_FRACTIONS_LIST_COUNT ) * SHOW_FRACTIONS_LIST_COUNT;
+	
+	for( uint i = 0; i < SHOW_FRACTIONS_LIST_COUNT; i++ )
+		data.insertLast( start + i < list.length() ? list[start + i] : "" );
+	
+	data.insertLast( "Создать фракцию" );
+	data.insertLast( ">>>" );
+	data.insertLast( "<<<" );
+	data.insertLast( "Назад" );
+	
+	DIALOG_MENU( player, data );
 }
 
 void answer_GM_PANNEL_FACTION_CREATE( Critter& player, uint answerI, string& answerS )
 {
 	CreateFraction( answerS );
+	Back( player );
 }
 
 void answer_GM_PANNEL_FACTION_LIST( Critter& player, uint answerI, string& answerS )
 {
 	array<string@> list = GetList();
-	if( answerI == list.length() )
+	
+	if( answerI == SHOW_FRACTIONS_LIST_COUNT )
 	{
 		player.ShowScreen( SCREEN_SAY, 0, "answer_GM_PANNEL_FACTION_CREATE" );
 		player.Say( SAY_SAY_TITLE, "Введите имя фракции" );
 		return;
 	}
-	else if( answerI == list.length() + 1 )
+	
+	if( answerI == SHOW_FRACTIONS_LIST_COUNT + 1 )
+	{
+		int step = player.ParamBase[ CR_VAL0 ] + 1;
+		if( step > int( list.length() / SHOW_FRACTIONS_LIST_COUNT ) )
+			step = 0;		
+
+		player.ParamBase[ CR_VAL0 ] = step;
+		
+		show_faction_list( player );
+		return;
+	}
+	if( answerI == SHOW_FRACTIONS_LIST_COUNT + 2 )
+	{
+		int step = player.ParamBase[ CR_VAL0 ] - 1;
+		if( step < 0 )
+			step = list.length() / SHOW_FRACTIONS_LIST_COUNT;		
+
+		player.ParamBase[ CR_VAL0 ] = step;
+		
+		show_faction_list( player );
+		return;
+	}
+	
+	else if( answerI == SHOW_FRACTIONS_LIST_COUNT + 3 )
 	{
 		Back( player );
 		return;
 	}
 
-	Memmory.set( "faction_" + player.Id, GetFactionNameByIndex( answerI ) );
-	array<string> data = { "answer_GM_PANNEL_FACTION", "Фракция \"" + GetFactionNameByIndex( answerI ) + "\"", "Отношения", "Дефолт отношения", "Добавить игрока", "Удалить", "Назад" };
+	uint index = player.ParamBase[ CR_VAL0 ] * SHOW_FRACTIONS_LIST_COUNT + answerI;
+	if( index >= list.length() )
+	{
+		show_faction_list( player );
+		return;
+	}
+	
+	player.ParamBase[ CR_VAL1 ] = player.ParamBase[ CR_VAL0 ];
+	Memmory.set( "faction_" + player.Id, GetFactionNameByIndex( index ) );
+	array<string> data = { "answer_GM_PANNEL_FACTION", "Фракция '" + GetFactionNameByIndex( index ) + "'", "Отношения", "Дефолт отношения", "Добавить игрока", "Удалить", "Назад" };
 	BackParse( player, @answer_GM_PANNEL_FACTION_LIST, answerI, answerS );
 	DIALOG_MENU( player, data );
 }
@@ -1374,31 +1424,8 @@ void answer_GM_PANNEL_FACTION( Critter& player, uint answerI, string& answerS )
 	{
 		case 0:
 			{				
-				array<string@> list = GetList();
-				
-				Fraction@ faction = GetMemmoryFraction(player);
-				if( faction is null )
-				{
-					string faction_name = "error";
-					Memmory.get( "faction_" + player.Id, faction_name );
-					player.Say( SAY_NETMSG, "Ошибка, фракция " + faction_name + " не найдена" );
-					return;
-				}
-				
-				array<string> data = {"answer_GM_PANNEL_FACTION_RELATIONS", "" };
-				string@ title = data[1];
-				for( uint i = 0, iend = list.length(); i < iend; i++ )
-				{
-					IRelations@ rel = faction.GetRelation( "RelationFaction_" + list[i] );
-					if( rel is null )
-						@rel = faction.GetRelation( "RelationDefault" + list[i] );
-					title += list[i] + ": " + rel.Name + "\n";
-					data.insertLast( list[i] );
-				}
-				data.insertLast( "С игроком" );
-				data.insertLast( "Назад" );
+				show_faction_list2( player );				
 				BackParse( player, @answer_GM_PANNEL_FACTION, answerI, answerS );
-				DIALOG_MENU( player, data );
 			} break;
 		case 1:
 			{
@@ -1419,7 +1446,7 @@ void answer_GM_PANNEL_FACTION( Critter& player, uint answerI, string& answerS )
 					return;
 				}
 				string current = faction.GetRelation( "RelationDefault" ).Name;
-				array<string> data = { "answer_GM_PANNEL_FACTION_SET_RELATIONS", "Фракция \"" + faction_name + "\" DefaultRelation " + current , "war","dislike", "neutral", "like","ally", "Назад" };
+				array<string> data = { "answer_GM_PANNEL_FACTION_SET_RELATIONS", "Стандартное отношение ко всем у:\n\t'" + faction_name + "' == " + colorize_relations( current ), "war","dislike", "neutral", "like","ally", "Назад" };
 				BackParse( player, @answer_GM_PANNEL_FACTION, answerI, answerS );
 				Memmory.set( "faction_" + player.Id + "_relkey", "RelationDefault" );
 				DIALOG_MENU( player, data );
@@ -1431,7 +1458,7 @@ void answer_GM_PANNEL_FACTION( Critter& player, uint answerI, string& answerS )
 		}	break;
 		case 3:
 			player.ShowScreen( SCREEN_SAY, 0, "answer_GM_DELETE_FACTION" );
-			player.Say( SAY_SAY_TITLE, "Для подтверждения удаления фракции введите ее название" );
+			player.Say( SAY_SAY_TITLE, "Повторите имя:" );
 			break;
 		case 4:
 			Back( player );
@@ -1450,32 +1477,116 @@ void answer_GM_DELETE_FACTION( Critter& player, uint answerI, string& answerS )
 		else DeleteFraction( faction.Id );
 	}
 	else player.Say( SAY_NETMSG, "Ошибка, фракция не найдена" );
+	
+	Back( player );
+}
+
+void show_faction_list2( Critter& player )
+{
+	Fraction@ faction = GetMemmoryFraction(player);
+	if( faction is null )
+	{
+		string faction_name = "error";
+		Memmory.get( "faction_" + player.Id, faction_name );
+		player.Say( SAY_NETMSG, "Ошибка, фракция " + faction_name + " не найдена" );
+		return;
+	}
+
+	array<string> data = {"answer_GM_PANNEL_FACTION_RELATIONS", ""};
+	array<string@> list = GetList();
+	
+	uint start = CLAMP( uint( player.ParamBase[ CR_VAL1 ] ), 0, list.length / SHOW_FRACTIONS_LIST_COUNT ) * SHOW_FRACTIONS_LIST_COUNT;
+	string@ title = data[1];
+	for( uint i = 0; i < SHOW_FRACTIONS_LIST_COUNT; i++ )
+	{
+		if( start + i >= list.length() )
+		{
+			title += "\n";
+			data.insertLast( "" );
+			continue;
+		}
+			
+		IRelations@ rel = faction.GetRelation( "RelationFaction_" + list[start + i] );
+		if( rel is null )
+			@rel = faction.GetRelation( "RelationDefault" + list[start + i] );
+		title += list[start + i] + ": " + colorize_relations( rel.Name ) + "\n";
+		data.insertLast( list[start + i] );
+	}
+	
+	data.insertLast( "С игроком" );
+	data.insertLast( ">>>" );
+	data.insertLast( "<<<" );
+	data.insertLast( "Назад" );
+	
+	DIALOG_MENU( player, data );
 }
 
 void answer_GM_PANNEL_FACTION_RELATIONS( Critter& player, uint answerI, string& answerS )
 {
 	array<string@> list = GetList();
 	
-	if( answerI == list.length() )
+	if( answerI == SHOW_FRACTIONS_LIST_COUNT )
 	{
 		player.ShowScreen( SCREEN_SAY, 0, "answer_GM_PANNEL_FACTION_RELATIONS_PLAYER" );
 		player.Say( SAY_SAY_TITLE, "Введите Никнейм или Ид игрока" );
 		return;
 	}
-	else if( answerI == list.length() + 1 )
+	
+	if( answerI == SHOW_FRACTIONS_LIST_COUNT + 1 )
+	{
+		int step = player.ParamBase[ CR_VAL1 ] + 1;
+		if( step > int( list.length() / SHOW_FRACTIONS_LIST_COUNT ) )
+			step = 0;		
+
+		player.ParamBase[ CR_VAL1 ] = step;
+		
+		show_faction_list2( player );
+		return;
+	}
+	
+	if( answerI == SHOW_FRACTIONS_LIST_COUNT + 2 )
+	{
+		int step = player.ParamBase[ CR_VAL1 ] - 1;
+		if( step < 0 )
+			step = list.length() / SHOW_FRACTIONS_LIST_COUNT;		
+
+		player.ParamBase[ CR_VAL1 ] = step;
+		
+		show_faction_list2( player );
+		return;
+	}
+	
+	else if( answerI == SHOW_FRACTIONS_LIST_COUNT + 3 )
 	{
 		Back( player );
 		return;
 	}
 
-	Fraction@ faction = GetMemmoryFraction(player);
-	string current = faction.GetRelation( "RelationFaction_" + list[answerI] ).Name;
-	array<string> data = { "answer_GM_PANNEL_FACTION_SET_RELATIONS", "Фракция \"" + GetFactionNameByIndex( answerI ) + "\" Relation " + list[answerI] + ": " + current , "war","dislike", "neutral", "like","ally", "Назад" };
-	BackParse( player, @answer_GM_PANNEL_FACTION_RELATIONS, answerI, answerS );
-	Memmory.set( "faction_" + player.Id + "_relkey", "RelationFaction_" + list[answerI] );
-	DIALOG_MENU( player, data );
+	uint index = player.ParamBase[ CR_VAL1 ] * SHOW_FRACTIONS_LIST_COUNT + answerI;
+	if( index >= list.length() )
+	{
+		show_faction_list2( player );
+		return;
+	}
 	
-	// answer_GM_PANNEL_RELATIONS
+	Fraction@ faction = GetMemmoryFraction(player);
+	string current = faction.GetRelation( "RelationFaction_" + list[index] ).Name;
+	array<string> data = { "answer_GM_PANNEL_FACTION_SET_RELATIONS", "Отношение '" + GetFactionNameByIndex( index ) + "' к '" + list[index] + "':\n\t" + colorize_relations( current ), "war","dislike", "neutral", "like","ally", "Назад" };
+	BackParse( player, @answer_GM_PANNEL_FACTION_RELATIONS, answerI, answerS );
+	Memmory.set( "faction_" + player.Id + "_relkey", "RelationFaction_" + list[index] );
+	Memmory.set( "faction_" + player.Id + "_name", list[index] );
+	DIALOG_MENU( player, data );
+}
+
+string colorize_relations( string relation )
+{
+	if( relation == "war" ) 	return COLOR_RELATIONS_WAR + relation + COLOR_NETMSG;
+	if( relation == "dislike" ) return COLOR_RELATIONS_DISLIKE + relation + COLOR_NETMSG;
+	if( relation == "neutral" ) return COLOR_RELATIONS_NEUTRAL + relation + COLOR_NETMSG;
+	if( relation == "like" ) 	return COLOR_RELATIONS_LIKE + relation + COLOR_NETMSG;
+	if( relation == "ally" ) 	return COLOR_RELATIONS_ALLY + relation + COLOR_NETMSG;
+
+	return relation;
 }
 
 void answer_GM_PANNEL_FACTION_RELATIONS_PLAYER( Critter& player, uint answerI, string& answerS )
@@ -1486,7 +1597,7 @@ void answer_GM_PANNEL_FACTION_RELATIONS_PLAYER( Critter& player, uint answerI, s
 		
 	Fraction@ faction = GetMemmoryFraction(player);
 	string current = faction.GetRelation( "RelationCritter_" + answerS ).Name;
-	array<string> data = { "answer_GM_PANNEL_FACTION_SET_RELATIONS", "Фракция \"" + faction.Name + "\" Relation " + answerS + ": " + current , "war","dislike", "neutral", "like","ally", "Назад" };
+	array<string> data = { "answer_GM_PANNEL_FACTION_SET_RELATIONS", "Отношение '" + faction.Name + "' к '" + answerS + "':\n\t" + colorize_relations( current ), "war","dislike", "neutral", "like","ally", "Назад" };
 	BackParse( player, @answer_GM_PANNEL_FACTION_RELATIONS, answerI, answerS );
 	Memmory.set( "faction_" + player.Id + "_relkey", "RelationCritter_" + answerS );
 	DIALOG_MENU( player, data );
@@ -1496,24 +1607,18 @@ void answer_GM_PANNEL_FACTION_SET_RELATIONS( Critter& player, uint answerI, stri
 {
 	string key;
 	Memmory.get( "faction_" + player.Id + "_relkey", key );
-	switch( answerI )
+
+	string[] relation = { "war", "dislike", "neutral", "like", "ally" };
+	SetFractionRelation( GetMemmoryFraction(player), key, relation[answerI] );
+
+	if( findFirst( key, "RelationFaction_" ) != -1 )
 	{
-		case 0:
-			SetFractionRelation( GetMemmoryFraction(player), key, "war" );
-			break;
-		case 1:
-			SetFractionRelation( GetMemmoryFraction(player), key, "dislike" );
-			break;
-		case 2:
-			SetFractionRelation( GetMemmoryFraction(player), key, "neutral" );
-			break;
-		case 3:
-			SetFractionRelation( GetMemmoryFraction(player), key, "like" );
-			break;
-		case 4:
-			SetFractionRelation( GetMemmoryFraction(player), key, "ally" );
-			break;
+		string name = "";
+		Memmory.get( "faction_" + player.Id + "_name", name );
+		
+		SetFractionRelation( GetFraction( name ), "RelationFaction_" + GetMemmoryFraction(player).Name, relation[answerI] );
 	}
+
 	Back( player );
 }
 
