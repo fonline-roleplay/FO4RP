@@ -1,0 +1,280 @@
+#include "_utils.fos"
+#include "_ltp.fos"
+
+#include "STAT_MODS_H.fos"
+
+
+uint8 GetDir( Critter@ cr, Critter@ target )
+{
+    return GetDirection( cr.HexX, cr.HexY, target.HexX, target.HexY );
+}
+
+bool IsNotHuman( Critter& cr ) {    return !IsHuman(cr); }
+bool IsHuman( Critter& cr )
+{
+    if( cr.StatBase[ ST_BODY_TYPE ] < BT_BRAHMIN || cr.IsPlayer() )
+        return true;
+    else
+        return false;
+}
+
+void _InitSexItem( Item& item, bool firstTime )
+{
+    item.SetEvent( ITEM_EVENT_USE, "e_SexUse" );
+}
+
+bool e_SexUse( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
+{
+    if( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) )
+	{
+		InformWarning(cr, "Вы не поняли, что с этим делать. Используйте его на цель.");
+        return true;
+	}
+    if( cr.IsPlayer() && onCritter.IsPlayer() && ( IsHuman( cr ) ) && ( IsHuman( onCritter ) ) )
+    {
+        ToAskSex( item, cr, onCritter );
+        return true;
+    }
+    else if( onCritter.StatBase[ ST_BODY_TYPE ] == 5 )
+	{
+        cr.Say( SAY_NETMSG, "Оу..." );
+		onCritter.ParamBase[CR_VAL1] = item.Id;
+		HaveSex( cr, onCritter );
+		return true;
+	}
+	else
+		cr.Say( SAY_NETMSG, "Нет, ведь это даже не брамин!" );
+	return true;
+}
+
+void ToAskSex( Item& item, Critter& target, Critter@ onCritter )
+{
+    string player;
+    if( target.IsPlayer() )
+        player = GetPlayerName( target.Id );
+    else
+        player = "Кто-то";
+
+    onCritter.ParamBase[CR_VAL0] = crit.Id;
+	onCritter.ParamBase[CR_VAL1] = item.Id;
+	onCritter.ShowScreen( SCREEN_DIALOGBOX, 1, "AnswerSexMe" );
+	onCritter.Say( SAY_DIALOGBOX_TEXT, player + " хочет заняться с вами сексом!" );
+	onCritter.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Согласиться" );
+}
+
+void AnswerSexMe( Critter& cr, uint answerI, string& answerS )
+{
+    if( answerI == 0 )
+    {
+		InformWarning(cr, "Вы согласились");
+        HaveSex( GetCritter( cr.ParamBase[CR_VAL0] ), cr );
+    }
+}
+
+void HaveSex( Critter& cr, Critter@ target )
+{
+	Item@ condom = GetItem( target.ParamBase[CR_VAL1] );
+	if(!valid(condom)) return;
+	
+	if( cr.TimeoutBase[ TO_TIREDNESS ] > int( __FullSecond + REAL_SECOND( 60 ) ) ) {
+		InformWarning(cr, "Вы слишком устали, и не готовы к новым постельным приключениям." );
+		return;
+    }
+		
+	if( target.TimeoutBase[ TO_TIREDNESS ] > int( __FullSecond + REAL_SECOND( 60 ) ) ) {
+        InformWarning( cr, "Ваш партнер слишком сильно устал, чтобы ублажить вас." );
+        return;
+    }
+	
+	if( cr.TimeoutBase[ TO_TIREDNESS ] < int( __FullSecond ) )
+		cr.TimeoutBase[ TO_TIREDNESS ] = __FullSecond;
+	cr.TimeoutBase[ TO_TIREDNESS ] += REAL_SECOND( 300 );
+
+	if( target.TimeoutBase[ TO_TIREDNESS ] < int( __FullSecond ) )
+		target.TimeoutBase[ TO_TIREDNESS ] = __FullSecond;
+	target.TimeoutBase[ TO_TIREDNESS ] += REAL_SECOND( 300 );
+		
+	if( target.StatBase[ ST_BODY_TYPE ] == 5 )
+	{
+		_SubItem( condom, 1 );
+		cr.ParamBase[CR_VAL0] = target.Id;
+		start_bramin_sex( cr );
+		return;
+	}
+	
+	cr.StatBase[ ST_HUNGER ] -= Random( 15, 20 );
+	target.StatBase[ ST_HUNGER ] -= Random( 15, 20 );
+	cr.StatBase[ ST_THIRST ] -= Random( 20, 30 );
+	target.StatBase[ ST_THIRST ] -= Random( 20, 30 );
+	cr.ParamBase[ CR_DIRTINESS ] += Random( 20, 30 );
+	target.ParamBase[ CR_DIRTINESS ] += Random( 20, 30 );
+	cr.StatBase[ ST_CURRENT_HP ] += 50;
+	target.StatBase[ ST_CURRENT_HP ] += 50;
+    
+    SayLog( cr, crInfo( cr ) + " и " + crInfo( target ) + " принимают порцию сладкой любви." );
+	
+	_SubItem( condom, 1 );
+	cr.ParamBase[CR_VAL0] = target.Id;
+	target.ParamBase[CR_VAL0] = cr.Id;
+	start_fucker_sex( cr );
+	start_fucked_sex( target );
+    //FlushScreen( cr, COLOR_BLACK, COLOR_BLACK, 10000 );
+    //FlushScreen( target, COLOR_BLACK, COLOR_BLACK, 10000 );
+	return;
+}
+
+bool ltp_bramin_inited = false;
+void ltp_bramin_init()
+{
+	LTPREG( LTP_BRAMIN_SEX, process_bramin_sex )
+	ltp_bramin_inited = true;
+}
+
+bool start_bramin_sex( Critter& cr )
+{
+	if(!ltp_bramin_inited) 
+		ltp_bramin_init();
+	
+		Critter@ target = GetCritter( cr.ParamBase[CR_VAL0] );
+		target.SetDir( cr.Dir );
+		target.SetHomePos( target.HexX, target.HexY, target.Dir);
+		target.Animate( 0, ANIM2_DAMAGE_BACK, null, true, true );
+		cr.Animate( 0, ANIM2_DAMAGE_FRONT, null, true, true );
+		StartProcess( cr, LTP_BRAMIN_SEX, 0, 0, 0, 0 );
+		return true;
+}
+
+uint process_bramin_sex( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+	LTPROCESS( cr, param0, LTP_BRAMIN_SEX )
+	Critter@ target = GetCritter( cr.ParamBase[CR_VAL0] );
+	
+	param0++;
+	
+	target.Animate( 0, ANIM2_DAMAGE_BACK, null, true, true );
+	cr.Animate( 0, ANIM2_DAMAGE_FRONT, null, true, true );
+	
+	if( param0 > 10 )
+	{
+		cr.Say( SAY_EMOTE, "Ублажает брамина" );
+		target.Say( SAY_EMOTE, "Нежно и протяжно мычит" );
+		return 0;
+	}
+	
+	return 700;
+}
+//cr - Fucker
+bool fucker_ltp_inited = false;
+void fucker_ltp_init()
+{
+	LTPREG( LTP_SEX, process_sex )
+	ltp_inited = true;
+}
+
+bool start_fucker_sex( Critter& cr )
+{
+	if(!fucker_ltp_inited) 
+		fucker_ltp_init();
+	
+	cr.Animate( 0, ANIM2_DAMAGE_FRONT, null, true, true );
+	StartProcess( cr, LTP_SEX, 0, 0, 0, 0 );
+	return true;
+}
+
+uint process_fucker_sex( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+	LTPROCESS( cr, param0, LTP_SEX )
+	Critter@ target = GetCritter( cr.ParamBase[CR_VAL0] );
+	param0++;
+	
+	cr.Animate( 0, ANIM2_DAMAGE_FRONT, null, true, true );
+
+	if( cr.ParamBase[ ST_LTP_TIME ] == -1 )
+		return 0;
+	
+	if( target.ParamBase[ ST_LTP_TIME ] == -1 ) {
+		cr.Say( SAY_NETMSG, "|0xFF0000 Кажется, ваш партнер кончил преждевременно..." );
+		target.Say( SAY_EMOTE, "Судорога" );
+		return 0;
+	}
+	
+	if( param0 > 10 )
+	{
+		finish_sex( cr, target );
+		target.ParamBase[ ST_LTP_TIME ] = -1;
+		return 0;
+	}
+	
+	return 700;
+}
+
+//target - Fucked
+bool fucked_ltp_inited = false;
+void fucked_ltp_init()
+{
+	LTPREG( LTP_SEX_RECIEVE, another_process_sex )
+	fucked_ltp_inited = true;
+}
+
+bool start_fucked_sex( Critter& target )
+{
+	if(!fucked_ltp_inited) 
+		fucked_ltp_init();
+	
+	Critter@ cr = GetCritter( target.ParamBase[CR_VAL0] );
+	if( !target.IsKnockout() ) {
+		target.SetDir( cr.Dir );
+	}
+	target.Animate( 0, ANIM2_DAMAGE_BACK, null, true, true );
+	StartProcess( target, LTP_SEX_RECIEVE, 0, 0, 0, 0 );
+	return true;
+}
+
+uint fucked_process_sex( Critter@ target, int& param0, int& param1, int& param2 )
+{
+	LTPROCESS( target, param0, LTP_SEX_RECIEVE )
+	Critter@ cr = GetCritter( target.ParamBase[CR_VAL0] );
+	param0++;
+	
+	target.Animate( 0, ANIM2_DAMAGE_BACK, null, true, true );
+	
+	if( target.ParamBase[ ST_LTP_TIME ] == -1 )
+		return 0;
+	
+	if( cr.ParamBase[ ST_LTP_TIME ] == -1 ) {
+		target.Say( SAY_NETMSG, "|0xFF0000 Кажется, ваш партнер кончил преждевременно..." );
+		cr.Say( SAY_EMOTE, "Судорога" );
+		return 0;
+	}
+	
+	if( param0 > 10 )
+	{
+		finish_sex( cr, target );
+		cr.ParamBase[ ST_LTP_TIME ] = -1;
+		return 0;
+	}
+	
+	return 700;
+}
+
+void finish_sex( Critter@ cr, Critter@ target )
+{
+	target.Say( SAY_EMOTE, "Принимает порцию сладкой любви" );
+	cr.Say( SAY_EMOTE, "Принимает порцию сладкой любви" );
+
+    if( cr.KarmaBase[ KARMA_SEXPERT ] >= 1 || target.KarmaBase[ KARMA_SEXPERT ] >= 1 )
+    {
+		int roll = Random( 0, 2 );    
+		if( roll == 0 )
+        {
+			SetDrug( cr, PID_KITTY_SEX_DRUG_AGILITY );
+			SetDrug( target, PID_KITTY_SEX_DRUG_AGILITY );
+		} else if ( roll == 1 ) {
+			SetDrug( cr, PID_KITTY_SEX_DRUG_INTELLIGENCE );
+			SetDrug( target,PID_KITTY_SEX_DRUG_INTELLIGENCE );
+		} else if ( roll == 2 ) {
+			SetDrug( cr, PID_KITTY_SEX_DRUG_STRENGTH );
+			SetDrug( target, PID_KITTY_SEX_DRUG_STRENGTH );
+		}
+    }
+}
