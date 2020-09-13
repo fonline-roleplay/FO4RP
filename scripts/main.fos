@@ -898,65 +898,8 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			cr.Say( SAY_NETMSG, ( valid( cr ) ? cr.Id : 0 ) + " " + ( valid( targetCr ) ? targetCr.Id : 0 ) );
 	}
 	
-	if( pid == PID_SHACKLES )
-	{
-        if( item.Val1 == 0 )
-			item.Val1 = Random( 1, 8191 );
-		
-		if( item.Val3 != 0 )
-		{
-			cr.Say( SAY_NETMSG, "Эти кандалы сломаны." );
-			return true;
-		}
-		
-		if( item.Val2 != 0 )
-		{
-			return false;
-		}
-
-		if( !valid( targetCr ) && !useOnSelf )	return false;
-		bool noResistance = useOnSelf || !CanResist( targetCr );
-		Critter@ target = useOnSelf ? @cr : @targetCr;
-
-		Item@ slot = target.GetItem( 0, SLOT_MISC );
-		if( valid( slot ) )
-		{
-			if( slot.GetProtoId() == PID_SHACKLES && slot.Val2 != 0 )
-			{
-				cr.Say( SAY_NETMSG, "На цели уже одеты кандалы." );
-				return true;
-			}
-			
-			target.MoveItem( slot.Id, slot.GetCount(), SLOT_INV );
-		}
-
-		Item @key = cr.AddItem( PID_SHACKLES_KEY, 1 );
-		key.Val1 = item.Val1;
-		key.SetLexems( "$keynum" + key.Val1 );
-		key.SetScript( "_HandcuffsKeyUsed" );
-		key.Update();
-		
-		item.Val2 = key.Id;
-		item.SetScript( "_InitUsedShackles" );		
-		
-		if( !useOnSelf )
-		{
-			cr.Say( SAY_NETMSG, "Вы одели кандалы на цель." );
-			target.Say( SAY_NETMSG, "Вас заковали в кандалы." );
-		}
-		else
-		{
-			cr.Say( SAY_NETMSG, "Вы одели кандалы на себя." );
-		}
-
-		MoveItem( item, 1, target );
-		target.MoveItem( item.Id, item.GetCount(), SLOT_MISC );
-		
-		LogItemMovement( cr, item, "одевает кандалы на " + crInfo( target ) + ", запирая их ключом " + itemDesc( key ) );
-		
-		ChangeCritterSpeed( target );
+	if( pid == PID_SHACKLES && UsedShackles( cr, item, targetCr, useOnSelf ) )
 		return true;
-	}
 	
 	//Traps on items
 	if( valid( targetItem ) && SetTrapOnItem( cr, item, targetItem ) )
@@ -5653,4 +5596,99 @@ bool _release( Item& key, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery
 	return true;
 }
 
+bool UsedShackles( Critter& cr, Item& item, Critter@ targetCr, bool useOnSelf )
+{
+	if( item.Val1 == 0 )
+		item.Val1 = Random( 1, 8191 );
+	
+	if( item.Val3 != 0 )
+	{
+		cr.Say( SAY_NETMSG, "Эти кандалы сломаны." );
+		return true;
+	}
+	
+	if( item.Val2 != 0 )
+	{
+		if( useOnSelf )
+		{
+			InformWarning( cr, "Кандалы так просто не снять." );
+			return true;
+		}
+		
+		return false;
+	}
+
+	if( useOnSelf )
+		return PutOnShackles( cr, item, targetCr, useOnSelf );
+	
+	if( !valid( targetCr ) ) return false;
+	
+	if( CanResist( targetCr ) )
+	{
+		targetCr.ParamBase[CR_VAL0] = cr.Id;
+		targetCr.ParamBase[CR_VAL1] = item.Id;
+		targetCr.ParamBase[CR_VAL2] = useOnSelf ? 1 : 0;
+		targetCr.ShowScreen( SCREEN_DIALOGBOX, 1, "AnswerPutOnShackles" );
+		targetCr.Say( SAY_DIALOGBOX_TEXT, "На вас пытаются надеть кандалы!" );
+		targetCr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Подчиниться" );
+		targetCr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "Сопротивляться" );		
+		
+		return true;
+	}
+	
+	return PutOnShackles( cr, item, targetCr, useOnSelf );
+}
+
+void AnswerPutOnShackles( Critter& targetCr, uint answerI, string& answerS )
+{
+	PutOnShackles( GetCritter( targetCr.ParamBase[CR_VAL0] ), GetItem( targetCr.ParamBase[CR_VAL1] ), targetCr, targetCr.ParamBase[CR_VAL2] == 1 );
+}
+
+bool PutOnShackles( Critter@ cr, Item@ item, Critter@ targetCr, bool useOnSelf )
+{
+	if( !valid( cr ) || !valid( item ) ) return false;
+	
+	Critter@ target = useOnSelf ? @cr : @targetCr;
+
+	if( !valid( target ) ) return false;
+
+	Item@ slot = target.GetItem( 0, SLOT_MISC );
+	if( valid( slot ) )
+	{
+		if( slot.GetProtoId() == PID_SHACKLES && slot.Val2 != 0 && slot.Val3 == 0 )
+		{
+			cr.Say( SAY_NETMSG, "На цели уже одеты кандалы." );
+			return true;
+		}
+		
+		target.MoveItem( slot.Id, slot.GetCount(), SLOT_INV );
+	}
+
+	Item @key = cr.AddItem( PID_SHACKLES_KEY, 1 );
+	key.Val1 = item.Val1;
+	key.SetLexems( "$keynum" + key.Val1 );
+	key.SetScript( "_HandcuffsKeyUsed" );
+	key.Update();
+	
+	item.Val2 = key.Id;
+	item.SetScript( "_InitUsedShackles" );		
+	
+	if( !useOnSelf )
+	{
+		cr.Say( SAY_NETMSG, "Вы одели кандалы на цель." );
+		target.Say( SAY_NETMSG, "Вас заковали в кандалы." );
+	}
+	else
+	{
+		cr.Say( SAY_NETMSG, "Вы одели кандалы на себя." );
+	}
+
+	MoveItem( item, 1, target );
+	target.MoveItem( item.Id, item.GetCount(), SLOT_MISC );
+	
+	LogItemMovement( cr, item, "одевает кандалы на " + crInfo( target ) + ", запирая их ключом " + itemDesc( key ) );
+	
+	ChangeCritterSpeed( target );	
+	return true;
+}
 #include "behaviours.fos"
