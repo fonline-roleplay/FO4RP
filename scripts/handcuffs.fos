@@ -62,6 +62,12 @@ void _InitHandcuffsKey( Item& item, bool firstTime )
 
 bool _tie( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
 {
+	if( valid( onCritter ) && onCritter.IsDead() )
+	{
+		InformWarning( crit, "Это бесполезно, цель мертва." );
+		return true;
+	}
+	
     bool onSelf = ( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) );
     bool isRope = ( item.GetProtoId() == PID_ROPE );
     if( IsNotHuman( crit ) && !isRope )
@@ -96,40 +102,67 @@ bool _tie( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scenery@
     if( ( valid( onCritter ) ) && ( onCritter.ParamBase[ HANDCUFFS ] != 0) && ( IsHuman( onCritter ) ) )
     {		
 		Item@[] items;
-		string name;
         onCritter.GetItems( SLOT_HAND1, items );	
-		isRope = (items[0].GetProtoId() == PID_ROPE_USED);
+
+		isRope = ( items[0].GetProtoId() == PID_ROPE_USED );
 		
-		string postfix = (onCritter.Stat [ST_GENDER] == GENDER_FEMALE) ? "а" : "";
-		if( onCritter.IsPlayer() ) 	name = GetPlayerName( onCritter.Id );
-        else 						name =  "Он " + postfix;
-		
-		InformError(crit,  !isRope ?  name + " уже закован" + postfix + " в наручники." : name + " уже связан" + postfix + " веревкой.");
+		InformError( crit, !isRope ?  "Цель уже закована в наручники." : "Цель уже связана веревкой." );
 		return true;
     }
 	
     if( ( valid( onCritter ) ) && ( onCritter.ParamBase[ HANDCUFFS ] == 0 ) )
     {
-        if( onCritter.StatBase[ ST_CURRENT_HP ] < 0 || onCritter.IsKnockout() )
+        bool human_handcuffs = item.GetProtoId() == PID_HANDCUFFS && onCritter.Stat[ ST_BODY_TYPE ] < BT_BRAHMIN;
+		
+		if( human_handcuffs || onCritter.StatBase[ ST_CURRENT_HP ] < 0 || onCritter.IsKnockout() )
         {
-            TieUp( item, crit, onCritter );
+			if( isOwningNPC( crit, onCritter ) )
+			{
+				InformWarning( crit, "В этом нет необходимости. Используйте хоткей ALT-T для того что бы приказать НПЦ следовать за вами или остановиться." );
+			}
+			else
+			{
+				InformWarning( crit, "Вы связали жертву верёвкой. Она будет слушаться вас пока вы её не освободите." );
+				
+				onCritter.SetScript( null );
+				TieUp( item, crit, onCritter );
+				brahminTie( crit, onCritter );
+			}
+			
             return true;
         }
         if( onCritter.Timeout[ TO_BATTLE ] != 0 || onCritter.IsNpc() )
         {
-            if(onCritter.Stat[ ST_BODY_TYPE ] == BT_BRAHMIN)
+            if( onCritter.Stat[ ST_BODY_TYPE ] == BT_BRAHMIN )
             {
 				if( item.GetProtoId() == PID_ROPE )
-					brahminTie ( crit, onCritter );
+				{
+					if( isOwningNPC( crit, onCritter ) )
+					{
+						InformWarning( crit, "В этом нет необходимости. Используйте хоткей ALT-T для того что бы приказать НПЦ следовать за вами или остановиться." );
+					}
+					else
+					{
+						InformWarning( crit, "Вы связали брамина верёвкой. Используйте навык ловушек что бы снять узду." );
+
+						onCritter.SetScript( null );
+						onCritter.ParamBase[ ST_FACTION ] = crit.ParamBase[ ST_FACTION ];
+						onCritter.ParamBase[ MERC_MASTER_ID ] = int( crit.Id );
+						
+						_SubItem( item, 1 );
+						brahminTie( crit, onCritter );
+					}
+				}
 				else
 					InformWarning(crit, "Вам нужна верёвка для этого." );
+				
                 return true;
             }
             else
             {
                 if( onCritter.IsNpc() )
                     onCritter.AddEnemyInStack( crit.Id );
-				InformWarning(crit, (!isRope) ? "Вам не удалось надеть наручники на цель." : "Вам не удалось связать цель." );
+				InformWarning(crit, "Вам не удалось связать цель." );
                 return true;
             }
         }
@@ -139,6 +172,7 @@ bool _tie( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scenery@
             return true;
         }
     }
+	
 	InformWarning(crit, "Вы не смогли придумать, что с этим делать." );
 	return true;
 }
@@ -257,15 +291,22 @@ bool _release( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scen
 
         if( item.Val1 == keynum )
         {
-            string name;
-            if( onCritter.IsPlayer() )
-                name = GetPlayerName( onCritter.Id );
-            else
-                name = "жертву";
-            //crit.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12948, "$name" + name );
-			InformWarning(crit, "Вы oсвободили " + name + " от наручников." );
-			InformWarning(onCritter, "Вас освободили от наручников... наконец-то." );
-            onCritter.ParamBase[ HANDCUFFS ] = 0;
+			InformWarning(crit, "Вы oсвободили  жертву от наручников." );
+			InformWarning(onCritter, "Вас освободили от наручников." );
+			
+			onCritter.ParamBase[ HANDCUFFS ] = 0;
+			onCritter.StatBase[ ST_FOLLOW_CRIT ] = 0;
+			onCritter.ParamBase[ MERC_MASTER_ID ] = 0;
+
+			onCritter.ParamBase[ ST_FACTION ] = onCritter.ParamBase[ CR_VAL0 ];
+			if( onCritter.IsNpc() )
+			{
+				onCritter.SetHomePos( onCritter.HexX, onCritter.HexY, onCritter.Dir );
+				onCritter.EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
+			
+				AddWalkPlane( onCritter, 0, onCritter.HexX, onCritter.HexY, onCritter.Dir, false, 0 );
+			}
+			
             onCritter.GetItems( SLOT_HAND1, items );
             //onCritter.GetItems( SLOT_HAND2, items );// баг который удаляет из 2 руки все а не перемещает в инвернтарь
             DeleteItems( items );
@@ -274,7 +315,7 @@ bool _release( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scen
 			cuffs.Val2 = 0;
             cuffs.SetLexems( "$number" + cuffs.Val1 );
             DeleteItem( item );
-			onCritter.StatBase [ST_FOLLOW_CRIT] = 0;
+
             if( onCritter.IsNpc() )
             {
                 onCritter.EraseTimeEvents( EVENT_ID );
@@ -352,6 +393,10 @@ void TieUp( Item& item, Critter& crit, Critter@ onCritter )
         onCritter.ParamBase[ HANDCUFFS ] = onCritter.ParamBase[ HANDCUFFS ] | ( item.Val1 << 16 ) | ( escape << 29 ) | ( onCritter.ModeBase[ MODE_NO_HOME ] << 30 ) | ( follow << 31 );
     bool  handCuffs = ( item.GetProtoId() == PID_HANDCUFFS );
 
+	onCritter.ParamBase[ CR_VAL0 ] = onCritter.ParamBase[ ST_FACTION ];
+	onCritter.ParamBase[ ST_FACTION ] = crit.ParamBase[ ST_FACTION ];
+	onCritter.ParamBase[ MERC_MASTER_ID ] = int( crit.Id );
+
     uint keyId = 0;
 	Item@ key;
     if( handCuffs )
@@ -387,17 +432,11 @@ void TieUp( Item& item, Critter& crit, Critter@ onCritter )
 	
 	if( crit.Id != onCritter.Id )
     {
-        string name;
-        if( onCritter.IsPlayer() )
-            name = GetPlayerName( onCritter.Id );
-        else
-            name = "жертву";
-		
 		CrimeLog( crit, crInfo( crit ) + ( handCuffs ? " одевает наручники на " : " связывает " ) + crInfo( onCritter ) );
 		
-		InformWarning(crit, handCuffs ? "Вы успешно надели наручники на " + name : "Вы связали " + name);
+		InformWarning( crit, handCuffs ? "Вы успешно надели наручники на" : "Вы связали" + " жертву." );
         if( onCritter.IsPlayer() )
-			InformWarning( onCritter, handCuffs ? "На вас одели наручники!" : "Вас связали" );
+			InformWarning( onCritter, handCuffs ? "На вас одели наручники!" : "Вас связали!" );
     }
 	//onCritter.SetScript("_HandcuffsDrop");
 }
@@ -422,12 +461,22 @@ bool unlock( Critter& cr, Critter& targetCr, uint16 pid ) // export in main.fos 
     if( !isKnife )
         return false;
 
-    targetCr.DeleteItem( PID_ROPE_USED, 2 );
     cr.AddItem( PID_ROPE, 1 );
-    targetCr.ParamBase[ HANDCUFFS ] = 0;
-	targetCr.StatBase[ ST_FOLLOW_CRIT] = 0;
+	
+    targetCr.DeleteItem( PID_ROPE_USED, 2 );
+
+	targetCr.ParamBase[ HANDCUFFS ] = 0;
+	targetCr.StatBase[ ST_FOLLOW_CRIT ] = 0;
+	targetCr.ParamBase[ MERC_MASTER_ID ] = 0;
+	targetCr.ParamBase[ ST_FACTION ] = targetCr.ParamBase[ CR_VAL0 ];
+	
 	if( targetCr.IsNpc() )
 	{
+		targetCr.SetHomePos( targetCr.HexX, targetCr.HexY, targetCr.Dir );
+		targetCr.EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
+	
+		AddWalkPlane( targetCr, 0, targetCr.HexX, targetCr.HexY, targetCr.Dir, false, 0 );
+
 		targetCr.ModeBase[ MODE_NO_HOME ] = ( targetCr.ParamBase[ HANDCUFFS ] >> 30 ) & 0x1;
 		targetCr.ModeBase[ MODE_NO_FAVORITE_ITEM ] = 0;
 		targetCr.EraseTimeEvents( EVENT_ID );
@@ -2740,17 +2789,17 @@ void unsafe_call_mob( Critter& cr, int targetId, int, int, string@ , int[]@ )
 		return;
 	}
 	
-	if( target.IsPlayer() || target.ParamBase[ ST_FACTION ] == 0 || cr.ParamBase[ ST_FACTION ] != target.ParamBase[ ST_FACTION ] )
-	{
-		cr.Say( SAY_NETMSG, "Цель вас не слушается." );
-		return;
-	}
-	
-	if( target.IsDead() || target.IsKnockout() )
+	if( target.IsPlayer() || target.IsDead() || target.IsKnockout() )
 	{
 		cr.Say( SAY_NETMSG, "Это бесполезно." );
 		return;
 	}
+
+	if( !isOwningNPC( cr, target ) )
+	{
+		cr.Say( SAY_NETMSG, "Цель вас не слушается." );
+		return;
+	}	
 	
 	brahminTie( cr, target );
 }
@@ -2760,6 +2809,7 @@ void unsafe_call_mob( Critter& cr, int targetId, int, int, string@ , int[]@ )
 void brahminTie( Critter& cr, Critter& brahmin ) {
     brahmin.DropPlanes();
     brahmin.ClearEnemyStack();
+	
 	if( brahmin.StatBase [ST_FOLLOW_CRIT] == 0 ) {
 		brahmin.StatBase [ST_FOLLOW_CRIT] = cr.Id;
     	brahmin.ModeBase [MODE_NO_HOME] = 1;
@@ -2769,12 +2819,13 @@ void brahminTie( Critter& cr, Critter& brahmin ) {
     	cr.Say( SAY_NETMSG, "Цель следует за вами." );
 	} else if( brahmin.StatBase [ST_FOLLOW_CRIT] == int( cr.Id ) ) {
 		brahmin.ModeBase [MODE_NO_HOME] = 0;
-		brahmin.SetHomePos (brahmin.HexX, brahmin.HexY, brahmin.Dir);
+		brahmin.SetHomePos( brahmin.HexX, brahmin.HexY, brahmin.Dir );
 		brahmin.StatBase [ST_FOLLOW_CRIT] = 0;
-		brahmin.EraseTimeEvents (CTE_BRAHMIN_FOLLOW);
+		brahmin.EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
+		
+		AddWalkPlane( brahmin, 0, brahmin.HexX, brahmin.HexY, brahmin.Dir, false, 0 );
 		cr.Say( SAY_NETMSG, "Цель остановилась." );
 	}
-	brahmin.ClearEnemyStack();
 }
 
 uint cte_brahmin_follow (Critter& cr, int identifier, uint& rate) {
@@ -2797,9 +2848,14 @@ uint cte_brahmin_follow (Critter& cr, int identifier, uint& rate) {
 		{
 			cr.ErasePlane (AI_PLANE_WALK, true);
 			
-			if( GetDistantion( cr.HexX, cr.HexY, master.HexX, master.HexY ) > 3 )
+			if( GetDistantion( cr.HexX, cr.HexY, master.HexX, master.HexY ) > 5 )
 			{
-				AddWalkPlane (cr, 0, master.HexX + Random( -1, 1 ), master.HexY + Random( -1, 1 ), GetDirection( cr.HexX, cr.HexY, master.HexX, master.HexY ), false, 1 );
+				AddWalkPlane( cr, 0, master.HexX + Random( -1, 1 ), master.HexY + Random( -1, 1 ), GetDirection( cr.HexX, cr.HexY, master.HexX, master.HexY ), true, 2 );
+			}
+			
+			if( GetDistantion( cr.HexX, cr.HexY, master.HexX, master.HexY ) > 2 )
+			{
+				AddWalkPlane( cr, 0, master.HexX + Random( -1, 1 ), master.HexY + Random( -1, 1 ), GetDirection( cr.HexX, cr.HexY, master.HexX, master.HexY ), false, 1 );
 			}
 		} 
 		else 
