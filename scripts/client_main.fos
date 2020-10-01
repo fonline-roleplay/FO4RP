@@ -2553,15 +2553,125 @@ void combat_result( uint[]& data )
 	}
 }
 
+string generic_description_slot( ItemCl@ item )
+{
+	CritterCl@ chosen = GetChosen();
+	string result = "-----------------------\n";
+	
+	if( !valid( item ) )
+	{
+		uint8      mode = 0;
+		int bonus = chosen.Stat[ ST_MELEE_DAMAGE ];
+		ProtoItem@ unarmed = chosen.GetSlotProto( SLOT_HAND2, mode );
+		result += GetMsgStr( TEXTMSG_GAME, STR_INV_NO_ITEM ) + "\n";
+		result += GetMsgStr( TEXTMSG_GAME, STR_INV_UNARMED_DMG ) + " ";
+		result += ( _WeaponDmgMin( unarmed, _WeaponModeUse( mode ) ) + bonus ) + "-";
+		result += ( _WeaponDmgMax( unarmed, _WeaponModeUse( mode ) ) + bonus ) + "\n";
+		result += "\n\n";
+		
+		return result;
+	}
+	
+	int use = _WeaponModeUse( item.Mode );
+	if( use > 2 )
+		use = 0;
+
+	result += itemText( item, 150 ) + ".\n";
+
+	if( item.GetType() != ITEM_TYPE_WEAPON )
+	{
+		if( item.GetCount() > 1 )
+			result += " x" + item.GetCount();
+		
+		return result + "\n\n\n";
+	}
+
+	int bonus = 0;
+	uint skill = _WeaponSkill( item.Proto, use );
+	
+	if( skill == WS_THROWING )
+		bonus = chosen.Stat[ ST_MELEE_DAMAGE ] / 2;
+	
+	if( skill == SK_UNARMED || skill == SK_MELEE_WEAPONS )
+		bonus = chosen.Stat[ ST_MELEE_DAMAGE ];
+
+	result += GetMsgStr( TEXTMSG_GAME, STR_INV_DMG ) + " ";
+	result += ( _WeaponDmgMin( item.Proto, use ) + bonus ) + "-";
+	result += ( _WeaponDmgMax( item.Proto, use ) + bonus ) + "\n";
+
+	if( _WeaponMaxDist( item.Proto, use ) > 1 )
+	{
+		result += GetMsgStr( TEXTMSG_GAME, STR_INV_DIST ) + " ";
+		int wpnMaxDist = _WeaponMaxDist( item.Proto, use );
+		
+		if( skill == SK_THROWING )
+			wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), chosen.Stat[ ST_STRENGTH ] ) );
+			//wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), chosen.Stat[ ST_STRENGTH ] + 2 * chosen.Perk[ PE_HEAVE_HO ] ) );
+			
+		result += wpnMaxDist;
+	}
+	result += "\n";
+
+	if( item.Proto.Weapon_MaxAmmoCount > 0 )
+	{
+		result += GetMsgStr( TEXTMSG_GAME, STR_INV_AMMO ) + " ";
+		result += item.AmmoCount + "/" + item.Proto.Weapon_MaxAmmoCount + " ";
+		result += GetMsgStr( TEXTMSG_GAME, STR_CALIBER( item.Proto.Weapon_Caliber ) );
+	}
+	else if( item.GetCount() > 1 )
+		result += "\tx" + item.GetCount();
+	
+	result += "\n";
+	
+	return result;
+}
+
+#define DESCRIPTION_DEFAULT_DELAY	( 33 )
+int[] description_tick_delays = { 0, 0, 0, 0 };
+string[] generic_descriptions = { "DESC_INVENTORY_MAIN", "DESC_INVENTORY_SPECIAL", "DESC_INVENTORY_STATS", "DESC_INVENTORY_RESIST" };
+
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Generic description. Descriptions type look in _client_defines.fos, Generic descriptions types.
 // int& offsX, int& offsY - offsets of text, by default is zero.
 string generic_description( int descType, int& offsX, int& offsY )
 {
+	
     CritterCl@ chosen = GetChosen();
-    if( not valid( chosen ) )
+    if( not valid( chosen ) || descType < 0 || descType >= int(generic_descriptions.length()) )
         return "";
-    string result;
+
+	//Message( "" + description_tick_delays[descType] );//DEBUG ONLY
+	
+	if( description_tick_delays[descType] <= 0 )
+	{
+		description_tick_delays[descType] = DESCRIPTION_DEFAULT_DELAY;
+		generic_descriptions[descType] = update_generic_description( descType );
+	}
+	else
+	{
+		description_tick_delays[descType]--;
+	}
+
+	update_generic_description_offsets( descType, offsX, offsY );
+	return generic_descriptions[descType];
+}
+
+void update_generic_description_offsets( int descType, int& offsX, int& offsY )
+{
+	switch( descType )
+	{
+		case( DESC_INVENTORY_MAIN ): 				break;
+		case( DESC_INVENTORY_SPECIAL ): offsX = 23; break;
+		case( DESC_INVENTORY_STATS ): 	offsX = -8;	break;
+		case( DESC_INVENTORY_RESIST ): 	offsX = 35; offsY = 110; break;
+	}
+}
+
+string update_generic_description( int descType )
+{
+	CritterCl@ chosen = GetChosen();
+	
+	string result;
 
     if( descType == DESC_INVENTORY_MAIN )
     {
@@ -2574,130 +2684,18 @@ string generic_description( int descType, int& offsX, int& offsY )
         result += GetMsgStr( TEXTMSG_GAME, STR_INV_SHORT_SPECIAL( ST_INTELLECT ) ) + "\n";
         result += GetMsgStr( TEXTMSG_GAME, STR_INV_SHORT_SPECIAL( ST_AGILITY ) ) + "\n";
         result += GetMsgStr( TEXTMSG_GAME, STR_INV_SHORT_SPECIAL( ST_LUCK ) ) + "\n";
-		result += "\n\n\n\n\n\n\n"; // FoRP Inventory 2020 adjustment
-        result += "\n-----------------------\n";
+		result += "\n\n\n\n\n\n\n\n"; // FoRP Inventory 2020 adjustment
 
-        ItemCl@ weaponMain = _CritGetItemHand(chosen);
-        if( valid( weaponMain ) )
-        {
-            int use = _WeaponModeUse( weaponMain.Mode );
-            if( use > 2 )
-                use = 0;
-			result += GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( weaponMain ) ) + "\n";
-			
-			// string item_info_color = GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( weaponMain ));
-			// result += "|0xE5C62B " + item_info_color + " |0x3CF800 \n";
-			
-
-            if( weaponMain.GetType() == ITEM_TYPE_WEAPON )
-            {
-                result += GetMsgStr( TEXTMSG_GAME, STR_INV_DMG ) + " ";
-                result += _WeaponDmgMin( weaponMain.Proto, use ) + "-";
-                int wpnMaxDmg = _WeaponDmgMax( weaponMain.Proto, use );
-                if( _WeaponIsHtHAttack( weaponMain.Proto, use ) )
-                    wpnMaxDmg += chosen.Stat[ ST_MELEE_DAMAGE ];
-                result += wpnMaxDmg;
-
-                if( _WeaponMaxDist( weaponMain.Proto, use ) > 1 )
-                {
-                    result += "\n" + GetMsgStr( TEXTMSG_GAME, STR_INV_DIST ) + " ";
-                    int wpnMaxDist = _WeaponMaxDist( weaponMain.Proto, use );
-                    if( _WeaponSkill( weaponMain.Proto, use ) == SK_THROWING )
-                        wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), chosen.Stat[ ST_STRENGTH ] ) );
-						//wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), chosen.Stat[ ST_STRENGTH ] + 2 * chosen.Perk[ PE_HEAVE_HO ] ) );
-                    result += wpnMaxDist;
-                }
-                result += "\n";
-
-                if( weaponMain.Proto.Weapon_MaxAmmoCount > 0 )
-                {
-                    result += GetMsgStr( TEXTMSG_GAME, STR_INV_AMMO ) + " ";
-                    result += weaponMain.AmmoCount            + "/";
-                    result += weaponMain.Proto.Weapon_MaxAmmoCount  + " ";
-                    result += GetMsgStr( TEXTMSG_GAME, STR_CALIBER( weaponMain.Proto.Weapon_Caliber ) );
-                }
-                result += "\n";
-            }
-            else
-            {
-                result += "\n\n\n";
-            }
-        }
-        else
-        {
-            // Unarmed
-            uint8      mode = 0;
-            ProtoItem@ unarmed = chosen.GetSlotProto( SLOT_HAND1, mode );
-            result += GetMsgStr( TEXTMSG_GAME, STR_INV_NO_ITEM ) + "\n";
-            result += GetMsgStr( TEXTMSG_GAME, STR_INV_UNARMED_DMG ) + " ";
-            result += _WeaponDmgMin( unarmed, _WeaponModeUse( mode ) ) + "-";
-            result += ( _WeaponDmgMax( unarmed, _WeaponModeUse( mode ) ) + chosen.Stat[ ST_MELEE_DAMAGE ] );
-            result += "\n\n\n";
-        }
-		result += "-----------------------\n";
-
-        ItemCl@ weaponExt = _CritGetItemHandExt(chosen);
-        if( valid( weaponExt ) )
-        {
-            int use = _WeaponModeUse( weaponExt.Mode );
-            if( use > 2 )
-                use = 0;
-
-            result += GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( weaponExt ) ) + "\n";
-
-            if( weaponExt.GetType() == ITEM_TYPE_WEAPON )
-            {
-                result += GetMsgStr( TEXTMSG_GAME, STR_INV_DMG ) + " ";
-                result += _WeaponDmgMin( weaponExt.Proto, use ) + "-";
-                int wpnMaxDmg = _WeaponDmgMax( weaponExt.Proto, use );
-                if( _WeaponIsHtHAttack( weaponExt.Proto, use ) )
-                    wpnMaxDmg += chosen.Stat[ ST_MELEE_DAMAGE ];
-                result += wpnMaxDmg;
-                if( _WeaponMaxDist( weaponExt.Proto, use ) > 1 )
-                {
-                    result += "\n" + GetMsgStr( TEXTMSG_GAME, STR_INV_DIST ) + " ";
-                    int wpnMaxDist = _WeaponMaxDist( weaponExt.Proto, use );
-                    if( _WeaponSkill( weaponExt.Proto, use ) == SK_THROWING )
-                        wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), chosen.Stat[ ST_STRENGTH ] ) );
-						//wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), chosen.Stat[ ST_STRENGTH ] + 2 * chosen.Perk[ PE_HEAVE_HO ] ) );
-                    result += wpnMaxDist;
-                }
-                result += "\n";
-
-                if( weaponExt.Proto.Weapon_MaxAmmoCount > 0 )
-                {
-                    result += GetMsgStr( TEXTMSG_GAME, STR_INV_AMMO ) + " ";
-                    result += weaponExt.AmmoCount             + "/";
-                    result += weaponExt.Proto.Weapon_MaxAmmoCount   + " ";
-                    result += GetMsgStr( TEXTMSG_GAME, STR_CALIBER( weaponExt.Proto.Weapon_Caliber ) );
-                }
-                result += "\n";
-            }
-            else
-            {
-                result += "\n";
-            }
-        }
-        else
-        {
-            // Unarmed
-            uint8      mode = 0;
-            ProtoItem@ unarmed = chosen.GetSlotProto( SLOT_HAND2, mode );
-            result += GetMsgStr( TEXTMSG_GAME, STR_INV_NO_ITEM ) + "\n";
-            result += GetMsgStr( TEXTMSG_GAME, STR_INV_UNARMED_DMG ) + " ";
-            result += _WeaponDmgMin( unarmed, _WeaponModeUse( mode ) ) + "-";
-            result += ( _WeaponDmgMax( unarmed, _WeaponModeUse( mode ) ) + chosen.Stat[ ST_MELEE_DAMAGE ] );
-            result += "\n\n\n";
-        }
-		
+		result += generic_description_slot( _CritGetItemHand(chosen) );
+		result += generic_description_slot( _CritGetItemHandExt(chosen) );
+	
 		// Additional slots
-        result += "\n\n";
-		result += "Доп. экипировка:\n";
+        result += "\n\n\n Доп. экипировка:\n";
 		result += "-----------------------\n";
 		
 		ItemCl@ headwear = _CritGetItemHead(chosen);
 		if( valid( headwear ) ) { 
-			result += "" + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( headwear ) ) + ".\n";
+			result += itemText( headwear, 150 ) + ".\n";
 			//result += "" + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( headwear ) + 1 ) + ".\n";
         } else { result += "Слот головы пуст\n";
 		}
@@ -2705,7 +2703,7 @@ string generic_description( int descType, int& offsX, int& offsY )
 		
 		ItemCl@ backpack = _CritGetItemBack(chosen);
 		if( valid( backpack ) ) { 
-			result += "" + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( backpack ) ) + ".\n";
+			result += itemText( backpack, 150 ) + ".\n";
 			//result += "" + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( backpack ) + 1 ) + "\n";
 		} else { result += "Слот рюкзака пуст\n";
 		}
@@ -2713,7 +2711,7 @@ string generic_description( int descType, int& offsX, int& offsY )
 		
 		ItemCl@ misc = _CritGetItemMisc(chosen);
 		if( valid( misc ) ) { 
-			result += "" + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( misc ) ) + ".\n";
+			result += itemText( misc, 150 ) + ".\n";
 			//result += "" + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( misc ) + 1 ) + "\n";
         } else { result += "Утилитарный слот пуст\n";
 		}
@@ -2725,9 +2723,9 @@ string generic_description( int descType, int& offsX, int& offsY )
 		float max_weight = chosen.Stat[ ST_CARRY_WEIGHT ] / 1000.0;
         result += max_weight + " кг.";*/ //
     }
-    else if( descType == DESC_INVENTORY_SPECIAL )
+	
+    if( descType == DESC_INVENTORY_SPECIAL )
     {
-        offsX = 23;
         result += "\n\n";
         result += chosen.Stat[ ST_STRENGTH ] + "\n";
         result += chosen.Stat[ ST_PERCEPTION ] + "\n";
@@ -2737,9 +2735,9 @@ string generic_description( int descType, int& offsX, int& offsY )
         result += chosen.Stat[ ST_AGILITY ] + "\n";
         result += chosen.Stat[ ST_LUCK ];
     }
-    else if( descType == DESC_INVENTORY_STATS )
+	
+    if( descType == DESC_INVENTORY_STATS )
     {
-		offsX = -6;
         result += "\n\n";
 		// Hit Points
         result += "                "  + GetMsgStr( TEXTMSG_GAME, STR_INV_HP ) + " ";
@@ -2763,7 +2761,7 @@ string generic_description( int descType, int& offsX, int& offsY )
 		result += "  -----------------------\n";
 		
 		ItemCl@ armor = _CritGetItemArmor(chosen);
-		if( valid( armor ) ) { result += "  " + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( armor ) ) + ":\n";
+		if( valid( armor ) ) { result += "  " + itemText( armor, 150 ) + ":\n";
         } else { result += "  Без брони: \n";
 		}
 		result += ""   + GetMsgStr( TEXTMSG_GAME, STR_INV_NORMAL )     + "\n";
@@ -2772,12 +2770,10 @@ string generic_description( int descType, int& offsX, int& offsY )
         result += ""   + GetMsgStr( TEXTMSG_GAME, STR_INV_PLASMA )     + "\n";
         result += ""   + GetMsgStr( TEXTMSG_GAME, STR_INV_EXPLODE )    + "\n";
 		result += "  " + GetMsgStr( TEXTMSG_GAME, STR_INV_ELECTRO );
-		offsX = -8;
     }
-    else if( descType == DESC_INVENTORY_RESIST )
+	
+    if( descType == DESC_INVENTORY_RESIST )
     {
-        offsX = 35;
-		offsY = 110;
         result += "      " + chosen.Stat[ ST_NORMAL_ABSORB ]  + "/" + chosen.Stat[ ST_NORMAL_RESIST ]  + "%\n";
         result += "      " + chosen.Stat[ ST_LASER_ABSORB ]   + "/" + chosen.Stat[ ST_LASER_RESIST ]   + "%\n";
         result += "      " + chosen.Stat[ ST_FIRE_ABSORB ]    + "/" + chosen.Stat[ ST_FIRE_RESIST ]    + "%\n";
@@ -2785,7 +2781,6 @@ string generic_description( int descType, int& offsX, int& offsY )
         result += "      " + chosen.Stat[ ST_EXPLODE_ABSORB ] + "/" + chosen.Stat[ ST_EXPLODE_RESIST ] + "%\n";
 		result += "      " + chosen.Stat[ ST_ELECTRO_ABSORB ] + "/" + chosen.Stat[ ST_ELECTRO_RESIST ] + "%";
     }
-
 
     return result;
 }
@@ -3314,401 +3309,437 @@ string critter_description_maker( int lookType, int target_id, int age, int gend
 	return result;
 }
 
+string critter_description_health( CritterCl& cr )
+{
+	int gender = cr.Stat[ ST_GENDER ];
+	string result = GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_WHO( gender ) );
+	
+	int hp_proc = cr.Stat[ ST_CURRENT_HP ] * 100 / cr.Stat[ ST_MAX_LIFE ];
+	if( cr.IsDead() )
+	{
+		if( cr.IsNpc () )
+			result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( -1 ) ) + genderEnding( cr );	
+		else
+			result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 0 ) );
+	}
+	else if( cr.Stat[ ST_CURRENT_HP ] < 0 )
+		result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 1 ) ) + genderEnding( cr );
+	else if( hp_proc <= 30 )
+		result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 2 ) ) + genderEnding( cr );
+	else if( hp_proc <= 50 )
+		result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 3 ) ) + genderEnding( cr );
+	else if( hp_proc <= 70 )
+		result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 4 ) ) + genderEnding( cr );
+	else if( hp_proc <= 90 )
+		result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 5 ) ) + genderEnding( cr );
+	else
+		result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 6 ) ) + genderEnding( cr );
+
+	if( _CritIsInjured( cr ) )
+	{
+		bool needComa = false;
+
+		int hp_proc = cr.Stat[ ST_CURRENT_HP ] * 100 / cr.Stat[ ST_MAX_LIFE ];
+		result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_LIMBS( gender, hp_proc >= 90 ) ) + ": ";
+		
+		if( cr.ParamBase[ DAMAGE_EYE ] != 0 )
+		{
+			result += "глаза";
+			needComa = true;
+		}
+		if( cr.ParamBase[ DAMAGE_RIGHT_ARM ] != 0 )
+		{
+			if( needComa ) result += ", ";
+			result += "правая рука";
+			needComa = true;
+		}
+		if( cr.ParamBase[ DAMAGE_LEFT_ARM ] != 0 )
+		{
+			if( needComa ) result += ", ";
+			result += "левая рука";
+			needComa = true;
+		}
+		if( cr.ParamBase[ DAMAGE_RIGHT_LEG ] != 0 )
+		{
+			if( needComa ) result += ", ";
+			result += "правая нога";
+			needComa = true;
+		}
+		if( cr.ParamBase[ DAMAGE_LEFT_LEG ] != 0 )
+		{
+			if( needComa ) result += ", ";
+			result += "левая нога";
+			needComa = true;
+		}
+		
+	}
+
+	return result + ".";
+}
+
+string critter_description_hand( CritterCl& cr )
+{
+	ItemCl@    item  = _CritGetItemHand(cr);
+	if( !valid( item ) ) return "";
+
+	int bodyType = cr.Stat[ ST_BODY_TYPE ];
+	int crType = cr.CrType;
+
+	bool twoHanded = valid( item ) ? FLAG( item.Flags, ITEM_TWO_HANDS ) : false;
+	bool determined = true;
+	
+	string hands;
+	switch( crType )
+	{
+		case( 90 ): 
+		case( 101 ):
+		case( 438 ):
+		case( 478 ):hands = "Вооружение:"; break;
+		default: determined = false; break;
+	}
+	
+	if( !determined )
+	{
+		switch( bodyType )
+		{
+			case( BT_BRAHMIN ): 		//hands = "копыт" + ( twoHanded ? "ах" : "е" ); break;
+				hands = "Во рту держит";
+				break;
+
+			case( BT_RAT ): 			//hands = "лапк" + ( twoHanded ? "ах" : "е" ); break;
+			case( BT_DOG ): 			//hands = "лап" + ( twoHanded ? "ах" : "е" ); break;
+			case( BT_PLANT ): 			//hands = "листве"; break;
+				hands = "В пасти держит";
+				break;
+
+			case( BT_GIANT_ANT ): 		//hands = "лапк" + ( twoHanded ? "ах" : "е" ); break;
+			case( BT_GIANT_BEETLE ): 	//hands = "лапк" + ( twoHanded ? "ах" : "е" ); break;
+			case( BT_GIANT_WASP   ): 	//hands = " лапк" + ( twoHanded ? "ах" : "е" ); break;
+				hands = "В жвалах держит";
+				break;
+
+			case( BT_RADSCORPION ): 	hands = "В клешн" + ( twoHanded ? "ях" : "е" ); break;
+			case( BT_FLOATER ): 		hands = "В тентакл" + ( twoHanded ? "ях" : "е" ); break;
+			case( BT_ALIEN ): 			hands = "В тентакл" + ( twoHanded ? "ях" : "е" ); break;
+			case( BT_CENTAUR ): 		hands = "В нарост" + ( twoHanded ? "ах" : "е" ); break;
+			case( BT_ROBOT ): 			hands = "Держит " + ( twoHanded ? "манипуляторами" : "в манипуляторе" ) + " предмет:"; break;
+			case( BT_GECKO ): 			hands = "В лапк" + ( twoHanded ? "ах" : "е" ); break;
+			case( BT_MANTI ): 			hands = "В лапк" + ( twoHanded ? "ах" : "е" ); break;
+			case( BT_DEADCLAW ): 		hands = "В лап" + ( twoHanded ? "ах" : "е" ); break;
+			case( BT_BIG_BAD_BOSS ): 	hands = "Держит " + ( twoHanded ? "двумя ручищами" : "в ручище" ) + " предмет:"; break;
+
+			case( BT_ZOMBIE       ): 	hands = "Держит в" + ( twoHanded ? "гнилых руках" : "гниющей руке" ); break;
+			default: 					hands = "В рук" + ( twoHanded ? "ах" : "е" ); break;
+		}
+	}					
+
+	return " " + hands + " " + itemText( item ) + ".";
+}
+
+string critter_description_slots( CritterCl& cr )
+{
+	string result;
+	
+	ItemCl@    offhand = _CritGetItemHandExt(cr);
+	if( valid( offhand ) && !wearMask( cr ) )
+	{
+		result += " " + GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_MISC ) + ".";
+		result = ReplaceText( result, "MISC", itemText( offhand ) );
+	}
+	
+	bool hasPrefix = false;
+	bool female = cr.Stat[ ST_GENDER ] == GENDER_FEMALE;
+	
+	ItemCl@    armor = _CritGetItemArmor(cr);
+	if( valid( armor ) )
+	{
+		result += " На не" + ( female ? "й" : "м" ) + " " + itemText( armor );
+		hasPrefix = true;
+	}
+
+	ItemCl@    head = _CritGetItemHead(cr);
+	if( valid( head ) )
+	{
+		result += ( hasPrefix ? "," : ( " На не" + ( female ? "й" : "м" ) ) ) + " " + itemText( head );
+		hasPrefix = true;
+	}
+
+	ItemCl@    misc = _CritGetItemMisc(cr);
+	if( valid( misc ) )
+	{
+		result += ( hasPrefix ? " и" : ( " У не" + ( female ? "ё" : "го" ) ) ) + " " + itemText( misc );
+		hasPrefix = true;
+	}
+
+	if( hasPrefix ) 
+		result += ".";
+	
+	ItemCl@    back = _CritGetItemBack(cr);
+	if( valid( back ) )
+	{
+		result += " На спине " + " " + itemText( back ) + ".";
+	}
+	
+	return result;
+}
+
+string critter_description_stats( CritterCl& cr )
+{
+	if( cr.Stat[ ST_BODY_TYPE ] >= BT_BRAHMIN && cr.IsNpc() ) return "";
+	
+	CritterCl@ chosen = GetChosen();
+
+	ItemCl@    item2 = _CritGetItemHandExt(cr);
+	ItemCl@    item3 = _CritGetItemArmor(cr);
+
+	// Список брони для сокрытия внешности.
+	uint16[][] OpenArmorList =
+	{
+	{   // Снимаемое. Капюшоны.
+		PID_PURPLE_ROBE, PID_BLACK_ROBE, PID_SANDROBE, PID_BROWN_ROBE, PID_DARK_GREEN_ROBE, PID_RED_RITUAL_ROBE, PID_BLACK_RITUAL_ROBE, PID_DARK_BLACK_ROBE, 
+		PID_DARK_RED_ROBE, PID_RED_ROBE, PID_DARK_BROWN_ROBE, PID_DARK_BLUE_ROBE, PID_ATOM_CHILD_ROBE
+
+	},{ // Неснимаемое. Скрывает всё.
+		 PID_EKZO, PID_OXIDENED_POWER_ARMOR, PID_aras2k1, PID_arekzo, PID_EKZO_2, PID_POWERED_ARMOR_NEVADA, PID_aras2k2, PID_arbattl1,
+		 PID_ardfnder, PID_HYENA_PA, PID_HYENA_PA_MK2, PID_ADVANCED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR_MK2
+	},{ // Снимаемый шлем.
+		 PID_POWERED_ARMOR, PID_HARDENED_POWER_ARMOR
+	}
+	};
+
+	uint8 OpenArmor = 0;
+	if( item3 !is null )
+	{
+		uint16 PID = item3.GetProtoId();
+		for( uint8 i = 0, l = OpenArmorList.length(); i < l; i++ )
+		{
+			for( uint8 ii = 0, ll = OpenArmorList[ i ].length(); ii < ll; ii++ )
+			{
+				if( PID == OpenArmorList[ i ][ ii ] ) { OpenArmor = i+1; break; }
+			}
+		}
+	}
+	
+	bool hidelex = false;
+
+	bool showface = true;
+	bool showbody = true;
+	bool female = ( cr.Stat[ ST_GENDER ] == GENDER_FEMALE ? true : false );
+	string usual = " "+( cr.Stat[ ST_GENDER ] == GENDER_FEMALE ? "обычная" : cr.Stat[ ST_GENDER ] == GENDER_MALE ? "обычный" : "обычное" );
+	string look = "";
+
+	hidelex = ( OpenArmor == 1 && FLAG( cr.Param[ MIO_FLAGS ], ITEM_FLAT ) );
+	bool hideopt = ( FLAG( cr.Param[ MIO_FLAGS ], ITEM_HIDDEN ) );
+
+	if( OpenArmor == 1 && hideopt )
+	{
+		look += "Лицо скрыто капюшоном";
+		showface = false;
+		usual = "";
+	}
+	else if( OpenArmor == 2 )
+	{
+		look += "Внешность скрывает доспех";
+		showface = false;
+		showbody = false;
+		usual = "";
+	}
+	else if( OpenArmor == 3 )
+	{
+		if( hideopt )
+		{
+			look += "Внешность скрывает доспех";
+			showface = false;
+		}
+		else { look += "Тело скрывает доспех"; }
+		showbody = false;
+		usual = "";
+	}
+	else { if( !wearMask( cr ) ) look += "На вид"; }
+	
+	if( wearMask( cr ) )
+	{
+		if( showface )
+			look += "Лицо скрывает " + GetMsgStr( TEXTMSG_ITEM, item2.GetProtoId() * 100 );
+		
+		showface = false;
+	}
+
+	if( showface && chosen.Id != cr.Id )
+	{
+		if( chosen.Trait[ TRAIT_BLOODY_MESS ] != 0 )
+		{
+			look += " ";
+			switch( Random( 0, 9 ) )
+			{
+				case 0: look += "смотрит зло на тебя"; break;
+				case 1: look += "бормочет что-то нехорошее о тебе"; break;
+				case 2: look += "смотрит с ненавистью"; break;
+				case 3: look += "насмехается над тобой"; break;
+				case 4: look += "смотрит презрительно"; break;
+				case 5: look += "выглядит уродливо"; break;
+				case 6: look += "коситься в твою сторону"; break;
+				case 7: look += "кажется хочет напасть"; break;
+				case 8: look += "скалится на тебя"; break;
+				case 9: look += "шепчет сдохни"; break;
+			}
+			showface = false;
+			showbody = false;
+			usual = "";
+		}
+	}
+
+	string comma = " ";
+	if( !showface || !showbody ) { comma = ", "; }
+	bool truecomma;
+	if( showface )
+	{
+		truecomma = true;
+		if( cr.Stat[ ST_CHARISMA ] >= 10 )
+		{
+			if( female ) { look += comma + "|0x3CF8FA неотразима|0x3CF800 "; } else { look += comma + "|0x3CF8FA неотразим|0x3CF800 "; }
+		}
+		else if( cr.Stat[ ST_CHARISMA ] >= 9 )
+		{
+			if( female ) { look += comma + "|0x3CF8D2 прекрасна|0x3CF800 "; } else { look += comma + "|0x3CF8D2 прекрасен|0x3CF800 "; }
+		}
+		else if( cr.Stat[ ST_CHARISMA ] >= 8 )
+		{
+			if( female ) { look += comma + "|0x3CF8AA красива|0x3CF800 "; } else { look += comma + "|0x3CF8AA красив|0x3CF800 "; }
+		}
+		else if( cr.Stat[ ST_CHARISMA ] >= 7 )
+		{
+			if( female ) { look += comma + "|0x3CF882 привлекательна|0x3CF800 "; } else { look += comma + "|0x3CF882 привлекателен|0x3CF800 "; }
+		}
+		else if( cr.Stat[ ST_CHARISMA ] <= 1 )
+		{
+			if( female ) { look += comma + "|0xFF0000 тошнотворная|0x3CF800 "; } else { look += comma + "|0xFF0000 тошнотворный|0x3CF800 "; }
+		}
+		else if( cr.Stat[ ST_CHARISMA ] <= 2 )
+		{
+			if( female ) { look += comma + "|0xFF4000 отвратительна|0x3CF800 "; } else { look += comma + "|0xFF4000 отвратителен|0x3CF800 "; }
+		}
+		else if( cr.Stat[ ST_CHARISMA ] <= 3 )
+		{
+			if( female ) { look += comma + "|0xFF6000 неприятна|0x3CF800 "; } else { look += comma + "|0xFF6000 неприятен|0x3CF800 "; }
+		}
+		else { truecomma = false; }
+		if( truecomma ) { comma = ", "; usual = ""; }
+	}
+
+	if( showbody )
+	{
+		truecomma = true;
+		if( cr.StatBase[ ST_STRENGTH ] >= 10 )
+		{
+			if( female ) { look += comma + "мощная"; } else { look += comma + "мощный"; }
+		}
+		else if( cr.StatBase[ ST_STRENGTH ] >= 8 )
+		{
+			if( female ) { look += comma + "сильна"; } else { look += comma + "силён"; }
+		}
+		else if( cr.StatBase[ ST_STRENGTH ] <= 1 )
+		{
+			if( female ) { look += comma + "немощная"; } else { look += comma + "немощный"; }
+		}
+		else if( cr.StatBase[ ST_STRENGTH ] <= 3 )
+		{
+			if( female ) { look += comma + "слабая"; } else { look += comma + "слабый"; }
+		}
+		else { truecomma = false; }
+		if( truecomma ) { comma = ", "; usual = ""; }
+
+		//==================================================
+
+		truecomma = true;
+		if( cr.StatBase[ ST_ENDURANCE ] >= 10 )
+		{
+			if( female ) { look += comma + "крепко сбита"; } else { look += comma + "крепко сбит"; }
+		}
+		else if( cr.StatBase[ ST_ENDURANCE ] >= 8 )
+		{
+			if( female ) { look += comma + "крепкая"; } else { look += comma + "крепкий"; }
+		}
+		else if( cr.StatBase[ ST_ENDURANCE ] <= 1 )
+		{
+			if( female ) { look += comma + "хрупкая"; } else { look += comma + "хрупкий"; }
+		}
+		else if( cr.StatBase[ ST_ENDURANCE ] <= 3 )
+		{
+			if( female ) { look += comma + "хилая"; } else { look += comma + "хилый"; }
+		}
+		else { truecomma = false; }
+		if( truecomma ) { comma = ", "; usual = ""; }
+
+		//==================================================
+
+		truecomma = true;
+		if( cr.StatBase[ ST_AGILITY ] >= 10 )
+		{
+			if( female ) { look += comma + "проворна"; } else { look += comma + "проворен"; }
+		}
+		else if( cr.StatBase[ ST_AGILITY ] >= 8 )
+		{
+			if( female ) { look += comma + "ловкая"; } else { look += comma + "ловкий"; }
+		}
+		else if( cr.StatBase[ ST_AGILITY ] <= 1 )
+		{
+			if( female ) { look += comma + "неповоротливая"; } else { look += comma + "неповоротливый"; }
+		}
+		else if( cr.StatBase[ ST_AGILITY ] <= 3 )
+		{
+			if( female ) { look += comma + "неуклюжая"; } else { look += comma + "неуклюжий"; }
+		}
+		else { truecomma = false; }
+		if( truecomma ) { comma = ", "; usual = ""; }
+	}
+
+	string result = ( look != "" ? ( " " + look + usual + "." ) : "" );
+
+	ItemCl@ armor = cr.GetItem( 0, SLOT_ARMOR );
+	bool ArmorLexem = ( valid(armor) && armor.Lexems != "" );
+	
+	if( valid(armor) && ( armor.Val9 == PID_POPUP || armor.GetProtoId() == PID_POPUP ) )
+		ArmorLexem = false;
+	
+	if( ( cr.Lexems != "" || ArmorLexem ) && !hidelex && cr.Param[ QST_MEDIUM ] != 3 ) 
+	{ 
+		result += " ";
+		if( ArmorLexem )
+			result += armor.Lexems;
+		else	
+			result += cr.Lexems;
+		
+		result += "."; 
+	}
+
+	return result;
+}
+
+string critter_description_full( CritterCl& cr, string& result )
+{
+	if( result.length() > 0 && result[ result.length() - 1 ] != '.' )
+		result += ".";
+
+	result += " " + COLOR_NETMSG 
+			+ critter_description_health( cr ) 
+			+ critter_description_hand( cr ) 
+			+ critter_description_slots( cr ) 
+			+ critter_description_stats( cr );
+			
+	return result;
+}
+
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Critter description. Look types look in _client_defines.fos, Critter look types.
 string critter_description( CritterCl& cr, int lookType )
 {
     string result = critter_description_maker( cr, lookType ); //Базовое описание цели.
 
-	CritterCl@ chosen = GetChosen();
-	
-	int gender = cr.Stat[ ST_GENDER ];
-	int bodyType = cr.Stat[ ST_BODY_TYPE ];
-	int crType = cr.CrType;
-	
     //Подробное описание состояния и инвентаря цели.
 	if( lookType == CRITTER_LOOK_FULL )
     {
-        if( result.length() > 0 && result[ result.length() - 1 ] != '.' )
-            result += ".";
-        result += " " + COLOR_NETMSG;
-
-		ItemCl@    item  = _CritGetItemHand(cr);
-        ItemCl@    item2 = _CritGetItemHandExt(cr);
-        ItemCl@    item3 = _CritGetItemArmor(cr);
-		ItemCl@    item4 = _CritGetItemMisc(cr);
-		ItemCl@    item5 = _CritGetItemHead(cr);
-		ItemCl@    item6 = _CritGetItemBack(cr);
-		
-		uint16[] FaceMasks = { PID_RED_BANDANA, PID_raspir2, PID_BALACLAV, PID_RESPIRATOR };
-		bool wearMask = valid( item2 ) ? ( FaceMasks.find( item2.GetProtoId() ) != -1 ) : false;
-		
-
-		if( valid( chosen ) )
-        {
-			result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_WHO( gender ) );
-			
-			int hp_proc = cr.Stat[ ST_CURRENT_HP ] * 100 / cr.Stat[ ST_MAX_LIFE ];
-			if( cr.IsDead() )
-			{
-				if( cr.IsNpc () )
-					result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( -1 ) ) + genderEnding( cr );	
-				else
-					result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 0 ) );
-			}
-			else if( cr.Stat[ ST_CURRENT_HP ] < 0 )
-				result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 1 ) ) + genderEnding( cr );
-			else if( hp_proc <= 30 )
-				result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 2 ) ) + genderEnding( cr );
-			else if( hp_proc <= 50 )
-				result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 3 ) ) + genderEnding( cr );
-			else if( hp_proc <= 70 )
-				result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 4 ) ) + genderEnding( cr );
-			else if( hp_proc <= 90 )
-				result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 5 ) ) + genderEnding( cr );
-			else
-				result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_STATE( 6 ) ) + genderEnding( cr );
-
-            if( _CritIsInjured( cr ) )
-            {
-				bool needComa = false;
-
-				int hp_proc = cr.Stat[ ST_CURRENT_HP ] * 100 / cr.Stat[ ST_MAX_LIFE ];
-				result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_LIMBS( gender, hp_proc >= 90 ) ) + ": ";
-				
-                if( cr.ParamBase[ DAMAGE_EYE ] != 0 )
-				{
-                    result += "глаза";
-					needComa = true;
-				}
-                if( cr.ParamBase[ DAMAGE_RIGHT_ARM ] != 0 )
-				{
-					if( needComa ) result += ", ";
-                    result += "правая рука";
-					needComa = true;
-				}
-                if( cr.ParamBase[ DAMAGE_LEFT_ARM ] != 0 )
-				{
-					if( needComa ) result += ", ";
-                    result += "левая рука";
-					needComa = true;
-				}
-                if( cr.ParamBase[ DAMAGE_RIGHT_LEG ] != 0 )
-				{
-					if( needComa ) result += ", ";
-                    result += "правая нога";
-					needComa = true;
-				}
-                if( cr.ParamBase[ DAMAGE_LEFT_LEG ] != 0 )
-				{
-					if( needComa ) result += ", ";
-                    result += "левая нога";
-					needComa = true;
-				}
-				
-            }
-
-
-            if( valid( item ) )
-            {
-				bool twoHanded = valid( item ) ? FLAG( item.Flags, ITEM_TWO_HANDS ) : false;
-				bool determined = true;
-				
-				string hands;
-				switch( crType )
-				{
-					case( 90 ): 
-					case( 101 ):
-					case( 438 ):
-					case( 478 ):hands = "Вооружение:"; break;
-					default: determined = false; break;
-				}
-				
-				if( !determined )
-				{
-					switch( bodyType )
-					{
-						case( BT_BRAHMIN ): 		//hands = "копыт" + ( twoHanded ? "ах" : "е" ); break;
-							hands = "Во рту держит";
-							break;
-
-						case( BT_RAT ): 			//hands = "лапк" + ( twoHanded ? "ах" : "е" ); break;
-						case( BT_DOG ): 			//hands = "лап" + ( twoHanded ? "ах" : "е" ); break;
-						case( BT_PLANT ): 			//hands = "листве"; break;
-							hands = "В пасти держит";
-							break;
-
-						case( BT_GIANT_ANT ): 		//hands = "лапк" + ( twoHanded ? "ах" : "е" ); break;
-						case( BT_GIANT_BEETLE ): 	//hands = "лапк" + ( twoHanded ? "ах" : "е" ); break;
-						case( BT_GIANT_WASP   ): 	//hands = " лапк" + ( twoHanded ? "ах" : "е" ); break;
-							hands = "В жвалах держит";
-							break;
-
-						case( BT_RADSCORPION ): 	hands = "В клешн" + ( twoHanded ? "ях" : "е" ); break;
-						case( BT_FLOATER ): 		hands = "В тентакл" + ( twoHanded ? "ях" : "е" ); break;
-						case( BT_ALIEN ): 			hands = "В тентакл" + ( twoHanded ? "ях" : "е" ); break;
-						case( BT_CENTAUR ): 		hands = "В нарост" + ( twoHanded ? "ах" : "е" ); break;
-						case( BT_ROBOT ): 			hands = "Держит " + ( twoHanded ? "манипуляторами" : "в манипуляторе" ) + " предмет:"; break;
-						case( BT_GECKO ): 			hands = "В лапк" + ( twoHanded ? "ах" : "е" ); break;
-						case( BT_MANTI ): 			hands = "В лапк" + ( twoHanded ? "ах" : "е" ); break;
-						case( BT_DEADCLAW ): 		hands = "В лап" + ( twoHanded ? "ах" : "е" ); break;
-						case( BT_BIG_BAD_BOSS ): 	hands = "Держит " + ( twoHanded ? "двумя ручищами" : "в ручище" ) + " предмет:"; break;
-
-						case( BT_ZOMBIE       ): 	hands = "Держит в" + ( twoHanded ? "гнилых руках" : "гниющей руке" ); break;
-						default: 					hands = "В рук" + ( twoHanded ? "ах" : "е" ); break;
-					}
-				}					
-				result += ". " + hands + itemColor(item) + " " + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( item ) ) + COLOR_NETMSG;
-			}
-            if( valid( item2 ) && !wearMask )
-            {
-				result += ". ";
-				result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_LOOK_MISC );
-				result = ReplaceText( result, "MISC", itemColor(item2) + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( item2 ) ) + COLOR_NETMSG );
-            }
-            if( valid( item3 ) )
-            {
-                if( gender == GENDER_FEMALE )
-                    result += ". На ней ";
-                else
-                    result += ". На нем ";
-                result += itemColor(item3) + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( item3 ) ) + COLOR_NETMSG;
-            }
-			if( valid( item5 ) )
-            {
-                result += ", ";
-                result += itemColor(item5) + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( item5 ) ) + COLOR_NETMSG;
-            }
-			if( valid( item4 ) )
-            {
-                result += " и ";
-                result += itemColor(item4) + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( item4 ) ) + COLOR_NETMSG;
-            }
-			if( valid( item6 ) )
-            {
-                result += ". На спине ";
-                result += itemColor(item6) + GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( item6 ) ) + COLOR_NETMSG;
-            }
-
-        }
-
-		// Список брони для сокрытия внешности.
-		uint16[][] OpenArmorList =
-		{
-		{   // Снимаемое. Капюшоны.
-			PID_PURPLE_ROBE, PID_BLACK_ROBE, PID_SANDROBE, PID_BROWN_ROBE, PID_DARK_GREEN_ROBE, PID_RED_RITUAL_ROBE, PID_BLACK_RITUAL_ROBE, PID_DARK_BLACK_ROBE, 
-			PID_DARK_RED_ROBE, PID_RED_ROBE, PID_DARK_BROWN_ROBE, PID_DARK_BLUE_ROBE, PID_ATOM_CHILD_ROBE
-
-		},{ // Неснимаемое. Скрывает всё.
-			 PID_EKZO, PID_OXIDENED_POWER_ARMOR, PID_aras2k1, PID_arekzo, PID_EKZO_2, PID_POWERED_ARMOR_NEVADA, PID_aras2k2, PID_arbattl1,
-			 PID_ardfnder, PID_HYENA_PA, PID_HYENA_PA_MK2, PID_ADVANCED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR_MK2
-		},{ // Снимаемый шлем.
-			 PID_POWERED_ARMOR, PID_HARDENED_POWER_ARMOR
-		}
-		};
-
-		uint8 OpenArmor = 0;
-		if( item3 !is null )
-		{
-			uint16 PID = item3.GetProtoId();
-			for( uint8 i = 0, l = OpenArmorList.length(); i < l; i++ )
-			{
-				for( uint8 ii = 0, ll = OpenArmorList[ i ].length(); ii < ll; ii++ )
-				{
-					if( PID == OpenArmorList[ i ][ ii ] ) { OpenArmor = i+1; break; }
-				}
-			}
-		}
-		
-		bool hidelex = false;
-
-		if( cr.IsPlayer() )
-		{
-			bool showface = true;
-			bool showbody = true;
-			bool female = ( cr.Stat[ ST_GENDER ] == GENDER_FEMALE ? true : false );
-			string usual = " "+( cr.Stat[ ST_GENDER ] == GENDER_FEMALE ? "обычная" : cr.Stat[ ST_GENDER ] == GENDER_MALE ? "обычный" : "обычное" );
-			string look = "";
-
-			hidelex = ( OpenArmor == 1 && FLAG( cr.Param[ MIO_FLAGS ], ITEM_FLAT ) );
-			bool hideopt = ( FLAG( cr.Param[ MIO_FLAGS ], ITEM_HIDDEN ) );
-
-			if( OpenArmor == 1 && hideopt )
-			{
-				look += "Лицо скрыто капюшоном";
-				showface = false;
-				usual = "";
-			}
-			else if( OpenArmor == 2 )
-			{
-				look += "Внешность скрывает доспех";
-				showface = false;
-				showbody = false;
-				usual = "";
-			}
-			else if( OpenArmor == 3 )
-			{
-				if( hideopt )
-				{
-					look += "Внешность скрывает доспех";
-					showface = false;
-				}
-				else { look += "Тело скрывает доспех"; }
-				showbody = false;
-				usual = "";
-			}
-			else { if( !wearMask ) look += "На вид"; }
-			
-			if( wearMask )
-			{
-				if( showface )
-					look += "Лицо скрывает " + GetMsgStr( TEXTMSG_ITEM, item2.GetProtoId() * 100 );
-				
-				showface = false;
-			}
-
-			if( showface && chosen.Id != cr.Id )
-			{
-				if( chosen.Trait[ TRAIT_BLOODY_MESS ] != 0 )
-				{
-					look += " ";
-					switch( Random( 0, 9 ) )
-					{
-						case 0: look += "смотрит зло на тебя"; break;
-						case 1: look += "бормочет что-то нехорошее о тебе"; break;
-						case 2: look += "смотрит с ненавистью"; break;
-						case 3: look += "насмехается над тобой"; break;
-						case 4: look += "смотрит презрительно"; break;
-						case 5: look += "выглядит уродливо"; break;
-						case 6: look += "коситься в твою сторону"; break;
-						case 7: look += "кажется хочет напасть"; break;
-						case 8: look += "скалится на тебя"; break;
-						case 9: look += "шепчет сдохни"; break;
-					}
-					showface = false;
-					showbody = false;
-					usual = "";
-				}
-			}
-
-			string comma = " ";
-			if( !showface || !showbody ) { comma = ", "; }
-			bool truecomma;
-			if( showface )
-			{
-				truecomma = true;
-				if( cr.Stat[ ST_CHARISMA ] >= 10 )
-				{
-					if( female ) { look += comma + "|0x3CF8FA неотразима|0x3CF800 "; } else { look += comma + "|0x3CF8FA неотразим|0x3CF800 "; }
-				}
-				else if( cr.Stat[ ST_CHARISMA ] >= 9 )
-				{
-					if( female ) { look += comma + "|0x3CF8D2 прекрасна|0x3CF800 "; } else { look += comma + "|0x3CF8D2 прекрасен|0x3CF800 "; }
-				}
-				else if( cr.Stat[ ST_CHARISMA ] >= 8 )
-				{
-					if( female ) { look += comma + "|0x3CF8AA красива|0x3CF800 "; } else { look += comma + "|0x3CF8AA красив|0x3CF800 "; }
-				}
-				else if( cr.Stat[ ST_CHARISMA ] >= 7 )
-				{
-					if( female ) { look += comma + "|0x3CF882 привлекательна|0x3CF800 "; } else { look += comma + "|0x3CF882 привлекателен|0x3CF800 "; }
-				}
-				else if( cr.Stat[ ST_CHARISMA ] <= 1 )
-				{
-					if( female ) { look += comma + "|0xFF0000 тошнотворная|0x3CF800 "; } else { look += comma + "|0xFF0000 тошнотворный|0x3CF800 "; }
-				}
-				else if( cr.Stat[ ST_CHARISMA ] <= 2 )
-				{
-					if( female ) { look += comma + "|0xFF4000 отвратительна|0x3CF800 "; } else { look += comma + "|0xFF4000 отвратителен|0x3CF800 "; }
-				}
-				else if( cr.Stat[ ST_CHARISMA ] <= 3 )
-				{
-					if( female ) { look += comma + "|0xFF6000 неприятна|0x3CF800 "; } else { look += comma + "|0xFF6000 неприятен|0x3CF800 "; }
-				}
-				else { truecomma = false; }
-				if( truecomma ) { comma = ", "; usual = ""; }
-			}
-
-			if( showbody )
-			{
-				truecomma = true;
-				if( cr.StatBase[ ST_STRENGTH ] >= 10 )
-				{
-					if( female ) { look += comma + "мощная"; } else { look += comma + "мощный"; }
-				}
-				else if( cr.StatBase[ ST_STRENGTH ] >= 8 )
-				{
-					if( female ) { look += comma + "сильна"; } else { look += comma + "силён"; }
-				}
-				else if( cr.StatBase[ ST_STRENGTH ] <= 1 )
-				{
-					if( female ) { look += comma + "немощная"; } else { look += comma + "немощный"; }
-				}
-				else if( cr.StatBase[ ST_STRENGTH ] <= 3 )
-				{
-					if( female ) { look += comma + "слабая"; } else { look += comma + "слабый"; }
-				}
-				else { truecomma = false; }
-				if( truecomma ) { comma = ", "; usual = ""; }
-
-				//==================================================
-
-				truecomma = true;
-				if( cr.StatBase[ ST_ENDURANCE ] >= 10 )
-				{
-					if( female ) { look += comma + "крепко сбита"; } else { look += comma + "крепко сбит"; }
-				}
-				else if( cr.StatBase[ ST_ENDURANCE ] >= 8 )
-				{
-					if( female ) { look += comma + "крепкая"; } else { look += comma + "крепкий"; }
-				}
-				else if( cr.StatBase[ ST_ENDURANCE ] <= 1 )
-				{
-					if( female ) { look += comma + "хрупкая"; } else { look += comma + "хрупкий"; }
-				}
-				else if( cr.StatBase[ ST_ENDURANCE ] <= 3 )
-				{
-					if( female ) { look += comma + "хилая"; } else { look += comma + "хилый"; }
-				}
-				else { truecomma = false; }
-				if( truecomma ) { comma = ", "; usual = ""; }
-
-				//==================================================
-
-				truecomma = true;
-				if( cr.StatBase[ ST_AGILITY ] >= 10 )
-				{
-					if( female ) { look += comma + "проворна"; } else { look += comma + "проворен"; }
-				}
-				else if( cr.StatBase[ ST_AGILITY ] >= 8 )
-				{
-					if( female ) { look += comma + "ловкая"; } else { look += comma + "ловкий"; }
-				}
-				else if( cr.StatBase[ ST_AGILITY ] <= 1 )
-				{
-					if( female ) { look += comma + "неповоротливая"; } else { look += comma + "неповоротливый"; }
-				}
-				else if( cr.StatBase[ ST_AGILITY ] <= 3 )
-				{
-					if( female ) { look += comma + "неуклюжая"; } else { look += comma + "неуклюжий"; }
-				}
-				else { truecomma = false; }
-				if( truecomma ) { comma = ", "; usual = ""; }
-			}
-
-			if( look != "" ) { result += ". " + look + usual; }
-		}
-
-		ItemCl@ armor = cr.GetItem( 0, SLOT_ARMOR );
-		bool ArmorLexem = ( valid(armor) && armor.Lexems != "" );
-		if( ( cr.Lexems != "" || ArmorLexem ) && !hidelex && cr.Param[ QST_MEDIUM ] != 3 ) 
-		{ 
-			if( ArmorLexem )
-				result += ". " + armor.Lexems;
-			else
-				result += ". "+ cr.Lexems; 
-		}
-		result += ".";
+        critter_description_full( cr, result );
 	}
 
     if( lookType == CRITTER_LOOK_SHORT && ( __sinf & SINF_CRID ) != 0 )

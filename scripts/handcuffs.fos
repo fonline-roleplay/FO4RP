@@ -5,6 +5,8 @@
 
 #define EVENT_ID    ( 9 )
 import bool AddWalkPlane( Critter& npc, uint priority, uint16 hexX, uint16 hexY, uint8 dir, bool run, uint cut ) from "npc_planes";
+import bool AddAttackPlane( Critter& npc, uint priority, Critter& target, bool run ) from "npc_planes";
+
 import void FlushScreen( Critter& cr, uint fromColor, uint toColor, uint timeMs ) from "effects";
 import void RestartFactions( ) from "factions";
 import void Log_factions( Critter& player, int crId, int mode, int level, string@ param3, int[] @ param4 ) from "gm";
@@ -2772,6 +2774,19 @@ void CollarNameScreen( Critter& player, uint answerI, string& answerS )
     }
 }
 
+bool canControll( Critter& cr, int targetId, int x, int y )
+{
+	return canControll( cr, targetId ) || canControll( cr, x, y );
+}
+bool canControll( Critter& cr, int x, int y )
+{
+	Map@ map = cr.GetMap();
+	if( !valid( map ) ) return false;
+	
+	Critter@ target = map.GetCritter( x, y );
+	return canControll( cr, valid( target ) ? target.Id : 0 );
+}
+
 bool canControll( Critter& cr, int targetId )
 {
 	if( targetId == 0 ) return false;
@@ -2804,23 +2819,230 @@ bool canControll( Critter& cr, int targetId )
 	return true;
 }
 
-void unsafe_switch_aggro( Critter& cr, int targetId, int, int, string@ , int[]@ )
+void unsafe_switch_aggro( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
 {
-	if( canControll( cr, targetId ) )
+	if( !canControll( cr, targetId, x, y ) ) return;
+
+	Critter@ target = GetCritter( targetId );
+	target.ParamBase[ CR_IS_AGGRESSIVE ] = CLAMP( 1 - target.ParamBase[ CR_IS_AGGRESSIVE ], 0, 1 );
+	string state = target.ParamBase[ CR_IS_AGGRESSIVE ] != 0 ? "агрессивен" : "пассивен";
+	InformWarning( cr, "Выбранный НПЦ теперь " + state + "." );
+}
+
+void unsafe_call_mob( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
+{
+	if( !canControll( cr, targetId, x, y ) ) return;
+
+	Critter@ target = GetCritter( targetId );
+	if( !valid( target ) )
 	{
-		Critter@ target = GetCritter( targetId );
-		target.ParamBase[ CR_IS_AGGRESSIVE ] = CLAMP( 1 - target.ParamBase[ CR_IS_AGGRESSIVE ], 0, 1 );
-		string state = target.ParamBase[ CR_IS_AGGRESSIVE ] != 0 ? "агрессивен" : "пассивен";
-		InformWarning( cr, "Выбранный НПЦ теперь " + state + "." );
+		@target = cr.GetMap().GetCritter( x, y );
+		if( !valid( target ) ) return;
+	}
+
+    target.DropPlanes();
+    target.ClearEnemyStack();
+	
+	if( target.StatBase [ST_FOLLOW_CRIT] == 0 ) {
+		target.StatBase [ST_FOLLOW_CRIT] = cr.Id;
+		target.SetDir( cr.Dir );
+	} else if( target.StatBase [ST_FOLLOW_CRIT] == int( cr.Id ) ) {
+		target.StatBase [ST_FOLLOW_CRIT] = 0;
+		target.EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
 	}
 }
 
-void unsafe_call_mob( Critter& cr, int targetId, int, int, string@ , int[]@ )
+void unsafe_see( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
 {
-	if( canControll( cr, targetId ) )
+	Critter@ target = GetCritter( targetId );
+	if( !valid( target ) )
 	{
-		Critter@ target = GetCritter( targetId );
-		brahminTie( cr, target );
+		if( x == 0 && y == 0 ) return;
+	}
+	else
+	{
+		x = target.HexX;
+		y = target.HexY;
+	}
+	
+	Critter@[] units = getControlledNPC( cr );
+	for( uint i = 0, l = units.length(); i < l; i++ )
+		if( sameFaction( cr, units[i] ) )
+		{
+            if( units[i].ModeBase[ MODE_NO_HOME ] == 1 )
+			{
+				units[i].SetHomePos( units[i].HexX, units[i].HexY, units[i].Dir );
+				units[i].ModeBase[ MODE_NO_HOME ] = 0;
+			}
+
+            units[i].ErasePlane( -1, true );
+            units[i].ClearEnemyStack();
+
+ 			if( units[i].GetTimeEvents( CTE_BRAHMIN_FOLLOW, null, null, null ) > 0 )
+				units[i].EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
+
+            units[i].SetDir( GetDirection( units[i].HexX, units[i].HexY, x, y ) );
+		}
+}
+
+void unsafe_attack( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
+{
+	Critter@ target = GetCritter( targetId );
+	if( !valid( target ) )
+	{
+		if( x == 0 && y == 0 ) return;
+	}
+	else
+	{
+		x = target.HexX;
+		y = target.HexY;
+	}
+	
+	bool command_succeed = false;
+	
+	Critter@[] units = getControlledNPC( cr );
+	for( uint i = 0, l = units.length(); i < l; i++ )
+		if( sameFaction( cr, units[i] ) )
+		{
+            if( units[i].ModeBase[ MODE_NO_HOME ] == 0 )
+			{
+				units[i].SetHomePos( units[i].HexX, units[i].HexY, units[i].Dir );
+				units[i].ModeBase[ MODE_NO_HOME ] = 1;
+			}
+
+            units[i].ErasePlane( -1, true );
+            units[i].ClearEnemyStack();
+
+ 			if( units[i].GetTimeEvents( CTE_BRAHMIN_FOLLOW, null, null, null ) > 0 )
+				units[i].EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
+
+			if( !valid( target ) )
+			{
+				AddWalkPlane( units[i], 0, x, y, GetDirection( units[i].HexX, units[i].HexY, x, y ), true, Random( 1, 3 ) );
+
+				if( units[i].Stat[ ST_BODY_TYPE ] < BT_BRAHMIN && Random( 0, 1 ) == 0 )
+				{
+					uint n = Random( 0, 2 ) + Random( 0, 2 ) + Random( 0, 1 );
+					units[i].Say( SAY_NORM_ON_HEAD, walk_phrases[n] );
+				}
+			}
+			else
+			{
+				AddAttackPlane( units[i], 0, target, true );
+				units[i].AddEnemyInStack( target.Id );
+				
+				command_succeed = true;
+			}
+			
+		}
+		
+	if( command_succeed )
+		InformWarning( cr, "Вы послали подчинённых в атаку." );
+
+}
+
+void unsafe_walk( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
+{
+	Critter@ target = GetCritter( targetId );
+	if( !valid( target ) )
+	{
+		if( x == 0 && y == 0 ) return;
+	}
+	else
+	{
+		x = target.HexX;
+		y = target.HexY;
+	}
+	
+	Critter@[] units = getControlledNPC( cr );
+	for( uint i = 0, l = units.length(); i < l; i++ )
+		if( sameFaction( cr, units[i] ) )
+		{
+            if( units[i].ModeBase[ MODE_NO_HOME ] == 0 )
+			{
+				units[i].SetHomePos( units[i].HexX, units[i].HexY, units[i].Dir );
+				units[i].ModeBase[ MODE_NO_HOME ] = 1;
+			}
+
+            units[i].ErasePlane( -1, true );
+            units[i].ClearEnemyStack();
+
+			if( units[i].GetTimeEvents( CTE_BRAHMIN_FOLLOW, null, null, null ) > 0 )
+				units[i].EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
+
+			AddWalkPlane( units[i], 0, x, y, GetDirection( units[i].HexX, units[i].HexY, x, y ), false, Random( 1, 2 ) );
+			
+			if( units[i].Stat[ ST_BODY_TYPE ] < BT_BRAHMIN && Random( 0, 1 ) == 0 )
+			{
+				uint n = Random( 0, 2 ) + Random( 0, 2 ) + Random( 0, 1 );
+				units[i].Say( SAY_NORM_ON_HEAD, walk_phrases[n] );
+			}
+		}
+}
+
+string[] walk_phrases = { "Сейчас-сейчас..", "Выдвигаюсь..", "Хорошо.", "Иду.", "Да!", "Вперёд!" };
+
+void unsafe_retreat( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
+{
+	x = cr.HexX;
+	y = cr.HexY;
+	
+	bool command_succeed = false;
+	
+	Critter@[] units = getControlledNPC( cr );
+	for( uint i = 0, l = units.length(); i < l; i++ )
+		if( sameFaction( cr, units[i] ) )
+		{
+            if( units[i].ModeBase[ MODE_NO_HOME ] == 0 )
+			{
+				units[i].SetHomePos( cr.HexX, cr.HexY, units[i].Dir );
+				units[i].ModeBase[ MODE_NO_HOME ] = 1;
+			}
+
+            units[i].ErasePlane( -1, true );
+            units[i].ClearEnemyStack();
+
+			if( units[i].GetTimeEvents( CTE_BRAHMIN_FOLLOW, null, null, null ) > 0 )
+				units[i].EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
+
+			int dist = GetDistantion( units[i].HexX, units[i].HexY, x, y );
+            AddWalkPlane( units[i], 0, x, y, GetDirection( units[i].HexX, units[i].HexY, x, y ), dist > 5, Random( 1, 2 ) );
+			
+			command_succeed = true;
+		}
+		
+	if( command_succeed )
+		InformWarning( cr, "Вы отозвали к себе подконтрольных вам юнитов." );
+}
+
+void unsafe_follow( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
+{
+	if( !canControll( cr, targetId, x, y ) ) return;
+
+	Critter@ target = GetCritter( targetId );
+	if( !valid( target ) )
+	{
+		@target = cr.GetMap().GetCritter( x, y );
+		if( !valid( target ) ) return;
+	}
+
+	if( target.StatBase[ ST_FOLLOW_CRIT ] == 0 || target.StatBase[ ST_FOLLOW_CRIT ] != int( cr.Id ) )
+		return;
+
+    target.DropPlanes();
+    target.ClearEnemyStack();
+
+	if( target.GetTimeEvents( CTE_BRAHMIN_FOLLOW, null, null, null ) > 0 )
+	{
+		target.EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
+		cr.Say( SAY_NETMSG, "Цель больше не следует за вами." );
+		target.ModeBase [MODE_NO_HOME] = 0;
+	}
+	else
+	{
+		target.AddTimeEvent( "cte_brahmin_follow", 0, CTE_BRAHMIN_FOLLOW, 0 );
+		cr.Say( SAY_NETMSG, "Цель идёт следом." );
+		target.ModeBase [MODE_NO_HOME] = 1;
 	}
 }
 
