@@ -745,7 +745,9 @@ struct ProtoItem
 	const uint16 Item_UseAp;
 	const uint8  Partial_Item;      // -> 338 кусочки 
 	const uint8  Fuel_Efficiency;	// -> 340 эффективность энергоресурса
-    const uint8  UnusedEnd[ 164 ];  // SUKA
+    const uint8  UnusedEnd[ 160 ];  // SUKA
+	
+	const uint EffectSpeed;
 
     // Type specific data
     const bool   Weapon_IsUnarmed;
