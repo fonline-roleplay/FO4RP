@@ -1610,11 +1610,30 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
 		}
 		
 		if( useHex || not valid( realTarget ) ) {										 // binyan - Hex attack - added
-			map.RunFlyEffect( _WeaponEffect( weapon, use ), cr, null, hx, hy, tx, ty );  // yeah, the target can be null (see: grenades, rocket launcher)
-				map.PlaySound( "WHG1FXX2.ACM", hx, hy, 5 );
+			
+			uint[] valsN = { map.Id, _WeaponEffect( weapon, use ), cr.Id, hx, hy, tx, ty };
+			if( isBurst) {
+				for( uint i = 0; i < CLAMP( _WeaponRound( weapon, use ), 1, 10 ); i++ ) {
+					int baseTime = 200;
+					baseTime *= i;
+					CreateTimeEvent( AFTER( REAL_MS( baseTime ) ), "e_FlyEffectNull", valsN, false );
+				}
+			} else {
+				CreateTimeEvent( AFTER( REAL_MS( 200 ) ), "e_FlyEffectNull", valsN, false );
+			}
 				
 		} else {
-			map.RunFlyEffect( _WeaponEffect( weapon, use ), cr, ( useNormal ? normalTarget : realTarget ), hx, hy, tx, ty );
+			
+			uint[] vals = { map.Id, _WeaponEffect( weapon, use ), cr.Id, ( useNormal ? normalTarget.Id : realTarget.Id ), hx, hy, tx, ty };
+			if( isBurst) {
+				for( uint i = 0; i < CLAMP( _WeaponRound( weapon, use ), 1, 10 ); i++ ) {
+					int baseTime = 200;
+					baseTime *= i;
+					CreateTimeEvent( AFTER( REAL_MS( baseTime ) ), "e_FlyEffect", vals, false );
+				}
+			} else {
+				CreateTimeEvent( AFTER( REAL_MS( 200 ) ), "e_FlyEffect", vals, false );
+			}
 		}
 	}
 
@@ -1745,6 +1764,33 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
 	}
 
     return;
+}
+
+uint e_FlyEffect( uint[]@ vals )
+{
+	Map@ map = GetMap( vals[0] ); 
+	int effect = vals[1];
+	Critter@ cr = GetCritter( vals[2] );
+	Critter@ target = GetCritter( vals[3] );
+	int hx = vals[4];
+	int hy = vals[5];
+	int tx = vals[6];
+	int ty = vals[7];
+	map.RunFlyEffect( effect, cr, target, hx, hy, tx, ty );
+	return 0;
+}
+
+uint e_FlyEffectNull( uint[]@ vals )
+{
+	Map@ map = GetMap( vals[0] ); 
+	int effect = vals[1];
+	Critter@ cr = GetCritter( vals[2] );
+	int hx = vals[3];
+	int hy = vals[4];
+	int tx = vals[5];
+	int ty = vals[6];
+	map.RunFlyEffect( effect, cr, null, hx, hy, tx, ty );
+	return 0;
 }
 
 //import void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCritical, bool intentionally, CombatRes[]& results ) from "combat";
@@ -1956,9 +2002,6 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     }
 // /////////////////////////////////////////////////////////
 
-    // int targetTimeout = BATTLE_TIMEOUT( target );
-    // if( target.Timeout[ TO_BATTLE ] < int( targetTimeout - __FullSecond ) )
-        // target.TimeoutBase[ TO_BATTLE ] = targetTimeout;
     target.TimeoutBase[ TO_SNEAK ] = SNEAK_TIMEOUT( target );
 
     if( target.Mode[ MODE_INVULNERABLE ] != 0 )
@@ -2841,7 +2884,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 		{
 		if( Random( 0, 1 ) == 0 )
 			{
-			map.RunEffect( PID_EXPLODE_ROCKET, target.HexX, target.HexY, 1 );
+			map.RunEffect( PID_EXPLODE_MISSILE2, target.HexX, target.HexY, 0 );
 			map.PlaySound( Random( 0, 1 ) == 0 ? "WHN1XXX1.ACM" : "WHN1XXX2.ACM" );
 			QuakeScreen2( target );
 			DeleteItem( _CritGetItemHand( target ) );
@@ -3213,10 +3256,6 @@ uint e_DelayedExplosion( uint[]@ values )
 			break;
 	}
 	
-	//QuakeScreen2( target );
-	// if( pid != PID_FLASH_GRENADE && pid != PID_FLASH_GRENADE )
-		// QuakeScreen( map );
-	
 	int maxDist = 4;
 	int r = ( pid == PID_FLASH_GRENADE ? 5 : maxDist );
 
@@ -3233,20 +3272,6 @@ uint e_DelayedExplosion( uint[]@ values )
 
 	bool stopped = false;
 	
-    /*
-	for( int k = 0; k < count; k++ )
-		if( critsHit[ k ].HexX == x && critsHit[ k ].HexY == y && critsHit[ k ].IsKnockout() )
-		{
-			critsHit[ k ].Say( SAY_EMOTE, "закрывает собой" );
-			if( pid == PID_FLASH_GRENADE )
-				ApplyFlashEff( critsHit[ k ], 0 );
-			else
-				InjureCritter( critsHit[ k ], 2 * Random( DmgMin, DmgMax ), DmgType, GetDirection( x, y, critsHit[ k ].HexX, critsHit[ k ].HexY ), 0 );
-			stopped = true;
-			break;
-		}
-	*/
-
 	if( pid == PID_FLASH_GRENADE )
 	{
 		map.SetText( x, y, COLOR_GRAY, ":вспышка:" );
@@ -3281,7 +3306,7 @@ uint e_DelayedExplosion( uint[]@ values )
         }
 		
 		int dir = GetDirection( x, y, critsHit[ k ].HexX, critsHit[ k ].HexY );
-		float mul = 1.0 - distance * ( 1.0 / maxDist );
+		float mul = 1.0 - CLAMP( distance * 0.1, 0, 0.5 );
 		int dmg = Random( DmgMin, ( critsHit[ k ].IsKnockout() ? DmgMax * 0.5 : DmgMax ) );
 		InjureCritter( critsHit[ k ], dmg * mul, DmgType, dir, -pid );		
     }
