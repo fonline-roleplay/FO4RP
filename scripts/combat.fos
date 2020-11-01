@@ -43,8 +43,8 @@ import bool ChangeWildness( uint16 x, uint16 y, int delta ) from "globalmap_grou
 import void ChangeStatus( Critter& cr, uint16 status, uint8 value, bool set ) from "critter_status";
 import int  GetDeteriorationProcent( Item& item ) from "repair";
 
-import bool FireUp( Item& item, uint pid, int strength ) from "firestarter";
-import bool spawnFire( Map@ map, int x, int y ) from "firestarter";
+import void GenerateFire( Map@ map, int x, int y, int radius, uint8 strength, int attackerId ) from "firestarter";
+import void FireUp( Item& item, uint pid, int strength ) from "firestarter";
 
 const uint16[] FireAmmo = {PID_10MM_HEAP, PID_5MM_HEAP };
 
@@ -487,8 +487,9 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
 	{
         attack.BonusDmg = cr.Stat[ ST_MELEE_DAMAGE ];
 	}
-	if( weaponSubtype == WS_THROWING )
-	{
+	
+	uint8 weapon_Subtype = valid( realWeapon ) ? realWeapon.Proto.Item_Subtype : 0;
+	if( weaponSubtype == WS_THROWING && ( weapon_Subtype == ITEM_SUBTYPE_WEAPON_GRENADE_PRIM || weapon_Subtype == ITEM_SUBTYPE_WEAPON_GRENADE_KIFE ) ) {
         attack.BonusDmg = cr.Stat[ ST_MELEE_DAMAGE ] / 2;
 	}
 		
@@ -786,14 +787,13 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 NotifyMiss( cr, results );
         }
         // }//end of split if
-    }
-    else if( isFlamethrower || isShotgun )
-    {
+    } else if( isFlamethrower || isShotgun )  {
 		// Flame attack
-{
 		uint8 item_Subtype = valid( realWeapon ) ? realWeapon.Proto.Item_Subtype : 0;
-		if( item_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER )
-			GenerateFire( map, tx, ty, 1 );
+		if( item_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER ) {
+			int radius = ammo.Blast_Radius;
+			uint8 strength = ammo.Fire_Strength;
+			GenerateFire( map, tx, ty, radius, strength, cr.Id );
 		}
 
         // adjust toHit if random hit
@@ -1440,7 +1440,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
         if( isHit || changedTarget )
         {
             if( exploding )
-                CommenceExplosion( attack, map, tx, ty, realTarget, weapPid, criticalHit, valid( realTarget ) ? realTarget.Id : 0, isRocket, isGrenade, results );
+                CommenceExplosion( attack, map, hx, hy, tx, ty, realTarget, weapPid, criticalHit, valid( realTarget ) ? realTarget.Id : 0, isRocket, isGrenade, results );
             else if( valid( realTarget ) )          // binyan - Hex attack - added
                 ApplyDamage( attack, realTarget, 1, criticalHit, !changedTarget, results );
         }
@@ -1516,7 +1516,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 if( weapPid != PID_BALL )                                                                                                                    // binyan - учитывем мяч
                 {
                     if( exploding )
-                        CommenceExplosion( attack, map, tx, ty, normalTarget, weapPid, false, valid( realTarget ) ? realTarget.Id : 0, isRocket, isGrenade, results );  // binyan - Hex attack - added
+                        CommenceExplosion( attack, map, hx, hy, tx, ty, normalTarget, weapPid, false, valid( realTarget ) ? realTarget.Id : 0, isRocket, isGrenade, results );  // binyan - Hex attack - added
                     else
                         ApplyDamage( attack, normalTarget, 1, false, false, results );
                 }
@@ -1551,7 +1551,7 @@ void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weapon
                 }
 
                 if( exploding )
-                    CommenceExplosion( attack, map, tx, ty, null, weapPid, false, valid( realTarget ) ? realTarget.Id : 0, isRocket, isGrenade, results );  // binyan - Hex attack - added
+                    CommenceExplosion( attack, map, hx, hy, tx, ty, null, weapPid, false, valid( realTarget ) ? realTarget.Id : 0, isRocket, isGrenade, results );  // binyan - Hex attack - added
             }
         }                                                                                                                                        // miss
         
@@ -3185,45 +3185,27 @@ uint e_DelayedExplosionEff( uint[]@ values )
 	return 0;
 }
 
-void GenerateFire( Map@ map, int x, int y, int r ) //exported
-{
-	if( !valid( map ) ) return;
-	
-	map.SetText( x, y, COLOR_SAND, "|0xFF828a96 :треск огня:" );
-	
-	Item@[] heated;
-	map.GetItems( x, y, heated );
-
-	for( uint i = 0; i < heated.length(); i++ )
-	{	
-		uint16[] WildFires = { PID_WILDFIRE_1, PID_WILDFIRE_2, PID_WILDFIRE_3, PID_WILDFIRE_4, PID_WILDFIRE_5 };
-		if( WildFires.find( heated[i].GetProtoId() ) != -1 )
-			continue;
-		FireUp( heated[i], WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
-	}
-	spawnFire( map, x, y );
-	for( int k = 1; k <= r; k++ )
-		for( uint i = 0; i < 6; i++ ) 
-		{
-			uint16 hx = x + Random( -k, k ), hy = y + Random( -k, k );
-			spawnFire( map, hx, hy );
-		}
-}
-
 uint e_DelayedExplosion( uint[]@ values )
 {
-	if( values.length() != 7 ) return 0;
+	if( values.length() != 9 ) return 0;
 	
-	int i = 0;
-	int x = values[i++];
-	int y = values[i++];
-	int mapId = values[i++];
+	int tx = values[0];
+	int ty = values[1];
+	int mapId = values[2];
+	
 	Map @map = mapId > 0 ? GetMap( mapId ) : null;
+	
 	if( !valid(map) ) return 0;
 	
+	int weapPid = values[3];
+	int DmgMin = values[4];
+	int DmgMax = values[5];
+	int DmgType = values[6];
+	uint8 radius = values[7];
+	int attackerId = values[8];
 	int type = 0;
-	int pid = values[i++];
-	switch( pid )
+
+	switch( weapPid )
 	{
 		case( PID_FLASH_GRENADE ): 		
 			type = PID_EXPLODE_EMP; 
@@ -3256,34 +3238,30 @@ uint e_DelayedExplosion( uint[]@ values )
 			break;
 	}
 	
-	int maxDist = 4;
-	int r = ( pid == PID_FLASH_GRENADE ? 5 : maxDist );
-
     Critter@[] critsHit;
-	int count = int( map.GetCrittersHex( x, y, r, FIND_LIFE_AND_KO, critsHit ) );
+	int count = int( map.GetCrittersHex( tx, ty, radius, FIND_LIFE_AND_KO, critsHit ) );
 	
-	if( pid == PID_MOLOTOV_COCKTAIL || pid == PID_GRNMLTV ) {
-		GenerateFire( map, x, y, r ); 
+	if( weapPid == PID_MOLOTOV_COCKTAIL || weapPid == PID_GRNMLTV ) {
+		ProtoItem@ molotov = null;
+		@molotov =  GetProtoItem( weapPid );
+		uint8 strength = molotov.Fire_Strength;
+		GenerateFire( map, tx, ty, radius, strength, attackerId ); 
 	}
 	
-	int DmgMin = values[i++];
-	int DmgMax = values[i++];
-	int DmgType = values[i++];
-
 	bool stopped = false;
 	
-	if( pid == PID_FLASH_GRENADE )
+	if( weapPid == PID_FLASH_GRENADE )
 	{
-		map.SetText( x, y, COLOR_GRAY, ":вспышка:" );
-		SayLog( map, "Вспышка флешки.", x, y );
+		map.SetText( tx, ty, COLOR_GRAY, ":вспышка:" );
+		SayLog( map, "Вспышка флешки.", tx, ty );
 	}
 
 	if( type > 0 ) 
 	{
-		uint max = ( stopped ? 0 : ( pid == PID_FLASH_GRENADE ? 0 : 3 ) );
-		uint[] vals = { mapId, type, x, y, 0, max };
+		uint max = ( stopped ? 0 : ( weapPid == PID_FLASH_GRENADE ? 0 : 3 ) );
+		uint[] vals = { mapId, type, tx, ty, 0, max };
 		CreateTimeEvent( __FullSecond + 1, "e_DelayedExplosionEff", vals, true );
-		SayLog( map, "Взрыв " + itemName( pid ) + ".", x, y );
+		SayLog( map, "Взрыв " + itemName( weapPid ) + ".", tx, ty );
 	}
 	
 	if( stopped ) return 0;	
@@ -3291,10 +3269,10 @@ uint e_DelayedExplosion( uint[]@ values )
     for( int k = 0; k < count; k++ )
     {
 		QuakeScreen2( critsHit[ k ] );
-		int distance = GetDistantion( x, y, critsHit[ k ].HexX, critsHit[ k ].HexY );
-        if( pid == PID_FLASH_GRENADE )
+		int distance = GetDistantion( tx, ty, critsHit[ k ].HexX, critsHit[ k ].HexY );
+        if( weapPid == PID_FLASH_GRENADE )
         {
-            uint8 DirToCrit = GetDirection( x, y, critsHit[ k ].HexX, critsHit[ k ].HexY );
+            uint8 DirToCrit = GetDirection( tx, ty, critsHit[ k ].HexX, critsHit[ k ].HexY );
             uint8 FlashDir, Near1, Near2;
             REVERSE_DIRECTION( FlashDir, DirToCrit );
             GET_NEAR_DIRECTION( FlashDir, Near1, Near2 );
@@ -3305,26 +3283,46 @@ uint e_DelayedExplosion( uint[]@ values )
 			continue;
         }
 		
-		int dir = GetDirection( x, y, critsHit[ k ].HexX, critsHit[ k ].HexY );
+		int dir = GetDirection( tx, ty, critsHit[ k ].HexX, critsHit[ k ].HexY );
 		float mul = 1.0 - CLAMP( distance * 0.1, 0, 0.5 );
 		int dmg = Random( DmgMin, ( critsHit[ k ].IsKnockout() ? DmgMax * 0.5 : DmgMax ) );
-		InjureCritter( critsHit[ k ], dmg * mul, DmgType, dir, -pid );		
+		InjureCritter( critsHit[ k ], dmg * mul, DmgType, dir, -weapPid );
+		
+		Critter@ attacker = null;
+		if( attackerId > 0 ) {
+			@attacker = GetCritter( attackerId );
+			critsHit[ k ].EventAttacked( attacker );
+		}
     }
 	return 0;
 }
 
-void CommenceExplosion( AttackStruct& attack, Map@ map, uint16 tx, uint16 ty, Critter@ target, uint weapPid, bool isCritical, uint intentionallyId, bool isRocket, bool isGrenade, CombatRes[]& results )
+void CommenceExplosion( AttackStruct& attack, Map@ map, uint16 hx, uint16 hy, uint16 tx, uint16 ty, Critter@ target, uint weapPid, bool isCritical, uint intentionallyId, bool isRocket, bool isGrenade, CombatRes[]& results )
 {
 	if( !valid(map) ) { return; }
 	
+	Critter@ attacker = attack.Attacker;
+	
 	if( isGrenade )	{
-
-		uint[] vals = { tx, ty, map.Id, weapPid, attack.DmgMin, attack.DmgMax, attack.DmgType };
 		
-		int delay = REAL_SECOND(3);
-		if( weapPid == PID_MOLOTOV_COCKTAIL || weapPid == PID_GRNMLTV )
-			delay = 0;
+		ProtoItem@ grenade = null;
+		@grenade =  GetProtoItem( weapPid );
+		uint8 Blast_Radius = grenade.Blast_Radius;
 		
+		if( !valid( target ) ) {
+			if( !map.IsHexPassed( tx, ty ) ) {
+				map.SetText( tx, ty, COLOR_LGRAY, ":отскок:" );
+				uint8 revDir = GetDirection( tx, ty, hx, hy );
+				map.MoveHexByDir( tx, ty, revDir, Random( 1, 2 ) );
+			}
+		}
+		
+		int delay = REAL_SECOND( 3 );
+		
+		if( weapPid == PID_MOLOTOV_COCKTAIL || weapPid == PID_GRNMLTV ) {
+			delay = REAL_MS( 100 );
+		}
+		uint[] vals = { tx, ty, map.Id, weapPid, attack.DmgMin, attack.DmgMax, attack.DmgType, Blast_Radius, attacker.Id };
 		CreateTimeEvent( __FullSecond + delay, "e_DelayedExplosion", vals, true );
 		
 		uint[] values = { map.Id, tx, ty };
@@ -3339,7 +3337,7 @@ void CommenceExplosion( AttackStruct& attack, Map@ map, uint16 tx, uint16 ty, Cr
 		
 	} else if( isRocket ) {
 
-		uint[] vals = { tx, ty, map.Id, weapPid, attack.DmgMin, attack.DmgMax, attack.DmgType };
+		uint[] vals = { tx, ty, map.Id, weapPid, attack.DmgMin, attack.DmgMax, attack.DmgType, attack.Ammo.Blast_Radius, attacker.Id };
 		
 		uint distanceMod = GetDistantion( attack.Hx, attack.Hy, tx, ty ); 
 		distanceMod = distanceMod * 10; // modify to match fly effect
@@ -3350,9 +3348,12 @@ void CommenceExplosion( AttackStruct& attack, Map@ map, uint16 tx, uint16 ty, Cr
 		CreateTimeEvent( AFTER( REAL_MS( distanceMod ) ), "e_CollateralDamageDelay", values, true );
 		return;
 	}
-
-    uint radius = 3;
-    map.RunEffect( PID_EXPLODE_ROCKET, tx, ty, 0 );
+	uint radius = 3;
+    if( valid( attack.Ammo) ) {
+		uint radius = attack.Ammo.Blast_Radius;
+    }
+	
+	map.RunEffect( PID_EXPLODE_ROCKET, tx, ty, 0 );
 	QuakeScreen( map );//todo
 
     Critter@[] critsHit;
@@ -3420,8 +3421,6 @@ void CriticalFailure( Critter& cr, ProtoItem& weapon, uint8 weaponUse, ProtoItem
 			} else if( ammoDmgType!=0 ) {
 				dmgType = ammoDmgType;
 			}
-			
-
 		}
 		
         int  targetDR = cr.Stat[ ST_NORMAL_RESIST + dmgType - 1 ];

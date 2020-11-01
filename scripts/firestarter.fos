@@ -12,10 +12,14 @@ import bool LockInPlace( Critter& cr, Item& targetItem ) from "main";
 #define MAX_FUEL 					Val1 								// Макс допустимый заряд (верхний передел) 
 #define CURRENT_FUEL				Val2 								// Текущий заряд
 #define EVENT 						Val3 								// Для записи тайм-ивента горения костров и бочек, дыма и пара
-#define FIRE_STR 					Val5 								// для горения дикого огня
+#define FIRE_STRENGTH				Val4 								// Сила горения дикого огня
+#define FIRE_TIMER 					Val5 								// Время горения дикого огня
 #define FIRE_BURNING_TIME			REAL_SECOND( 39 ) 					// Время тика горения рукотворного огня
 #define WILD_FIRE_BURNING_TIME 		REAL_SECOND( Random( 4, 10 ) )  	// Время тика горения дикого огня
 #define EXPLOSION_TIMEOUT			Val6 								// Для записи тайм-ивента взрыва
+#define FIRE_MARKER					Val7 								// Маркер огня ( для проверки на силу )
+#define LIQUID_AMOUNT				Val8								// Кол-во жидкости в разливаемом топливе 
+#define ATTACKER_ID					Val9 								// Атакующий для дикого огня
 
 #define REMAINING_USES 				Val0								// Кол-во юзов у воды / фляги
 #define DNA							Val1								// Proto содержимого фляги
@@ -367,73 +371,162 @@ uint e_Explosives( uint[]@ values )
 	}
 	return 0;
 }
-//============ВОЗГОРАНИЕ ПРИ МЕТАНИИ МОЛОТОВЫХ==================//
-bool spawnFire( Map@ map, int x, int y ) //exported учет тока в комбаче для молотова
+
+//===============СОЗДАНИЕ ОГНЯ==================//
+/*class Fire - черновик на будущее
 {
-	if(!valid(map)) { return false;
-	}
+	uint16 pid;
+	uint8 strength;
+	uint8 charge;
+	int attackerId;
+	bool burnOut;
 	
-	Critter@ victim = map.GetCritter( x, y); 
-	if( !map.IsHexPassed( x, y ) && !valid(victim) ) { return false;
-	}
-	
-	Item@[] heated;	
-	map.GetItems( x, y, heated );
-	
-	for( uint i = 0; i < heated.length(); i++ )
+	Fire( uint16 pid, uint8 size, uint8 charge, int attackerId )
 	{
-		if( heated[i].GetProtoId() == PID_FIREBARREL || WildFires.find( heated[i].GetProtoId() ) != -1 ) { return false;
+        this.pid = pid;
+        this.strength = strength;
+        this.charge = charge;
+        this.attackerId = attackerId;
+		burnOut = false;
+	}
+}*/
+
+
+void GenerateFire( Map@ map, int x, int y, int radius, uint8 strength, int attackerId ) //exported
+{
+	if( !valid( map ) ) { return; }
+	Item@ initialFire = null;
+	Item@ fire = null;
+	
+	Critter@ victim = map.GetCritter( x, y ); 
+	
+	if( !map.IsHexPassed( x, y ) && !valid( victim ) ) { return; }
+	
+	@initialFire = map.AddItem( x, y, WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
+
+	
+	SayLog( map, "[ Очаг Возгорания ]", x, y );
+	
+	if( !valid( initialFire ) ) { return; }
+	
+	if( attackerId > 0 ) {
+		initialFire.ATTACKER_ID = attackerId;
+	}
+	
+	SetFireEvent( initialFire, strength );
+
+	initialFire.LIQUID_AMOUNT = CalcualteCharges( radius );
+	
+	uint[] active_fires = { initialFire.Id };
+	
+	if( radius > 0 ) {
+		FireCircle( map, x, y, strength, active_fires );
+		for( int i = 1; i < initialFire.LIQUID_AMOUNT ; i++ ) {
+			uint16 zx = 0, zy = 0;
+			Item@ fire = null;
+			@fire = GetItem( active_fires[ Random( 1, active_fires.length() - 1 ) ] );
+			fire.GetMapPosition( zx, zy );
+			FireCircle( map, zx, zy, strength, active_fires );
 		}
 	}
-	
-	Item@ fire = map.AddItem( x, y, WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
-	if( !valid( fire ) ) { return false;
-	}
-	
-	fire.SetEvent( ITEM_EVENT_WALK, "e_Hot" );	
-	fire.FIRE_STR = 1; // сила огня - валка для тайм ивента возгорания
-	uint[] values = { fire.Id, 0 };
-	fire.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ), "e_FireBurn", values, true );
-	SayLog( map, "[ Возгорание ]", fire.HexX, fire.HexY );
-	return true;
 }
-//================ВОЗГОРАНИЕ ПРЕДМЕТОВ РЯДОМ С ОГНЕМ===========================//
-bool FireUp( Item& burningItem, uint pid, int strength ) //exported
+
+uint CalcualteCharges( uint radius )
 {
-	if( FireSource.find( pid ) == -1 ) {
-		return false;
+	uint charge = 0;
+	for ( uint i = 1; i <= radius; i++ ) {
+		charge += 6 * i;
 	}
+	return charge;
+}
+
+void SetFireEvent( Item& fire, uint8 strength )
+{
+	fire.SetEvent( ITEM_EVENT_WALK, "e_Hot" );	
+	uint[] values = { fire.Id, strength };
+	fire.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ), "e_FireBurn", values, true );
+}
+
+uint FireCircle( Map@ map, int x, int y, uint8 strength, uint[]@ active_fires )
+{
+	if( !valid( map ) ) { return 0; }
+	
+	if( active_fires.length() == 0 ) { return 0; }
+	
+	uint initialFireId = active_fires[0];
+	Item@ initialFire = GetItem( initialFireId );
+	Item@ fire = null;
+	
+	int charge = initialFire.LIQUID_AMOUNT;
+	
+	uint16 tx = 0, ty = 0;
+	
+	Critter@ victim = map.GetCritter( x, y ); 
+	
+	for( uint i = 0; i < 6; i++ ) {
+		tx = x; ty = y;
+		map.MoveHexByDir( tx, ty, i, 1 );
+		
+		if( !map.IsHexPassed( tx, ty ) && !valid( victim ) ) 
+			continue;
+		if( CheckFire( map, tx, ty ) == false ) {
+			@fire = map.AddItem( tx, ty, WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
+			if( !valid( fire ) )
+				continue;
+			fire.ATTACKER_ID = initialFire.ATTACKER_ID;
+			SetFireEvent( fire, strength );
+			initialFire.LIQUID_AMOUNT--;
+			active_fires.insertLast( fire.Id );
+		}
+		if( initialFire.LIQUID_AMOUNT <= 0 ) { return 0; }
+	}
+	return charge;
+}
+
+bool CheckFire( Map& map, int x, int y )
+{
+	uint pid = 0;
+	Item@[] fire;
+	uint count = map.GetItems( x, y, fire );
+	for( uint i = 0; i < count; i++ ) {
+		if( WildFires.find( fire[i].GetProtoId() ) != -1 ) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//================ВОЗГОРАНИЕ ПРЕДМЕТОВ РЯДОМ С ОГНЕМ===========================//
+void FireUp( Item& burningItem, uint pid, int strength ) //exported
+{
+	if( FireSource.find( pid ) == -1 ) { return; }
 	
 	uint firablePid = burningItem.GetProtoId();	
-	if( FireFuel.find(firablePid) == -1 && Collaterals.find(firablePid) == -1 && Explosives.find(firablePid) == -1 && Destructables.find(firablePid) == -1 ) {
-		return false;
-	}
+	if( FireFuel.find( firablePid ) == -1 && Collaterals.find( firablePid ) == -1 && Explosives.find( firablePid ) == -1 && Destructables.find( firablePid ) == -1 ) { return; }
 	
     Map@ map = GetMap( burningItem.MapId );
-    if(!valid(map)) {
-        return false;
-	}
+    if(!valid(map)) { return; }
 	
 	uint16 hx = burningItem.HexX, hy = burningItem.HexY;
-	if( Explosives.find( burningItem.GetProtoId() ) != -1 )
-	{
+	if( Explosives.find( burningItem.GetProtoId() ) != -1 )	{
 		ExplodeEx( map, hx, hy, PID_EXPLODE_MISSILE2, 0, Random( 50, 100 ), DAMAGE_EXPLODE, 3, 0 );
 		Item@[] destroyedItems;
 		map.GetItems( hx, hy, destroyedItems );
 		DeleteItems( destroyedItems );
 		map.AddItem( hx, hy, Ashes[ Random( 0, Ashes.length() - 1 ) ], 1 );
 	}		
+	
 	Item@ fire = map.AddItem( hx, hy, WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
 	map.PlaySound( "WAI1XXX2.ACM", hx, hy, 3 );
-	fire.SetEvent( ITEM_EVENT_WALK, "e_Hot" );	
-	if( valid( fire ) )
+	
+	if( !valid( fire ) ) { return; } {
+		fire.SetEvent( ITEM_EVENT_WALK, "e_Hot" );	
+		SetFireEvent( fire, strength );
+
+		SayLog( map, "[ Возгорание предмета в ]", hx, hy );
+		
 		DeleteItem( burningItem );
-			
-	fire.FIRE_STR = strength;
-	uint[] values = { fire.Id, 0 };
-	fire.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ), "e_FireBurn", values, true );
-	SayLog( map, "[ Возгорание ]", fire.HexX, fire.HexY );
-	return true;
+	}
 }
 
 void e_Hot(Item& item, Critter& crit, bool entered, uint8 dir) 
@@ -443,9 +536,15 @@ void e_Hot(Item& item, Critter& crit, bool entered, uint8 dir)
 		if( crit.GetTimeEvents( CTE_DYSPNEA, null, null, null ) == 0 ) {
 			crit.AddTimeEvent( "cte_Hot", 0, CTE_DYSPNEA, 0 );
 		}
+		Critter@ attacker = null;
+		if( item.ATTACKER_ID > 0 ) {
+			@attacker = GetCritter( item.ATTACKER_ID );
+			crit.EventAttacked( attacker );
+		}
 	}
 	else crit.EraseTimeEvents( CTE_DYSPNEA );
 }
+
 //=============ПОДНИМАЕМ ТЕМПЕРАТУРУ КРИТЕРА==================//
 uint cte_Hot( Critter& cr, int identifier, uint& rate )
 {
@@ -479,63 +578,78 @@ uint cte_Hot( Critter& cr, int identifier, uint& rate )
 	return REAL_SECOND( 1 );
 }
 //==========WILDFIRE TIME EVENT ===============//
-uint e_FireBurn( uint[] @ values )
+uint e_FireBurn( uint[]@ values )
 {
-	if( !valid( values ) || values.length() != 2 ) return 0;
+	if( !valid( values ) ) { return 0; }
 	
-    Item@ item = GetItem( values[ 0 ] );
-	if( !valid(item) ) return 0;
-
-	if( item.FIRE_STR > 0 ) 
-	{
-        values[1]++;
-		if( values[1] >= 60 ) 
-		{ 
-			values[1] = 0; 
-			item.FIRE_STR -= Random( 0, 1); 
+    Item@ fire = GetItem( values[ 0 ] );
+	if( !valid( fire ) ) { return 0; }
+	
+	uint8 strength = values[ 1 ];
+	
+	if( fire.FIRE_MARKER == 0 ) {
+		fire.FIRE_STRENGTH = strength;
+	}
+	
+	if( fire.FIRE_STRENGTH > 0 ) {
+		fire.FIRE_TIMER++;
+		
+		if( fire.FIRE_TIMER >= 20 ) { 
+			fire.FIRE_TIMER = 0; 
+			fire.FIRE_STRENGTH -= Random( 0, 1 );
+			
+			if( fire.FIRE_MARKER == 0 ) {
+				fire.FIRE_MARKER = 1;
+			}
 		}
 		
-		Map@ map = GetMap( item.MapId );
-		if( !valid( map ) ) return 0;
+		Map@ map = GetMap( fire.MapId );
+		if( !valid( map ) ) { return 0; }
 
-		if( Random(0,1) == 0 ) 
+		if( Random( 0, 1 ) == 0 ) 
 		{
-			uint16 hx = item.HexX, hy = item.HexY;
-			Item@[] items;
-			map.GetItems( item.HexX, item.HexY, items );
-			for( uint i = 0; i < 6; i++ ) 
-			{
-				hx = item.HexX; hy = item.HexY;
+			uint16 hx = fire.HexX, hy = fire.HexY;
+			Item@[] heated;
+			map.GetItems( fire.HexX, fire.HexY, heated );
+			
+			for( uint i = 0; i < 6; i++ ) {
+				hx = fire.HexX; hy = fire.HexY;
 				map.MoveHexByDir( hx, hy, i, 1 );
-				map.GetItems( hx, hy, items );
+				map.GetItems( hx, hy, heated );
 			}
-			for( uint i = 0; i < items.length(); i++ )
-			FireUp( items[i], WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
+			for( uint i = 0; i < heated.length(); i++ ) {
+				FireUp( heated[i], WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
+			}
 		}
-		uint16 hx = item.HexX, hy = item.HexY;
+		
+		uint16 hx = fire.HexX, hy = fire.HexY;
 		Item@ fireFX = map.AddItem( hx, hy, PID_SMOKE, 1 );
 		map.PlaySound( "forest_fire2.ogg", hx, hy, 3 );
+		
 		uint[] values = {fireFX.Id};
 		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", values, true );
 
 		Critter@[] targetCR;
-		uint count = map.GetCrittersHex( item.HexX, item.HexY, 0, FIND_LIFE_AND_KO, targetCR );
-		for( uint i = 0; i < count; i++ )
-			if( targetCR[i].GetTimeEvents( CTE_DYSPNEA, null, null, null ) == 0 )
+		uint count = map.GetCrittersHex( fire.HexX, fire.HexY, 0, FIND_LIFE_AND_KO, targetCR );
+		for( uint i = 0; i < count; i++ ) {
+			if( targetCR[i].GetTimeEvents( CTE_DYSPNEA, null, null, null ) == 0 ) {
 				targetCR[i].AddTimeEvent( "cte_Hot", 0, CTE_DYSPNEA, 0 );
+			}
+		}
 		if( map.GetRain() == 0 || Random( 1, 10 ) != 10 ) {
 			return WILD_FIRE_BURNING_TIME;
 		}
     }
 	
-	if( WildFires.find( item.GetProtoId() ) != -1 )   
+	if( WildFires.find( fire.GetProtoId() ) != -1 )   
 	{
-		item.ChangeProto( Ashes[ Random( 0, Ashes.length() - 1 ) ] );
+		fire.ChangeProto( Ashes[ Random( 0, Ashes.length() - 1 ) ] );
 		return 0;
 	}
-	item.STATE = 0;
-	EraseTimeEvent( item.EVENT );
-	item.EVENT = 0;
+	
+	fire.STATE = 0;
+	EraseTimeEvent( fire.EVENT );
+	fire.EVENT = 0;
     return 0;
 }
 //========== ACTION MENU FOR UNIGNITED BARREL ===============//
