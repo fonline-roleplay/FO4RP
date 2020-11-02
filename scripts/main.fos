@@ -431,7 +431,11 @@ void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weap
 			vals[4] = ammo.ProtoId;
 		
 		cr.SetDir( GetDirection( cr.HexX, cr.HexY, target.HexX, target.HexY ) );
-		cr.Wait( windupTime );
+		if( cr.ParamBase[ CR_IS_WINDUPED ] == 0 ) {
+			cr.Wait( windupTime );
+		} else {
+			windupTime = 0;
+		}
 		Item@ realWeapon = _CritGetItemHand(cr);
 		cr.Action(ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid(realWeapon) ? realWeapon : null );
 		cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
@@ -5281,6 +5285,31 @@ void ChangeWindup( Critter& cr, bool ignore_bussy )
 	} else {
 		uint16 realWeaponPid = realWeapon.GetProtoId();
 		action_name = "" + GetMsgStr( 0, TEXTMSG_ITEM, realWeaponPid * 100 );
+		
+		Map@ map = cr.GetMap();
+		if( valid( map ) ) {
+			uint8 item_Subtype = realWeapon.Proto.Item_Subtype;
+			string sound;
+			if( item_Subtype == 55 || item_Subtype == 56  ) {
+				sound = "KNIFE.ACM";
+			} else if( item_Subtype == 58 || item_Subtype == 60 ) {
+				sound = "SLEDGE.ACM";
+			} else if( item_Subtype == 57 || item_Subtype == 61 ) {
+				sound = "SPEAR.ACM";
+			} else if( item_Subtype == 1 || item_Subtype == 2 || item_Subtype == 15 || item_Subtype == 25 || item_Subtype == 35 || item_Subtype == 41 ) {
+				sound = "PISTOL.ACM";
+			} else if( item_Subtype == 3 || item_Subtype == 17 || item_Subtype == 27 || item_Subtype == 37 ) {
+			   sound = "UZI.ACM";
+			} else if( item_Subtype == 4 || item_Subtype == 5 || item_Subtype == 6 || item_Subtype == 7 || item_Subtype == 8 || item_Subtype == 16 || item_Subtype == 18 || item_Subtype == 19 
+			|| item_Subtype == 26 || item_Subtype == 28	|| item_Subtype == 29 || item_Subtype == 36 || item_Subtype == 38 || item_Subtype == 39 || item_Subtype == 42 ) {
+			   sound = "RIFLE.ACM";
+			} else if( item_Subtype == 10 || item_Subtype == 11 || item_Subtype == 12 || item_Subtype == 14 ) {
+			   sound = "FLAMETHR.ACM";
+			} else if( item_Subtype == 13 || item_Subtype == 20 || item_Subtype == 30 || item_Subtype == 40 ) {
+			   sound = "MINIGUN.ACM";
+			}
+			map.PlaySound( sound, cr.HexX, cr.HexY, 1 ); 
+		}
 	}
 	
 	ProtoItem@ weapon = valid( realWeapon ) ? GetProtoItem( realWeapon.GetProtoId() ) : null;
@@ -5293,11 +5322,15 @@ void ChangeWindup( Critter& cr, bool ignore_bussy )
 		cr.ParamBase[ CR_IS_WINDUPED ] = 0;
 		if( cr.Anim2Life >= 120 || cr.Anim2Life <= 125 ) // _animation.fos defines for weapon windup
 		{
-			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
 			if( valid( realWeapon ) ) {
 				action_name = "опускает " + action_name;
+				uint[] values = { cr.Id };
+				cr.SetAnims( COND_LIFE, 0, ANIM2_TURNOFF_WEAPON );
+				CreateTimeEvent( AFTER( REAL_MS( 230 ) ),"e_gunWindDownVFX", values, true );
+				cr.Wait( 250 );
 			} else {
 				action_name = "успокаивается";
+				cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 			}
 		}
 		else
@@ -5307,13 +5340,19 @@ void ChangeWindup( Critter& cr, bool ignore_bussy )
 	{
 		if( valid( realWeapon ) ) {
 			action_name = "вскидывает " + action_name;
+			uint8 weapon_Subtype = valid( realWeapon ) ? realWeapon.Proto.Item_Subtype : 0;
+			
 		}
 		cr.ParamBase[ CR_IS_WINDUPED ] = 1;
+		cr.StatBase[ ST_CURRENT_AP ] -= 3000; // тут можно на сабтайпы разбить
 		
 		uint8 weapon_Subtype = valid( realWeapon ) ? realWeapon.Proto.Item_Subtype : 0;
 
 		if( weaponSubtype == WS_GUN ) {
-			cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
+			uint[] values = { cr.Id };
+			cr.SetAnims( COND_LIFE, 0, ANIM2_PREPARE_WEAPON );
+			CreateTimeEvent( AFTER( REAL_MS( 230 ) ),"e_gunWindupVFX", values, true );
+			cr.Wait( 250 );
 		} else if ( weapon_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_KNIFE || weapon_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_LONG_KNIFE || weapon_Subtype == ITEM_SUBTYPE_WEAPON_GRENADE_KIFE ) {
 			cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP_BLADE );
 		} else if ( weapon_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_HAMMER ) {
@@ -5333,8 +5372,24 @@ void ChangeWindup( Critter& cr, bool ignore_bussy )
 	
 	SayLog( cr, crInfo( cr ) + " :" + action_name + ":" );
 	
-	if( !ignore_bussy )
+	if( !ignore_bussy ) { 
 		cr.Say( SAY_EMOTE_ON_HEAD, action_name );
+	}
+}
+uint e_gunWindupVFX( uint[]@ values )
+{
+	Critter@ cr = GetCritter( values[0] );
+	cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
+	cr.Wait( 100 );
+	return 0;
+}
+
+uint e_gunWindDownVFX( uint[]@ values )
+{
+	Critter@ cr = GetCritter( values[0] );
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	cr.Wait( 100 );
+	return 0;
 }
 
 void unsafe_set_aim( Critter& cr, int aim, int, int, string@, int[]@ )
