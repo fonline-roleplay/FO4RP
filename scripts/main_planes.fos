@@ -6,9 +6,12 @@
 
 import void SetDeterioration( Item& item, int deteriorationProcent ) from "repair";
 import bool AddWalkPlane( Critter& npc, uint priority, uint16 hexX, uint16 hexY, uint8 dir, bool run, uint cut ) from "npc_planes";
+import bool AddPickPlane( Critter& npc, uint priority, Item@ item, uint useItemId, bool toOpen ) from "npc_planes";
 import bool IsKeyAviable( Critter& cr, uint lockerId ) from "lockers";
 import uint GetKeyId( Critter& cr, uint lockerId ) from "lockers";
 import int  RawToHit( Critter& cr, Critter& target, ProtoItem@ weapon, uint8 weaponUse, ProtoItem@ ammo ) from "combat";
+import void TransitCritterToCell(Critter& cr, Scenery& grid) from "globalmap_group";
+import Scenery@ GetNearestExitGridInRadius(Map@ map, uint16 hexX, uint16 hexY, uint maxRadius, uint minRadius) from "globalmap_group";
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Called on some plane added.
@@ -43,13 +46,47 @@ bool npc_plane_begin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr
 // REASON_NO_UNARMED
 bool npc_plane_end( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem )
 {
+    if (plane.IdentifierExt == AI_PLANE_THEN_TRANSIT)
+    {
+        Map@ map = npc.GetMap();
+        if (null is map) return true;
+        Scenery@ exitGrid = GetNearestExitGridInRadius(map, npc.HexX, npc.HexY, 3, 0);
+        // Map edge found - attempt to transit
+        if (null !is exitGrid) {
+            TransitCritterToCell(npc, exitGrid);
+        }
+        Map@ newMap = npc.GetMap();
+        if (null !is newMap && newMap.Id == map.Id) {
+            if (plane.IdentifierExt == AI_PLANE_THEN_TRANSIT) plane.IdentifierExt = 0;
+            if (plane.Type == AI_PLANE_ATTACK) {
+                Critter@ cr = GetCritter(plane.Attack_TargId);
+                if (cr !is null) {
+                    Map@ targetMap = cr.GetMap();
+                    int ent = -1;
+                    uint16 x = cr.HexX, y = cr.HexY;
+                    if(targetMap !is null && targetMap.Id != map.Id) {
+                        if (targetMap.GetNearEntireCoords(ent, x, y)) {
+                            npc.TransitToMap(targetMap.Id, x, y, npc.Dir);
+                        }
+                    }
+                }
+            }
+        } 
+    }
+
     // Log("npc_plane_end "+reason + "npcId" + npc.Id);
     if( reason == REASON_CANT_WALK && npc.IsNoPlanes() )
+    {
         npc.Wait( Random( 1000, 2000 ) );
+    }        
     else if( reason == REASON_HEX_BUSY || reason == REASON_HEX_BUSY_RING || reason == REASON_POSITION_NOT_FOUND )
+    {
         npc.Wait( Random( 1000, 2000 ) );
-    else if( reason == REASON_FIND_PATH_ERROR || reason == REASON_HEX_TOO_FAR )
+    }        
+    else if( reason == REASON_FIND_PATH_ERROR || reason == REASON_HEX_TOO_FAR ) 
+    {
         npc.Wait( 20000 );
+    }
     else if( reason == REASON_GAG_CRITTER )
     {
         if( valid( someCr ) && someCr.IsPlayer() && int(someCr.Id) != npc.Merc[ MERC_MASTER_ID ] )
@@ -154,6 +191,49 @@ bool npc_plane_end( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, 
         }
         npc.Wait( 10000 );
     }
+    else if ( reason == REASON_TARGET_DISAPPEARED && plane.Type == AI_PLANE_ATTACK && npc.IsCanWalk() )
+    {
+        Map@ npcMap = npc.GetMap();
+        Critter@ cr = GetCritter( plane.Attack_TargId );
+        if (null !is cr && null !is npcMap) {
+            Map@ crMap = cr.GetMap();
+            if (crMap.Id != npcMap.Id) {
+                uint exitGridDistance = 20;
+                Scenery@ exitGrid = GetNearestExitGridInRadius(npcMap, npc.HexX, npc.HexY, exitGridDistance, 0);
+                if (null !is exitGrid) {
+                    exitGridDistance = GetDistantion(exitGrid.HexX, exitGrid.HexY, npc.HexX, npc.HexY);
+                }
+
+                uint16 ex = npc.HexX, ey = npc.HexY;
+                int etype = -1;
+                if (npcMap.GetNearEntireCoords(etype, ex, ey) && GetDistantion(ex, ey, npc.HexX, npc.HexY) < exitGridDistance) {
+                    NpcPlane@ walkAndTransit = CreatePlane();
+                    walkAndTransit.Type = AI_PLANE_WALK;
+                    walkAndTransit.IdentifierExt = plane.IdentifierExt = AI_PLANE_THEN_TRANSIT;
+                    walkAndTransit.Priority = 100;
+                    walkAndTransit.Walk_HexX = ex;
+                    walkAndTransit.Walk_HexY =  ey;
+                    walkAndTransit.Run = true;
+                    walkAndTransit.Walk_Cut = 0;
+                    npc.AddPlane( walkAndTransit );
+                    return false;
+                }
+                else if (null !is exitGrid) {
+                    NpcPlane@ walkAndTransit = CreatePlane();
+                    walkAndTransit.Type = AI_PLANE_WALK;
+                    walkAndTransit.IdentifierExt = plane.IdentifierExt = AI_PLANE_THEN_TRANSIT;
+                    walkAndTransit.Priority = 100;
+                    walkAndTransit.Walk_HexX = exitGrid.HexX;
+                    walkAndTransit.Walk_HexY =  exitGrid.HexY;
+                    walkAndTransit.Run = true;
+                    walkAndTransit.Walk_Cut = 2;
+                    npc.AddPlane( walkAndTransit );
+                    return false;
+                }
+            }
+        }
+    }
+
     return true;
 }
 
