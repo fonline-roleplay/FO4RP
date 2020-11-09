@@ -43,6 +43,7 @@ import bool AskAction( Critter& cr, Item& item ) from "repair";
 import bool InstallRadio( Critter& cr, Item& radio, Item& armor ) from "repair";
 import int  GetDeteriorationProcent( Item& item ) from "repair";
 import void SetDeterioration( Item& item, int deteriorationProcent ) from "repair";
+import void robotRepairSkill (Critter& cr, Critter& targetCr, bool alreadyAllowed) from "repair";
 
 import bool WantedSignSet( Item& wantedSign, string& name, uint cost ) from "wanted";
 
@@ -94,9 +95,6 @@ import string SetupAidLeX( uint8 aidValue ) from "item";
 
 import void CheckFaction( Critter& cr, bool join ) from "factions";
 
-import bool IsHaveBlade( uint16 pid ) from "repair";                             // pm added
-import void robotRepairSkill (Critter& cr, Critter& targetCr, bool alreadyAllowed) from "repair";
-
 import bool ItemStimpackUse( Critter& cr, Item& item ) from "heal";
 import bool __Bandage( Critter& cr, Critter@ targetCr ) from "heal";
 import void ItemHypoUse (Critter& cr, Item& item) from "heal";
@@ -116,7 +114,6 @@ import bool IsDoorAutomatic( uint pid ) from "map_sutter_objects";
 
 import void FlushScreen( Critter& cr, uint fromColor, uint toColor, uint timeMs ) from "effects";
 
-import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attackerId ) from "combat";
 import bool SetTrapOnItem( Critter& cr, Item& trap, Item& onItem ) from "trap";
 
 import void DiceUse( Critter& cr, Item& item ) from "mio_social";
@@ -167,11 +164,13 @@ import bool PourFlask( Critter& cr, Item& flask ) from "flask";
 
 import void StartMenuWell( Critter& cr, Item& well ) from "waterworks";
 
+import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attackerId ) from "combat";
 import void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16 hexX, uint16 hexY ) from "combat";
 import int getFullSkill( Critter& cr, Critter@ target, int skillNum, uint8 weaponSubtype ) from "combat"; //вынести отдельно
 import uint GetAimApCost( int hitLocation ) from "combat";
-import void hearshot( Critter& cr, ProtoItem& weapon, uint8 weaponMode ) from "rp_combat"; 
 import void CollateralDamage( Map& map, uint16 tx, uint16 ty ) from "combat";
+
+import void hearshot( Critter& cr, ProtoItem& weapon, uint8 weaponMode ) from "rp_combat"; 
 
 import void ProccessFood( Critter& cr, Critter& target, Item& item ) from "food";
 import void ProccessDrink( Critter& cr, Critter& target, Item& item ) from "food";
@@ -525,7 +524,9 @@ uint e_DelayedAttack( uint[]@ values )
 			if( FireAmmo.find( ammoPid ) != -1 ) {
 				dmgType = DAMAGE_FIRE;
 			}
-			
+		}
+		
+		if( weapon.Windup_Time != 0 ) {
 			uint distanceMod = GetDistantion( cr.HexX, cr.HexY, hexX, hexY ); 
 			distanceMod = distanceMod * 10; // modify to match fly effect
 			CreateTimeEvent( AFTER( REAL_MS( distanceMod ) ), "e_DelayedAttackVFX", values, false );
@@ -545,7 +546,7 @@ uint e_DelayedAttackVFX( uint[]@ values )
 	
 	ProtoItem@ weapon = GetProtoItem(values[2]);
 	uint8 weaponMode = values[3];
-	ProtoItem@ ammo = GetProtoItem(values[4]);
+	ProtoItem@ ammo = GetProtoItem( values[4] );
 	uint hexX = values[5];
 	uint hexY = values[6];
 	
@@ -554,15 +555,20 @@ uint e_DelayedAttackVFX( uint[]@ values )
 	
 	if( !valid( realWeapon ) ) return 0;
 	
-	if( !valid( ammo ) ) return 0; 
+	int dmgType = DAMAGE_LASER;
+	uint16 ammoRound = 1;
+	uint16 ammoPid = 0;
 	
-	uint16 ammoRound = _WeaponRound( weapon, _WeaponModeUse( weaponMode ) );
-	uint16 ammoPid = ammo.ProtoId;
-	int dmgType = _WeaponDmgType( weapon, _WeaponModeUse( weaponMode ) );
+	if( valid( ammo ) ) {
+		ammoRound = _WeaponRound( weapon, _WeaponModeUse( weaponMode ) );
+		ammoPid = ammo.ProtoId;
+		dmgType = _WeaponDmgType( weapon, _WeaponModeUse( weaponMode ) );
+	}
 	
 	uint16 effectPid = 0;
 	Item@ flashVFX = null;
 	uint16 flashPid = 0;
+	
 	switch( dmgType )
 	{
 		case( DAMAGE_NORMAL ):
@@ -577,7 +583,7 @@ uint e_DelayedAttackVFX( uint[]@ values )
 		}
 		case( DAMAGE_LASER ):
 		{
-			if( ammoRound == 1 ) {
+			if( ammoRound <= 1 ) {
 				effectPid = PID_EXPLODE_LASER_SINGLE;
 			} else if ( ammoRound == 2 ) {
 				effectPid = PID_EXPLODE_LASER_DOUBLE;
@@ -1482,10 +1488,17 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 
        if( useOnSelf ) {
 		   
+		   				
+			if( pid == PID_TRAUMATIN && cr.StatBase[ ST_TRAUMATIN_OVERDOSE ] >= 2 ) {
+				cr.Say( SAY_NETMSG , "|0xFFFF00 Ваш организм не выдержит еще одной дозы Травматина!" );
+				return true;
+			}
+
             cr.StatBase[ ST_HUNGER ] += hungerBonus * SATURATION_SIMPLIFIER;
             cr.StatBase[ ST_THIRST ] += thristBonus * SATURATION_SIMPLIFIER;
             ProccessFood( cr, cr, item );
-            UseDrug( cr, item );
+
+			UseDrug( cr, item );
             
             cr.Action( ACTION_USE_ITEM, 2, item );
         
@@ -2190,683 +2203,646 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
     if( valid( targetItem ) && ( targetItem.GetType() == ITEM_TYPE_DOOR || targetItem.GetType() == ITEM_TYPE_CONTAINER ) && UseSkillOnLocker( cr, targetItem, skill ) )
         return true;
 
+	// Check for all skills for critter
     switch( skill )
     {
-    case SKILL_PICK_ON_GROUND: {
-		
-        if( !(targetScen is null) && CanCook( targetScen ) )
-        {
-            return UseCookingStuff( targetScen, cr );
-        }
-
-		// Готовка на открытом пламени - Open fire cooking
-		if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_FIREPLACE2 || targetItem.GetProtoId() == PID_CHOPPED_FIREWOOD ) && targetItem.Val0 >= 1 )
-		{	
-			AskCooking( cr );
-			return true;
-		}
-
-		// Меню закрепленной бочкой для огня
-		if( valid( targetItem ) && ( ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_BRAZIER ) && targetItem.Val0 == 0 && !FLAG( targetItem.Flags, ITEM_CAN_PICKUP ) ) )
-		{	
-			ShowMenuFireBarrel( cr, targetItem );
-			return true;
-		}
-
-		// Scenery
-		if( valid( targetScen ) )
+		case( SKILL_PICK_ON_GROUND ): 
 		{
-			if( water_sources.find( targetScen.ProtoId ) != -1 )
-				Cleaning( cr, 0, targetScen.ProtoId );
-			else
+			
+			if( !(targetScen is null) && CanCook( targetScen ) )
 			{
-				if (!TryTraining( cr, targetScen.ProtoId ) )
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+				return UseCookingStuff( targetScen, cr );
 			}
-			return true;
-		}
-		
-		if( valid( targetItem ) && targetItem.GetProtoId() == PID_SWITCH1_DIR2 || targetItem.GetProtoId() == PID_SWITCH1_DIR3 || targetItem.GetProtoId() == PID_SWITCH2_DIR2 || targetItem.GetProtoId() == PID_SWITCH2_DIR3 || targetItem.GetProtoId() == PID_SWITCH3_DIR2 || targetItem.GetProtoId() == PID_SWITCH3_DIR3 )
-		{
-			UseLightSwitch( cr, targetItem ); 
-			return true;
-		}
-		
-        // Manufacture, Alcohol
-       // if( isPlayer && IsStill( targetItem ) && UseStill( cr, targetItem, -1, null ) )
-         //   return true;
 
-        // Wanted
-        if( valid( targetItem ) && targetItem.GetProtoId() == PID_WANTED_SIGN && WantedSignSet( targetItem, cr.Name, Random( 1000, 2000 ) ) )
-            return true;
-        // Explosion
-        if( valid( targetItem ) && targetItem.GetProtoId() == PID_ACTIVE_MINE && OnUseExplode( cr, targetItem, null, null, null, 0 ) )
-            return true;
-	
-        // Pick some item
-        if( valid( targetItem ) )
-        {
-			uint16 wildplantPid = targetItem.GetProtoId();
-			if( Wildplants.find( wildplantPid ) != -1 ) {
-				cr.Say( SAY_EMOTE, "Срывает растение" );
-				if( targetItem.Val2 - 1 == targetItem.Val0 ) {
-					uint16 pickedPlantPid = 0;
-					switch ( wildplantPid ) 
-					{
-						case( PID_PLANT_BROC ):
-							pickedPlantPid = PID_BROC_FLOWER;
-							break;
-						case( PID_PLANT_XANDER ):
-							pickedPlantPid = PID_XANDER_ROOT;
-							break;
-						case( PID_PLANT_MURAVNIKTAR ):
-							pickedPlantPid = PID_MURAVNIKTAR;
-							break;
-						case( PID_PLANT_TONGUE_GECKO ):
-							pickedPlantPid = PID_TONGUE_GECKO;
-							break;
-						case( PID_PLANT_BLACK_MUSHROOMS ):
-							pickedPlantPid = PID_BLACK_MUSHROOMS;
-							break;
-						case( PID_PLANT_PALE_MUSHROOM ):
-							pickedPlantPid = PID_PALE_MUSHROOM;
-							break;
-						case( PID_PLANT_MUTMUSH ):
-							pickedPlantPid = PID_MUTMUSH;
-							break;
-					}
-					cr.AddItem( pickedPlantPid, targetItem.Val1 );
-					cr.Say( SAY_NETMSG, "|0xFFFF00 Вы добыли немного полезных растений." );
-					DeleteItem( targetItem );
-				} else {
-					cr.Say( SAY_NETMSG, "|0xFFFF00 Вы сорвали незрелое растение, а затем выкинули его." );
-					DeleteItem( targetItem );
-				}
-			} else {
-				PickItem( cr, targetItem );
+			// Готовка на открытом пламени - Open fire cooking
+			if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_FIREPLACE2 || targetItem.GetProtoId() == PID_CHOPPED_FIREWOOD ) && targetItem.Val0 >= 1 )
+			{	
+				AskCooking( cr );
+				return true;
 			}
-		}
-		return true; 
-	}
-    case SKILL_PUT_CONT: {
-		if( cr.ParamBase[ ST_LAST_CONT_ID ] == 0 )
-			return false;
 
-		Item@ cont = GetItem( cr.ParamBase[ ST_LAST_CONT_ID ] );
+			// Меню закрепленной бочкой для огня
+			if( valid( targetItem ) && ( ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_BRAZIER ) && targetItem.Val0 == 0 && !FLAG( targetItem.Flags, ITEM_CAN_PICKUP ) ) )
+			{	
+				ShowMenuFireBarrel( cr, targetItem );
+				return true;
+			}
 
-		if( !canPutItemInContainer( targetItem, cont ) || cont.Id == targetItem.Id )
-		{
-			cr.Say( SAY_NETMSG, "Не удалось впихнуть предмет в контейнер." );
-			return true;
-		}
-		
-
-		if( cont.GetProtoId() == PID_POT_ALCO )
-		{
-			TransferToPot( cr, targetItem, cont );
-			return true;
-		}	
-
-		if( cont.GetProtoId() == PID_STILL_S )
-		{
-			TransferToStill( cr, targetItem, cont );
-			return true;
-		}	
-		
-		CheckCartPicMap( cont );//Обновляет картинку содержимого телеги.
-		return false; 
-	}
-    case SKILL_TAKE_CONT: {
-		// if( cr.Timeout[ TO_SK_STEAL ] > int( REAL_SECOND(1) ) && !isGM( cr ) )
-		// {
-			// cr.Say( SAY_NETMSG, "Вы не можете взять всё и сразу, подождите ещё " + ( cr.Timeout[ TO_SK_STEAL ] / __TimeMultiplier ) + " секунд." );
-			// return true;
-		// }
-		
-		if( targetItem.Accessory == ACCESSORY_CONTAINER || targetItem.CritId == cr.Id )
-			cr.Say( SAY_EMOTE_ON_HEAD, "Берёт что-то" );
-		
-        if( valid(targetItem) && targetItem.Accessory == ACCESSORY_CONTAINER )
-        {
-			int full_weight = ItemsWeight( targetItem, cr.ItemTransferCount() );
-			int freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] - ItemsWeight( cr );
-			if( !isGM( cr ) && freeWeight < full_weight )
+			// Scenery
+			if( valid( targetScen ) )
 			{
-				cr.Say( SAY_NETMSG, "Слишком тяжело, не достать." );
-				Item@ cont = GetItem( targetItem.ContainerId );
-				if( valid( cont ) )
+				if( water_sources.find( targetScen.ProtoId ) != -1 )
+					Cleaning( cr, 0, targetScen.ProtoId );
+				else
 				{
-					ShowContainer( cr, cont, TRANSFER_FAR_CONT );
+					if (!TryTraining( cr, targetScen.ProtoId ) )
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
 				}
 				return true;
 			}
-        }
-		
-		if( cr.ParamBase[ ST_LAST_CONT_ID ] == 0 ) return false;
-		
-		Item@ cont = GetItem( cr.ParamBase[ ST_LAST_CONT_ID ] );
-		if( !valid( cont ) ) return false;
-		
-		if( cont.GetProtoId() == PID_POT_ALCO )
-		{
-			TransferFromPot( cr, targetItem, cont );
-			return true;
-		}
-		
-		if( cont.GetProtoId() == PID_LO_CONTAINER )
-		{
-			Item@[] items;
-			uint count = cont.GetItems( uint( -1 ), items );
 			
-			testInfo( cr, "В контейнере было " + count + " предметов." );
-			
-			if( count == 1 )
+			if( valid( targetItem ) && targetItem.GetProtoId() == PID_SWITCH1_DIR2 || targetItem.GetProtoId() == PID_SWITCH1_DIR3 || targetItem.GetProtoId() == PID_SWITCH2_DIR2 || targetItem.GetProtoId() == PID_SWITCH2_DIR3 || targetItem.GetProtoId() == PID_SWITCH3_DIR2 || targetItem.GetProtoId() == PID_SWITCH3_DIR3 )
 			{
-				uint[] vals = { cont.Id, cr.Id };
-				CreateTimeEvent( AFTER( REAL_MS( 500 ) ), "e_DelayedRemoval", vals, true );
+				UseLightSwitch( cr, targetItem ); 
+				return true;
 			}
-		}
+			
+			// Manufacture, Alcohol
+		   // if( isPlayer && IsStill( targetItem ) && UseStill( cr, targetItem, -1, null ) )
+			 //   return true;
 
-		CheckCartPicMap( cont );//Обновляет картинку содержимого телеги.
-		return false; //Что бы предметы перенеслись, нужно вернуть false!
-	}
-    case SKILL_TAKE_ALL_CONT: {
-		if( !isGM( cr ) ) 
-		{
-			cr.Say( SAY_EMOTE, "Пытается взять всё сразу" );
-			cr.Say( SAY_NETMSG, "Хорошая попытка, но.. нет." );
-			return true;
+			// Wanted
+			if( valid( targetItem ) && targetItem.GetProtoId() == PID_WANTED_SIGN && WantedSignSet( targetItem, cr.Name, Random( 1000, 2000 ) ) )
+				return true;
+			// Explosion
+			if( valid( targetItem ) && targetItem.GetProtoId() == PID_ACTIVE_MINE && OnUseExplode( cr, targetItem, null, null, null, 0 ) )
+				return true;
+		
+			// Pick some item
+			if( valid( targetItem ) )
+			{
+				uint16 wildplantPid = targetItem.GetProtoId();
+				if( Wildplants.find( wildplantPid ) != -1 ) {
+					cr.Say( SAY_EMOTE, "Срывает растение" );
+					if( targetItem.Val2 - 1 == targetItem.Val0 ) {
+						uint16 pickedPlantPid = 0;
+						switch ( wildplantPid ) 
+						{
+							case( PID_PLANT_BROC ):
+								pickedPlantPid = PID_BROC_FLOWER;
+								break;
+							case( PID_PLANT_XANDER ):
+								pickedPlantPid = PID_XANDER_ROOT;
+								break;
+							case( PID_PLANT_MURAVNIKTAR ):
+								pickedPlantPid = PID_MURAVNIKTAR;
+								break;
+							case( PID_PLANT_TONGUE_GECKO ):
+								pickedPlantPid = PID_TONGUE_GECKO;
+								break;
+							case( PID_PLANT_BLACK_MUSHROOMS ):
+								pickedPlantPid = PID_BLACK_MUSHROOMS;
+								break;
+							case( PID_PLANT_PALE_MUSHROOM ):
+								pickedPlantPid = PID_PALE_MUSHROOM;
+								break;
+							case( PID_PLANT_MUTMUSH ):
+								pickedPlantPid = PID_MUTMUSH;
+								break;
+						}
+						cr.AddItem( pickedPlantPid, targetItem.Val1 );
+						cr.Say( SAY_NETMSG, "|0xFFFF00 Вы добыли немного полезных растений." );
+						DeleteItem( targetItem );
+					} else {
+						cr.Say( SAY_NETMSG, "|0xFFFF00 Вы сорвали незрелое растение, а затем выкинули его." );
+						DeleteItem( targetItem );
+					}
+				} else {
+					PickItem( cr, targetItem );
+				}
+			}
+			return true; 
 		}
 		
-		//Старый код, дефолтное поведение до 17.02.19, доступно лишь ГМам.
-        if( valid( targetItem ) && targetItem.Accessory == ACCESSORY_CRITTER && targetItem.CritId == cr.Id )
-        {
-            int  contWeight = 0;
-            Item@[] items;
-            uint len = targetItem.GetItems( uint( -1 ), items );
-            for( uint i = 0; i < len; i++ )
-            {
-                if( items[ i ] is null )
-                    continue;
+		case( SKILL_PUT_CONT ): {
+			if( cr.ParamBase[ ST_LAST_CONT_ID ] == 0 )
+				return false;
 
-                contWeight += int( items[ i ].Proto.Weight * items[ i ].GetCount() );
-            }
+			Item@ cont = GetItem( cr.ParamBase[ ST_LAST_CONT_ID ] );
 
-            //cr.ParamBase[ ST_CARRY_WEIGHT_EXT ] += contWeight;
-            ChangeCritterSpeed( cr ); 
-        }
-		else
+			if( !canPutItemInContainer( targetItem, cont ) || cont.Id == targetItem.Id )
+			{
+				cr.Say( SAY_NETMSG, "Не удалось впихнуть предмет в контейнер." );
+				return true;
+			}
+			
+
+			if( cont.GetProtoId() == PID_POT_ALCO )
+			{
+				TransferToPot( cr, targetItem, cont );
+				return true;
+			}	
+
+			if( cont.GetProtoId() == PID_STILL_S )
+			{
+				TransferToStill( cr, targetItem, cont );
+				return true;
+			}	
+			
+			CheckCartPicMap( cont );//Обновляет картинку содержимого телеги.
+			return false; 
+		}
+		
+		case( SKILL_TAKE_CONT ): 
+		{
+			if( targetItem.Accessory == ACCESSORY_CONTAINER || targetItem.CritId == cr.Id )
+				cr.Say( SAY_EMOTE_ON_HEAD, "Берёт что-то" );
+			
+			if( valid(targetItem) && targetItem.Accessory == ACCESSORY_CONTAINER )
+			{
+				int full_weight = ItemsWeight( targetItem, cr.ItemTransferCount() );
+				int freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] - ItemsWeight( cr );
+				if( !isGM( cr ) && freeWeight < full_weight )
+				{
+					cr.Say( SAY_NETMSG, "Слишком тяжело, не достать." );
+					Item@ cont = GetItem( targetItem.ContainerId );
+					if( valid( cont ) )
+					{
+						ShowContainer( cr, cont, TRANSFER_FAR_CONT );
+					}
+					return true;
+				}
+			}
+			
+			if( cr.ParamBase[ ST_LAST_CONT_ID ] == 0 ) return false;
+			
+			Item@ cont = GetItem( cr.ParamBase[ ST_LAST_CONT_ID ] );
+			if( !valid( cont ) ) return false;
+			
+			if( cont.GetProtoId() == PID_POT_ALCO )
+			{
+				TransferFromPot( cr, targetItem, cont );
+				return true;
+			}
+			
+			if( cont.GetProtoId() == PID_LO_CONTAINER )
+			{
+				Item@[] items;
+				uint count = cont.GetItems( uint( -1 ), items );
+				
+				testInfo( cr, "В контейнере было " + count + " предметов." );
+				
+				if( count == 1 )
+				{
+					uint[] vals = { cont.Id, cr.Id };
+					CreateTimeEvent( AFTER( REAL_MS( 500 ) ), "e_DelayedRemoval", vals, true );
+				}
+			}
+
+			CheckCartPicMap( cont );//Обновляет картинку содержимого телеги.
+			return false; //Что бы предметы перенеслись, нужно вернуть false!
+		}
+		
+		case( SKILL_TAKE_ALL_CONT ): 
+		{
+			if( !isGM( cr ) ) 
+			{
+				cr.Say( SAY_EMOTE, "Пытается взять всё сразу" );
+				cr.Say( SAY_NETMSG, "Хорошая попытка, но.. нет." );
+				return true;
+			}
+			
+			//Старый код, дефолтное поведение до 17.02.19, доступно лишь ГМам.
+			if( valid( targetItem ) && targetItem.Accessory == ACCESSORY_CRITTER && targetItem.CritId == cr.Id )
+			{
+				int  contWeight = 0;
+				Item@[] items;
+				uint len = targetItem.GetItems( uint( -1 ), items );
+				for( uint i = 0; i < len; i++ )
+				{
+					if( items[ i ] is null )
+						continue;
+
+					contWeight += int( items[ i ].Proto.Weight * items[ i ].GetCount() );
+				}
+
+				//cr.ParamBase[ ST_CARRY_WEIGHT_EXT ] += contWeight;
+				ChangeCritterSpeed( cr ); 
+			}
+			else
+			{
+				if( valid( targetItem ) )
+					cr.Say( SAY_EMOTE, "Выгребает всё" );
+				else
+					cr.Say( SAY_EMOTE, "Обищает останки" );
+			}
+			return false; //Что бы предметы перенеслись, нужно вернуть false!
+		}
+		
+		case( SKILL_LOOT_CRITTER ): 
+		{
+			cr.Say( SAY_EMOTE, "Осматривает" );
+			cr.Action( ACTION_PICK_CRITTER, 0, null );
+			
+			ShowContainer( cr, targetCr, TRANSFER_CRIT_LOOT );
+			return true; 
+		}
+		
+		case( SKILL_PUSH_CRITTER ): 
+		{
+			cr.Action( ACTION_PICK_CRITTER, 2, null );
+			cr.StatBase[ ST_CURRENT_AP ] -= 5000;
+			if( ( cr.Timeout[ TO_BATTLE ] == 0 && targetCr.Timeout[ TO_BATTLE ] == 0 ) 
+				&& ( cr.Mode[ MODE_NO_PVP ] == 0 && targetCr.Mode[ MODE_NO_PVP ] == 0 )
+				&& ( targetCr.IsPlayer() || ( targetCr.IsNoPlanes() && targetCr.GetTalkedPlayers( null ) == 0 ) )
+				&& targetCr.Mode[MODE_NO_PUSH] == 0
+				&& targetCr.MoveToDir( cr.Dir )  
+				) {
+					cr.Say( SAY_NETMSG, "Вы толкаете цель." );
+					SayLog( cr, crInfo( cr ) + " толкает " + crInfo( targetCr ) + "." );
+				}
+				else
+				{
+					cr.Say( SAY_NETMSG, "Цель сопротивляется." );
+					SayLog( cr, crInfo( cr ) + " безуспешно пытается толкнуть " + crInfo( targetCr ) + "." );
+				}
+			return true; 
+		}
+		
+		case( SK_SCIENCE ): 
+		{
+			if( isPlayer && inHeaven(cr) )
+			{
+				Pray( cr );
+				return true;
+			}
+		
+			// Handcuffs
+			if( ( valid( targetCr ) ) && ( targetCr.Param[ HANDCUFFS ] != 0 ) || ( cr.Param[ HANDCUFFS ] != 0 ) )
+			{
+				if( ( valid( targetCr ) ) && ( targetCr.Param[ HANDCUFFS ] != 0 ) )                         // TabaK. Проверка серийного номера наручников.
+				{
+					uint KeyNumber = ( targetCr.Param[ HANDCUFFS ] >> 16 ) & 0x3FFF;
+					if( KeyNumber != 0 )
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12954, "$number" + KeyNumber );
+					else
+						cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
+				}
+				if( ( cr.Param[ HANDCUFFS ] != 0 ) && ( onSelf ) )
+				{
+					uint KeyNumber = ( cr.Param[ HANDCUFFS ] >> 16 ) & 0x3FFF;
+					if( KeyNumber != 0 )
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12954, "$number" + KeyNumber );
+					else
+						cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
+				}
+				return true;
+			}
+
+			// Radio
+			if( valid( targetItem ) && FLAG( targetItem.Flags, ITEM_RADIO ) && targetItem.Accessory == ACCESSORY_CRITTER && targetItem.CritId == cr.Id )
+			{
+				if( isPlayer ) {
+					EditRadioSettings( cr, targetItem );
+				}
+				return true;
+			}
+
+			if( valid( targetItem ) && targetItem.Accessory == ACCESSORY_CRITTER && AskAction( cr, targetItem ) )
+				return true;
+			break; 
+		}
+		
+		case( SK_REPAIR ): 
+		{
+			if( onSelf )
+				@targetCr = cr;
+
+			if( valid( targetCr ) )
+			{
+				if( targetCr.Stat[ ST_BODY_TYPE ] == BT_ROBOT )
+				{
+					if( cr.Timeout[ TO_SK_REPAIR ] > 0 )
+					{
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 3401 );
+						return true;
+					}
+					
+					robotRepairSkill (cr, targetCr, false);
+					ChangeCritterSpeed (targetCr);
+					cr.TimeoutBase[ TO_SK_REPAIR ] = REPAIR_TIMEOUT( cr );
+					return true;
+				}
+				else
+				{
+					if( onSelf )
+						return false;
+					
+					if( cr.Timeout[ TO_SK_STEAL ] > 0 && !isGM( cr ) ) 
+					{
+						if( !targetCr.IsDead() ) targetCr.Say(SAY_EMOTE,"Сопротивляется" );
+						cr.Say(SAY_EMOTE,"Пытается что-то отобрать" );
+						cr.Say(SAY_NETMSG, "Вы слишком устали, что бы успешно отобрать вещь.");
+						
+						CrimeLog( cr, crInfo( cr ) + " пытается что-то отобрать у " + crInfo( targetCr ) );
+						return true;
+					}
+
+					Item@[] items;
+					Item@[] items0;
+					Item@[] items1;
+					Item@[] items2;
+					Item@[] items3;
+					uint itemscount = targetCr.GetItems( SLOT_HAND1, items );
+					uint itemscount0 = targetCr.GetItems( SLOT_HAND2, items0 );
+					uint itemscount1 = targetCr.GetItems( SLOT_HEAD, items1 );
+					uint itemscount2 = targetCr.GetItems( SLOT_BACK, items2 );
+					uint itemscount3 = targetCr.GetItems( SLOT_MISC, items3 );
+					
+					if( targetCr.IsKnockout() || targetCr.IsDead() || targetCr.Stat[ HANDCUFFS ] != 0 || !CanResist( targetCr ) || isGM( cr ) ) 
+					{
+						if( itemscount > 0 )
+						{
+							Item@ hand = items[0];
+							if(valid(hand)) {
+								int pid = hand.GetProtoId();
+								if( pid != PID_HANDCUFFS && pid != PID_ROPE_USED ) {
+									targetCr.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
+								}
+							}
+						}
+						if( itemscount0 > 0 )
+						{
+							Item@ hand = items0[0];
+							if(valid(hand)) {
+								int pid = hand.GetProtoId();
+								if( pid != PID_HANDCUFFS && pid != PID_ROPE_USED )
+									targetCr.MoveItem( items0[ 0 ].Id, itemscount, SLOT_INV );
+							}
+						}
+
+						if( itemscount1 > 0 )
+						{
+							Item@ head = items1[0];
+							if(valid(head)) {
+								int pid = head.GetProtoId();
+								if( pid != PID_COLLAR )
+									targetCr.MoveItem( items1[ 0 ].Id, itemscount, SLOT_INV );
+							}
+						}
+
+						if( itemscount2 > 0 )
+						{
+							Item@ back = items2[0];
+							if(valid(back)) {
+								int pid = back.GetProtoId();
+								targetCr.MoveItem( items2[ 0 ].Id, itemscount, SLOT_INV );
+							}
+						}
+						
+						if( itemscount3 > 0 )
+						{
+							Item@ misc = items3[0];
+							if(valid(misc)) {
+								int pid = misc.GetProtoId();
+								targetCr.MoveItem( items3[ 0 ].Id, itemscount, SLOT_INV );
+							}
+						}
+
+						if( StealContainerOrArmor( cr, targetCr, targetItem ) ) {
+							return true;
+						}
+					}
+				}
+			}
+			
+			//Перенос потухших бочек для костров
+			if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_BRAZIER ) && targetItem.Val0 == 0 )
+			{	
+				LockInPlace( cr, targetItem );
+				return true;
+			}
+			
+			break; 
+		}
+		
+		case( SK_SNEAK ): 
+		{
+			cr.Say( SAY_NETMSG, "|0xFF0000 Данный хоткей отключен." );
+			return true; 
+		}
+		
+		case( SK_STEAL ): 
 		{
 			if( valid( targetItem ) )
-				cr.Say( SAY_EMOTE, "Выгребает всё" );
-			else
-				cr.Say( SAY_EMOTE, "Обищает останки" );
-		}
-		return false; //Что бы предметы перенеслись, нужно вернуть false!
-	} 
-    case SKILL_LOOT_CRITTER: {
-		cr.Say( SAY_EMOTE, "Осматривает" );
-        cr.Action( ACTION_PICK_CRITTER, 0, null );
-		
-        ShowContainer( cr, targetCr, TRANSFER_CRIT_LOOT );
-        return true; }
-    case SKILL_PUSH_CRITTER: {
-		//cr.Say( SAY_EMOTE_ON_HEAD, "Толкает" );
-        cr.Action( ACTION_PICK_CRITTER, 2, null );
-		cr.StatBase[ ST_CURRENT_AP ] -= 5000;
-        if( ( cr.Timeout[ TO_BATTLE ] == 0 && targetCr.Timeout[ TO_BATTLE ] == 0 ) 
-			&& ( cr.Mode[ MODE_NO_PVP ] == 0 && targetCr.Mode[ MODE_NO_PVP ] == 0 )
-			&& ( targetCr.IsPlayer() || ( targetCr.IsNoPlanes() && targetCr.GetTalkedPlayers( null ) == 0 ) )
-			&& targetCr.Mode[MODE_NO_PUSH] == 0
-			&& targetCr.MoveToDir( cr.Dir )  
-			) {
-				cr.Say( SAY_NETMSG, "Вы толкаете цель." );
-				SayLog( cr, crInfo( cr ) + " толкает " + crInfo( targetCr ) + "." );
-			}
-			else
 			{
-				cr.Say( SAY_NETMSG, "Цель сопротивляется." );
-				SayLog( cr, crInfo( cr ) + " безуспешно пытается толкнуть " + crInfo( targetCr ) + "." );
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+				return true;
 			}
-				// targetCr.Say( SAY_EMOTE_ON_HEAD, "Поддается" );
-			// else
-				// targetCr.Say( SAY_EMOTE_ON_HEAD, "Сопротивляется" );
-        return true; }
-    case SK_SCIENCE: {
-		if( isPlayer && inHeaven(cr) )
+			else if( valid( targetCr ) )
+			{
+				CrimeLog( cr, crInfo( cr ) + " пытается подглянуть в инвентарь к " + crInfo( targetCr ) );
+				
+				if( targetCr.Param[ HANDCUFFS ] != 0 )
+				{
+					CrimeLog( cr, crInfo( cr ) + " подглядывает в инвентарь к обездвиженной цели " + crInfo( targetCr ) );
+					ShowContainer( cr, targetCr, TRANSFER_CRIT_STEAL );
+					return true;
+				}
+				else
+				{
+					// Loot
+					if( targetCr.IsDead() )
+					{
+						cr.Action( ACTION_PICK_CRITTER, 0, null );
+						ShowContainer( cr, targetCr, TRANSFER_CRIT_LOOT );
+						return true;
+					}
+					// Steal
+					else
+					{
+						if( isPlayer && cr.Timeout[ TO_SK_STEAL ] > 0 ) {
+							cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_WEARINESS );
+							return true;
+						}
+						else
+						{
+							CrimeLog( cr, crInfo( cr ) + " подглядывает в инвентарь к " + crInfo( targetCr ) );
+							ShowContainer( cr, targetCr, TRANSFER_CRIT_STEAL );
+							cr.TimeoutBase[ TO_SK_STEAL ] = STEAL_TIMEOUT( cr );
+							cr.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
+							cr.StatBase[ ST_STEAL_COUNT ] = 0;
+							return true;
+						}
+					}
+				}
+			}
+			break; 
+		}
+		
+		case( SK_LOCKPICK ): 
 		{
-			Pray( cr );
-			return true;
-		}
-		
-        // Manufacture, Alcohol
-       // if( isPlayer && IsStill( targetItem ) && UseStill( cr, targetItem, skill, null ) )
-       //     return true;
-		
-		// Handcuffs
-        if( ( valid( targetCr ) ) && ( targetCr.Param[ HANDCUFFS ] != 0 ) || ( cr.Param[ HANDCUFFS ] != 0 ) )
-        {
-            if( ( valid( targetCr ) ) && ( targetCr.Param[ HANDCUFFS ] != 0 ) )                         // TabaK. Проверка серийного номера наручников.
-            {
-                uint KeyNumber = ( targetCr.Param[ HANDCUFFS ] >> 16 ) & 0x3FFF;
-				if( KeyNumber != 0 )
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12954, "$number" + KeyNumber );
-				else
-					cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
-            }
-            if( ( cr.Param[ HANDCUFFS ] != 0 ) && ( onSelf ) )
-            {
-                uint KeyNumber = ( cr.Param[ HANDCUFFS ] >> 16 ) & 0x3FFF;
-				if( KeyNumber != 0 )
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12954, "$number" + KeyNumber );
-				else
-					cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
-            }
-            return true;
-        }
-
-        // Radio
-        if( valid( targetItem ) && FLAG( targetItem.Flags, ITEM_RADIO ) && targetItem.Accessory == ACCESSORY_CRITTER && targetItem.CritId == cr.Id )
-        {
-            if( isPlayer )
-                EditRadioSettings( cr, targetItem );
-            return true;
-        }
-
-        // if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_FIRST_AID_KIT || targetItem.GetProtoId() == PID_DOCTORS_BAG ) )
-        // {
-            // cr.RunClientScript( "client_screen_firstais@ShowScreen", targetItem.Id, targetItem.Val4, targetItem.GetProtoId() == PID_FIRST_AID_KIT ? 0 : 1, "", null );
-            // return true;
-        // }
-		
-        if( valid( targetItem ) && targetItem.Accessory == ACCESSORY_CRITTER && AskAction( cr, targetItem ) )
-			return true;
-    break; }
-    case SK_REPAIR: {
-        // Manufacture, Alcohol
-       // if( isPlayer && IsStill( targetItem ) && UseStill( cr, targetItem, skill, null ) )
-       //     return true;
-        // Generic repair
-
-        if( onSelf )
-            @targetCr = cr;
-
-        if( valid( targetCr ) )
-        {
-            if( targetCr.Stat[ ST_BODY_TYPE ] == BT_ROBOT )
+			if( valid( targetCr ) || onSelf )
 			{
-				if( cr.Timeout[ TO_SK_REPAIR ] > 0 )
+				Critter@ target = onSelf ? @cr : @targetCr;
+				Item@ ball_gag = target.GetItem( 0, SLOT_HEAD );
+				if( valid( ball_gag ) && ball_gag.GetProtoId() == PID_BALL_GAG )
+				{
+					if( onSelf && ball_gag.Val0 != 0 )
+					{
+						InformWarning( cr, "|0xFFFF00 Вы не можете вынуть кляп в данный момент." );
+						return true;
+					}
+					
+					ball_gag.Val0 = 0;
+					MoveItem( ball_gag, 1, cr );
+					cr.MoveItem( ball_gag.Id, ball_gag.GetCount(), SLOT_INV );				
+
+					if( !onSelf )
+					{
+						cr.Say( SAY_NETMSG, "|0xFFFF00 Вы вынули кляп." );
+						targetCr.Say( SAY_NETMSG, "|0xFFFF00 Вам вынули кляп изо рта, теперь вы снова можете говорить." );
+					}
+					else
+						cr.Say( SAY_NETMSG, "|0xFFFF00 Вы самостоятельно избавились от кляпа во рту." );
+					
+					return true;
+				}
+			}
+		
+			if( ( ( valid( targetCr ) ) && ( targetCr.Param[ HANDCUFFS ] != 0 ) ) || ( ( onSelf ) && ( cr.Param[ HANDCUFFS ] != 0 ) ) )         // Взлом наручников. TabaK
+			{
+				if( cr.Timeout[ TO_SK_LOCKPICK ] > 0 )
 				{
 					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 3401 );
 					return true;
 				}
-				
-				robotRepairSkill (cr, targetCr, false);
-				ChangeCritterSpeed (targetCr);
-				cr.TimeoutBase[ TO_SK_REPAIR ] = REPAIR_TIMEOUT( cr );
-				return true;
-				
-			}
-			else
-			{
-				if( onSelf )
-					return false;
-				
-				if( cr.Timeout[ TO_SK_STEAL ] > 0 && !isGM( cr ) ) 
-				{
-					if( !targetCr.IsDead() ) targetCr.Say(SAY_EMOTE,"Сопротивляется" );
-					cr.Say(SAY_EMOTE,"Пытается что-то отобрать" );
-					cr.Say(SAY_NETMSG, "Вы слишком устали, что бы успешно отобрать вещь.");
-					
-					CrimeLog( cr, crInfo( cr ) + " пытается что-то отобрать у " + crInfo( targetCr ) );
-					return true;
-				}
-
-				Item@[] items;
-				Item@[] items0;
-				Item@[] items1;
-				Item@[] items2;
-				Item@[] items3;
-				uint itemscount = targetCr.GetItems( SLOT_HAND1, items );
-				uint itemscount0 = targetCr.GetItems( SLOT_HAND2, items0 );
-				uint itemscount1 = targetCr.GetItems( SLOT_HEAD, items1 );
-				uint itemscount2 = targetCr.GetItems( SLOT_BACK, items2 );
-				uint itemscount3 = targetCr.GetItems( SLOT_MISC, items3 );
-				
-				if( targetCr.IsKnockout() || targetCr.IsDead() || targetCr.Stat[ HANDCUFFS ] != 0 || !CanResist( targetCr ) || isGM( cr ) ) 
-				{
-					if( itemscount > 0 )
-					{
-						Item@ hand = items[0];
-						if(valid(hand)) {
-							int pid = hand.GetProtoId();
-							if( pid != PID_HANDCUFFS && pid != PID_ROPE_USED ) {
-								targetCr.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
-							}
-						}
-					}
-					if( itemscount0 > 0 )
-					{
-						Item@ hand = items0[0];
-						if(valid(hand)) {
-							int pid = hand.GetProtoId();
-							if( pid != PID_HANDCUFFS && pid != PID_ROPE_USED )
-								targetCr.MoveItem( items0[ 0 ].Id, itemscount, SLOT_INV );
-						}
-					}
-
-					if( itemscount1 > 0 )
-					{
-						Item@ head = items1[0];
-						if(valid(head)) {
-							int pid = head.GetProtoId();
-							if( pid != PID_COLLAR )
-								targetCr.MoveItem( items1[ 0 ].Id, itemscount, SLOT_INV );
-						}
-					}
-
-					if( itemscount2 > 0 )
-					{
-						Item@ back = items2[0];
-						if(valid(back)) {
-							int pid = back.GetProtoId();
-							targetCr.MoveItem( items2[ 0 ].Id, itemscount, SLOT_INV );
-						}
-					}
-					
-					if( itemscount3 > 0 )
-					{
-						Item@ misc = items3[0];
-						if(valid(misc)) {
-							int pid = misc.GetProtoId();
-							targetCr.MoveItem( items3[ 0 ].Id, itemscount, SLOT_INV );
-						}
-					}
-
-
-					if( StealContainerOrArmor( cr, targetCr, targetItem ) ) {
-						return true;
-					}
-				}
-			}
-        }
-		
-        if( valid( targetItem ) && targetItem.Accessory == ACCESSORY_CRITTER && targetItem.IsDeteriorable() )           // pm deattach if
-        {
-            if( IsHaveBlade( targetItem.GetProtoId() ) )
-            {
-                Item @ activeHand = _CritGetItemHand( cr );
-                if( @activeHand == null && activeHand.GetProtoId() != PID_FLINT )
-                {
-                    cr.Say( SAY_NETMSG, "Для заточки лезвия нужен кремень в руке." );
-                    return true;
-                }
-                if( !ltp_sharp_inited )
-                    ltp_sharp_init();
-                StartProcess( cr, LTP_SHARP, targetItem.Id, 0, 0, 10 );
-                return true;
-            }
-            else if( AskAction( cr, targetItem ) )
-                return true;
-        }
-
-        //Перенос потухших бочек для костров
-		if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_BRAZIER ) && targetItem.Val0 == 0 )
-		{	
-			LockInPlace( cr, targetItem );
-			return true;
-		}
-		
-    break; }
-    case SK_SNEAK: {
-		cr.Say( SAY_NETMSG, "Данный хоткей отключен." );
-		// if( cr.Timeout[ TO_BATTLE ] > 0 ) 
-		// {
-			// // cr.Say( SAY_EMOTE_ON_HEAD, "блок" );
-			// // cr.StatBase[ ST_BLOCK ] = 1;
-		// } 
-		// else 
-		// {
-			// // cr.StatBase[ ST_BLOCK ] = 1;
-			// cr.ParamBase[ ST_CURRENT_AP ] -= 20 * 100;
-			// cr.ParamBase[ CR_IS_WINDUPED ] = 1;
-			// cr.Say( SAY_EMOTE, "готовится атаковать" );
-			// SayLog( cr, crInfo( cr ) + " готовится атаковать." );
-			// //cr.TimeoutBase[ TO_BATTLE ] = __FullSecond + REAL_SECOND(60);
-
-			// Item@ realWeapon = _CritGetItemHand(cr);
-			// ProtoItem@ weapon = valid( realWeapon ) ? GetProtoItem( realWeapon.GetProtoId() ) : null;
-			// int   skillNum = ( valid( weapon ) ? _WeaponSkill( weapon, 0 ) : ( valid( realWeapon ) ? SK_MELEE_WEAPONS : SK_UNARMED ) );
-			// uint8 weaponSubtype = ( skillNum == SK_SMALL_GUNS || skillNum == SK_BIG_GUNS || skillNum == SK_ENERGY_WEAPONS ) ? WS_GUN : 
-								// ( ( skillNum == SK_THROWING ) ? WS_THROWING : ( skillNum == SK_MELEE_WEAPONS ) ? WS_MELEE : WS_UNARMED );		
-			
-			// if( weaponSubtype == WS_GUN )
-				// cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
-		// }
-		return true; }
-    case SK_STEAL: {
-        if( valid( targetItem ) )
-        {
-            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
-			return true;
-        }
-        else if( valid( targetCr ) )
-        {
-			CrimeLog( cr, crInfo( cr ) + " пытается подглянуть в инвентарь к " + crInfo( targetCr ) );
-			
-            if( targetCr.Param[ HANDCUFFS ] != 0 )
-            {
-				CrimeLog( cr, crInfo( cr ) + " подглядывает в инвентарь к обездвиженной цели " + crInfo( targetCr ) );
-                ShowContainer( cr, targetCr, TRANSFER_CRIT_STEAL );
-				return true;
-            }
-            else
-            {
-                // Loot
-                if( targetCr.IsDead() )
-                {
-                    cr.Action( ACTION_PICK_CRITTER, 0, null );
-                    ShowContainer( cr, targetCr, TRANSFER_CRIT_LOOT );
-					return true;
-                }
-                // Steal
-                else
-                {
-                    if( isPlayer && cr.Timeout[ TO_SK_STEAL ] > 0 ) {
-                        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_WEARINESS );
-						return true;
-					}
-                    else
-                    {
-                        CrimeLog( cr, crInfo( cr ) + " подглядывает в инвентарь к " + crInfo( targetCr ) );
-						ShowContainer( cr, targetCr, TRANSFER_CRIT_STEAL );
-                        cr.TimeoutBase[ TO_SK_STEAL ] = STEAL_TIMEOUT( cr );
-                        cr.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
-                        cr.StatBase[ ST_STEAL_COUNT ] = 0;
-						return true;
-                    }
-                }
-            }
-        }
-    break; }
-    case SK_LOCKPICK: {
-        if( valid( targetCr ) || onSelf )
-		{
-			Critter@ target = onSelf ? @cr : @targetCr;
-			Item@ ball_gag = target.GetItem( 0, SLOT_HEAD );
-			if( valid( ball_gag ) && ball_gag.GetProtoId() == PID_BALL_GAG )
-			{
-				if( onSelf && ball_gag.Val0 != 0 )
-				{
-					InformWarning( cr, "Вы не можете вынуть кляп в данный момент." );
-					return true;
-				}
-				
-				ball_gag.Val0 = 0;
-				MoveItem( ball_gag, 1, cr );
-				cr.MoveItem( ball_gag.Id, ball_gag.GetCount(), SLOT_INV );				
-
-				if( !onSelf )
-				{
-					cr.Say( SAY_NETMSG, "Вы вынули кляп." );
-					targetCr.Say( SAY_NETMSG, "Вам вынули кляп изо рта, теперь вы снова можете говорить." );
-				}
 				else
-					cr.Say( SAY_NETMSG, "Вы самостоятельно избавились от кляпа во рту." );
-				
-				return true;
-			}
-		}
-	
-		if( ( ( valid( targetCr ) ) && ( targetCr.Param[ HANDCUFFS ] != 0 ) ) || ( ( onSelf ) && ( cr.Param[ HANDCUFFS ] != 0 ) ) )         // Взлом наручников. TabaK
-        {
-            if( cr.Timeout[ TO_SK_LOCKPICK ] > 0 )
-            {
-                cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 3401 );
-				return true;
-			}
-            else
-            {
-                if( valid( targetCr ) && ( ( targetCr.Param[ HANDCUFFS ] >> 29 ) & 0x1 ) == 0 )
-                {
-					CrimeLog( cr, crInfo( cr ) + " пытается освободить цель от наручников/верёвки " + crInfo( targetCr ) );
-					
-                    cr.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( cr );
-                    if( ( cr.Param[ SK_LOCKPICK ] + Random( 0, 150 ) + (cr.Stat[ST_LUCK] - 5)*5) > 300 - Random( 0, 50 ) )
-                    {
-                        Item@[] items;
-                        uint8 nohome = ( targetCr.Param[ HANDCUFFS ] >> 30 ) & 0x1;
-
-                        if( targetCr.IsNpc() )
-                        {
-                            targetCr.ParamBase[ MODE_NO_HOME ] = nohome;
-                        }
-
-						bool isCuffs = targetCr.CountItem( PID_HANDCUFFS_USED ) > 0;
-						bool isRope =  targetCr.CountItem( PID_ROPE_USED ) > 0;
-						if( isCuffs || isRope )
-						{
-							targetCr.DeleteItem( isCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
-							cr.AddItem( isCuffs ? PID_BROKEN_CUFFS : PID_ROPE, 1 );
-							cr.Say( SAY_NETMSG, "Вы освободили цель." );
-							
-							CrimeLog( cr, crInfo( cr ) + " вскрывает " + ( isCuffs ? "наручники" : "узел верёвки" ) + " у цели " + crInfo( targetCr ) );
-						}
-						targetCr.StatBase[ HANDCUFFS ] = 0;
-                    }
-                    else
-                        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12944 );
-                }
-
-                if( onSelf )
-                {
-                    cr.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( cr );
-                    if( ( cr.Param[ SK_LOCKPICK ] + Random( 0, 150 ) + (cr.Stat [ST_LUCK] - 5)*5) > 300 - Random( 0, 50 ) )
-                    {
-						bool isCuffs = cr.CountItem( PID_HANDCUFFS_USED ) > 0;
-						bool isRope =  cr.CountItem( PID_ROPE_USED ) > 0;
-						if( isCuffs || isRope )
-						{
-							cr.DeleteItem( isCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
-							cr.AddItem( isCuffs ? PID_BROKEN_CUFFS : PID_ROPE, 1 );
-							cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, isCuffs ? 12947 : 12988 );
-
-							CrimeLog( cr, crInfo( cr ) + " вскрывает " + ( isCuffs ? "наручники" : "узел верёвки" ) + " у себя" );
-						}
-						cr.StatBase[ HANDCUFFS ] = 0;
-                    }
-                    else
-                        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12944 );
-                }
-				
-				return true;
-            }
-        }
-    break; }
-    case SK_TRAPS: {
-		if( IsAnimal( cr ) || cr.Karma[ KARMA_BERSERKER ] != 0 )
-		{
-			cr.Animate( 0, ANIM2_PUNCH_RIGHT, null, true, false );
-			cr.Wait( GetSkillTime( skill, cr ) );
-			
-			if( valid( targetCr ) )
-			{
-				if( !targetCr.IsDead() && targetCr.IsKnockout() && IsAnimal( cr ) ) 
-					cr.Say( SAY_EMOTE_ON_HEAD, "Обнюхивает" );
-				
-				if( targetCr.IsDead() )
 				{
-					string[] emotes = { "Ест", "Грызёт", "Жуёт" };
-					uint index = IsAnimal( cr ) && Random( 1, 4 ) == 1 ? Random( 0, emotes.length() - 1 ) : 0;
-					string action_text = emotes[ index ];
-					cr.Say( SAY_EMOTE_ON_HEAD, action_text );
-					SayLog( cr, crInfo( cr ) + " " + action_text + " " + crInfo( targetCr ) );
-					
-					if( targetCr.ParamBase[ CR_VAL0 ] < targetCr.Stat[ ST_MAX_LIFE ] )
+					if( valid( targetCr ) && ( ( targetCr.Param[ HANDCUFFS ] >> 29 ) & 0x1 ) == 0 )
 					{
-						targetCr.ParamBase[ CR_VAL0 ] += cr.Stat[ ST_MELEE_DAMAGE ];
+						CrimeLog( cr, crInfo( cr ) + " пытается освободить цель от наручников/верёвки " + crInfo( targetCr ) );
 						
-						cr.StatBase[ST_EXPERIENCE] += targetCr.Stat[ST_KILL_EXPERIENCE];
-						cr.StatBase[ ST_HUNGER ] += 10;
-						cr.StatBase[ ST_THIRST ] += 1;
-						return true;
+						cr.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( cr );
+						if( ( cr.Param[ SK_LOCKPICK ] + Random( 0, 150 ) + (cr.Stat[ST_LUCK] - 5)*5) > 300 - Random( 0, 50 ) )
+						{
+							Item@[] items;
+							uint8 nohome = ( targetCr.Param[ HANDCUFFS ] >> 30 ) & 0x1;
+
+							if( targetCr.IsNpc() )
+							{
+								targetCr.ParamBase[ MODE_NO_HOME ] = nohome;
+							}
+
+							bool isCuffs = targetCr.CountItem( PID_HANDCUFFS_USED ) > 0;
+							bool isRope =  targetCr.CountItem( PID_ROPE_USED ) > 0;
+							if( isCuffs || isRope )
+							{
+								targetCr.DeleteItem( isCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
+								cr.AddItem( isCuffs ? PID_BROKEN_CUFFS : PID_ROPE, 1 );
+								cr.Say( SAY_NETMSG, "|0xFFFF00 Вы освободили цель." );
+								
+								CrimeLog( cr, crInfo( cr ) + " вскрывает " + ( isCuffs ? "наручники" : "узел верёвки" ) + " у цели " + crInfo( targetCr ) );
+							}
+							targetCr.StatBase[ HANDCUFFS ] = 0;
+						}
+						else
+							cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12944 );
+					}
+
+					if( onSelf )
+					{
+						cr.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( cr );
+						if( ( cr.Param[ SK_LOCKPICK ] + Random( 0, 150 ) + (cr.Stat [ST_LUCK] - 5)*5) > 300 - Random( 0, 50 ) )
+						{
+							bool isCuffs = cr.CountItem( PID_HANDCUFFS_USED ) > 0;
+							bool isRope =  cr.CountItem( PID_ROPE_USED ) > 0;
+							if( isCuffs || isRope )
+							{
+								cr.DeleteItem( isCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
+								cr.AddItem( isCuffs ? PID_BROKEN_CUFFS : PID_ROPE, 1 );
+								cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, isCuffs ? 12947 : 12988 );
+
+								CrimeLog( cr, crInfo( cr ) + " вскрывает " + ( isCuffs ? "наручники" : "узел верёвки" ) + " у себя" );
+							}
+							cr.StatBase[ HANDCUFFS ] = 0;
+						}
+						else
+							cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12944 );
+					}
+					
+					return true;
+				}
+			}
+			break; 
+		}
+		
+		case( SK_TRAPS ): 
+		{
+			if( IsAnimal( cr ) || cr.Karma[ KARMA_BERSERKER ] != 0 )
+			{
+				cr.Animate( 0, ANIM2_PUNCH_RIGHT, null, true, false );
+				cr.Wait( GetSkillTime( skill, cr ) );
+				
+				if( valid( targetCr ) )
+				{
+					if( !targetCr.IsDead() && targetCr.IsKnockout() && IsAnimal( cr ) ) 
+						cr.Say( SAY_EMOTE_ON_HEAD, "Обнюхивает" );
+					
+					if( targetCr.IsDead() )
+					{
+						string[] emotes = { "Ест", "Грызёт", "Жуёт" };
+						uint index = IsAnimal( cr ) && Random( 1, 4 ) == 1 ? Random( 0, emotes.length() - 1 ) : 0;
+						string action_text = emotes[ index ];
+						cr.Say( SAY_EMOTE_ON_HEAD, action_text );
+						SayLog( cr, crInfo( cr ) + " " + action_text + " " + crInfo( targetCr ) );
+						
+						if( targetCr.ParamBase[ CR_VAL0 ] < targetCr.Stat[ ST_MAX_LIFE ] )
+						{
+							targetCr.ParamBase[ CR_VAL0 ] += cr.Stat[ ST_MELEE_DAMAGE ];
+							
+							cr.StatBase[ST_EXPERIENCE] += targetCr.Stat[ST_KILL_EXPERIENCE];
+							cr.StatBase[ ST_HUNGER ] += 10;
+							cr.StatBase[ ST_THIRST ] += 1;
+							return true;
+						}
+						else
+						{
+							targetCr.StatBase[ ST_DESEASE ] = 1;
+							cr.Say( SAY_NETMSG, "Здесь больше нечего есть." );
+							return true;
+						}
+					}
+				}
+				
+				if( valid( targetScen ) )
+				{
+					uint scenPID = targetScen.ProtoId;
+					if( scenPID >= 16980 && scenPID <= 16994 )
+					{
+						cr.StatBase[ ST_HUNGER ] += 1;
+						cr.StatBase[ ST_THIRST ] += 10;
+						cr.Say( SAY_EMOTE, "Пьёт" );
 					}
 					else
-					{
-						targetCr.StatBase[ ST_DESEASE ] = 1;
-						cr.Say( SAY_NETMSG, "Здесь больше нечего есть." );
-						return true;
-					}
+						cr.Say( SAY_EMOTE_ON_HEAD, "Обнюхивает" );
+					
+					return true;
 				}
 			}
-			
-			if( valid( targetScen ) )
+				
+			if( valid( targetItem ) )
 			{
-				uint scenPID = targetScen.ProtoId;
-				if( scenPID >= 16980 && scenPID <= 16994 )
-				{
-					cr.StatBase[ ST_HUNGER ] += 1;
-					cr.StatBase[ ST_THIRST ] += 10;
-					cr.Say( SAY_EMOTE, "Пьёт" );
-				}
-				else
+				if( IsAnimal( cr ) )
 					cr.Say( SAY_EMOTE_ON_HEAD, "Обнюхивает" );
 				
-				return true;
-			}
-		}
-			
-		if( valid( targetItem ) )
-        {
-			if( IsAnimal( cr ) )
-				cr.Say( SAY_EMOTE_ON_HEAD, "Обнюхивает" );
-			
-            uint16 pid = targetItem.GetProtoId();
-            if( ( pid == PID_ACTIVE_DYNAMITE || pid == PID_ACTIVE_PLASTIC_EXPLOSIVE || pid == PID_ACTIVE_MINE ) && OnUseExplode( cr, targetItem, null, null, null, 0 ) ) {
-                return true;
-			}
-			
-			if( targetItem.GetType() == ITEM_TYPE_CONTAINER && StealContainerOrArmor( cr, targetCr, targetItem ) ) {
-				return true;
-			}
-        }
-		if( valid( targetScen ) )
-		{
-			if( water_sources.find( targetScen.ProtoId ) != -1 ) {
-				Cleaning( cr, 0, targetScen.ProtoId );
-			}
-			else
-				if( !TryTraining( cr, targetScen.ProtoId ) ) {
-					cr.Say( SAY_EMOTE, "Осматривает " + targetScen.ProtoId );
+				uint16 pid = targetItem.GetProtoId();
+				if( ( pid == PID_ACTIVE_DYNAMITE || pid == PID_ACTIVE_PLASTIC_EXPLOSIVE || pid == PID_ACTIVE_MINE ) && OnUseExplode( cr, targetItem, null, null, null, 0 ) ) {
+					return true;
 				}
-			return true;
+				
+				if( targetItem.GetType() == ITEM_TYPE_CONTAINER && StealContainerOrArmor( cr, targetCr, targetItem ) ) {
+					return true;
+				}
+			}
+			if( valid( targetScen ) )
+			{
+				if( water_sources.find( targetScen.ProtoId ) != -1 ) {
+					Cleaning( cr, 0, targetScen.ProtoId );
+				}
+				else
+					if( !TryTraining( cr, targetScen.ProtoId ) ) {
+						cr.Say( SAY_EMOTE, "Осматривает " + targetScen.ProtoId );
+					}
+				return true;
+			}
+			break; 
 		}
-	break; 
-	}
-	default: 
-	break;
+		default: 
+		{
+			break;
+		}
     }
-
 	return false;
 }
 
@@ -3170,7 +3146,6 @@ bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
 // Call on something critter reload weapon.
 // If ammo is not valid than only unload.
 
-// ltp reload pm add
 
 #define RELOAD_BASE             ( 6000 )
 #define RELOAD_BASE_REVOLVER    ( 500 )
@@ -3182,79 +3157,34 @@ bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
 #define RELOAD_BASE_ENRRFL      ( 8000 )
 #define RELOAD_BASE_BIGGUN      ( 10000 )
 
-bool ltp_reload_inited = false;
-
-void ltp_reload_init()
-{
-    LTPREG( LTP_RELOAD, process_reload )
-    ltp_reload_inited = true;
-}
-
-uint process_reload( Critter@ cr, int& param0, int& param1, int& param2 )
-{
-    LTPROCESSD( LTP_RELOAD )
-
-
-    Item @ weapon = GetItem( param0 );
-    if( @weapon == null )
-        return 0;
-
-    Item @ ammo;
-    if( param1 != 0 )
-        @ammo = GetItem( param1 );
-
-
-    if( not valid( ammo ) || ( weapon.AmmoCount > 0 && weapon.AmmoPid != ammo.GetProtoId() ) )
-    {
-        if( weapon.AmmoPid != 0 )
-        {
-            Item@ existAmmo = cr.GetItem( weapon.AmmoPid, -1 );
-            if( not valid( existAmmo ) )
-                cr.AddItem( weapon.AmmoPid, weapon.AmmoCount );
-            else
-                _IncItem( existAmmo, weapon.AmmoCount );
-        }
-        weapon.AmmoCount = 0;
-    }
-
-    if( valid( ammo ) )
-    {
-        uint count = MIN( ammo.GetCount(), weapon.Proto.Weapon_MaxAmmoCount - weapon.AmmoCount );
-        weapon.AmmoCount += count;
-        weapon.AmmoPid = ammo.GetProtoId();
-        _SubItem( ammo, count );
-    }
-
-    weapon.Update();
-
-    return 0;
-}
-
-// ltp reload end
-
 void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo )
 {
-	cr.Wait(500);//GetProtoTime(weapon.Proto, USE_RELOAD, cr)
+	cr.Wait( 500 );//GetProtoTime(weapon.Proto, USE_RELOAD, cr)
 		
     // Special weapons
     if( weapon.Proto.Weapon_Caliber == 0 )
     {
-        if( weapon.GetProtoId() == PID_SOLAR_SCORCHER || weapon.GetProtoId() == PID_SUN || weapon.GetProtoId() == PID_SUN2 || weapon.GetProtoId() == PID_SUN3 ) // Скорчер / перезарядка
-        {
-            if( IS_NIGHT( __Hour ) )
-                cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SOLAR_SCORCHER_NO_LIGHT );
-            else
-            {
-                weapon.AmmoCount = weapon.Proto.Weapon_MaxAmmoCount;
-                weapon.Update();
-            }
-        }
-        else if( ( weapon.GetProtoId() == PID_FIREBREATH && cr.StatBase[ ST_BODY_TYPE ] == BT_GECKO ) || ( weapon.GetProtoId() == PID_KIRE && cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) )
-        {
-                weapon.AmmoCount = weapon.Proto.Weapon_MaxAmmoCount;
-                weapon.Update();
-        }
+        if( weapon.GetProtoId() == PID_SOLAR_SCORCHER || weapon.GetProtoId() == PID_SUN || weapon.GetProtoId() == PID_SUN2 || weapon.GetProtoId() == PID_SUN3 ) {
+			
+			uint16 year = 0;
+			uint16 month = 0;
+			uint16 day = 0;
+			uint16 dayOfWeek = 0;
+			uint16 hour = 0;
+			uint16 minute = 0;
+			uint16 second = 0;
+   
+			GetGameTime( __FullSecond, year, month, day, dayOfWeek, hour, minute, second );
 
+            if( !IS_NIGHT( hour ) && weapon.AmmoCount < weapon.Proto.Weapon_MaxAmmoCount ) {
+				uint[] val = { weapon.Id };
+                CreateTimeEvent( AFTER( REAL_SECOND( 10 ) ), "e_RechargeWeapon", val, true );
+            }
+			
+        } else if( ( weapon.GetProtoId() == PID_FIREBREATH && cr.StatBase[ ST_BODY_TYPE ] == BT_GECKO ) || ( weapon.GetProtoId() == PID_KIRE && cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) ) {
+                weapon.AmmoCount = weapon.Proto.Weapon_MaxAmmoCount;
+                weapon.Update();
+        }
         return;
     }
 
@@ -3569,6 +3499,17 @@ void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo )
     }
 }
 
+uint e_RechargeWeapon( uint[]@ val )
+{
+	Item@ weapon = GetItem( val[0] );
+	if( valid( weapon ) && weapon.AmmoCount < weapon.Proto.Weapon_MaxAmmoCount ) {
+		weapon.AmmoCount ++ ;
+		weapon.Update();
+		return REAL_SECOND( 10 );
+	}
+	return 0;
+}
+
 void e_ReloadInterrupt( Item& item, Critter& crit, uint8 fromSlot )
 {
     if(fromSlot == SLOT_HAND1 )
@@ -3669,262 +3610,6 @@ uint cte_slowReload( Critter& cr, int identifier, uint& rate )
 	ChangeCritterSpeed( cr );
 	
     return 0;
-}
-// //////////////////////////////////////////////////////////////////////////////////////////////////
-// Kriegwolf: Limb management timed event
-uint cte_limb_management (Critter& cr, int identifier, uint& rate) {
-	return 0; //Самоубивает включенные ивенты.
-	/* //Отключено, т.к. игровой опыт данного механа слишком жёсткий.
-	Map@  map = cr.GetMap();
-	bool emoteSaid = false;
-	bool screen = false;
-	int maxHP = cr.Stat [ST_MAX_LIFE];
-	int i = BP_LIMBS_BEGIN;
-	int currentHP = 0;
-	int roll = Random( 0, 1 );
-	if (cr.ParamBase [BP_BLOOD_LOSS] > 0) cr.ParamBase [BP_BLOOD_LOSS] -= 4;
-	if (cr.ParamBase [BP_BLOOD_LOSS] > 0.8 * maxHP) {
-		cr.Say (SAY_NETMSG, "Вы чувствуете смертельный холод и усталость.");
-	} else if (cr.ParamBase [BP_BLOOD_LOSS] > 0.6 * maxHP) {
-		cr.Say (SAY_NETMSG, "Вы чувствуете сильную усталость и головокружение");
-	} else if (cr.ParamBase [BP_BLOOD_LOSS] > 0.4 * maxHP) {
-		cr.Say (SAY_NETMSG, "Вы чувствуете усталость и головокружение");
-	} else if (cr.ParamBase [BP_BLOOD_LOSS] > 0.2 * maxHP) {
-		cr.Say (SAY_NETMSG, "Вы чувствуете легкое головокружение");
-	}
-	if (cr.ParamBase [ST_CURRENT_HP] > maxHP - __DeadHitPoints - cr.ParamBase [BP_BLOOD_LOSS] && !cr.IsDead() ) cr.ParamBase [ST_CURRENT_HP] = maxHP - __DeadHitPoints - cr.ParamBase [BP_BLOOD_LOSS];
-	while (i <= BP_LIMBS_END) {
-		currentHP = cr.ParamBase [i];
-		if ( currentHP > 0.8 * maxHP && !cr.IsDead() ) {
-			switch (i) {
-				case BP_TORSO_HP:
-					if( roll == 0 ){map.PlaySound ("head_damage1.ogg", cr.HexX, cr.HexY, 1 );}
-					if( roll == 1 ){map.PlaySound ("head_damage2.ogg", cr.HexX, cr.HexY, 1 );}
-					roll = -1;
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваш корпус болит просто невыносимо.");
-					if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) cr.Say (SAY_EMOTE, "Корпус искрит");
-					if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) cr.Say (SAY_NETMSG, "###КРИТИЧЕСКИЕ ПОВРЕЖДЕНИЯ КОРПУСА. ТРЕБУЕТСЯ РЕМОНТ.###");
-					if (cr.ParamBase [ST_CURRENT_HP] > maxHP - __DeadHitPoints - currentHP && cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.ParamBase [ST_CURRENT_HP] = maxHP - __DeadHitPoints - currentHP;
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 10000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 10000 ); 
-					screen == true;
-					break;
-				case BP_HEAD_HP:
-					if( roll == 0 ){map.PlaySound ("head_damage1.ogg", cr.HexX, cr.HexY, 1 );}
-					if( roll == 1 ){map.PlaySound ("head_damage2.ogg", cr.HexX, cr.HexY, 1 );}
-					roll = -1;
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша голова в ужасном состоянии. В глазах темнеет, вы почти теряете сознание.");
-					if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) cr.Say (SAY_NETMSG, "###КРИТИЧЕСКИЕ ПОВРЕЖДЕНИЯ ПРОЦЕССОРА. ТРЕБУЕТСЯ РЕМОНТ.###");
-					FlushScreen( cr, 0, COLOR_BLACK, 13000 );
-					if ( (Random (0, 1) == 0) && !cr.IsKnockout() && !cr.IsDead() ) {
-						cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 18, 25 ), cr.HexX, cr.HexY );
-						cr.Say (SAY_EMOTE, "Шатаясь, падает на землю");
-						if( screen == false ) FlushScreen( cr, 0, COLOR_BLACK, 10000 );
-						if( screen == false ) FlushScreen( cr, COLOR_BLACK, 0, 10000 );
-						screen == true;
-					}
-					else if( (Random (0, 1) == 1) && !cr.IsKnockout() && !cr.IsDead() ) {
-						cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 10, 15 ), cr.HexX, cr.HexY );
-						cr.Say (SAY_EMOTE, "Шатается");
-						if( screen == false ) FlushScreen( cr, 0, COLOR_BLACK, 10000 );
-						if( screen == false ) FlushScreen( cr, COLOR_BLACK, 0, 10000 );
-						screen == true;
-					}
-					if (cr.ParamBase [ST_CURRENT_HP] > maxHP - __DeadHitPoints - currentHP && cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.ParamBase [ST_CURRENT_HP] = maxHP - __DeadHitPoints - currentHP;
-					break;
-				case BP_EYES_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "В глазах все темнеет...");
-					if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) cr.Say (SAY_NETMSG, "###КРИТИЧЕСКИЕ ПОВРЕЖДЕНИЯ СЕНСОРОВ. ТРЕБУЕТСЯ РЕМОНТ.###");
-					FlushScreen( cr, 0, COLOR_BLACK, 10000 );
-					FlushScreen( cr, COLOR_BLACK, 0, 10000 );
-					screen == true;
-					if( cr.IsRuning ) {
-						cr.Say (SAY_EMOTE, "Валится на бегу");
-						cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 18, 25 ), cr.HexX, cr.HexY );
-						FlushScreen( cr, 0, COLOR_RED, 10000 );
-						FlushScreen( cr, COLOR_RED, 0, 10000 );
-						
-					}
-					break;
-				case BP_RIGHT_ARM_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша правая рука ужасно болит.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 2, 7 );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 10000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 10000 );
-					break;
-				case BP_LEFT_ARM_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша левая рука ужасно болит.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 2, 7 );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 10000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 10000 );
-					screen == true;
-					break;
-				case BP_LEFT_LEG_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша левая нога ужасно болит.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 2, 7 );
-					if( cr.IsRuning ) cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 12, 20 ), cr.HexX, cr.HexY );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 10000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 10000 );
-					screen == true;
-					break;
-				case BP_RIGHT_LEG_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша правая нога ужасно болит.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 2, 7 );
-					if( cr.IsRuning ) cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 12, 20 ), cr.HexX, cr.HexY );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 10000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 10000 );
-					screen == true;
-					break;
-			}
-		}
-		else if ( currentHP > 0.6 * maxHP && !cr.IsDead() ) {
-			switch (i) {
-				case BP_TORSO_HP:
-					if( roll == 0 ){map.PlaySound ("head_damage1.ogg", cr.HexX, cr.HexY, 1 );}
-					if( roll == 1 ){map.PlaySound ("head_damage2.ogg", cr.HexX, cr.HexY, 1 );}
-					roll = -1;
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say(SAY_NETMSG, "Вы чувствуете сильную боль в груди.");
-					if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) cr.Say (SAY_NETMSG, "###ЗНАЧИТЕЛЬНЫЕ ПОВРЕЖДЕНИЯ КОРПУСА. ТРЕБУЕТСЯ РЕМОНТ.###");
-					if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) cr.Say (SAY_EMOTE, "Корпус искрит");
-					if (cr.ParamBase [ST_CURRENT_HP] > maxHP - __DeadHitPoints - currentHP && cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.ParamBase [ST_CURRENT_HP] = maxHP - __DeadHitPoints - currentHP;
-					if( cr.IsRuning ) cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 5, 12 ), cr.HexX, cr.HexY );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 8000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 8000 );
-					screen == true;
-					break;
-				case BP_HEAD_HP:
-					if( roll == 0 ){map.PlaySound ("head_damage1.ogg", cr.HexX, cr.HexY, 1 );}
-					if( roll == 1 ){map.PlaySound ("head_damage2.ogg", cr.HexX, cr.HexY, 1 );}
-					roll = -1;
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "У вас кружится и болит голова.");
-					if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) cr.Say (SAY_NETMSG, "###ЗНАЧИТЕЛЬНЫЕ ПОВРЕЖДЕНИЯ ПРОЦЕССОРА. ТРЕБУЕТСЯ РЕМОНТ.###");
-					if (!emoteSaid && !cr.IsKnockout() && !cr.IsDead() ) cr.Say (SAY_EMOTE, "Шатается");
-					emoteSaid = true;
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 8000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 8000 );
-					screen == true;
-					if (cr.ParamBase [ST_CURRENT_HP] > maxHP - __DeadHitPoints - currentHP && cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.ParamBase [ST_CURRENT_HP] = maxHP - __DeadHitPoints - currentHP;
-					if( cr.IsRuning ) cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 10, 15 ), cr.HexX, cr.HexY );
-					cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 7, 12 ), cr.HexX, cr.HexY );
-					break;
-				case BP_EYES_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "В глазах все темнеет...");
-					if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) cr.Say (SAY_NETMSG, "###ЗНАЧИТЕЛЬНЫЕ ПОВРЕЖДЕНИЯ СЕНСОРОВ. ТРЕБУЕТСЯ РЕМОНТ.###");
-					if( screen == false ) FlushScreen( cr, 0, COLOR_BLACK, 10000 );
-					if( screen == false ) FlushScreen( cr, COLOR_BLACK, 0, 10000 );
-					screen == true;
-					break;
-				case BP_RIGHT_ARM_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша правая рука болит.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 1, 5 );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 8000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 8000 );
-					screen == true;
-					break;
-				case BP_LEFT_ARM_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша левая рука болит.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 1, 5 );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 8000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 8000 );
-					screen == true;
-					break;
-				case BP_LEFT_LEG_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша левая нога болит.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 1, 5 );
-					if( cr.IsRuning ) cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 3, 8 ), cr.HexX, cr.HexY );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 8000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 8000 );
-					screen == true;
-					break;
-				case BP_RIGHT_LEG_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша правая нога болит.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 1, 5 );
-					if( cr.IsRuning ) cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 3, 8 ), cr.HexX, cr.HexY );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 8000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 8000 );
-					screen == true;
-					break;
-			}
-		}
-		else if ( currentHP > 0.4 * maxHP && !cr.IsDead() ) {
-			switch (i) {
-				case BP_TORSO_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Вы ощущаете боль в груди.");
-					if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) cr.Say (SAY_NETMSG, "###КОРПУС ПОВРЕЖДЕН. ТРЕБУЕТСЯ РЕМОНТ.###");
-					if (cr.ParamBase [ST_CURRENT_HP] > maxHP - __DeadHitPoints - currentHP && cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.ParamBase [ST_CURRENT_HP] = maxHP - __DeadHitPoints - currentHP;
-					if( cr.IsRuning ) cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 4, 8 ), cr.HexX, cr.HexY );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 5000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 5000 );
-					screen == true;
-					break;
-				case BP_HEAD_HP:
-					map.PlaySound ("head_damage1.ogg", cr.HexX, cr.HexY, 1 );
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "У вас легкое головокружение");
-					if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) cr.Say (SAY_NETMSG, "###ПРОЦЕССОР ПОВРЕЖДЕН. ТРЕБУЕТСЯ РЕМОНТ.###");
-					if (cr.ParamBase [ST_CURRENT_HP] > maxHP - __DeadHitPoints - currentHP && cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.ParamBase [ST_CURRENT_HP] = maxHP - __DeadHitPoints - currentHP;
-					if (!emoteSaid && !cr.IsKnockout() && !cr.IsDead() ) cr.Say (SAY_EMOTE, "Шатается");
-					emoteSaid = true;
-					if( screen == false ) FlushScreen( cr, 0, COLOR_WHITE, 5000 );
-					if( screen == false ) FlushScreen( cr, COLOR_WHITE, 0, 5000 );
-					screen == true;
-					if( cr.IsRuning ) cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 4, 8 ), cr.HexX, cr.HexY );
-					break;
-				case BP_EYES_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "В глазах все мутнеет...");
-					if( cr.StatBase[ ST_BODY_TYPE ] == BT_ROBOT ) cr.Say (SAY_NETMSG, "###СЕНСОРЫ ПОВРЕЖДЕНЫ. ТРЕБУЕТСЯ РЕМОНТ.###");
-					if( screen == false ) FlushScreen( cr, 0, COLOR_BLACK, 10000 );
-					if( screen == false ) FlushScreen( cr, COLOR_BLACK, 0, 10000 );
-					screen == true;
-					break;
-				case BP_RIGHT_ARM_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша правая рука побаливает.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 0, 1 );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 5000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 5000 );
-					screen == true;
-					break;
-				case BP_LEFT_ARM_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша левая рука побаливает.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 0, 1 );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 5000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 5000 );
-					screen == true;
-					break;
-				case BP_LEFT_LEG_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша левая нога побаливает.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 0, 1 );
-					if( cr.IsRuning ) cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 2, 4 ), cr.HexX, cr.HexY );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 5000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 5000 );
-					screen == true;
-					break;
-				case BP_RIGHT_LEG_HP:
-					if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.Say (SAY_NETMSG, "Ваша правая нога побаливает.");
-					if (cr.ParamBase [ST_CURRENT_HP] >= 0 ) cr.ParamBase [ST_CURRENT_HP] -= Random( 0, 1 );
-					if( cr.IsRuning ) cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), Random( 2, 4 ), cr.HexX, cr.HexY );
-					if( screen == false ) FlushScreen( cr, 0, COLOR_RED, 5000 );
-					if( screen == false ) FlushScreen( cr, COLOR_RED, 0, 5000 );
-					screen == true;
-					break;
-			}
-		}
-		else if (currentHP > 0.2 * maxHP && !cr.IsDead() ) {
-			if (cr.ParamBase [ST_CURRENT_HP] > maxHP - __DeadHitPoints - currentHP && cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT ) cr.ParamBase [ST_CURRENT_HP] = maxHP - __DeadHitPoints - currentHP;
-		}
-		if (cr.StatBase [ST_BODY_TYPE] != BT_ROBOT) {
-			if ((currentHP < 0.2 * maxHP) && (currentHP > 0)) cr.ParamBase [i] -= cr.Stat [ST_HEALING_RATE];
-			else if ((currentHP < 0.3 * maxHP) && (currentHP > 0)) cr.ParamBase [i] -= cr.Stat [ST_HEALING_RATE]*0.8;
-			else if ((currentHP < 0.4 * maxHP) && (currentHP > 0)) cr.ParamBase [i] -= cr.Stat [ST_HEALING_RATE]*0.6;
-			else if ((currentHP < 0.5 * maxHP) && (currentHP > 0)) cr.ParamBase [i] -= cr.Stat [ST_HEALING_RATE]*0.4;
-			else if ((currentHP < 0.6 * maxHP) && (currentHP > 0)) cr.ParamBase [i] -= cr.Stat [ST_HEALING_RATE]*0.2;
-			else if ((currentHP < 0.7 * maxHP) && (currentHP > 0)) cr.ParamBase [i] -= cr.Stat [ST_HEALING_RATE]*0.1;
-		}
-		if (currentHP > maxHP - __DeadHitPoints && cr.StatBase [ST_BODY_TYPE] != BT_ROBOT  ) cr.ParamBase [i] = maxHP - __DeadHitPoints;
-		if (currentHP < 0) cr.ParamBase [i] = 0;
-		i ++;
-	}
-	return ( 4 * 60 * __TimeMultiplier);
-	*/
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -5016,29 +4701,6 @@ bool player_allowcommand( Critter@ player, string@ adminPanel, uint8 command )
 
     player.Say( SAY_NETMSG, "Access denied." );
     return false;
-}
-
-bool ltp_sharp_inited = false;
-
-void ltp_sharp_init()
-{
-    LTPREG( LTP_SHARP, process_sharp )
-    ltp_sharp_inited = true;
-}
-
-uint process_sharp( Critter@ cr, int& param0, int& param1, int& param2 )
-{
-    LTPROCESSD( LTP_SHARP )
-    Item @ item = GetItem( param0 );
-    if( @item == null )
-        return 0;
-    int8 det = GetDeteriorationProcent( item );
-    det -= Random( 1, cr.Stat[ ST_STRENGTH ] );
-    det = CLAMP( det, 0, 100 );
-    SetDeterioration( item, det );
-
-    cr.Say( SAY_NETMSG, "Вы точите лезвия." );
-    return det > 0 ? 3 * 1000 : 0;
 }
 
 //import void ShowInputBoxScreen( Critter& cr, string funcName, uint16 textLength, uint8 flags ) from "main";
