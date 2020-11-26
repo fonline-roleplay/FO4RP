@@ -3035,32 +3035,18 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 	if( valid( realWeapon ) ) {
 		
 		uint16 effectPid = 0;
-		int bodyType = target.Stat[ ST_BODY_TYPE ];
 		Item@ checkArmor = _CritGetItemArmor( target );
+		uint8 attackDir =  attackFront? 0 : 1;
 		
-		if( valid( checkArmor ) ) {
-			uint8 attackDir =  attackFront? 0 : 1;
-			SparkManager( map, attackDir, target, aim, checkArmor, rounds );
+		if( valid( checkArmor ) && ( checkArmor.Proto.Material != MATERIAL_FABRIC || checkArmor.Proto.Material != MATERIAL_LEATHER ) ) {
+			SparkManager( attacker, map, attackDir, target, aim, checkArmor, realWeapon, rounds );
 		} else {
-			
-			//Log( "bodyType: " + bodyType );
-			
-			switch( bodyType ) 
-			{
-				case( BT_RAT ):
-				case( BT_DOG ):
-					effectPid = PID_TARGET_BLOOD;
-					break;
-			}
-		}
-		if( effectPid != 0 ) {
-			map.RunEffect( effectPid, target.HexX, target.HexY, 0 );
-			//Log( "drawing hit effect");
+			BloodManager( map, attackDir, target, aim, rounds );
 		}
 	}
 }
 
-void SparkManager( Map& map, uint8 attackDir, Critter& target, int aim, Item& armor, int rounds )
+void SparkManager( Critter& cr, Map& map, uint8 attackDir, Critter& target, int aim, Item& armor, Item& realWeapon, int rounds )
 {
 	if( !valid(target) ) { return; }
 	if( rounds <= 0 ) { return; }
@@ -3070,7 +3056,7 @@ void SparkManager( Map& map, uint8 attackDir, Critter& target, int aim, Item& ar
 		{ PID_TARGET_SPARKS_LEFT0, PID_TARGET_SPARKS_LEFT1, PID_TARGET_SPARKS_LEFT2, PID_TARGET_SPARKS_LEFT3, PID_TARGET_SPARKS_LEFT4, PID_TARGET_SPARKS_LEFT5 },
 		{ PID_TARGET_SPARKS_RIGHT0, PID_TARGET_SPARKS_RIGHT1, PID_TARGET_SPARKS_RIGHT2, PID_TARGET_SPARKS_RIGHT3, PID_TARGET_SPARKS_RIGHT4, PID_TARGET_SPARKS_RIGHT5 },
 		{ PID_TARGET_SPARKS_SHOULDERS0, PID_TARGET_SPARKS_SHOULDERS1, PID_TARGET_SPARKS_SHOULDERS2, PID_TARGET_SPARKS_SHOULDERS3, PID_TARGET_SPARKS_SHOULDERS4, PID_TARGET_SPARKS_SHOULDERS5 },
-		{ PID_TARGET_SPARKS_HEAD0, PID_TARGET_SPARKS_HEAD1, PID_TARGET_SPARKS_HEAD2 } // only for CA, PA, APA headshots Material=9 (polymer)
+		{ PID_TARGET_SPARKS_HEAD0, PID_TARGET_SPARKS_HEAD1, PID_TARGET_SPARKS_HEAD2 } // only for CA, PA, APA headshots Material=9, 10 (polymer, composite)
 	};
 
 	bool isHeadshot = ( aim == HIT_LOCATION_HEAD ) || ( aim == HIT_LOCATION_EYES );
@@ -3080,92 +3066,150 @@ void SparkManager( Map& map, uint8 attackDir, Critter& target, int aim, Item& ar
 	int prevIdx = -1;
 
 	for( int j = 0; j < rounds; j ++ ) {
-	
-		uint16 effectPid = 0;
-		int i = -1;
-		
-		if( !isHeadshot ) {
-			if( attackDir == 0 ) {
-				switch( targetDir )
-				{
-					case( 0 ):
-						i = 3;
-						break;
-					case( 1 ):
-						i = 2;
-						break;
-					case( 2 ):
-					case( 3 ):
-						i = 0;
-						break;
-					case( 4 ):
-						i = 1;
-						break;
-					case( 5 ):
-						i = 3;
-						break;
+		if( !target.IsKnockout() && !target.IsDead() ) {
+			uint16 effectPid = 0;
+			int i = -1;
+			
+			if( !isHeadshot ) {
+				if( attackDir == 0 ) {
+					switch( targetDir )
+					{
+						case( 0 ):
+							i = 3;
+							break;
+						case( 1 ):
+							i = 2;
+							break;
+						case( 2 ):
+						case( 3 ):
+							i = 0;
+							break;
+						case( 4 ):
+							i = 1;
+							break;
+						case( 5 ):
+							i = 3;
+							break;
+					}
+				} else {
+					switch( targetDir )
+					{
+						case( 0 ):
+							i = 0;
+							break;
+						case( 1 ):
+							i = 1;
+							break;
+						case( 2 ):
+						case( 3 ):
+							i = 3;
+							break;
+						case( 4 ):
+							i = 2;
+							break;
+						case( 5 ):
+							i = 0;
+							break;
+					}
 				}
-			} else {
-				switch( targetDir )
-				{
-					case( 0 ):
-						i = 0;
-						break;
-					case( 1 ):
-						i = 1;
-						break;
-					case( 2 ):
-					case( 3 ):
-						i = 3;
-						break;
-					case( 4 ):
-						i = 2;
-						break;
-					case( 5 ):
-						i = 0;
-						break;
+			
+			} else { //headshots
+				uint16 armorPid = armor.GetProtoId();
+				ProtoItem@ armorProto = GetProtoItem( armorPid );
+				if( armorProto.Material == MATERIAL_POLYMER || armorProto.Material == MATERIAL_COMPOSITE ) {
+					i = 4;
+				} else {
+					Log( "эффект попадания в голову" );
 				}
 			}
-		
-		} else { //headshots
-			uint16 armorPid = armor.GetProtoId();
-			ProtoItem@ armorProto = GetProtoItem( armorPid );
-			if( armorProto.Material == MATERIAL_POLYMER ) {
-				i = 4;
-			} else {
-				//Log( "эффект попадания в голову" );
-			}
-		}
-		
-		if( i != -1 ) {
 			
-			int len = Sparks[i].length();
-			int idx = Random( 0, ( len - 1 ) );
-			
-			if( ( len > 1 ) && ( prevIdx == idx ) ) {
-				int rnd = Random( 1, ( len - 1 ) );
-				idx = ( idx + rnd ) % len ;
-			} 			
-			
-			prevIdx = idx;
-			effectPid = Sparks[i][idx];
+			if( i != -1 ) {
+				
+				int len = Sparks[i].length();
+				int idx = Random( 0, ( len - 1 ) );
+				
+				if( ( len > 1 ) && ( prevIdx == idx ) ) {
+					int rnd = Random( 1, ( len - 1 ) );
+					idx = ( idx + rnd ) % len ;
+				} 			
+				
+				prevIdx = idx;
+				effectPid = Sparks[i][idx];
 
-			uint[] values = { target.Id, effectPid };
+				uint[] values = { target.Id, effectPid };
+				int baseTime = 250;
+				int k = j + 1;
+				baseTime *= k;
+				CreateTimeEvent( AFTER( REAL_MS( baseTime ) ), "e_HitEffectVFX", values, false );
+			}
+		} else {
+			uint16 weaponPid = realWeapon.GetProtoId();
+			uint[] vals = { cr.Id, target.Id, weaponPid, 0, realWeapon.AmmoPid, target.HexX, target.HexY };
 			int baseTime = 250;
 			int k = j + 1;
 			baseTime *= k;
-			CreateTimeEvent( AFTER( REAL_MS( baseTime ) ), "e_SparkVFX", values, false );
+			CreateTimeEvent( AFTER( REAL_MS( baseTime ) ), "main@e_DelayedAttackVFX", vals, false );
 		}
 	}
 }
 
-uint e_SparkVFX( uint[]@ values )
+void BloodManager( Map& map, uint8 attackDir, Critter& target, int aim, int rounds )
+{
+	if( !valid(target) ) { return; }
+	if( rounds <= 0 ) { return; }
+	
+	int bodyType = target.Stat[ ST_BODY_TYPE ];
+	uint8 targetDir = target.Dir; 
+
+	for( int j = 0; j < rounds; j ++ ) {
+	
+		uint16 effectPid = 0;
+		if( !target.IsKnockout() && !target.IsDead() ) {
+			switch( bodyType ) 
+			{
+				case( BT_MEN ):
+				case( BT_WOMEN ):
+				case( BT_CHILDREN ):
+				case( BT_BRAHMIN ):
+					effectPid = PID_TARGET_BLOOD_NORM;
+					break;
+				case( BT_RAT ):
+				case( BT_MANTI ):
+				case( BT_DOG ):
+				case( BT_GIANT_ANT ):
+					effectPid = PID_TARGET_BLOOD;
+					break;
+				case( BT_GECKO ):
+				case( BT_FLOATER ):
+				case( BT_SUPER_MUTANT ):
+				case( BT_GHOUL ):
+				case( BT_CENTAUR ):
+				case( BT_DEADCLAW ):
+				case( BT_ALIEN ):
+					effectPid = PID_TARGET_BLOOD_DARK;
+					break;
+			}
+		} else {
+			effectPid = PID_TARGET_BLOOD;
+		}
+		
+		if( effectPid == 0 ) { return; }
+		
+		uint[] values = { target.Id, effectPid };
+		int baseTime = 250;
+		int k = j + 1;
+		baseTime *= k;
+		CreateTimeEvent( AFTER( REAL_MS( baseTime ) ), "e_HitEffectVFX", values, false );
+	}
+}
+
+uint e_HitEffectVFX( uint[]@ values )
 {
 	Critter@ target = GetCritter( values[0] );
 	if( !valid(target) ) { return 0; }
 	
 	Map@ map = target.GetMap();
-	
+
 	uint16 effectPid = values[1];
 	
 	map.RunEffect( effectPid, target.HexX, target.HexY, 0 );
