@@ -3,43 +3,46 @@
 #include "_utils.fos"
 
 //								Val0 // Used in locks DO NOT USE HERE - conflict
-#define STATE					Val1 // not yet
-#define PRODUCT					Val2 // not yet
+//								Val1 // not yet
+//								Val2 // not yet
 //								Val4 // Used in locks DO NOT USE HERE - possible conflict
 //								Val5 // Used in locks DO NOT USE HERE - possible conflict
 #define PRICE					Val6 // Product Price - цена товара
 #define BALANCE					Val7 // Outstanding balance - Денежный баланс на который можно купить товар.
+#define PRODUCT					Val8 // Sale Item Pid - Пид товара для продажи
 
 const string[] SoundNames = { "CLANG.ACM", "CLANG1.ACM", "CLANK.ACM", "CLANK1.ACM" };
 
 uint16[] cash_pids =   { PID_DOLLAR_100, PID_DOLLAR_20, PID_DOLLAR_5, PID_BOTTLE_CAPS };
 uint16[] cash_values = {	  100, 			 20, 			5, 		   	   1		  };
 
-void TransferItemToContainer( Item& item, Item& target ) {
+void TransferItemToContainer( Item& item, Item& vendMach ) {
     uint16 pid = item.GetProtoId();
     _SubItem( item, 1 );
-    target.AddItem( pid, 1, 0 );
+    vendMach.AddItem( pid, 1, 0 );
 }
 
-void PlayVendSound( Map& map, Item & target ) {
-	map.PlaySound( SoundNames[ Random( 0, SoundNames.length() -1 ) ], target.HexX, target.HexY, 5 );
+void PlayVendSound( Map& map, Item & vendMach ) {
+	map.PlaySound( SoundNames[ Random( 0, SoundNames.length() -1 ) ], vendMach.HexX, vendMach.HexY, 5 );
 }
 
 // Интерактивное меню ку3, точка входа main.fos
 class MenuVendingMachine: CenteredMenuHandler {
-    uint target_id;
+    uint vendMach_id;
     uint map_id;
+	uint level;
 	
-    MenuVendingMachine(Item& target, Map& map) {
-        target_id = target.Id;
+    MenuVendingMachine(Item& vendMach, Map& map) {
+        vendMach_id = vendMach.Id;
         map_id = map.Id;
+		level = 0;
     }
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
         Map@ map = GetMap(map_id);
-        Item@ target = GetItem(target_id);
+        Item@ vendMach = GetItem(vendMach_id);
 		
-        if( map is null || target is null ) {
+        if( map is null || vendMach is null ) {
             return false;
         }
 
@@ -49,74 +52,81 @@ class MenuVendingMachine: CenteredMenuHandler {
 			Item@ cash = cr.GetItem( pid, -1 );
 
 			if( valid( cash ) && menu.Button( "Вставить "+balance_change+" $" ) ) {
-				TransferItemToContainer(cash, target);
-				PlayVendSound( map, target );
-				target.BALANCE += balance_change;
-				cr.Say( SAY_EMOTE_ON_HEAD, "Вставляет деньги в аппарат" );
+				TransferItemToContainer(cash, vendMach);
+				PlayVendSound( map, vendMach );
+				vendMach.BALANCE += balance_change;
+				cr.Say( SAY_EMOTE_ON_HEAD, "вставляет деньги в аппарат" );
 				return true;
 			}
 		}
 		
 		if( menu.Button( "Купить" ) ) {
-			if( target.BALANCE >= target.PRICE ) {
-				Item@[] cigPacks;
-				if( target.GetItems( uint( -1 ), cigPacks ) == 0 )
+			if( vendMach.BALANCE >= vendMach.PRICE ) {
+				Item@[] productItm;
+				if( vendMach.GetItems( uint( -1 ), productItm ) == 0 )
 				{
-					map.PlaySound( "LOSER.ACM", target.HexX, target.HexY, 5 );
+					map.PlaySound( "LOSER.ACM", vendMach.HexX, vendMach.HexY, 5 );
 					return true;
 				}
 			
-				for( uint i = 0; i < cigPacks.length(); i++ )
+				for( uint i = 0; i < productItm.length(); i++ )
 				{			
-					if( cigPacks[i].GetProtoId() == PID_CIGARETTES )
+					if( productItm[i].GetProtoId() == vendMach.PRODUCT )
 					{
-						Item@ cigPack = target.GetItem( PID_CIGARETTES, 0 );
+						Item@ cigPack = vendMach.GetItem( vendMach.PRODUCT, 0 );
 						_SubItem( cigPack, 1 );
-						PlayVendSound( map, target );
-						cr.AddItem( PID_CIGARETTES, 1 );
-						target.BALANCE -= target.PRICE;
-						cr.Say( SAY_EMOTE, "Забирает пачку сигарет" );
+						PlayVendSound( map, vendMach );
+						cr.AddItem( vendMach.PRODUCT, 1 );
+						vendMach.BALANCE -= vendMach.PRICE;
+						cr.Say( SAY_EMOTE, "забирает товар" );
 						return true;
 					}
 				}
 			} else {
-				map.PlaySound( "LOSER.ACM", target.HexX, target.HexY, 5 );
+				map.PlaySound( "LOSER.ACM", vendMach.HexX, vendMach.HexY, 5 );
 				return true;
 			}
 			
 		}
 		
 		if( menu.Button( "Возврат денег" ) ) {
-			Item@ change = target.GetItem( PID_BOTTLE_CAPS, 0 );
-			if( valid( change ) && target.BALANCE > 0) {
-				int changeCount = MIN( int( change.GetCount() ), target.BALANCE );
+			Item@ change = vendMach.GetItem( PID_BOTTLE_CAPS, 0 );
+			if( valid( change ) && vendMach.BALANCE > 0) {
+				int changeCount = MIN( int( change.GetCount() ), vendMach.BALANCE );
 				_SubItem( change, uint( changeCount ) );
 				cr.AddItem( PID_BOTTLE_CAPS, changeCount );
-				target.BALANCE -= changeCount;
-				map.SetText( target.HexX, target.HexY, COLOR_LGRAY, ":звон монет:" );
-				cr.Say( SAY_EMOTE, "Забирает сдачу" );
+				vendMach.BALANCE -= changeCount;
+				map.SetText( vendMach.HexX, vendMach.HexY, COLOR_LGRAY, ":звон монет:" );
+				cr.Say( SAY_EMOTE, "забирает сдачу" );
 				return false;
 			} else {
-				map.PlaySound( "LOSER.ACM", target.HexX, target.HexY, 5 );
+				map.PlaySound( "LOSER.ACM", vendMach.HexX, vendMach.HexY, 5 );
 				return true;
 			}
 		}
 		
-		if( !FLAG( target.LockerCondition, LOCKER_LOCKED ) ) {
+		if( !FLAG( vendMach.LockerCondition, LOCKER_LOCKED ) ) {
+			if ( menu.Button( "Установить товар" ) ) {
+				MenuSelectProduct@ select_product = MenuSelectProduct( vendMach, map );
+				select_product.level = level + 1;
+				return menu.OpenChild( "Уровень " + select_product.level, select_product );
+			}
+			
 			if( menu.Button( "Выставить цену" ) ) {
-				cr.RunClientScript( "client_screen_numberpad@ShowScreen", target.Id, target.Val6, 0, "Введите новую цену", null );
+				cr.RunClientScript( "client_screen_numberpad@ShowScreen", vendMach.Id, 0, 0, "Введите новую цену", null );
 				return false;
 			}
 		}
 
 		if( menu.Button( "Открыть сейф" ) ) {
-			if( FLAG( target.LockerCondition, LOCKER_LOCKED ) ) {
+			if( FLAG( vendMach.LockerCondition, LOCKER_LOCKED ) ) {
 				cr.Say( SAY_NETMSG, "|0xFFFF00 Аппарат заперт." );
-				map.PlaySound( "ILCNTNRB.ACM", target.HexX, target.HexY, 5 );
+				map.PlaySound( "ILCNTNRB.ACM", vendMach.HexX, vendMach.HexY, 5 );
 				return true;
 			} else {
-				ShowContainer( cr, target, TRANSFER_HEX_CONT_UP );
-				map.PlaySound( "IOCNTNRB.ACM", target.HexX, target.HexY, 5 );
+				ShowContainer( cr, vendMach, TRANSFER_HEX_CONT_UP );
+				map.PlaySound( "IOCNTNRB.ACM", vendMach.HexX, vendMach.HexY, 5 );
+				cr.Say( SAY_EMOTE, "открывает вендомат" );
 				return false;
 			}
         }
@@ -126,58 +136,166 @@ class MenuVendingMachine: CenteredMenuHandler {
 	// UI менюхи
     string@ Description( Critter& cr ) {
 	
-		Item@ target = GetItem(target_id);
+		Item@ vendMach = GetItem( vendMach_id );
 		string status;
-		Item@ change = target.GetItem( PID_BOTTLE_CAPS, 0 );
+		Item@ change = vendMach.GetItem( PID_BOTTLE_CAPS, 0 );
 		if( !valid( change ) ) {
-			status = "\nАппарат сдачу не дает!"; 			
+			status = "|0xFF0000 Аппарат сдачу не дает!"; 			
 		}		
-		string balance = target.BALANCE;
-		string price = target.PRICE;
-		string product = GetMsgStr( 0, TEXTMSG_ITEM, 54100 ); //пока хардкод
+		string balance = vendMach.BALANCE;
+		string price = vendMach.PRICE;
+		string product = GetMsgStr( 0, TEXTMSG_ITEM, vendMach.PRODUCT * 100 );
 		string amount;		
 
-		Item@[] cigPacks;
-		if( target.GetItems( uint( -1 ), cigPacks ) == 0 )
+		Item@[] productItm;
+		if( vendMach.GetItems( uint( -1 ), productItm ) == 0 )
 		{
-			amount = "\nтовар закончился";
+			amount = "|0xFF0000 \nТовар закончился!";
 		}
-		
-		amount = "\nтовар закончился";
-		
-		for( uint i = 0; i < cigPacks.length(); i++ )
+
+		for( uint i = 0; i < productItm.length(); i++ )
 		{			
-			if( cigPacks[i].GetProtoId() == PID_CIGARETTES )
+			if( productItm[i].GetProtoId() == vendMach.PRODUCT )
 			{
 				amount = "\nОсталось ";
-				amount += cigPacks[i].GetCount();
-				amount += " шт.";
+				amount += "|0xFFFF00 " + productItm[i].GetCount();
+				amount += "|0x3CF800  шт.";
 			}
 		}
 
-		string info;
-		info = "Вендинговая машина № " + target.Id;
-		info += "\nТовар: " + product;
-		info += amount + " Цена: " + price + " $";
-		info += "\nВставьте деньги в приемник.";
+		string info = "Вендинговая машина № ";
+		info += "|0xFFFF00 " + vendMach.Id + "\n";
+		info += "|0x3CF800 Товар: ";
+		info += "|0xFFFF00 " + product;
+		info += "|0x3CF800 ." + amount;
+		info += "|0x3CF800  Цена: ";
+		info += "|0xFFFF00 " + price;
+		info += "|0x3CF800  $ \nВставьте деньги в приемник.";
 		info += "\n" + status ;
-		info += "\nБаланс: " + balance + " $";
+		info += "|0x3CF800 \nБаланс: ";
+		info += "|0xFFFF00 " + balance;
+		info += "|0x3CF800  $";
         return info;
     }
 	
     string@ ButtonCancel() {
-        return ButtonDecorator("Скрыть меню", null);
+        return ButtonDecorator( "Скрыть меню", null );
     }
 }
 
 // точка входа из main.fos при юзе рукой
-void StartMenuVendingMachine( Critter& cr, Item& target) // exported
+void StartMenuVendingMachine( Critter& cr, Item& vendMach ) // exported
 {
     Map@ map = cr.GetMap();
     if( map is null ) {
         return;
     }
 
-    iMenuHandler@ handler = MenuVendingMachine(target, map);
+    iMenuHandler@ handler = MenuVendingMachine( vendMach, map );
+    iDialogBox@ menu = OpenMenu( cr, "Вендинговый Аппарат", handler );
+}
+
+class MenuSelectProduct: CenteredMenuHandler {
+    uint vendMach_id;
+    uint map_id;
+	uint level;
+	int selectorPos;
+	uint arrayPos;
+	
+    MenuSelectProduct( Item& vendMach, Map& map ) {
+        vendMach_id = vendMach.Id;
+        map_id = map.Id;
+		level = 1;
+		selectorPos = 0;
+		arrayPos = 0;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Map@ map = GetMap( map_id );
+        Item@ vendMach = GetItem( vendMach_id );
+		
+        if( map is null || vendMach is null ) {
+            return false;
+        }
+			
+		Item@[] productItm;
+		vendMach.GetItems( uint( -1 ), productItm );
+		
+		if( productItm.length() != 0 )
+		{
+			if ( menu.Button( "Предыдущий" ) ) {
+				selectorPos--;
+				if( arrayPos == 0 ) {
+					arrayPos = productItm.length() - 1;
+					selectorPos = arrayPos;
+				} else {
+					arrayPos = selectorPos;
+				}
+				Item@ selectedProduct = productItm[arrayPos];
+				vendMach.PRODUCT = selectedProduct.GetProtoId();
+				return true;
+			}
+			
+			if ( menu.Button( "Следующий" ) ) {
+				selectorPos++;
+				if( arrayPos == productItm.length() -1 ) {
+					arrayPos = 0;
+					selectorPos = arrayPos;
+				} else {
+					arrayPos = selectorPos;
+				}
+				Item@ selectedProduct = productItm[arrayPos];
+				vendMach.PRODUCT = selectedProduct.GetProtoId();
+				return true;
+			}
+			
+			if ( menu.Button( "Подтвердить" ) ) {
+				cr.Say( SAY_EMOTE, "устанавливает новый товар" );
+				return false;
+			}
+		}
+		return true;
+    }
+
+    string@ Description( Critter& cr ) {	
+		Item@ vendMach = GetItem( vendMach_id );
+		string product = GetMsgStr( 0, TEXTMSG_ITEM, vendMach.PRODUCT * 100 );
+		Item@[] productItm;
+		vendMach.GetItems( uint( -1 ), productItm );
+		string amount;
+		for( uint i = 0; i < productItm.length(); i++ )
+		{			
+			if( productItm[i].GetProtoId() == vendMach.PRODUCT )
+			{
+				amount += productItm[i].GetCount();
+			}
+		}
+		string info = "Вендинговая машина № ";
+		info += "|0xFFFF00 " + vendMach.Id + "\n";
+		info += "|0x3CF800 Выбранный товар для продажи: \n[ ";
+		info += "|0xFFFF00 " + product;
+		info += "|0x3CF800  ]\nВ наличии: ";
+		info += "|0xFFFF00 " + amount;
+		info += "|0x3CF800  шт.";
+		info += "|0x3CF800  \nВыберите нужную позицию и нажмите";
+		info += "|0xFFFF00  Подтвердить";
+		info += "|0x3CF800  для завершения настройки.";
+		
+		return info;
+	}	
+		
+	string@ ButtonCancel() {
+        return ButtonDecorator( "Скрыть меню", null );
+    }
+}
+
+void StartMenuSelectProduct( Critter& cr, Item& vendMach )
+{
+    Map@ map = cr.GetMap();
+    if( map is null ) {
+        return;
+    }
+
+    iMenuHandler@ handler = MenuSelectProduct( vendMach, map );
     iDialogBox@ menu = OpenMenu( cr, "Вендинговый Аппарат", handler );
 }
