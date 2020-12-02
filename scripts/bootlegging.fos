@@ -2,17 +2,23 @@
 
 #include "_utils.fos"
 #include "FLAMMABLE_H.fos"
+#include "STAT_MODS_H.fos"
 #include "_ltp.fos"
 
 import void ExplodeEx( Map& map, uint16 hexX, uint16 hexY, uint16 effectPid, uint effectRadius, uint damage, uint damageType, uint damageRadius, uint ownerId )  from "explode";
 import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attackerId ) from "combat";
-import bool LockInPlace( Critter& cr, Item& targetItem ) from "main";
-import bool PickItem( Critter& cr, Item& targetItem ) from "main";
+import bool LockInPlace( Critter& cr, Item& stillItem ) from "main";
+import bool PickItem( Critter& cr, Item& stillItem ) from "main";
 import void GenerateFire( Map@ map, int x, int y, int radius, uint8 strength, int attackerId )  from "firestarter";
 
 const uint PIC_STILL_ANIM_ON = GetStrHash( "art\\items\\misc\\Still\\still_s_working.fofrm" );
 
-#define STATE								Val0 	// Статус 0 - потух, 1 - заслонка 0%, 2 - заслонка 25%, 3 - заслонка 50%, 4 - заслонка 75%, 5 - заслонка 100%, 6 - работа завершена
+const uint16[] Tools 	   = { PID_HAMMER, PID_SCREWDRIVER, PID_WRENCH, PID_SOLDERER };
+const uint16[] Components  = { PID_IRON_PLATE, PID_BRACING, PID_EMKOCT_MEH, PID_SHORT_TUBE, PID_MPARTS, PID_COPPER_WIRE };
+const uint16[] Amount	   = {	  4, 				4, 			  1, 			 2, 			2, 			1		   };
+const uint16[] Consumables = { PID_CRAFT_L_RAGS, PID_CHEMICALS, PID_GLASS_BOTTLE_FULL };
+
+#define STATE								Val0 	// Статус 0 - потух, 1 - заслонка 0%, 2 - заслонка 25%, 3 - заслонка 50%, 4 - заслонка 75%, 5 - заслонка 100%
 #define SPIRIT_LEVEL						Val1 	// Уроверь спирта в браге
 #define CURRENT_FUEL						Val2 	// Текущий заряд топлива
 #define EVENT 								Val3 	// Для записи тайм-ивента работы аппарата
@@ -25,25 +31,20 @@ const uint PIC_STILL_ANIM_ON = GetStrHash( "art\\items\\misc\\Still\\still_s_wor
 
 //Homebrew States
 #define REMAINING_USES						Val0 	// Кол-во оставшихся использований в бутылке браги
-#define POT_LIQUID_LEVEL					Val4 	// кол-во жидкостей в кувшине браги
+#define EXTRA_WEIGHT						Val2	// Дополнительный вес жидкости
+#define LIQUID_LEVEL						Val4 	// кол-во жидкостей
 #define POLUTION_LEVEL						Val7 	// кол-во загрязнения в браге
 #define HB_SPIRIT_LEVEL						Val9 	// Градус спирта в браге
 
-#define MAX_FUEL					 ( 10000.0f )	// Максимальный загруз топлива
+#define MAX_FUEL					 ( 18000.0f )	// Максимальный загруз топлива
 #define MAX_RAW_MATERIAL			 ( 15000.0f )	// Максимальный загруз браги
-#define MAX_TEMPRATURE				   ( 575.0f )	// Максимальная температура до возгорания к
-#define	MAX_PRESSURE				  ( 4000.0f )	// Максимальное давление до взрыва
-#define MAX_PRODUCT					 ( 10000.0f )	// Максимальный выход
+#define MAX_TEMPRATURE				   ( 474.0f )	// Максимальная температура до возгорания, к
+#define	MAX_PRESSURE				  	 ( 4.0f )	// Максимальное давление до взрыва
 
 #define FIRE_BURNING_TIME	  REAL_SECOND( 1.0f ) 	// Время тика горения огня
 #define FUEL_BURN_AMOUNT				( 45.0f )	// Кол-во сжигаемого топлива
 
 //Thermodynamics - export to separate module later
-#define THERM_HECHFS 				  ( 4650.0f ) 	// Вт/(м2*К) - коэффициент теплоотдачи от горячего флюида к стенке // heat exchange coefficient of hot fluid to surface
-#define THERM_HECSCF					 ( 9.6f ) 	// 9,6, Вт/(м2*К) - коэффициент теплоотдачи стенки к холодному флюиду // heat exchange coefficient of surface to cold fluid
-#define	THERM_STCC						( 52.5f ) 	// 52.5, Вт/(м*К) - коэффициент теплопроводности стенки // surface thermal conductivity coefficient
-#define	THERM_STILL_D_INNER				 ( 0.3f ) 	// d1, м - внутренний диаметр цилиндра.
-#define	THERM_STILL_D_OUTER				( 0.34f )	// d2, м - наружный диаметр цилиндра. 
 #define	THERM_STILL_HIGHT				 ( 1.0f )	// высота цилиндра. 
 #define L_RESIST 				  ( 100 * 0.31f )	// Линейное термическое сопротивление цилиндрической стенки
 #define ENVIROMENT_TEMPRATURE_K 	   ( 295.0f )   // Tf2 = 295, К - температура холодного флюида. Окружающей среды. // cold fluid temprature
@@ -51,7 +52,6 @@ const uint PIC_STILL_ANIM_ON = GetStrHash( "art\\items\\misc\\Still\\still_s_wor
 
 #define ALCOHOL_GAIN					( 10.0f )	// Прирост спирта за один "тик" таймивента, гр
 #define RAW_MATERIAL_LOSS 				( 40.0f )   // Скорость испарения жидкости
-#define BOILING_MULTIPLIER				 ( 1.0f )	// Мультипликатор давления при достижении температуры кипения
 
 //Still state
 #define STATE_PREPARE 						( 0 )
@@ -60,79 +60,78 @@ const uint PIC_STILL_ANIM_ON = GetStrHash( "art\\items\\misc\\Still\\still_s_wor
 #define STATE_WORKING_50 					( 3 )
 #define STATE_WORKING_75 					( 4 )
 #define STATE_WORKING_100 					( 5 )
-#define STATE_FINISH    					( 6 )
+#define STATE_FINISH 						( 6 )
 
-
-
-bool IsStill(Item& still) //export
+bool IsStill( Item& still ) //export
 {
 	return Stills.find(still.GetProtoId()) != -1;
 }
 
 // Использование предмета на аппарате
-// Вернуть false если target - это не аппарат, иначе true
+// Вернуть false если still - это не аппарат, иначе true
 bool UseItemOnStill( Critter& cr, Item@ item, Item@ still ) //export
 {
 	if( still is null || !IsStill(still) ) {
 		return false;
 	}
+	
     Map@ map = cr.GetMap();
  	if( map is null || item is null ) {
 		return true;
 	}
 	
-	if( hasItems( cr, Igniters ) ) {
-		
-		IgniteStill( cr, item, still );
-		
-	} else if( hasItems( cr, Homebrew ) ) {
-		
-		AddHomebrew( cr, item, still );
+	if( hasItem( cr, PID_HOMEBREW ) || hasItem( cr, PID_HOMEBREW_PRT ) ) {
+		TransferToStill( cr, item, still );
 		
 	} else if( hasItems( cr, FireFuel ) ) {
-		
 		FeedTheFire( cr, map, item, still );
 		
+	} else if( hasItem( cr, PID_BOTTLE_GLASS, SLOT_HAND1 ) || hasItem( cr, PID_BOOZE_PRT, SLOT_HAND1 ) ) {
+		start_spirit_out( cr, still );
+		
+	} else if( hasItems( cr, Igniters ) ) {
+		IgniteStill( cr, item, still );
 	}
+	
 	return true;
 }
 
-bool HasFuel(Item& still) {
+bool HasFuel( Item& still ) {
 	return still.CURRENT_FUEL > 0;
 }
 
-bool IgniteStill( Critter& cr, Item& item, Item& target )
+bool IgniteStill( Critter& cr, Item& item, Item& still )
 {	
-	if( !HasFuel(target) )
+	if( !HasFuel(still) )
 	{
 		cr.Say( SAY_NETMSG, "|0xFFFF00 Тут нечего разжигать, найдите подходящее топливо." );
 		return false;
 	}
-	if( target.EVENT == 0 )
+	if( still.EVENT == 0 )
 	{
 		if( item.GetProtoId() == PID_FLINT && Random( 1, 300 ) > cr.Skill[SK_OUTDOORSMAN] )
 		{
 			_SubItem( item, 1 );
 			cr.Say( SAY_NETMSG, "|0xFFFF00 Вы сточили поджиг." );
 		}
-		target.STATE = STATE_WORKING_100;
+		still.STATE = STATE_WORKING_100;
 		_CritAnimateUse( cr );
 		cr.Say( SAY_EMOTE, "Разжигает огонь" );
-		target.PicMap = PIC_STILL_ANIM_ON;
-		setAnimState( target );
-		uint[] values = { target.Id };
-		target.STORED_HEAT = FloatToBits( 1 );
-		target.CURRENT_PRESSURE = FloatToBits( 1 );
-		target.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "e_StillBurn", values, true );
+		still.PicMap = PIC_STILL_ANIM_ON;
+		setAnimState( still );
+		uint[] values = { still.Id };
+		still.STORED_HEAT = FloatToBits( 1 );
+		still.CURRENT_PRESSURE = FloatToBits( 1 );
+		still.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "e_StillBurn", values, true );
 	}
 	return true;
 }
 
-float Mass( Item& target )
+float Mass( Item& still )
 {
     float result = 0.09f; // масса воздуха в пустом баке на 15л // air mass in empty still
-    if( target.CURRENT_RAW_MATERIAL > 0 ) {
-        result = target.CURRENT_RAW_MATERIAL / 1000.0f;
+    if( still.CURRENT_RAW_MATERIAL > 0 ) {
+        result = still.CURRENT_RAW_MATERIAL / 1000.0f;
     }
     return result;
 }
@@ -144,13 +143,11 @@ uint e_StillBurn( uint[]@ values )
 	uint itemId = values[0];
 	Item@ still = GetItem( itemId );
 	
-	float boiling_Pressure_Mod = 1.0f;
-	
 	if( valid( still ) ) {
 		float System_heat = FloatFromBits( still.STORED_HEAT );
 		float M = Mass(still);
-		float T1 = FloatFromBits( still.CURRENT_TEMPRATURE );
-
+		float boiling_Pressure_Mod = ( still.IMPURITIES / 5000.0f );
+		
 		if( still.STATE > STATE_PREPARE && System_heat >= 0.5f ) {
 			
 			uint16 hexX = 0, hexY = 0;
@@ -176,12 +173,15 @@ uint e_StillBurn( uint[]@ values )
 					valve_level = 1.0f;
 					break;
 			}
-			//RL_Thermodynamics_start_here MAX_RAW_MATERIAL
 
 			float Q_burning = FUEL_BURN_AMOUNT * valve_level; //const 45
+			still.CURRENT_FUEL -= Q_burning;
+			if( still.CURRENT_FUEL < 0) {
+				still.CURRENT_FUEL = 0;
+			}
 			
-			if( still.CURRENT_FUEL <= 0 ) {
-				Q_burning = 0;
+			if( still.CURRENT_FUEL <= 0.0f ) {
+				Q_burning = 0.0f;
 			}
 			
 			System_heat += Q_burning;
@@ -198,61 +198,89 @@ uint e_StillBurn( uint[]@ values )
 			
 			float T2 = ( System_heat / TSP ) + ENVIROMENT_TEMPRATURE_K;
 			
-			still.CURRENT_TEMPRATURE = FloatToBits( T2 );
-			
-			if( FloatFromBits( still.CURRENT_PRESSURE ) >= MAX_PRESSURE ) {
-				CreateTimeEvent( AFTER( REAL_SECOND( Random( 5, 20 ) ) ), "e_Explode", values, true );
-			}
-
-			if( FloatFromBits( still.CURRENT_TEMPRATURE ) >= MAX_TEMPRATURE ) {
-				GenerateFire( map, still.HexX, still.HexY, 1, 1, 0 );
+			if( T2 >= MAX_TEMPRATURE ) {
+				still.IMPURITIES++;
 			}
 			
-			float Sys_ST = FloatFromBits( still.STORED_HEAT );
-			float Cur_temp = FloatFromBits( still.CURRENT_TEMPRATURE ) - 273.15;
-			
-			Log( "TSP: "+ TSP + ", Горение: " + Q_burning + ", Потери: " + Q_loss + ", Накопл Тепло: " + Sys_ST + ", Т-текущая: " + Cur_temp + " dT: " + ( Cur_temp - last_temp ) );
-			last_temp = Cur_temp;
-			
-			float CurrentTemp = FloatFromBits( still.CURRENT_TEMPRATURE );
-			if(  CurrentTemp >= Boiling_Temperature_Calc( still ) ) {
-				Item@ steamFX = map.AddItem( still.HexX, still.HexY, PID_STILL_STEAM, 1 );
-				uint[] values = { steamFX.Id };
-				steamFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_steamFX", values, true );
-				
-				if( still.CURRENT_RAW_MATERIAL > 0.0f && still.SPIRIT_LEVEL > 0.0f ) {
-					
-					still.CURRENT_RAW_MATERIAL -= RAW_MATERIAL_LOSS;
-					still.SPIRIT_LEVEL -= ALCOHOL_GAIN;
-					
-					still.CURRENT_PRODUCT += ALCOHOL_GAIN;					
+			if( ( T2 >= MAX_TEMPRATURE + 100 ) && still.GetProtoId() != PID_STILL_S_BROKEN ) {
+				for( uint i = 0; i < 6; i++ ) {
+					uint16 tx = still.HexX, ty = still.HexY;
+					map.MoveHexByDir( tx, ty, i, 1 );
+					Critter@ victim = map.GetCritter( tx, ty );
+					if( !map.IsHexPassed( tx, ty ) && !valid( victim ) ) {
+						continue;
+					}
+					GenerateFire( map, tx, ty, 0, 2, 0 );
+					still.ChangeProto( PID_STILL_S_BROKEN );
+					still.PicMap = still.Proto.PicMap;
+					still.SPIRIT_LEVEL = 0.0f;
+					still.CURRENT_PRODUCT = 0.0f;
+					still.SPIRIT_LEVEL = 0.0f;
+					still.IMPURITIES = 100.0f;
+					setAnimState( still );
 				}
 			}
 			
-			if( still.CURRENT_RAW_MATERIAL <= 0.0f ) {
-				still.CURRENT_RAW_MATERIAL = 0.0f;
-			}
+			still.CURRENT_TEMPRATURE = FloatToBits( T2 );
 			
-			if( still.SPIRIT_LEVEL <= 0.0f ) {
-				still.SPIRIT_LEVEL = 0.0f;
-			}
+			float Sys_ST = FloatFromBits( still.STORED_HEAT );
+			float Cur_temp = FloatFromBits( still.CURRENT_TEMPRATURE ) - 273.15f;
 			
+			//Log( "TSP: "+ TSP + ", Горение: " + Q_burning + ", Потери: " + Q_loss + ", Накопл Тепло: " + Sys_ST + ", Т-текущая: " + Cur_temp + " dT: " + ( Cur_temp - last_temp ) );
+			last_temp = Cur_temp;
+			
+			float CurrentTemp = FloatFromBits( still.CURRENT_TEMPRATURE );
+			float boiling_temp = Boiling_Temperature_Calc( still );
+			
+			if(  CurrentTemp >= boiling_temp ) {
+				Item@ steamFX = map.AddItem( still.HexX, still.HexY, PID_STILL_STEAM, 1 );
+				uint[] vals = { steamFX.Id };
+				steamFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_steamFX", vals, true );
+				
+				if( still.CURRENT_RAW_MATERIAL > 0.0f ) {
+					
+					still.CURRENT_RAW_MATERIAL -= RAW_MATERIAL_LOSS;
+					
+					if( still.CURRENT_RAW_MATERIAL <= 0.0f ) {
+						still.CURRENT_RAW_MATERIAL = 0.0f;
+					}
+					
+					if( still.SPIRIT_LEVEL > 0.0f ) {
+						if( still.SPIRIT_LEVEL > ALCOHOL_GAIN ) {
+							still.SPIRIT_LEVEL -= ALCOHOL_GAIN;
+							still.CURRENT_PRODUCT += ALCOHOL_GAIN;
+						} else {
+							still.CURRENT_PRODUCT += still.SPIRIT_LEVEL;
+							still.SPIRIT_LEVEL = 0.0f;
+						}					
+					}
+					
+					float CurrentPressure = FloatFromBits( still.CURRENT_PRESSURE );
+					CurrentPressure += boiling_Pressure_Mod;
+					still.CURRENT_PRESSURE = FloatToBits( CurrentPressure );
+						
+					if( FloatFromBits( still.CURRENT_PRESSURE ) >= MAX_PRESSURE ) {
+						CreateTimeEvent( AFTER( REAL_SECOND( Random( 5, 20 ) ) ), "e_Explode", values, true );
+					}
+				}
+			}
 			return FIRE_BURNING_TIME;
 		}
 		
 		still.STATE = STATE_PREPARE; // заменить на STATE_FINISH как только будет выделение спирта
-		ProtoItem@ proto = GetProtoItem( PID_STILL_S );
-		still.PicMap = proto.PicMap;
-		setAnimState( still );
-		still.EVENT = 0;
-		still.CURRENT_TEMPRATURE = 0;
-		still.STORED_HEAT = 0;
+		if( still.GetProtoId() == PID_STILL_S ) {
+			still.PicMap = still.Proto.PicMap;
+			setAnimState( still );
+		}
+		still.EVENT = 0.0f;
+		still.CURRENT_TEMPRATURE = 0.0f;
+		still.STORED_HEAT = 0.0f;
 		
 		uint16 hexX=0, hexY=0;
 		Map@ map = still.GetMapPosition( hexX, hexY );
 		Item@ fireFX = map.AddItem( still.HexX, still.HexY, PID_STEAM, 1 );
-		uint[] values = { fireFX.Id };
-		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ), "e_fireFX", values, true );
+		uint[] val = { fireFX.Id };
+		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ), "e_fireFX", val, true );
 		EraseTimeEvent( still.EVENT );
 	}
 	return 0;
@@ -260,40 +288,22 @@ uint e_StillBurn( uint[]@ values )
 
 uint Boiling_Temperature_Calc( Item& still ) 
 {
-	float minAlcoholPercentage = 0.0f;					//Минимально возможный процент спирта в рабочем теле
-	float minBoilingTemperature = 273.15f + 100.0f;		//Температура кипения рабочего тела при минимальном содержани спирта
+	float BaseBoilingTemperature = 273.15f + 100.0f; // 100% C
 	
-	float maxAlcoholPercentage = 20.0f;					//Максимальный процент спирта в браге
-	float maxBoilingTemperature = 273.15f + 80.0f;		//Температура кипения рабочего тела при заправке брагой с максимальной крепостью
+	float currentAlcoholPercentage = 0;
 	
-	float currentAlcoholPercentage = still.CURRENT_RAW_MATERIAL != 0 ? ( still.SPIRIT_LEVEL / still.CURRENT_RAW_MATERIAL ) : 0;
-	float targetBoilingTemperature;
-	
-	float borderAlcoholBoilingTemperature = 273.15f + 78.37f;
-	
-	targetBoilingTemperature = minBoilingTemperature + (( maxBoilingTemperature - minBoilingTemperature ) / ( maxAlcoholPercentage - minAlcoholPercentage )) * ( currentAlcoholPercentage - minAlcoholPercentage );
-	
-	//Если спирта нет - это просто вода которая кипит при 100 градусах
-	if( currentAlcoholPercentage == 0.0f ) 
-	{
-		targetBoilingTemperature = minBoilingTemperature;
+	if( still.CURRENT_RAW_MATERIAL > 0 ) {
+		currentAlcoholPercentage = still.SPIRIT_LEVEL * 100.0f / still.CURRENT_RAW_MATERIAL;
 	}
 	
-	//Температура кипения не может опуститься ниже, сколько спирта не лей
-	if( targetBoilingTemperature < borderAlcoholBoilingTemperature ) 
-	{
-		targetBoilingTemperature = borderAlcoholBoilingTemperature;
-	}
+	float stillBoilingTemperature = BaseBoilingTemperature - currentAlcoholPercentage;
 	
-	float tempForLog = targetBoilingTemperature - 273.15f;
-	Log( "Температура кипения: " + tempForLog + " С" );
-	
-	return targetBoilingTemperature;
+	return stillBoilingTemperature;
 }
 
-bool FeedTheFire( Critter& cr, Map& map, Item& item, Item& target )
+bool FeedTheFire( Critter& cr, Map& map, Item& item, Item& still )
 {
-	if( target.CURRENT_FUEL == MAX_FUEL)
+	if( still.CURRENT_FUEL == MAX_FUEL)
 	{	
 		cr.Say( SAY_NETMSG, "|0xFFFF00 Горючее уже некуда подкладывать, дайте ему прогореть!" );
 		return false;
@@ -303,59 +313,20 @@ bool FeedTheFire( Critter& cr, Map& map, Item& item, Item& target )
 	_CritAnimateUse(cr);
 	if( item.GetProtoId() == PID_COAL )
 	{
-		target.CURRENT_FUEL = MIN(target.CURRENT_FUEL + 5400, MAX_FUEL);
+		still.CURRENT_FUEL = MIN(still.CURRENT_FUEL + 5400, MAX_FUEL);
 		cr.Say( SAY_EMOTE, "Подкладывает уголь" );
-		map.PlaySound( "ROCK.ACM", target.HexX, target.HexY, 3 );
+		map.PlaySound( "ROCK.ACM", still.HexX, still.HexY, 3 );
 	}
 	else
 	{	
-		target.CURRENT_FUEL = MIN(target.CURRENT_FUEL + 1800, MAX_FUEL);
+		still.CURRENT_FUEL = MIN(still.CURRENT_FUEL + 1800, MAX_FUEL);
 		cr.Say( SAY_EMOTE, "Подкладывает топливо" );
-		map.PlaySound( "BRDSWELL.ACM", target.HexX, target.HexY, 3 );
+		map.PlaySound( "BRDSWELL.ACM", still.HexX, still.HexY, 3 );
 	}
 
-	int occupancy_rate = ( target.CURRENT_FUEL * 100 / MAX_FUEL );
+	int occupancy_rate = ( still.CURRENT_FUEL * 100 / MAX_FUEL );
 	cr.Say( SAY_NETMSG, "|0xFFFF00 Аппарат заполнен горючими материалами на " +occupancy_rate+ " %" );
 	
-	return true;
-}
-
-bool AddHomebrew( Critter& cr, Item& homebrew, Item& still )
-{
-	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false;
-	}
-	
-	map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
-	
-	if( homebrew.GetProtoId() == PID_HOMEBREW ) {
-		
-		still.CURRENT_RAW_MATERIAL += 500;
-		still.SPIRIT_LEVEL += 500 * homebrew.SPIRIT_LEVEL / 100;
-		still.IMPURITIES += homebrew.POLUTION_LEVEL;
-		
-	} else if( homebrew.GetProtoId() == PID_HOMEBREW_PRT ) {
-		
-		still.CURRENT_RAW_MATERIAL += homebrew.REMAINING_USES * 100;
-		still.SPIRIT_LEVEL += homebrew.REMAINING_USES * 100 * homebrew.HB_SPIRIT_LEVEL / 100;
-		still.IMPURITIES += homebrew.REMAINING_USES * 100 * homebrew.POLUTION_LEVEL / 100;
-	}
-		
-	_SubItem( homebrew, 1 );
-	cr.AddItem( PID_BOTTLE_GLASS, 1 );
-
-	if( still.CURRENT_RAW_MATERIAL > MAX_RAW_MATERIAL ) {
-		still.CURRENT_RAW_MATERIAL = MAX_RAW_MATERIAL;
-		map.SetText( still.HexX, still.HexY, COLOR_LGRAY, ":брага переливается через край:" );
-	}
-
-	/*if( item.GetProtoId() == PID_POT_ALCO ) { //лень делать, позже зафигачу
-		target.CURRENT_RAW_MATERIAL += item.POT_LIQUID_LEVEL;
-		target.SPIRIT_LEVEL = target.SPIRIT_LEVEL + ( item.POT_LIQUID_LEVEL * item.HB_SPIRIT_LEVEL / 100 );
-		item.POT_LIQUID_LEVEL = 0;
-		item.HB_SPIRIT_LEVEL = 0;
-		item.POLUTION_LEVEL = 0;
-	}*/
 	return true;
 }
 
@@ -376,7 +347,7 @@ bool TransferToStill( Critter& cr, Item& homebrew, Item& still ) //export to mai
 	if( homebrew.GetProtoId() == PID_HOMEBREW ) {
 		
 		still.CURRENT_RAW_MATERIAL += 500;
-		still.SPIRIT_LEVEL += 500 * homebrew.SPIRIT_LEVEL / 100;
+		still.SPIRIT_LEVEL += 500 * homebrew.HB_SPIRIT_LEVEL / 100;
 		still.IMPURITIES += homebrew.POLUTION_LEVEL;
 		
 	} else if( homebrew.GetProtoId() == PID_HOMEBREW_PRT ) {
@@ -401,38 +372,39 @@ bool TransferToStill( Critter& cr, Item& homebrew, Item& still ) //export to mai
 uint e_Explode( uint[]@ values )
 {
 	uint itemId = values[0];
-	Item@ target = GetItem( itemId );
-	if( valid( target ) )    
+	Item@ still = GetItem( itemId );
+	if( valid( still ) )    
 	{
 		uint16 hexX=0, hexY=0;
-		Map @map = target.GetMapPosition( hexX, hexY );
-		ExplodeEx( map, hexX, hexY, PID_EXPLODE_ROCKET, 2, Random( 50, 100 ), DAMAGE_EXPLODE, 2, 0 );
+		Map @map = still.GetMapPosition( hexX, hexY );
+		ExplodeEx( map, hexX, hexY, PID_EXPLODE_MISSILE2, 0, Random( 70, 150 ), DAMAGE_EXPLODE, 3, 0 );
 		map.AddItem( hexX, hexY, Ashes[ Random( 0, Ashes.length() - 1 ) ], 1 );
 		Item@ fireFX = map.AddItem( hexX, hexY, PID_SMOKE, 1 );
 		
 		uint[] values = {fireFX.Id};
 		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", values, true );
-		uint randomDebree = Random( 2,5 );
+		uint randomDebree = Random( 2, 5 );
 		for( uint i = 0; i < randomDebree; i++ )
 		{
-			uint16 hx=0, hy=0;
-			hx = target.HexX; hy = target.HexY;
+			uint16 hx=still.HexX, hy=still.HexY;
 			map.MoveHexByDir( hx, hy, Random( 1, 6 ), Random( 1, 3) );
 			if( map.IsHexPassed( hx, hy ) )
 			{
 				map.AddItem( hx, hy, Wreckage[ Random( 0, Wreckage.length() -1 ) ] , 1 );
 			}
 		}
+		still.EVENT = 0.0f;
+		EraseTimeEvent( still.EVENT );
+		uint16 tx=still.HexX, ty=still.HexY;
+		DeleteItem( still );
+		GenerateFire( map, tx, ty, 0, 2, 0 );
 	}
-	EraseTimeEvent( target.EVENT );
-	target.EVENT = 0;
-	DeleteItem( target );
 	return 0;
 }
 
-uint e_fireFX( uint[]@ values )
+uint e_fireFX( uint[]@ val )
 {
-	uint itemId = values[0];
+	uint itemId = val[0];
 	Item@ e_fireFX = GetItem( itemId );
 	if( valid( e_fireFX ) )  
 	{
@@ -440,12 +412,12 @@ uint e_fireFX( uint[]@ values )
 		e_fireFX.EVENT = 0;
 		DeleteItem( e_fireFX );
 	}
-return 0;
+	return 0;
 }
 
-uint e_steamFX( uint[]@ values )
+uint e_steamFX( uint[]@ vals )
 {
-	uint itemId = values[0];
+	uint itemId = vals[0];
 	Item@ e_steamFX = GetItem( itemId );
 	if( valid( e_steamFX ) )  
 	{
@@ -460,22 +432,22 @@ uint e_steamFX( uint[]@ values )
 		e_steamFX.EVENT = 0;
 		DeleteItem( e_steamFX );
 	}
-return 0;
+	return 0;
 }
 
 //========== TECHNICAL_ANIMATION_STATE_CHANGER ===============//
-void setAnimState( Item& target )
+void setAnimState( Item& still )
 {
-	if( target.STATE > STATE_PREPARE ) {	
-		UNSETFLAG( target.Flags, ITEM_SHOW_ANIM_EXT );
-		SETFLAG( target.Flags, ITEM_LIGHT );
-		SETFLAG( target.Flags, ITEM_CAN_USE );
-		UNSETFLAG( target.Flags, ITEM_CAN_PICKUP );
+	if( still.STATE > STATE_PREPARE ) {	
+		UNSETFLAG( still.Flags, ITEM_SHOW_ANIM_EXT );
+		SETFLAG( still.Flags, ITEM_LIGHT );
+		SETFLAG( still.Flags, ITEM_CAN_USE );
+		UNSETFLAG( still.Flags, ITEM_CAN_PICKUP );
 	} else {
-		SETFLAG( target.Flags, ITEM_SHOW_ANIM_EXT );
-		UNSETFLAG( target.Flags, ITEM_LIGHT );
+		SETFLAG( still.Flags, ITEM_SHOW_ANIM_EXT );
+		UNSETFLAG( still.Flags, ITEM_LIGHT );
 	}
-	target.Update();
+	still.Update();
 }
 
 //=============== STILL STATE DISCRIPTION ====================//
@@ -486,9 +458,6 @@ string@ GenerateDescription(Item& still) {
 	switch( still.STATE ) {
 		case STATE_PREPARE:
 			@info = "Аппарат не работает.";
-			break;
-		case STATE_FINISH:
-			@info = "Работа аппарата завершена.";
 			break;
 		default:
 			@info = "Аппарат работает, заслонка: ";
@@ -550,15 +519,16 @@ class MenuStill: CenteredMenuHandler {
 	uint m_still_id;
 	uint m_map_id;
 	int m_last_state;
+	int difficulty;
 	
-	MenuStill(Item& still, Map& map) {
+	MenuStill( Item& still, Map& map ) {
 		m_still_id = still.Id;
 		m_map_id = map.Id;
 	}
 	bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
 		Item@ still = GetItem(m_still_id);
 		Map@ map = GetMap(m_map_id);
-		if(still is null || map is null) {
+		if( still is null || map is null ) {
 			return false;
 		}
 
@@ -567,27 +537,124 @@ class MenuStill: CenteredMenuHandler {
 		// Все действия которые можно выполнить с закреплённым аппаратом
 		if( locked_in_place ) {
 			if ( still.STATE == STATE_PREPARE ) { // Который не начал работу
-				if( menu.Button("Демонтировать") ) {
+				if( menu.Button( "Демонтировать" ) ) {
 					LockInPlace( cr, still );
 					return true;
 				}
-				if( menu.Button( "Добавить брагу" ) ) {
-					ShowContainer( cr, still, TRANSFER_HEX_CONT_UP );
-					return false; // чтобы не перебивать окно контейнера
-				}
-				if( HasFuel(still) && menu.Button("Разжечь огонь") ) {
-					Item@ lighter = cr.GetItem( PID_LIGHTER, -1 );
-					if( lighter is null ) {
-						@lighter = cr.GetItem( PID_FLINT, -1 );
+				
+				if( still.GetProtoId() != PID_STILL_S_BROKEN ) {
+					if( menu.Button( "Добавить брагу" ) ) {
+						ShowContainer( cr, still, TRANSFER_HEX_CONT_UP );
+						return false; // чтобы не перебивать окно контейнера
 					}
-					if( lighter is null ) {
-						cr.Say( SAY_NETMSG, "|0xFFFF00 Вам нечем разжечь огонь." );
-					} else {
-						IgniteStill( cr, lighter, still );
+					
+					if ( still.STATE < STATE_FINISH ) { // Который не начал работу или работает
+						if( menu.Button( "Подкинуть горючее" ) ) {
+							Item@ fuel = FindStillFuel(cr);
+							if( valid( fuel ) ) {
+								FeedTheFire( cr, map, fuel, still ); 
+							} else {
+								cr.Say( SAY_NETMSG, "|0xFF0000 У Вас нет подходящего топлива." ); 
+							}				
+							return true;
+						}
 					}
-					return true;
+										
+					if( HasFuel( still ) && menu.Button( "Разжечь огонь" ) ) {
+						Item@ lighter = cr.GetItem( PID_LIGHTER, -1 );
+						if( lighter is null ) {
+							@lighter = cr.GetItem( PID_FLINT, -1 );
+						}
+						if( lighter is null ) {
+							cr.Say( SAY_NETMSG, "|0xFFFF00 Вам нечем разжечь огонь." );
+						} else {
+							IgniteStill( cr, lighter, still );
+						}
+						return true;
+					}
+					
+					if ( still.IMPURITIES > 0 ) { // Чистка аппарата
+						if( menu.Button( "Провести очиситку" ) ) {
+							
+							string fail = "|0xFFFF00 Вам нечем почистить самогонный аппарат!\n";
+							if( !checkConsumables( cr ) ) { 
+								string consumable = "|0x3CF800 Необходимые инструменты:\n";
+								for( uint i = 0; i < Consumables.length; i++ ) {
+									consumable += " - ";
+									consumable += "|0xFFFF00 " + _GetProtoName( Consumables[i] );
+									consumable += "|0x3CF800 ,\n";
+								}	
+								consumable[ consumable.length() - 2 ] = '.';
+								consumable[ consumable.length() - 1 ] = ' ';
+								cr.Say( SAY_NETMSG, fail + consumable );
+								return true;
+							}
+							difficulty = still.IMPURITIES * 50;
+							start_stillRepair( cr, still, difficulty );
+							return false;
+						}
+					}
+					
+					if( still.CURRENT_PRODUCT > 0 && menu.Button( "Разлить спирт" ) ) {
+						start_spirit_out( cr, still );
+						return false;
+					}
+									
+				} else {
+					if( menu.Button( "Отремонтировать" ) ) {
+						
+						string fail = "|0xFFFF00 Вы не смогли починить самогонный аппарат!\n";
+						
+						if( !checkSkill( cr ) ) {
+							string skill = "|0x3CF800 Необходимо иметь навыки: \n";
+							skill += " - ";
+							skill += "|0xFFFF00 Наука";
+							skill += "|0x3CF800  - ";
+							skill += "|0xFFFF00 150";
+							skill += "|0x3CF800 ,\n - ";
+							skill += "|0xFFFF00 Ремонт";
+							skill += "|0x3CF800  - ";
+							skill += "|0xFFFF00 200";
+							skill += "|0x3CF800 .";
+							cr.Say( SAY_NETMSG, fail + skill ); 
+							return true;
+						}
+						
+						if( !checkTools( cr ) ) { 
+							string tool = "|0x3CF800 Необходимые инструменты:\n";
+							for( uint i = 0; i < Tools.length; i++ ) {
+								tool += " - ";
+								tool += "|0xFFFF00 " + _GetProtoName( Tools[i] );
+								tool += "|0x3CF800 ,\n";
+							}	
+							tool[ tool.length() - 2 ] = '.';
+							tool[ tool.length() - 1 ] = ' ';
+							cr.Say( SAY_NETMSG, fail + tool );
+							return true;
+						}
+						
+						if( !checkComponents( cr ) ) {
+							string component = "|0x3CF800 Необходимые материалы:\n";
+							for( uint i = 0; i < Components.length; i++ ) {
+								component += " - ";
+								component += "|0xFFFF00 " + _GetProtoName( Components[i] );
+								component += "|0x3CF800  - ";
+								component += "|0xFFFF00 " + Amount[ i ];
+								component += "|0x3CF800  шт.,\n";
+							}			
+							component[ component.length() - 2 ] = ' ';
+							component[ component.length() - 1 ] = ' ';
+							cr.Say( SAY_NETMSG, fail + component );
+							return true;
+						}
+						difficulty = 10000;
+						start_stillRepair( cr, still, difficulty );
+						return false;
+					}
+					
 				}
-			} else if(still.STATE < STATE_FINISH ) { // Который начал, но не закончил работу
+				
+			} else if( still.STATE < STATE_FINISH ) { // Который начал, но не закончил работу
 				if ( menu.Button( "Закрыть заслонку" ) ) {
 					still.STATE = STATE_WORKING_0;
 					return true;
@@ -610,52 +677,41 @@ class MenuStill: CenteredMenuHandler {
 				}
 			}
 
-			if ( still.STATE < STATE_FINISH ) { // Который не начал работу или работает
-				if(menu.Button("Подкинуть горючее")) {
-					Item@ fuel = FindStillFuel(cr);
-					if( valid( fuel ) ) {
-						FeedTheFire(cr, map, fuel, still); 
-					} else {
-						cr.Say( SAY_NETMSG, "|0xFF0000 У Вас нет подходящего топлива." ); 
-					}				
-					return true;
-				}
-			}
 		} else {
-			if( menu.Button("Установить") ) {
+			if( menu.Button( "Установить" ) ) {
 				LockInPlace( cr, still );
 				return true;
 			}
-			if( menu.Button("Поднять") ) {
+			if( menu.Button( "Поднять" ) ) {
 				PickItem( cr, still );
 				return false; // предмет уже не на земле
 			}
 		}
-		if( menu.Button("Ничего не делать") ) {
+		if( menu.Button( "Ничего не делать" ) ) {
 			return false;
 		}
 		return true;
 	}
 
-	string@ Description(Critter& cr) {
+	string@ Description( Critter& cr ) {
 		Item@ still = GetItem(m_still_id);
 		m_last_state = still.STATE;
 		return GenerateDescription(still);
 	}
 
-	bool ShouldRedraw(Critter& cr) {
-		Item@ still = GetItem(m_still_id);
+	bool ShouldRedraw( Critter& cr ) {
+		Item@ still = GetItem( m_still_id );
 		return still is null || IsStillWorking(still) || still.STATE != m_last_state;
     }
 }
 
-bool IsStillWorking(Item& still) {
+bool IsStillWorking( Item& still ) {
 	return still.STATE > STATE_PREPARE && still.STATE < STATE_FINISH;
 }
 
-Item@ FindStillFuel(Critter& cr) {
+Item@ FindStillFuel( Critter& cr ) {
 	Item@ fuel = null;
-	for( uint i = 0, j = 9; i < j; i++)
+	for( uint i = 0, j = 9; i < j; i++ )
 	{
 		@fuel = @cr.GetItem( FireFuel[i], -1 );
 		if( fuel !is null ) {
@@ -663,4 +719,215 @@ Item@ FindStillFuel(Critter& cr) {
 		}
 	}
 	return fuel;
+}
+
+bool ltp_inited = false;
+void ltp_init()
+{
+	LTPREG( LTP_SPIRIT_OUT, process_spirit_out )
+	ltp_inited = true;
+}
+
+bool start_spirit_out( Critter& cr, Item& still )
+{
+	if( !ltp_inited ) { 
+		ltp_init();
+	}
+	Map@ map = cr.GetMap();		
+
+	if( valid( still ) ) {
+		if( ( still.CURRENT_PRODUCT / 100 ) < 1 ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Недостаточно жидкости для перелива." ); return false;
+		}
+		
+		if( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, PID_BOOZE_PRT ) ) { cr.Say( SAY_NETMSG, "|0xFFFF00 У вас нет подходящей тары." ); return false;
+		}
+		
+		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		
+		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+		
+		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+		
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);	
+		
+		StartProcess( cr, LTP_SPIRIT_OUT, 0, 0, still.Id, action_pause );
+		return true;
+	}
+	return false;
+}
+
+uint process_spirit_out( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_SPIRIT_OUT )
+	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+  	Item@ still = GetItem( param2 );
+	
+  	if( valid( still ) ) {
+		
+      	if( ( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, PID_BOOZE_PRT ) ) || ( still.CURRENT_PRODUCT / 100 ) < 1 ) {
+			string TXT = ( ( still.CURRENT_PRODUCT / 100 ) < 1 ) ? " Вы разлили весь спирт по бутылкам." :  " У Вас закончилась тара.";
+			cr.Say( SAY_NETMSG, "|0xFFFF00 " + TXT );
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+			return 0;
+		}
+		
+		uint autoemote = Random( 1, 10 );
+		if( autoemote == 10 ) { cr.Say( SAY_EMOTE, "Наполняет бутылку" );
+		}
+		
+		if( hasItem( cr, PID_BOOZE_PRT ) ) {
+			
+			Item@ spiritPrt = getItem( cr, PID_BOOZE_PRT );
+			if( spiritPrt.REMAINING_USES < spiritPrt.Proto.Partial_Item ) {
+				
+				still.CURRENT_PRODUCT -= 100;
+				spiritPrt.REMAINING_USES ++;
+				spiritPrt.EXTRA_WEIGHT = spiritPrt.REMAINING_USES * 100;
+
+				Map@ map = cr.GetMap();
+				map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+				spiritPrt.Update();
+				
+				if( spiritPrt.REMAINING_USES == spiritPrt.Proto.Partial_Item ) {
+			
+					Item@ spirit = cr.AddItem( PID_BOOZE, 1 );
+					_SubItem( spiritPrt , 1 );
+					cr.Say( SAY_NETMSG, "|0xFFFF00 Вы полностью наполнили бутылку спиртом" );
+					spirit.Update();
+				}
+			}
+
+			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true );
+			
+			return action_pause;
+			
+		} else {
+		
+			Item@ bottle = cr.GetItem( PID_BOTTLE_GLASS, -1 );
+			_SubItem( bottle , 1 );
+		
+			Item@ spiritPrt = cr.AddItem( PID_BOOZE_PRT, 1 );
+		
+			still.CURRENT_PRODUCT -= 100;
+			spiritPrt.REMAINING_USES ++;
+			spiritPrt.EXTRA_WEIGHT = spiritPrt.REMAINING_USES * 100;
+
+			Map@ map = cr.GetMap();
+			map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+				
+			spiritPrt.Update();
+		}
+		
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", cr.Id, true);
+		
+		return action_pause;
+    }
+	cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+	return 0;
+}
+
+bool ltp_stillRepair_inited = false;
+void ltp_stillRepair_init()
+{
+	LTPREG( LTP_STILL_REPAIR, process_stillRepair )
+	ltp_stillRepair_inited = true;
+}
+
+bool start_stillRepair( Critter& cr, Item& still, uint difficulty )
+{
+	if(!ltp_stillRepair_inited) 
+		ltp_stillRepair_init();
+	
+	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	uint[] values = { cr.Id };
+	
+	CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
+	CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", values, true);	
+
+	_CritAnimateUse( cr );
+	
+	StartProcess( cr, LTP_STILL_REPAIR, 0, still.Id, difficulty, action_pause );
+	return true;
+}
+
+uint process_stillRepair( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+	LTPROCESS( cr, param0, LTP_STILL_REPAIR )
+	
+	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+  	Item@ still = GetItem( param1 );
+	int difficulty = param2 ;
+	if( valid( still ) )
+    {
+		param0++;
+		
+		uint install_rate = ( cr.Skill[SK_REPAIR] ) + ( cr.Stat[ST_AGILITY] * 10 ) + ( cr.Stat[ST_INTELLECT] * 10 ) + OBJECT_DPA_BASE; 
+		int sequence_length = ceil( float( difficulty / ( CLAMP( install_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
+		
+		if( param0 > sequence_length )
+		{
+			
+			if( difficulty == 10000 ) {
+				cr.Say( SAY_EMOTE, "завершает ремонт самогонного аппрата" );
+				still.ChangeProto( PID_STILL_S );
+				still.PicMap = still.Proto.PicMap;
+				still.Update();
+			} else {
+				cr.Say( SAY_EMOTE, "завершает обслуживание самогонного аппрата" );
+				still.IMPURITIES = 0;
+			}
+			return 0;
+		}
+		
+		uint[] values = { cr.Id };
+		
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "repair@e_RepairSound", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", values, true);
+
+		_CritAnimateUse( cr );
+		
+		return action_pause;
+	}
+	return 0;
+}
+
+bool checkSkill( Critter& cr ) {
+	if( cr.ParamBase[  SK_REPAIR ] < 200 || cr.ParamBase[ SK_SCIENCE ] < 150 ) { return false; 
+	}
+	return true;
+}
+
+bool checkTools( Critter& cr ) {
+	for( uint i = 0; i < Tools.length; i++ ) {
+		Item@ tool = cr.GetItem( Tools[i], -1 );
+		if( !valid( tool ) ) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool checkComponents( Critter& cr ) {
+	for( uint i = 0; i < Components.length; i++ ) {
+		Item@ component = cr.GetItem( Components[i], -1 );
+		uint required_amount = Amount[i];
+		if( !valid( component ) || cr.CountItem( Components[i] ) < required_amount ) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool checkConsumables( Critter& cr ) {
+	for( uint i = 0; i < Consumables.length; i++ ) {
+		Item@ tool = cr.GetItem( Consumables[i], -1 );
+		if( !valid( tool ) ) {
+			return false;
+		}
+	}
+	return true;
 }
