@@ -1,9 +1,7 @@
 #include "_utils.fos"
 #include "_ltp.fos"
-#include "STAT_MODS_H.fos"
-
-import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attackerId ) from "combat";
-import void BleedCritter( Critter& cr, int8 bleedValue ) from "critter_status";
+#include "gathering_h.fos"
+#include "critter_skills_h.fos"
 
 const string[] RepairSounds = { "junk1.ogg", "junk2.ogg", "junk3.ogg", "junk4.ogg", "junk5.ogg", "junk6.ogg", "junk7.ogg", "junk8.ogg" };
 
@@ -39,12 +37,6 @@ bool TryRepairItem( Critter& cr, Item& item ) // Export
         return true;
 	}
 
-    if( cr.Timeout[ TO_BATTLE ] > 0 )
-    {
-        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_TIMEOUT_BATTLE_WAIT );
-        return true;
-    }
-
     if( cr.Timeout[ TO_SK_REPAIR ] > 0 )
     {
         cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_WEARINESS );
@@ -57,17 +49,7 @@ bool TryRepairItem( Critter& cr, Item& item ) // Export
         return true;
     }
 	
-	uint timeout_limit = ( cr.Stat[ST_ENDURANCE] * PHASE_TIMEOUT_RATE ) + PHASE_TIMEOUT_BASE;
-	int timeout = CLAMP( timeout_limit, PHASE_TIMEOUT_MIN, PHASE_TIMEOUT_MAX);
-	if( cr.Timeout[ TO_TIREDNESS ] > REAL_SECOND( timeout ) )
-	{
-		cr.Say( SAY_EMOTE_ON_HEAD, "Одышка" );
-		cr.Say( SAY_NETMSG, "|0xFF0000 Вы слишком устали, передохните." );
-		
-		if( !isGM(cr) ) {
-			return false;
-		}
-	}
+	if( IsTired( cr ) ) { return false; }
 
     // Repair
     int repair = cr.Skill[ SK_REPAIR ];
@@ -981,7 +963,7 @@ bool start_repair( Critter& cr, Item& item, int repair )
 	uint[] values = { cr.Id };
 	
 	CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
-	CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", values, true);
+	CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
 	
 	_CritAnimateUse( cr );
 	
@@ -1008,14 +990,15 @@ uint process_repair( Critter@ cr, int& param0, int& param1, int& param2 )
 		
 		if( param0 > sequence_length )
 		{
-			cr.Say( SAY_EMOTE, "Завершает работу" );
+			cr.Say( SAY_EMOTE, "завершает работу" );
 			RepairResult( cr, item, repair );
 			
 			if( item.GetType() == ITEM_TYPE_WEAPON && item.Proto.Weapon_MaxAmmoCount > 0 ) {
 			uint ammoCount = item.AmmoCount;
 		
 				if( ammoCount > 0 ) {
-					Accident( cr, item ); 
+					int skillNum = SK_REPAIR;
+					Accident( cr, skillNum ); 
 				}
 			}
 			return 0;
@@ -1023,7 +1006,7 @@ uint process_repair( Critter@ cr, int& param0, int& param1, int& param2 )
 		
 		uint[] values = { cr.Id };
 		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
-		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
 		
 		_CritAnimateUse( cr );
 		
@@ -1380,17 +1363,7 @@ bool EnlistBlueprints( Critter& cr )
 //ДЕКРАФТ//
 bool TryDisassembleItem( Critter& cr, Item& item ) // Export
 {
-	uint timeout_limit = ( cr.Stat[ST_ENDURANCE] * PHASE_TIMEOUT_RATE ) + PHASE_TIMEOUT_BASE;
-	int timeout = CLAMP( timeout_limit, PHASE_TIMEOUT_MIN, PHASE_TIMEOUT_MAX);
-	if( cr.Timeout[ TO_TIREDNESS ] > REAL_SECOND( timeout ) )
-	{
-		cr.Say( SAY_EMOTE_ON_HEAD, "Одышка" );
-		cr.Say( SAY_NETMSG, "|0xFF0000 Вы слишком устали, передохните." );
-		
-		if( !isGM(cr) ) {
-			return false;
-		}
-	}
+	if( IsTired( cr ) ) { return false; }
 
 	bool isItemPartable = true;
 	uint16 Pid = item.GetProtoId();
@@ -2350,7 +2323,7 @@ bool start_decraft( Critter& cr, Item& item, uint amount )
 	uint[] values = { cr.Id };
 	
 	CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
-	CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", values, true);	
+	CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);	
 
 	_CritAnimateUse( cr );
 
@@ -2378,14 +2351,14 @@ uint process_decraft( Critter@ cr, int& param0, int& param1, int& param2 )
 		
 		if( param0 > sequence_length )
 		{
-			cr.Say( SAY_EMOTE, "Завершает работу" );
+			cr.Say( SAY_EMOTE, "завершает работу" );
 			DecraftResult( cr, item );
 			return 0;
 		}
 		
 		uint[] values = { cr.Id };
 		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
-		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
 
 		_CritAnimateUse( cr );
 		
@@ -2447,6 +2420,8 @@ bool InstallRadio( Critter& cr, Item& radio, Item& armor ) { //export to main
 		return false;
 	}
 	
+	if( IsTired( cr ) ) { return false; }
+	
 	string fail = "|0xFFFF00 Вы не смогли произвести установку рации!\n";
 	
 	if( !checkSkill( cr ) ) {
@@ -2492,15 +2467,8 @@ bool InstallRadio( Critter& cr, Item& radio, Item& armor ) { //export to main
 		return false;
 	}
 	
-	uint timeout_limit = ( cr.Stat[ST_ENDURANCE] * PHASE_TIMEOUT_RATE ) + PHASE_TIMEOUT_BASE;
-	int timeout = CLAMP( timeout_limit, PHASE_TIMEOUT_MIN, PHASE_TIMEOUT_MAX);
-	if( cr.Timeout[ TO_TIREDNESS ] > REAL_SECOND( timeout ) )
-	{
-		cr.Say( SAY_EMOTE_ON_HEAD, "Одышка" );
-		cr.Say( SAY_NETMSG, "|0xFF0000 Вы слишком устали, передохните." );
-		
-		if( !isGM(cr) ) { return false; }
-	}
+	if( IsTired( cr ) ) { return false; }
+	
 	if( cr.ParamBase[ DAMAGE_RIGHT_LEG ] >= 1 || cr.ParamBase[ DAMAGE_LEFT_ARM ] >= 1 || cr.ParamBase[ DAMAGE_LEFT_LEG ] >= 1 || cr.ParamBase[ DAMAGE_RIGHT_ARM ] >= 1 ) 
 	{
 		cr.Say( SAY_NETMSG, "|0xFF0000 Вы травмированы и не в состоянии сделать работу." ); 	return false;
@@ -2554,7 +2522,7 @@ bool start_install_radio( Critter& cr, Item& armor )
 	uint[] values = { cr.Id };
 	
 	CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
-	CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", values, true);	
+	CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);	
 
 	_CritAnimateUse( cr );
 	
@@ -2586,7 +2554,7 @@ uint process_install_radio( Critter@ cr, int& param0, int& param1, int& param2 )
 		uint[] values = { cr.Id };
 		
 		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
-		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_TiredenessTimeout", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
 
 		_CritAnimateUse( cr );
 		
@@ -2614,65 +2582,5 @@ bool InstallRadio( Critter& cr, Item& armor ) {
 	}
 	SETFLAG( armor.Flags, ITEM_RADIO );
 	SETFLAG( armor.Flags, ITEM_CAN_USE );
-	return true;
-}
-
-// Accident 
-bool Accident( Critter& cr, Item& item )
-{
-	if( Random( 1, 200 * SKILL_ROLL_SIMPLIFIER ) <= ( CRITICAL_FAILURE_BASE - ( cr.ParamBase[ SK_REPAIR ] / 30 ) ) ) { 
-		
-		Map@ map = cr.GetMap();
-		string sound = "WAX1XXX1.ACM";
-		sound[ 2 ] = _WeaponSoundId( item.Proto, _WeaponModeUse( item.Mode ) );
-		map.PlaySound( sound );
-		item.AmmoCount --;
-		item.Update();
-		
-		int severity = Random( 1, 100 );
-		
-		if( severity > 65 && ( Random( 1, 100 ) < ( cr.Stat[ST_LUCK] * 2 ) ) ) {	
-			cr.Say( SAY_NETMSG, "|0x606060 В последний момент Вы чудом избежали старшной травмы, но все же:" );
-			severity = severity - 35;
-		}
-
-		if( severity <= 5 ) {
-			cr.Say( SAY_NETMSG, "|0xFF0000 Выстрел прошел в сантиметре от головы." );
-			InjureCritter( cr, 35, DAMAGE_NORMAL, cr.Dir, cr.Id );
-			cr.Say( SAY_EMOTE, "Оглушенно мотает головой" );
-			
-		} else if( severity  >= 6 && severity  <= 35 ) {			
-			cr.Say( SAY_NETMSG, "|0xFF0000 Заряд слегка рассек руку." );
-			InjureCritter( cr, 50, DAMAGE_NORMAL, cr.Dir, cr.Id );
-			SETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLEED );
-			BleedCritter( cr, 20 );
-			cr.Say(SAY_EMOTE, "Вскрикивает от боли");
-			cr.Say(SAY_SHOUT_ON_HEAD, "Ай");
-			
-		} else if( severity  >= 36 && severity  <= 65 ) {			
-			cr.Say( SAY_NETMSG, "|0xFF0000 Вы случайно выстрелили себе в ногу и рассекли плоть." );
-			InjureCritter( cr, 60, DAMAGE_NORMAL, cr.Dir, cr.Id );
-			BleedCritter( cr, 40 );
-			SETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG );
-			string emote = cr.Param[ ST_GENDER ] == 0 ? "Схватился за окровавленную ногу" : ( cr.Param[ ST_GENDER ] == 1 ? "Схватилась за окровавленную ногу" : "Завыло от боли" );			
-		
-		} else if( severity  >= 66 && severity  <= 95 ) {			
-			cr.Say( SAY_NETMSG, "|0xFF0000 Заряд пробил мягкие ткани." );
-			InjureCritter( cr, 70, DAMAGE_NORMAL, cr.Dir, cr.Id );
-			BleedCritter( cr, 50 );
-			SETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG );
-			string emote = cr.Param[ ST_GENDER ] == 0 ? "Заорал от боли" : ( cr.Param[ ST_GENDER ] == 1 ? "Заорала от боли" : "Заорало от боли" );
-			cr.Say(SAY_SHOUT_ON_HEAD, "А-а-а-ааа");
-			
-		} else {
-			cr.Say( SAY_NETMSG, "|0xFF0000 Заряд, практически выбил Вам в глаз, кровь заливает лицо." );
-			InjureCritter( cr, 80, DAMAGE_NORMAL, cr.Dir, cr.Id );
-			BleedCritter( cr, 50 );
-			SETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG );	
-			cr.ParamBase[ DAMAGE_EYE ] = 1;				
-			string emote = cr.Param[ ST_GENDER ] == 0 ? "Взвыл от дикой боли" : ( cr.Param[ ST_GENDER ] == 1 ? "Взвыла от дикой боли" : "Взвыло от дикой боли" );
-			cr.Say( SAY_SHOUT_ON_HEAD, "У-А-А-А-ААА" );
-		}
-	}
 	return true;
 }
