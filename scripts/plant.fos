@@ -6,10 +6,6 @@
 import void GenerateFire( Map@ map, int x, int y, int r, uint8 strength, int attackerId ) from "firestarter";
 import bool CheckGard( Map& map, uint16 hexX, uint16 hexY ) from "farm";
 
-#define isSEED			#(item)		( item.GROW_STAGE == 0 )
-
-#define DNA				Val1 	// - для проверки содержимого фляги
-
 string debugInfo( Item@ item )
 {
 	if( !valid( item ) ) return "[null]";
@@ -79,20 +75,6 @@ bool CleanUpPlant( Critter& cr, Item& item )
 	
 	if( item.GROW_STAGE == int( plant.DeathCycle ) ) {
 		return inform( cr, "|0xFFFF00 Тут нет ничего ценного, остаётся пустить на перегной." );
-	}
-	
-	if( item.GROW_STAGE == int( plant.SeedCycle ) ) {
-		cr.AddItem( plant.BasePid, 2 );
-		_SubItem( item, 1 );
-		
-		return action( cr, "собирает семена" );
-	}
-	
-	if( item.GROW_STAGE == int( plant.GainCycle ) ) {
-		cr.AddItem( plant.CollectPid, 1 );
-		_SubItem( item, 1 );
-		
-		return action( cr, "собирает плоды" );
 	}
 	
 	return inform( cr, "|0xFFFF00 Вы не знаете, что с этим делать."  );
@@ -340,71 +322,52 @@ bool PlantPickup( Critter& cr, Item@ plant )
 		return inform( cr, "Киньте скриншот в канал дискорда #баги, указав что за растение вы попытались собрать." );
 	}
 	
+	CPlant@ Cplant = GetCPlant( plant.PLANT_TYPE );
+	
 	cr.Animate( 0, ANIM2_PICKUP, null, false, true );
 	cleanScripts( plant );//TODO: Проверить - не генерило-ли это баг с потерей поведения.
 	
 	if( isSEED(plant) ) {
 		cr.ParamBase[ CR_DIRTINESS ] += Random( 0, 1 );
 		cr.Say( SAY_EMOTE_ON_HEAD, "выковыривает семена из земли" );
+
 	} else {
-		cr.Say( SAY_EMOTE_ON_HEAD, "cобирает" );
-		plant.SetEvent( ITEM_EVENT_USE, "_UsePlant" );
-		
-		if( plant.PLANT_GAIN > 1 ) {
-			Item@ item = cr.AddItem( plant.GetProtoId(), plant.PLANT_GAIN );
-			if( valid( item ) ) {
-				item.PLANT_TYPE = plant.PLANT_TYPE;
-				item.GROW_STAGE = plant.GROW_STAGE;
-				item.SetEvent( ITEM_EVENT_USE, "_UsePlant" );
+		if( plant.PLANT_GAIN > 0 ) {
+			if( plant.GROW_STAGE == int( Cplant.SeedCycle ) ) {
+				cr.AddItem( Cplant.BasePid, plant.PLANT_GAIN );
+				DeleteItem( plant );
+				return action( cr, "собирает семена" );
+				
+			} else if( plant.GROW_STAGE == int( Cplant.GainCycle ) ) {
+				cr.AddItem( Cplant.CollectPid, plant.PLANT_GAIN );
+				DeleteItem( plant );
+				return action( cr, "собирает плоды" );
+				
+			} else {
+				Item@ item = cr.AddItem( plant.GetProtoId(), plant.PLANT_GAIN );
+				if( valid( item ) ) {
+					item.PLANT_TYPE = plant.PLANT_TYPE;
+					item.GROW_STAGE = plant.GROW_STAGE;
+					item.SetEvent( ITEM_EVENT_USE, "_UsePlant" );
+				}
+				DeleteItem( plant );
+				return true;
 			}
-			
-			DeleteItem( plant );
-			return true;
 		}
+		
+		cr.Say( SAY_EMOTE_ON_HEAD, "собирает" );
+		plant.SetEvent( ITEM_EVENT_USE, "_UsePlant" );
 	}
-	
+
 	MoveItem( plant, plant.GetCount(), cr );
 	return true;
 }
 
 //Plant Watering
 
-bool ltp_watering_inited = false;
-void ltp_watering_init()
+bool Watering( Critter& cr, Item& plant, Item@ usedItem, bool TMI = true )
 {
-	LTPREG( LTP_WATERING, process_watering )
-	ltp_watering_inited = true;
-}
-
-bool start_watering( Critter& cr, Item& plant, Item@ usedItem, bool TMI = true )
-{
-	if( !ltp_watering_inited ) {
-		ltp_watering_init();
-	}
-	int used_id = valid( usedItem ) ? usedItem.Id : 0;
-	StartProcess( cr, LTP_WATERING, 0, used_id, plant.Id, 250 );//TODO: передать отсюда ещё и TMI
-	return true;
-}
-
-uint process_watering( Critter@ cr, int& param0, int& param1, int& param2 )
-{
-	LTPROCESS( cr, param0, LTP_WATERING )
-	
-	Item@ plant = GetItem( param2 );
-	Item@ usedItem = param1 != 0 ? GetItem( param1 ) : null;
-
-	param0--;
-		
-	if( param0 < 0 ) {
-		bool TMI = true;//TODO: передать сюда ещё и TMI
-		if( !watering_iteration( cr, plant, usedItem, TMI ) ) {
-			return 0;
-		}
-		param1 = 0; //Что бы стакаемые закупоренные ёмкости не тратились одна-за-одной.
-		param0 = Random( 0, 2 ) + Random( 0, 2 );
-	}
-
-	return 250;
+	return watering_iteration( cr, plant, usedItem, TMI );
 }
 
 bool watering_iteration( Critter& cr, Item& plant, Item@ usedItem, bool TMI = true )
@@ -457,11 +420,6 @@ bool watering_iteration( Critter& cr, Item& plant, Item@ usedItem, bool TMI = tr
 	
 	plant.WATERING++;
 	return action( cr, "поливает растение" );
-}
-
-bool Watering( Critter& cr, Item& plant, Item@ usedItem, bool TMI = true )
-{
-	return start_watering( cr, plant, usedItem, TMI );
 }
 
 bool Fertilize( Critter& cr, Item& plant )
@@ -754,17 +712,17 @@ uint e_ProcessPlant( uint[] @ values )
 				
 				for( uint j = 0; j <= 4; j ++ ) { //Mobs taken from _groups.fos rats, mantis, ants, lionants, pigrats 
 					for( uint i = 0; i <= Critter_list[j].length(); i++ ) {
-						mobs.insertLast( i );
+						mobs.insertLast( Critter_list[j][i] );
 					}
 				}
 				
 				for( uint i = 0; i <= Critter_list[12].length(); i++ ) { // scorpions
-					mobs.insertLast( i );
+					mobs.insertLast( Critter_list[12][i] );
 				}
 				
 				for( uint j = 0; j <= 4; j ++ ) { // plants 5 times, since we want to increase the chances
 					for( uint i = 0; i <= Critter_list[17].length(); i++ ) {
-						mobs.insertLast( i );
+						mobs.insertLast( Critter_list[17][i] );
 					}
 				}
 				
