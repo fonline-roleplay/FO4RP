@@ -141,7 +141,7 @@ float PerlinNoise2D( float x, float y )
 
 void fillNoiseBuffer( float* buffer, uint8 size )
 {
-    uint y0 = 0;
+    int y0 = 0;
     for( int y = 0; y < size; y++ )
     {
         for( int x = 0; x < size; x++ )

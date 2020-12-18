@@ -694,15 +694,16 @@ struct ProtoItem
 
     // User data, binded with 'bindfield' pragma
     // Common
-    const int    MagicPower;
-    const uint8  Unused[ 96 ];
+    const int    MagicPower;		//-> 0
+	const uint16 IndefineValue; 	//-> 4
+	const uint16 IndefineStat; 		//-> 6
+    const uint8  Unused[ 92 ];
     // Armor, offset 100
     const uint   Armor_CrTypeMale;
     const uint   Armor_CrTypeFemale;
     const int    Armor_AC;
     const uint  Armor_Perk;
-	const uint  HeadItem_Perk;
-    const int    Armor_DRNormal;
+	const int    Armor_DRNormal;
     const int    Armor_DRLaser;
     const int    Armor_DRFire;
     const int    Armor_DRPlasma;
@@ -724,30 +725,37 @@ struct ProtoItem
     const int    Weapon_DmgMax[ 3 ];
     const uint16 Weapon_Effect[ 3 ];
     const bool   Weapon_Remove[ 3 ];
+	const uint8  Padding0 [ 3 ];
     const uint   Weapon_ReloadAp;
     const int    Weapon_UnarmedCriticalBonus;
     const uint   Weapon_CriticalFailture;
     const bool   Weapon_UnarmedArmorPiercing;
     const uint8  Weapon_Unused[ 27 ];
     // Ammo, offset 300
-    const int    Ammo_AcMod;
-    const int    Ammo_DrMod;
-    const uint   Ammo_DmgMult;
-    const uint   Ammo_DmgDiv;
+    const int    Ammo_AcMod;  		// -> 300
+    const int    Ammo_DrMod;  		// -> 304
+    const uint   Ammo_DmgMult;  	// -> 308
+    const uint   Ammo_DmgDiv;  		// -> 312
     // Other
-    const uint16 Food_Thirst;       // pm
-    const uint16 Food_Restore;      // pm
-    const uint   Food_Flags;        // pm
+    const uint16 Food_Thirst;       // -> 316
+    const uint16 Food_Restore;      // -> 318
+    const uint   Food_Flags;        // -> 320
 	const uint16 Wait_Time_0;       // -> 324"
 	const uint16 Wait_Time_1;       // -> 326"
 	const uint16 Wait_Time_2;       // -> 328"
 	const uint16 Wait_Time_3;       // -> 330"
-	const uint16 Item_UseAp;
-	const uint8  Partial_Item;      // -> 338 кусочки 
-	const uint8  Fuel_Efficiency;	// -> 340 эффективность энергоресурса
-    const uint8  UnusedEnd[ 160 ];  // SUKA
+	const uint16 Item_UseAp;		// -> 332"
+	const uint16 BurnTime;			// -> 334"
+	const uint8  HeadItem_Perk;     // -> 336"
+	const uint8  Partial_Item;      // -> 337 кусочки 
+	const uint8  Fuel_Efficiency;	// -> 338 эффективность энергоресурса
 	
-	const uint EffectSpeed;
+	
+    const uint8  UnusedEnd[ 154 ];  // SUKA
+	const uint8  Item_Hitpoints;    // -> 493"
+	const uint8  Fire_Strength;     // -> 494"
+	const uint8  Blast_Radius;     	// -> 495"
+	const uint 	 EffectSpeed; 		// -> 496 скорость полета эффекта И ТОЛЬКО ФЛАЯ
 
     // Type specific data
     const bool   Weapon_IsUnarmed;

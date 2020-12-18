@@ -362,7 +362,7 @@ EXPORT int getParam_Ap( CritterMutual& cr, uint )
 
 EXPORT int getParam_RegenAp( CritterMutual& cr, uint )
 {
-    float val = cr.Params[ST_APREGEN] + ((cr.Params[ST_AGILITY] + cr.Params[ST_AGILITY_EXT] )* APREGEN_PER_AGI) + ((cr.Params[ST_ENDURANCE] + cr.Params[ST_ENDURANCE_EXT]) * APREGEN_PER_END) + APREGEN_BASE;
+    int val = cr.Params[ST_APREGEN] + ((cr.Params[ST_AGILITY] + cr.Params[ST_AGILITY_EXT] )* APREGEN_PER_AGI) + ((cr.Params[ST_ENDURANCE] + cr.Params[ST_ENDURANCE_EXT]) * APREGEN_PER_END) + APREGEN_BASE;
     return CLAMP(val, 0, APREGEN_MAX);
 }
 
@@ -730,22 +730,22 @@ uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode )
 			// aim = *ClientGlobals.__CurrentAim;
 	// #endif
     // int   apCost = 1; // Commended the line, because our AP is not default 1 anymoar.
-	float apCost = 1;
+	uint apCost = 1;
 
 	if(use == USE_USE)
 	{
 		apCost = (item.Proto->Item_UseAp == 0 ? FOnline->RtApCostUseItem : item.Proto->Item_UseAp);
 		// Character perks for Use actions
-		if(cr.Params[PE_QUICK_POCKETS]) apCost = apCost*QUICK_POCKETS_AP_MUL;
+		//if(cr.Params[PE_QUICK_POCKETS]) apCost = apCost*QUICK_POCKETS_AP_MUL;
 	}
 	else if(use == USE_RELOAD)
 	{
 		apCost = (item.Proto->Weapon_ReloadAp == 0 ? FOnline->RtApCostReloadWeapon : item.Proto->Weapon_ReloadAp);
 		
 		// Character perks for Reload actions
-		if(item.IsWeapon() && cr.Params[PE_QUICK_POCKETS]) apCost = apCost*QUICK_POCKETS_AP_MUL;
+		//if(item.IsWeapon() && cr.Params[PE_QUICK_POCKETS]) apCost = apCost*QUICK_POCKETS_AP_MUL;
 		// Item perks for Reload actions
-		if(item.IsWeapon() && item.Proto->Weapon_Perk == WEAPON_PERK_FAST_RELOAD) apCost = apCost*FAST_RELOAD_AP_MUL;
+		//if(item.IsWeapon() && item.Proto->Weapon_Perk == WEAPON_PERK_FAST_RELOAD) apCost = apCost*FAST_RELOAD_AP_MUL;
 	}
 	else if(use >= USE_PRIMARY && use <= USE_THIRD && item.IsWeapon())
 	{
@@ -763,7 +763,7 @@ uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode )
 
 		//if(hthAttack && cr.Params[PE_BONUS_HTH_ATTACKS]) apCost = apCost*BHTH_AP_MUL;
 
-		if(cr.Params[PE_BONUS_RATE_OF_FIRE]) apCost = apCost*BROF_AP_MUL;
+		//if(cr.Params[PE_BONUS_RATE_OF_FIRE]) apCost = apCost*BROF_AP_MUL;
 
 		if(rangedAttack)
 		{
@@ -772,7 +772,7 @@ uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode )
 			{
 				//if(item.WeapIsCanAim(use))
 				//{
-					apCost = apCost*FAST_SHOT_AP_MUL;
+					apCost = apCost * FAST_SHOT_AP_MUL / 100;
 				//	if(FLAG(item.Proto->Flags,ITEM_TWO_HANDS)) apCost -= apCost*0.15;
 				//}
 			}
@@ -792,7 +792,7 @@ uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode )
 	}
 
 	if(apCost < 1) apCost = 1;
-	return floor(apCost);
+	return apCost;
 }
 
 // Very limited function for calculating unarmed attack AP cost
@@ -807,7 +807,7 @@ uint GetWeaponProtoApCost(CritterMutual& cr, ProtoItem& prot, uint8 mode)
 			// aim = *ClientGlobals.__CurrentAim;
 // #endif
 	
-   	float apCost = 1;
+   	uint apCost = 1;
 
 	if(use >= USE_PRIMARY && use <= USE_THIRD)
 	{
@@ -823,7 +823,7 @@ uint GetWeaponProtoApCost(CritterMutual& cr, ProtoItem& prot, uint8 mode)
 		//if(hthAttack && cr.Params[PE_BONUS_HTH_ATTACKS]) apCost = apCost*BHTH_AP_MUL;
 	}
     if(apCost < 1) apCost = 1;
-    return floor(apCost);
+    return apCost;
 }
 
 
