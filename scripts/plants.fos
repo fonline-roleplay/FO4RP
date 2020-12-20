@@ -1,0 +1,290 @@
+#ifndef PLANTS
+#define PLANTS
+
+#include "_utils.fos"
+#include "plants_h.fos"
+#include "critter_skills_h.fos"
+
+interface IPlant
+{
+	Plant@ implant_seed();
+	Plant@ watering();
+	Plant@ fertilizing();
+	Plant@ gathering();
+}
+
+class GenericPlant: IPlant
+{
+	GenericPlant@ implant_seed() 
+	{
+		return this;
+	}
+	
+	GenericPlant@ watering() 
+	{
+		return this;
+	}
+	
+	GenericPlant@ fertilizing() 
+	{
+		return this;
+	}
+	
+	GenericPlant@ gathering()
+	{
+		return this;
+	}
+}
+
+class Mushroom: GenericPlant
+{
+	GenericPlant@ implant_seed() 
+	{
+		return this;
+	}
+}
+
+class Plant: GenericPlant
+{
+	uint8 type;
+	
+	uint8 seedStage;
+	uint8 gatheringStage;
+	uint8 deathStage;
+	
+	Plant( uint8 type, uint8 seedStage, uint8 gatheringStage, uint8 deathStage )
+	{
+        this.type = type;
+        this.deathStage = seedStage;
+		this.deathStage = gatheringStage;
+		this.deathStage = deathStage;
+	}
+}
+
+class MenuPlant: CenteredMenuHandler 
+{
+    uint plant_id;
+    uint map_id;
+	
+    MenuPlant ( Item& plant, Map& map ) {
+        plant_id = plant.Id;
+        map_id = map.Id;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Map@ map = GetMap( map_id );
+        Item@ vendMach = GetItem( plant_id );
+	
+		if( plant.WATERING <= 0 ) {
+			if( menu.Button( "Полить" ) ) {
+				return true;
+			}
+		}
+		
+		if( plant.FERTILITY <= 0 ) {
+			if( menu.Button( "Удобрить" ) ) {
+				return true;
+			}	
+		}
+			
+		if( menu.Button( "Собрать" ) ) {
+			return false;
+		}	
+		
+		return true;
+    }
+	
+	// UI менюхи
+    string@ Description( Critter& cr ) {
+	
+		string info;
+
+        return info;
+    }
+	
+    string@ ButtonCancel() {
+        return ButtonDecorator( "Скрыть меню", null );
+    }
+}
+
+void StartMenuPlant( Critter& cr, Item& plant ) // exported
+{
+    Map@ map = cr.GetMap();
+    if( map is null ) {
+        return;
+    }
+
+    iMenuHandler@ handler = MenuPlant( plant, map );
+    iDialogBox@ menu = OpenMenu( cr, "", handler );
+}
+
+void tryRaiseSkill( Critter& cr )
+{
+	if( Random( 1, 10 ) == 10 ) {
+		int skillNum = SK_FARMING;
+		raiseSkill( cr, skillNum );
+	}
+}
+
+
+
+#endif // PLANTS
+
+
+public interface IGameState
+{
+	public DateTimeOffset GameTime { get; }
+}
+
+public interface ICultivatable
+{
+	CultivationAction[] GetAvailableActions(IGameState state);
+	object[] Act(CultivationAction action, IGameState state);
+}
+
+public enum CultivationAction
+{
+	Water,
+	Gather,
+	Fertilize,
+}
+
+/// <summary>
+///   Это вкорячивается в класс самого растения, хз как у вас это делается
+/// </summary>
+public class CultivatablePartMixinAttachedShit : ICultivatable
+{
+	// вот эти 2 поля надо как-то проинициализировать, в зависимости от механизма наследования/аттача итп
+	private CultivationStage _currentStage;
+	private DateTimeOffset _lastChange;
+
+	public CultivationAction[] GetAvailableActions(IGameState state) =>
+		_currentStage.GetAvailableActions(state, _lastChange);
+	public object[] Act(CultivationAction action, IGameState state)
+	{
+		var result = _currentStage.Next(action, state, _lastChange);
+		_currentStage = result.NewStage;
+		return result.Items;
+	}
+}
+
+
+
+
+public sealed class CultivationActionResult
+{
+	/// <summary>
+	///   если при действии что-то выблевалось
+	/// </summary>
+	public object[] Items { get; set; }
+
+	public CultivationStage NewStage { get; set; }
+}
+
+public class CultivationStage
+{
+
+	public CultivationStageTransition[] Transitions { get; set; }
+	// вместо этого впили что тебе надо знать о стадии, ключи какие итп
+	public string Description { get; set; }
+
+
+	public CultivationAction[] GetAvailableActions(IGameState state, DateTimeOffset lastChange) =>
+		Transitions.Where((transition) => state.GameTime + transition.Delay <= lastChange)
+			.Select(transition => transition.Action)
+			.ToArray();
+
+	public CultivationActionResult Next(CultivationAction action, IGameState state, DateTimeOffset lastChange)
+	{
+		var effective = Transitions
+			.FirstOrDefault((transition) =>
+				transition.Action == action && state.GameTime + transition.Delay <= lastChange);
+		if (effective == null)
+			throw new InvalidOperationException("...");
+		return new CultivationActionResult()
+		{
+			NewStage = effective.NewStage,
+			Items = effective.CreateItems(state, lastChange)
+		};
+	}
+
+}
+
+public class CultivationStageTransition
+{
+	public CultivationStage NewStage { get; set; }
+	public CultivationAction Action { get; set; }
+	/// <summary>
+	///     время, которое должно пройти после смены состояния на текущее, чтобы этот транзишн работал (например: ждать 3 дня после полива чтоб ещё полить)
+	/// </summary>
+	public TimeSpan Delay { get; set; } = TimeSpan.Zero;
+
+	public virtual object[] CreateItems(IGameState state, DateTimeOffset lastChange)
+	// + параметры состояния, родительский объект, если надо итп
+	{
+		return null;
+	}
+}
+
+/// <summary>
+///     это пример создания объекта стадии, с которой всё начинается.
+///     делать это в статическом классе ТАКОЭ, я хз какой у вас там  DI, переделай под него
+/// </summary>
+public static class CultivationStages
+{
+	public static readonly CultivationStage[] Roots;
+
+	static CultivationStages()
+	{
+		var roots = new List<CultivationStage>();
+
+		// в обратном порядке
+		var deadBerry = new CultivationStage()
+		{
+			Transitions = new CultivationStageTransition[0],
+			Description = "Dead."
+		};
+		var fruitingBerry = new CultivationStage()
+		{
+			Transitions = new CultivationStageTransition[]
+			{
+				new BerryGatheringTransition()
+				{
+					Action = CultivationAction.Gather,
+					Delay = TimeSpan.FromDays(3),
+					NewStage = deadBerry
+				},
+			},
+			Description = "Fruiting"
+		};
+		var newBerry = new CultivationStage()
+		{
+			Transitions = new CultivationStageTransition[]
+			{
+				new CultivationStageTransition()
+				{
+					Action = CultivationAction.Water,
+					NewStage = fruitingBerry,
+				}
+			},
+			Description = "Small plant"
+		};
+
+		roots.Add(newBerry);
+
+		// ... 
+
+		Roots = roots.ToArray();
+
+	}
+}
+
+public class BerryGatheringTransition : CultivationStageTransition
+{
+	public override object[] CreateItems(IGameState state, DateTimeOffset lastChange)
+	{
+		// тут определяешь что нужно выблевать
+		return new object[] { "Berry1", "Berry2" };
+	}
+}
+
