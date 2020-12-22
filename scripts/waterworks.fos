@@ -4,7 +4,6 @@
 #include "_ltp.fos"
 #include "gathering_h.fos"
 
-import bool checkTiredness( Critter& cr, int max, int add ) from "fix_boy";
 import void ProccessDrink( Critter& cr, Critter& target, Item& item ) from "food";
 import void Cleaning( Critter& player, uint soap_pid, int water_source ) from "main";
 
@@ -12,10 +11,16 @@ import void Cleaning( Critter& player, uint soap_pid, int water_source ) from "m
 #define MAX_CHARGE 					Val1
 #define REMAINING_CHARGE			Val2
 #define EVENT 						Val3
-#define BREAK						Val4
+#define PUMP_EFFICIENCY				Val4
+#define WATERSOURCE_DNA				Val5 							// тип воды в источнике
 #define BUCKET_POSITION				Val6
+#define BROKEN						Val7
 
-#define WATER_FILL_TIME 			REAL_HOUR( Random( 6, 18 ) )
+#define BROKEN_MECHANICS			( 0x01 ) 						// механическая поломка
+#define BROKEN_FILTER				( 0x02 )						// загрязненный фильтр
+
+#define WATER_FILL_TIME 			REAL_HOUR( Random( 6, 18 ) ) 	// - wells
+#define PUMP_FILL_TIME 				REAL_MS( 300000 ) 				// - waterpumps
 
 #define REMAINING_USES				Val0
 #define DNA							Val1
@@ -47,34 +52,48 @@ class MenuWell: CenteredMenuHandler {
 		Item@ bucket = well.GetItem( PID_EMPTY_BUCKET, 0 );
 		Item@ bucket2 = well.GetItem( PID_WATER_BUCKET, 0 );
 		Item@ chain = well.GetItem( PID_CHAIN, 0 );
-		
-		if( ( valid( bucket ) || valid( bucket2 ) || well.BUCKET_POSITION > 0 ) && valid( chain ) ) 
-		{ 
-			@ bucket = valid( bucket) ? bucket : bucket2;
-			if( well.BUCKET_POSITION == 0 ) {
-				if( menu.Button( "Опустить ведро" ) ) {
-					well.BUCKET_POSITION = CLAMP( ( 10 - well.REMAINING_CHARGE / 100 ), 1, 10);
-					well.REMAINING_CHARGE += bucket.REMAINING_USES;
-					
-					if( well.REMAINING_CHARGE > well.MAX_CHARGE ) {
-						well.REMAINING_CHARGE = well.MAX_CHARGE;
-					}
-					
-					DeleteItem( bucket );
-					PlayChainSound( map, well );
-					return true;
-				}
-			} else {
-				if( menu.Button( "Поднять ведро" ) ) {
-					start_waterwell( cr, well );
-					return false;
+
+		if( isGM( cr ) ) {
+			string type = _GetProtoName( well.WATERSOURCE_DNA );
+			if(  menu.Button( type ) ) {
+				if( well.WATERSOURCE_DNA == PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) {
+					well.WATERSOURCE_DNA = PID_GLASS_BOTTLE_FULL_PRT;
+				} else {
+					well.WATERSOURCE_DNA = PID_GLASS_BOTTLE_DIRTY_FULL_PRT;
 				}
 			}
 		}
-		if( well.BUCKET_POSITION == 0 ) {
-			if( menu.Button( "Осмотреть колодец" ) ) {
-				ShowContainer( cr, well, TRANSFER_HEX_CONT_UP );
-				return false;
+		
+		if( well.BROKEN != BROKEN_MECHANICS ) {
+			
+			if( ( valid( bucket ) || valid( bucket2 ) || well.BUCKET_POSITION > 0 ) && valid( chain ) ) 
+			{ 
+				@ bucket = valid( bucket) ? bucket : bucket2;
+				if( well.BUCKET_POSITION == 0 ) {
+					if( menu.Button( "Опустить ведро" ) ) {
+						well.BUCKET_POSITION = CLAMP( ( 10 - well.REMAINING_CHARGE / 100 ), 1, 10);
+						well.REMAINING_CHARGE += bucket.REMAINING_USES;
+						
+						if( well.REMAINING_CHARGE > well.MAX_CHARGE ) {
+							well.REMAINING_CHARGE = well.MAX_CHARGE;
+						}
+						
+						DeleteItem( bucket );
+						PlayChainSound( map, well );
+						return true;
+					}
+				} else {
+					if( menu.Button( "Поднять ведро" ) ) {
+						start_waterwell( cr, well );
+						return false;
+					}
+				}
+			}
+			if( well.BUCKET_POSITION == 0 ) {
+				if( menu.Button( "Осмотреть колодец" ) ) {
+					ShowContainer( cr, well, TRANSFER_HEX_CONT_UP );
+					return false;
+				}
 			}
 		}
 		return true;
@@ -90,33 +109,37 @@ class MenuWell: CenteredMenuHandler {
 		string bucketPos;
 		string positionDisc;
 		
-		if( ( valid( well.GetItem( PID_EMPTY_BUCKET, 0 ) ) || valid(well.GetItem( PID_WATER_BUCKET, 0 ) ) || well.BUCKET_POSITION != 0 ) ) {
-			
-			well.BUCKET_POSITION > 0 ? bucketInfo = "\nВедро спущено." : bucketInfo = "\nВедро на месте.";
-		} else {
-			bucketInfo = "\nВедра нет!";
-		}
+		if( well.STATE != BROKEN_MECHANICS ) {
+			if( ( valid( well.GetItem( PID_EMPTY_BUCKET, 0 ) ) || valid(well.GetItem( PID_WATER_BUCKET, 0 ) ) || well.BUCKET_POSITION != 0 ) ) {
+				
+				well.BUCKET_POSITION > 0 ? bucketInfo = "\nВедро спущено." : bucketInfo = "\nВедро на месте.";
+			} else {
+				bucketInfo = "\nВедра нет!";
+			}
 
-		if( valid( well.GetItem( PID_CHAIN, 0 ) ) ) {
+			if( valid( well.GetItem( PID_CHAIN, 0 ) ) ) {
+				
+			chainInfo =	"\nЦепь на месте.";
+			} else {
+				chainInfo = "\nВедро не чем привязать.";
+			}
 			
-		chainInfo =	"\nЦепь на месте.";
+			well.REMAINING_CHARGE >= 700 ? chargeInfo = "отчетливо видна." : well.REMAINING_CHARGE <= 3 ? chargeInfo = "не видна." : chargeInfo = "поблескивает в глубине.";
+			
+			if( well.BUCKET_POSITION != 0 ) {
+				
+				well.BUCKET_POSITION >= 7 ? positionDisc = "почти полностью размотана." : well.BUCKET_POSITION <= 3 ? positionDisc = "практически не размотана." : positionDisc = "размотана на половину.";
+				
+				bucketPos = "\nЦепь " + positionDisc;
+			}
+			
+			info += "Вода " + chargeInfo;
+			info += "\n " + bucketInfo;
+			info += "\n " + chainInfo;
+			info += "\n " + bucketPos;
 		} else {
-			chainInfo = "\nВедро не чем привязать.";
+			info = "Колодец сломан, требуется ремонт";
 		}
-		
-		well.REMAINING_CHARGE >= 700 ? chargeInfo = "отчетливо видна." : well.REMAINING_CHARGE <= 3 ? chargeInfo = "не видна." : chargeInfo = "поблескивает в глубине.";
-		
-		if( well.BUCKET_POSITION != 0 ) {
-			
-			well.BUCKET_POSITION >= 7 ? positionDisc = "почти полностью размотана." : well.BUCKET_POSITION <= 3 ? positionDisc = "практически не размотана." : positionDisc = "размотана на половину.";
-			
-			bucketPos = "\nЦепь " + positionDisc;
-		}
-		
-		info += "Вода " + chargeInfo;
-		info += "\n " + bucketInfo;
-		info += "\n " + chainInfo;
-		info += "\n " + bucketPos;
         return info;
     }
 	
@@ -231,7 +254,7 @@ uint process_waterwell( Critter@ cr, int& param0, int& param1, int& param2 )
 				}
 				
 				fullBucket.EXTRA_WEIGHT = fullBucket.REMAINING_USES * 100;
-				fullBucket.DNA = PID_GLASS_BOTTLE_DIRTY_FULL_PRT;
+				fullBucket.DNA = well.WATERSOURCE_DNA;
 				fullBucket.Update();
 				
 			} else {
@@ -306,4 +329,344 @@ uint e_WellCharge( uint[] @ values )
 		well.REMAINING_CHARGE = well.MAX_CHARGE;
 	}
 		return WATER_FILL_TIME;
+}
+
+//WATERPUMP
+
+// Интерактивное меню ку3, точка входа main.fos
+class MenuWaterPump: CenteredMenuHandler {
+    uint waterPump_id;
+    uint map_id;
+	uint level;
+	
+    MenuWaterPump(Item& waterPump, Map& map) {
+        waterPump_id = waterPump.Id;
+        map_id = map.Id;
+		level = 0;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Map@ map = GetMap(map_id);
+        Item@ waterPump = GetItem(waterPump_id);
+	
+        if( map is null || waterPump is null ) {
+            return false;
+        }
+		
+		if( isGM( cr ) ) {
+			
+			string type = _GetProtoName( waterPump.WATERSOURCE_DNA );
+			if( menu.Button( type ) ) {
+				if( waterPump.WATERSOURCE_DNA == PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) {
+					waterPump.WATERSOURCE_DNA = PID_GLASS_BOTTLE_FULL_PRT;
+				} else {
+					waterPump.WATERSOURCE_DNA = PID_GLASS_BOTTLE_DIRTY_FULL_PRT;
+				}
+			}
+			
+			if( waterPump.BROKEN == 0 && menu.Button( "сломать" ) ) {
+				waterPump.BROKEN = 1;
+			} else if(waterPump.BROKEN != 0 && menu.Button( "починить" ) ) {
+				waterPump.BROKEN = 0;
+			}
+		}
+		
+		if( waterPump.BROKEN != BROKEN_MECHANICS ) {
+			if( waterPump.STATE > 0 ) {
+				
+				if( menu.Button( "Выключить" ) ) {
+					waterPump.STATE = 0;
+					setAnimState( waterPump );
+					return false;
+				}
+				
+				if( waterPump.REMAINING_CHARGE > 0 ) {
+					
+					if( menu.Button( "Набрать воды" ) ) {
+						if( !hasItem( cr, PID_BOTTLE_GLASS, SLOT_HAND1 ) && !hasItem( cr, waterPump.WATERSOURCE_DNA, SLOT_HAND1 ) ) { 
+							cr.Say( SAY_NETMSG, "|0xFFFF00 У вас нет подходящей тары в руках." );
+							return true;
+						}
+
+						start_gathering_water( cr, waterPump );
+						return false;
+						
+					} if ( menu.Button( "Попить" ) ) {
+						Item@ consumedDrink = cr.AddItem( waterPump.WATERSOURCE_DNA, 1 );
+						consumedDrink.REMAINING_USES = 2;
+						ProccessDrink( cr, cr, consumedDrink );
+						_SubItem( consumedDrink, 1 );
+						waterPump.REMAINING_CHARGE --;
+						return true;
+					}
+				}
+				
+			} else if( menu.Button( "Включить" ) ) {
+				waterPump.STATE = 1;
+				setAnimState( waterPump );
+				return true;
+			}
+		}
+		return true;
+    }
+	
+	// UI менюхи
+    string@ Description( Critter& cr ) {
+	
+		Item@ waterPump = GetItem( waterPump_id );
+
+		string info = "Водяной насос № ";
+		info += "|0xFFFF00 " + waterPump.Id + "\n";
+		
+		info += "|0x3CF800 Помпа ";
+		if( waterPump.WATERSOURCE_DNA == PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) { 
+			info += "|0xFF0000 не ";
+		}
+		info += "|0x3CF800 фильтрует воду. \n";
+		
+		if( waterPump.BROKEN == BROKEN_MECHANICS ) {
+			info += "|0x3CF800 Насос сломан. \n";
+		}
+		
+		if( waterPump.BROKEN == BROKEN_FILTER ) {
+			info += "|0x3CF800 Фильтр засорен. \n";
+		}
+		float remCharge = waterPump.REMAINING_CHARGE;
+		float amount = remCharge / 10.0f;
+		info += "|0x3CF800 В баках: ";
+		info += "|0xFFFF00 " + amount;
+		info += "|0x3CF800  л.";
+
+        return info;
+    }
+	
+    string@ ButtonCancel() {
+        return ButtonDecorator( "Скрыть меню", null );
+    }
+}
+
+// точка входа из main.fos при юзе рукой
+void StartMenuWaterPump( Critter& cr, Item& waterPump ) // exported
+{
+    Map@ map = cr.GetMap();
+    if( map is null ) {
+        return;
+    }
+
+    iMenuHandler@ handler = MenuWaterPump( waterPump, map );
+    iDialogBox@ menu = OpenMenu( cr, "Водяной насос", handler );
+}
+
+bool ltp_gathWater_inited = false;
+void ltp_gathWater_init()
+{
+	LTPREG( LTP_GATHER_WATER, process_gather_water )
+	ltp_gathWater_inited = true;
+}
+
+bool start_gathering_water( Critter& cr, Item& target )
+{
+	if(!ltp_gathWater_inited) { 
+		ltp_gathWater_init();
+	}
+	
+	Map@ map = cr.GetMap();		
+	
+	if( valid( target ) ) {
+		
+		if( target.REMAINING_CHARGE < 1 ) {
+			cr.Say( SAY_NETMSG, "|0xFFFF00 Воды больше нет." );
+			return false;
+		}
+	
+		if( target.STATE < 1 ) {
+			cr.Say( SAY_NETMSG, "|0xFFFF00 Помпа отключена. Включите ее сначала." );
+			return false;
+		}
+		
+		if( !hasItems( cr, Flasks, SLOT_HAND1 ) && !hasItem( cr, PID_BOTTLE_GLASS, SLOT_HAND1 ) && !hasItem( cr, target.WATERSOURCE_DNA, SLOT_HAND1 ) ) { 
+			cr.Say( SAY_NETMSG, "|0xFFFF00 У вас нет подходящей тары в руках." );
+			return false;
+		}
+
+		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+		
+		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+		
+		StartProcess( cr, LTP_GATHER_WATER, 0, 0, target.Id, action_pause );
+		return true;
+	}
+	return false;
+}
+
+uint process_gather_water( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_GATHER_WATER )
+	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+  	Item@ target = GetItem( param2 );
+	
+  	if( valid( target ) ) {
+		
+      	if( ( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, target.WATERSOURCE_DNA ) ) || target.REMAINING_CHARGE < 1 ) {
+			string TXT = ( !hasItem( cr, PID_BOTTLE_GLASS ) || !hasItem( cr, target.WATERSOURCE_DNA ) ) ? " У Вас закончилась тара." : " Вы разлили всю воду по бутылкам.";
+			cr.Say( SAY_NETMSG, "|0xFFFF00" + TXT );
+			
+			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+			return 0;
+		}
+		
+		uint autoemote = Random( 1, 10 );
+		if( autoemote == 10 ) { cr.Say( SAY_EMOTE, "Наполняет бутылку" );
+		}
+		
+		if( hasItem( cr, target.WATERSOURCE_DNA ) ) {
+			
+			Item@ waterBottlePrt = getItem( cr, target.WATERSOURCE_DNA );
+			if( waterBottlePrt.REMAINING_USES < waterBottlePrt.Proto.Partial_Item ) {
+				
+				target.REMAINING_CHARGE --;
+				waterBottlePrt.REMAINING_USES ++;
+				waterBottlePrt.EXTRA_WEIGHT = waterBottlePrt.REMAINING_USES * 100;
+
+				Map@ map = cr.GetMap();
+				map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+								
+				waterBottlePrt.Update();
+				
+			} else {
+			
+				Item@ waterBottle = null;
+				if( target.WATERSOURCE_DNA == PID_GLASS_BOTTLE_FULL_PRT ) {
+					@ waterBottle = cr.AddItem( PID_GLASS_BOTTLE_FULL, 1 );
+				} else {
+					@ waterBottle = cr.AddItem( PID_GLASS_BOTTLE_DIRTY_FULL, 1 );
+				}
+				_SubItem( waterBottlePrt , 1 );
+				
+				cr.Say( SAY_NETMSG, "|0xFFFF00 Вы полностью наполнили бутылку водой" );
+				
+				waterBottle.Update();
+			}
+
+			return action_pause;
+			
+		} else {
+		
+			Item@ bottle = cr.GetItem( PID_BOTTLE_GLASS, -1 );
+			_SubItem( bottle , 1 );
+		
+			Item@ waterBottlePrt = cr.AddItem( target.WATERSOURCE_DNA, 1 );
+			
+			Item@ hands = cr.GetItem( 0, SLOT_HAND1 );
+			if( valid( hands ) ) {
+				cr.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
+			}
+			
+			cr.MoveItem( waterBottlePrt.Id, waterBottlePrt.GetCount(), SLOT_HAND1 );
+		
+			target.REMAINING_CHARGE --;
+			waterBottlePrt.REMAINING_USES ++;
+			waterBottlePrt.EXTRA_WEIGHT = waterBottlePrt.REMAINING_USES * 100;
+
+			Map@ map = cr.GetMap();
+			map.PlaySound( "homebrew_pouring.ogg", cr.HexX, cr.HexY, 5 );
+				
+			waterBottlePrt.Update();
+		}
+		
+		return action_pause;
+    }
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	return 0;
+}
+
+void setAnimState( Item& item )
+{
+	if( item.STATE == 1 ) {	
+		SETFLAG( item.Flags, ITEM_SHOW_ANIM );
+		UNSETFLAG( item.Flags, ITEM_SHOW_ANIM_EXT );
+	} else {
+		UNSETFLAG( item.Flags, ITEM_SHOW_ANIM );
+		SETFLAG( item.Flags, ITEM_SHOW_ANIM_EXT );
+	}
+	item.Update();
+}
+
+void WaterPumpsAutoInit() //export to gameplay.fos
+{    
+    Map@[] maps;
+    for( int i = 0, iend = GetAllMaps( 0, maps ); i < iend; i++)
+	{   
+		CheckMapWaterPumpEvent( maps[i] );
+	}
+}
+
+//~run waterworks _WaterPumpsInit 0 0 0
+void _WaterPumpsInit(Critter& player, int param0, int param1, int param2)
+{
+	FoceWaterPumpsCharge();
+}
+
+//import void FoceWellsCharge() from "waterworks";
+void FoceWaterPumpsCharge()
+{
+    Map@[] maps;
+    for( int i = 0, iend = GetAllMaps( 0, maps ); i < iend; i++)
+	{   
+		CheckMapWaterPumpEvent( maps[i] );
+	}
+}
+
+bool CheckMapWaterPumpEvent( Map& map )
+{
+	Item@[] activeWaterPumps;
+
+	map.GetItems( PID_OBJECT_WATERPUMP, activeWaterPumps );
+	
+	if( activeWaterPumps.length != 0 ) {
+		
+		for( int i = 0, iend = activeWaterPumps.length(); i < iend; i++ ) {
+			Item@ waterPump = activeWaterPumps[i];
+			
+			if( !valid( waterPump ) ) { return false; }
+			
+			uint[] values = { waterPump.Id };
+			
+			if( waterPump.PUMP_EFFICIENCY < 1 ) {
+				waterPump.PUMP_EFFICIENCY = 1;
+			}
+			
+			waterPump.EVENT = CreateTimeEvent( AFTER( PUMP_FILL_TIME / waterPump.PUMP_EFFICIENCY ), "e_WaterPumpCharge", values, true );
+			values.resize(0);
+		}
+	}
+
+	activeWaterPumps.resize(0);
+    return false;
+} 
+
+uint e_WaterPumpCharge( uint[] @ values ) 
+{
+	Item@ waterPump = GetItem( values[ 0 ] );
+	if( !valid( waterPump ) ) { return 0; }
+	
+	Map@ map = GetMap( waterPump.MapId );
+	if( !valid( map ) ) { return 0; }
+	
+	if( waterPump.BROKEN == 0 ) {
+		waterPump.REMAINING_CHARGE ++;
+	}
+	
+	if( waterPump.REMAINING_CHARGE > waterPump.MAX_CHARGE ) {
+		waterPump.REMAINING_CHARGE = waterPump.MAX_CHARGE;
+	}
+	
+	if( waterPump.PUMP_EFFICIENCY < 1 ) {
+		waterPump.PUMP_EFFICIENCY = 1;
+	}
+	
+	return PUMP_FILL_TIME / waterPump.PUMP_EFFICIENCY;
 }
