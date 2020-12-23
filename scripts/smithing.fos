@@ -1,0 +1,139 @@
+// Author: Anuri
+
+#include "_utils.fos"
+#include "_ltp.fos"
+#include "gathering_h.fos"
+
+
+const uint16[] SmithingTools = { PID_SLEDGEHAMMER, PID_SUPER_SLEDGE, PID_SLEDGEHAMMER2, PID_mltelctr, PID_mlthmmr1, PID_mltmlot2, PID_SLEDGE, PID_PRIMITIVE_SLEDGE };
+
+const uint16[] MaterialList = { PID_IRON_BAR,	PID_COPPER_BAR,  PID_GOLDEN_BAR  };
+const uint16[] ResultList   = { PID_IRON_PLATE, PID_COPPER_LEAF, PID_GOLDEN_COIN };
+const uint16[] Amount 		= { 	1, 				  1, 			  100 		 };
+
+const string[] SmithingSounds = { "smithing1.ogg", "smithing2.ogg" };
+
+// LTP (long time process)
+bool ltp_inited = false;
+void ltp_init()
+{
+	LTPREG( LTP_SMITHING, process_Smithing )
+	ltp_inited = true;
+}
+//exported to main.fos - checks before start
+bool PrepareSmithing( Critter& cr, Item@ tool, Item@ anvil ) 
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) { return false; }
+	if( !valid( tool ) || !valid( anvil ) ) { return false; }
+	if( !hasItems( cr, SmithingTools, SLOT_HAND1 ) ) { cr.Say( SAY_NETMSG, "|0xFFFF00 Возьмите молот в руку." ); return false; }
+
+	if( IsTired( cr ) ) { return false; }
+	if( IsWounded( cr ) ) { return false; }
+	
+	Item@[] MaterialsCheck;
+	anvil.GetItems( uint( -1 ), MaterialsCheck );
+	Item@ material = null;
+	
+	if( MaterialsCheck.length() == 0 ) { 
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Наковальня пуста." ); 
+		return false; 
+		
+	} else {
+		for( uint i = 0; i < MaterialsCheck.length(); i ++ ) {
+			uint16 materialPid = MaterialsCheck[i].GetProtoId();
+			if( MaterialList.find( materialPid ) != -1 ) {
+				@material = MaterialsCheck[i];
+				break;
+			}
+		}
+		if( !valid( material ) ) { cr.Say( SAY_NETMSG, "|0xFFFF00 На наковальне нет подходящего бруса." ); return false; }
+	}
+	
+	start_Smithing( cr, tool, anvil, material );
+	return true;
+}
+
+bool start_Smithing( Critter& cr, Item& tool, Item& anvil, Item@ material )
+{
+	if(!ltp_inited) 
+		ltp_init();
+
+	if( valid( tool ) && valid( anvil ) )
+	{	
+		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
+		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint[] values = { cr.Id };
+		
+		CreateTimeEvent( AFTER( REAL_MS( 500 ) ), "e_SmithingSound", values, false);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
+
+		StartProcess( cr, LTP_SMITHING, 0, anvil.Id, material.Id, action_pause );
+		return true;
+	}
+	return false;
+}
+
+uint process_Smithing( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_SMITHING )
+	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+    Item@ anvil = GetItem( param1 );
+  	Item@ material = GetItem( param2 );
+  	if( valid( anvil ) && valid( material ) )
+    {
+		param0++;
+		
+		uint smithing_rate = ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE ) + OBJECT_DPA_BASE; 
+		int sequence_length = ceil( float( 3000.0f / ( CLAMP( smithing_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
+		
+		if( param0 > sequence_length )
+		{
+			cr.Say( SAY_EMOTE, "завершает работу" );
+			Profit( cr, anvil, material );
+			int skillNum = SK_REPAIR;
+			Accident( cr, skillNum );
+			return 0;
+		}
+		
+		uint[] values = { cr.Id };
+		CreateTimeEvent( AFTER( REAL_MS( 500 ) ), "e_SmithingSound", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
+
+		_CritAnimateSwing( cr );
+		
+		return action_pause;
+	}
+	return 0;
+}
+
+uint e_SmithingSound( uint[]@ values )
+{
+	Critter@ cr = GetCritter(values[0]);
+	Map@ map = cr.GetMap();
+	map.PlaySound( SmithingSounds[ Random( 0, SmithingSounds.length() -1 ) ], cr.HexX, cr.HexY, 5 );
+	return 0;
+}
+
+void Profit(  Critter& cr, Item& anvil, Item& material )
+{
+	if( !valid( anvil) && !valid( material ) ) { return ; }
+	
+	uint16 materialPid = material.GetProtoId();
+	uint8 index = MaterialList.find( materialPid );
+	uint16 resultPid = ResultList[ index ];
+	uint8 amount = Amount[index];
+	cr.AddItem( resultPid, amount );
+	_SubItem( material, 1 );
+	
+	string inform = "Вы получили: \n";
+	inform += "- ";
+	inform += "|0xFFFF00 " + _GetProtoName( resultPid );
+	inform += "|0x3CF800  - ";
+	inform += "|0xFFFF00 " + amount;
+	inform += "|0x3CF800  шт.";
+	cr.Say( SAY_NETMSG, inform );
+	
+	cr.StatBase[ST_EXPERIENCE] += 25;
+}
