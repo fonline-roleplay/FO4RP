@@ -20,6 +20,10 @@
 
 #include "behaviours.fos"
 
+#include "terminal.fos"
+
+#include "brahmins_h.fos"
+
 // Imports
 import void CheckCartPicMap( Item& furniture ) from "furniture";
 
@@ -97,11 +101,6 @@ import string SetupAidLeX( uint8 aidValue ) from "item";
 
 import void CheckFaction( Critter& cr, bool join ) from "factions";
 
-import bool ItemStimpackUse( Critter& cr, Item& item ) from "heal";
-import bool __Bandage( Critter& cr, Critter@ targetCr ) from "heal";
-import void ItemHypoUse (Critter& cr, Item& item) from "heal";
-import void ItemSupUse(Critter& cr, Item& item) from "heal";
-
 import void InitTiles() from "cimp";
 
 import void AskCooking( Critter& cr ) from "cooking";
@@ -124,10 +123,9 @@ import void ScouringStick( Critter& cr, Item& item ) from "mio_tests";
 
 import void registerTraps() from "traps";
 
-import void registerMines() from "traps_mines";
+import bool UseSkillOnTrappedItem( Item& trappedItem, Critter& cr, int skill ) from "trap";
 
-import void brahminInitSearch( Critter& cr ) from "brahmins";
-import bool BrahminPetting( Critter& cr, Item& item, Critter@ targetCr ) from "brahmins";
+import void registerMines() from "traps_mines";
 
 import NpcNamesHolder@ getNpcNamesHolder() from "npc_names_holder";
 
@@ -169,8 +167,6 @@ import void hearshot( Critter& cr, ProtoItem& weapon, uint8 weaponMode ) from "r
 import void ProccessFood( Critter& cr, Critter& target, Item& item ) from "food";
 import void ProccessDrink( Critter& cr, Critter& target, Item& item ) from "food";
 
-const string[] cap_bottle_open_sounds = { "capBottleOpen1.ogg", "capBottleOpen2.ogg" };
-
 import bool IsAnimal( Critter& cr ) from "races";
 
 import bool UseLightSwitch( Critter& cr, Item& lightSwitch ) from "map_lights";
@@ -179,6 +175,13 @@ import int GetMapLevelByPid( uint pid ) from "globalmap_group";
 
 import bool MovePosition(Critter&player) from "mio_deviants_toolkit";
 
+import void Training( Critter& player, int type ) from "workout";
+import bool TryTraining( Critter& cr, uint pid ) from "workout";
+
+import bool ProccessDoctorSkill( Critter& cr, Critter& targetCr, bool alreadyAllowed ) from "heal";
+import bool ProccessFirstAidSkill( Critter& cr, Critter& targetCr, bool alreadyAllowed ) from "heal";
+
+const string[] cap_bottle_open_sounds = { "capBottleOpen1.ogg", "capBottleOpen2.ogg" };
 const uint16[] FireAmmo = {PID_10MM_HEAP, PID_5MM_HEAP };
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -757,13 +760,6 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
     int size = item.Proto.Volume;
     if( size <= 0 )
         size = 1;
-
-    // Perk pickpocket, ignore size and facing
-    // if( thief.Perk[ PE_PICKPOCKET ] != 0 )
-    // {
-        // kDir = 0;
-        // size = 1;
-    // }
 
     // Count modifier
     int kCount = count / steal;
@@ -1939,14 +1935,6 @@ uint e_FlareBurn(uint[]@ values)
 	return 0; // return for repeat time in game time
 }
 
-#include "terminal.fos"
-
-import void Training( Critter& player, int type ) from "workout";
-import bool TryTraining( Critter& cr, uint pid ) from "workout";
-// #pragma bindfunc "uint Critter::ItemTransferCount() -> fonline_tnf.dll Critter_GetItemTransferCount"
-import bool UseSkillOnTrappedItem( Item& trappedItem, Critter& cr, int skill ) from "trap";
-import bool ComfirmedAction( Critter& cr, int skill, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen ) from "FA";
-
 void informAboutSkill( Critter& cr, int skill, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen )
 {
 	string skill_name = "";
@@ -1987,9 +1975,6 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 	DebugLog( exception_catcher, 2 );
 
 	informAboutSkill( cr, skill, targetCr, targetItem, targetScen );
-	
-	if( ComfirmedAction( cr, skill, targetCr, targetItem, targetScen )  )
-		return true;
 	
 	if( valid( targetItem ) )
 		CheckItemMovement( cr, targetItem, skill );
@@ -2277,9 +2262,13 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 						inform += "|0x3CF800  шт.";
 						cr.Say( SAY_NETMSG, inform );
 						
+						EraseTimeEvent( targetItem.Val3 );
+						targetItem.Val3 = 0;
 						DeleteItem( targetItem );
 					} else {
 						cr.Say( SAY_NETMSG, "|0xFFFF00 Вы сорвали растение в неправильной стадии, а затем выкинули его." );
+						EraseTimeEvent( targetItem.Val3 );
+						targetItem.Val3 = 0;
 						DeleteItem( targetItem );
 					}
 				} else {
@@ -2424,20 +2413,83 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		{
 			cr.Action( ACTION_PICK_CRITTER, 2, null );
 			cr.StatBase[ ST_CURRENT_AP ] -= 5000;
-			if( ( cr.Timeout[ TO_BATTLE ] == 0 && targetCr.Timeout[ TO_BATTLE ] == 0 ) 
-				&& ( cr.Mode[ MODE_NO_PVP ] == 0 && targetCr.Mode[ MODE_NO_PVP ] == 0 )
+			if( ( cr.Mode[ MODE_NO_PVP ] == 0 && targetCr.Mode[ MODE_NO_PVP ] == 0 )
 				&& ( targetCr.IsPlayer() || ( targetCr.IsNoPlanes() && targetCr.GetTalkedPlayers( null ) == 0 ) )
 				&& targetCr.Mode[MODE_NO_PUSH] == 0
-				&& targetCr.MoveToDir( cr.Dir )  
-				) {
+				&& targetCr.MoveToDir( cr.Dir ) ) {
 					cr.Say( SAY_NETMSG, "Вы толкаете цель." );
 					SayLog( cr, crInfo( cr ) + " толкает " + crInfo( targetCr ) + "." );
-				}
-				else
-				{
-					cr.Say( SAY_NETMSG, "Цель сопротивляется." );
-					SayLog( cr, crInfo( cr ) + " безуспешно пытается толкнуть " + crInfo( targetCr ) + "." );
-				}
+			
+			} else {
+				cr.Say( SAY_NETMSG, "Цель сопротивляется." );
+				SayLog( cr, crInfo( cr ) + " безуспешно пытается толкнуть " + crInfo( targetCr ) + "." );
+			}
+			return true; 
+		}
+		
+	  case( SK_FIRST_AID ): 
+	  {
+			if( valid( targetItem ) || valid( targetScen ) ) {
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+				return true;
+			}
+
+			if( not valid( targetCr ) ) {
+				@targetCr = cr;
+			}
+			
+			if( targetCr.Stat[ ST_BODY_TYPE ] == BT_ROBOT ) {
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+				return true;
+			}
+
+			if( targetCr.IsDead() ) {
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_NORESSURECT );
+				return true;
+			}
+
+			if( isPlayer && cr.Timeout[ TO_SK_FIRST_AID ] > 0 ) {
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_WEARINESS );
+				return true;
+			}
+
+			ProccessFirstAidSkill( cr, targetCr, false );
+			
+			return true; 
+		}
+		
+		case( SK_DOCTOR ): 
+		{
+			if( valid( targetItem ) || valid( targetScen ) ) {
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+				return true;
+			}
+
+			if( valid( targetCr ) && targetCr.IsNpc() && targetCr.Stat[ST_BASE_CRTYPE] == 15 && targetCr.Stat [ST_GENDER] == GENDER_FEMALE ) {
+				cr.Say( SAY_NETMSG, "Вы проверяете состояние самки брамина:" );
+				CheckBrahminPregnancy( cr, targetCr );
+			}
+
+			if( not valid( targetCr ) ) {
+				@targetCr = cr;
+			}
+			
+			if( targetCr.Stat[ ST_BODY_TYPE ] == BT_ROBOT ) {
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
+				return true;
+			}
+
+			if( targetCr.IsDead() ) {
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_NORESSURECT );
+				return true;
+			}
+
+			if( isPlayer && cr.Timeout[ TO_SK_DOCTOR ] > 0 ) {
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_WEARINESS );
+				return true;
+			}
+
+			ProccessDoctorSkill( cr, targetCr, false );
 			return true; 
 		}
 		
