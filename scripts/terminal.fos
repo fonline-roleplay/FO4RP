@@ -1,15 +1,13 @@
-#define HEXX 472
-#define HEXY 341
+#ifndef TERMINAL
+#define TERMINAL
 
-#define PASSWORD				Val6 	// Пароль для доступа - access password
-#define POWERED					Val7 	// Запитан или нет - access to powergrid
-#define ACCESS					Val8 	// Блокировка терминала - password block
-#define ACCESS_CARD				Val9 	// Пид для записи карты терминала (проверить конфликт терминалов)
-#define GRANTED 				( 0 )	// Отключен запрет доступа без пароля
-#define BLOCKED					( 1 )	// Включен запрет досутпа без пароля
+#include "_utils.fos"
+#include "terminal_h.fos"
+#include "gateway_h.fos"
+#include "_npc_pids.fos"
+#include "entire_h.fos"
 
-import void add_lazer( Critter& cr, int p0, int p1, int p2 ) from 	"gateway";
-import void del_lazer( Critter& cr, int p0, int p1, int p2 ) from	"gateway";
+import void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string@ param3, int[] @ param4 ) from "general_unsafe";
 
 void StartMenuTerminal( Critter& cr, Item& terminal )
 {
@@ -22,32 +20,12 @@ void StartMenuTerminal( Critter& cr, Item& terminal )
     iDialogBox@ menu = OpenMenu( cr, "Терминал", handler );
 }
 
-#ifndef __GATEWAY_UTILS
-	
-	#define __GATEWAY_UTILS
-	bool getStateLazer( Critter& cr ) { return getStateLazer( cr.GetMap() ); }
-	bool getStateLazer( Map@ map )
-	{
-		return valid( map ) && valid( map.GetItem( HEXX, HEXY, PID_LAZER_FENCE_NS) );
-	}
-
-	bool getStateTurels(Map@ map, uint pid)
-	{
-		Critter@[] crs;
-		int countCr = map.GetCritters(pid, FIND_LIFE, crs);
-		return ( countCr != 0 );
-	}
-
-	Critter@[] getCritters(Map@ map, uint pid, uint find)
-	{	
-		Critter@[] crs;
-		int countCr = map.GetCritters(pid, find, crs);
-		return crs;	
-	}
-	
-#endif
-
-import void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string@ param3, int[] @ param4 ) from "general_unsafe";
+Critter@[] getCritters(Map@ map, uint pid, uint find)
+{	
+	Critter@[] crs;
+	int countCr = map.GetCritters(pid, find, crs);
+	return crs;	
+}
 
 class MenuTerminal: CenteredMenuHandler {
 
@@ -61,85 +39,81 @@ class MenuTerminal: CenteredMenuHandler {
 		level = 0;
 	}
 
-	bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+	bool MenuUpdate( Critter& cr, iDialogBox& menu ) 
+	{
 		Map@ map = GetMap(map_id);
         Item@ terminal = GetItem( terminal_id );
 		
-		uint turretPID = NPC_PID_LAS_TURRET;
-		bool LazerOn = getStateLazer(cr);		
+		bool LazerOn = true; // ПОСТАВИТЬ ПРОВЕРКУ		
         string info = (!LazerOn) ? "Включить" : "Выключить";
         
+		if( isGM( cr ) && menu.Button( "ГМ меню" ) ) {
+			MenuTerminalGM@ menu_terminalGM = MenuTerminalGM( terminal, map );
+			menu_terminalGM.level = level + 1;
+			return menu.OpenChild( "Уровень " + menu_terminalGM.level, menu_terminalGM );
+		}
+		
 		if( terminal.POWERED > 0 ) {
-			if( terminal.ACCESS == GRANTED ) {
-				if( menu.Button( "Лазер: " + info ) ) {
-					if( !LazerOn ) {
-						cr.Say( SAY_NETMSG, "Включил лазерный забор" );    
-						add_lazer( cr, 0, 0, 0 );
-						return false;
-						
-					} else {        
-						cr.Say( SAY_NETMSG, "Выключил лазерный забор" );    
-						del_lazer( cr, 0, 0, 0 );
-						return false;
+			if( terminal.CONSOLE_PASSWORD == PASSWORD_DISABLED ) {
+				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) ) {
+					if( ( terminal.FENCE_GROUP != 0 && map.CountEntire( terminal.FENCE_GROUP ) > 0 ) && menu.Button( "Лазер: " + info ) ) {
+						ToggleLaserFence( map, terminal.FENCE_GROUP );	
+						return true;
 					}
 				}
 				
-				bool turrets = getStateTurels(cr.GetMap(), turretPID);
-				
-				info = ( !turrets ? "Включить" : "Выключить" );
-				if( menu.Button( "Турели " + info ) ) {	
-					if( turrets ) {
-						cr.Say( SAY_NETMSG, "Выключил Охрану" );   
-						
-						Critter@[] crs = getCritters(cr.GetMap(), turretPID, FIND_LIFE);
-						for( uint i = 0, countCr = crs.length(); i < countCr; i++ ) {
-							unsafe_sleep( crs[i], 0, 1, 1, null, null );				
-						}
-				
-					} else {
-						cr.Say( SAY_NETMSG, "Включил Охрану" );    
-
-						Critter@[] crs = getCritters(cr.GetMap(), turretPID, FIND_KO);
-						for( uint i = 0, countCr = crs.length(); i < countCr; i++ ) {
-							unsafe_sleep( crs[i], 0, 1, 0, null, null );				
-						}
+				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) ) {
+					if( menu.Button( "Авторизация Турелей" ) ) {
+						MenuTurrets@ menu_turrets = MenuTurrets( terminal, map );
+						menu_turrets.level = level + 1;
+						return menu.OpenChild( "Уровень " + menu_turrets.level, menu_turrets );
 					}
-					return false;//если "return false;" то меню закроется
+					
+					if( menu.Button( "Управение Турелями" ) ) {
+						MenuTurretsCtrl@ menu_turrets_ctrl = MenuTurretsCtrl( terminal, map );
+						menu_turrets_ctrl.level = level + 1;
+						return menu.OpenChild( "Уровень " + menu_turrets_ctrl.level, menu_turrets_ctrl );
+					}
 				}
 				
-				if( menu.Button( "Открыть приемник" ) ) {
-					ShowContainer( cr, terminal, TRANSFER_HEX_CONT_UP );
-					map.PlaySound( "SCDOORSM.ACM", terminal.HexX, terminal.HexY, 5 );
-					cr.Say( SAY_EMOTE, "открывает приемник для карт" );
-					return false;
+				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) ) {
+					if( menu.Button( "Открыть приемник" ) ) {
+						ShowContainer( cr, terminal, TRANSFER_HEX_CONT_UP );
+						map.PlaySound( "SCDOORSM.ACM", terminal.HexX, terminal.HexY, 5 );
+						cr.Say( SAY_EMOTE, "открывает приемник для карт" );
+						return false;
+					}
+					Item@[] cardItm;
+					terminal.GetItems( uint( -1 ), cardItm );
+					if( cardItm.length() > 0 && menu.Button( "Выбрать карту" ) ) {
+						MenuSelectCard@ select_card = MenuSelectCard( terminal, map );
+						select_card.level = level + 1;
+						return menu.OpenChild( "Уровень " + select_card.level, select_card );
+					}
 				}
 				
-				if ( menu.Button( "Выбрать карту" ) ) {
-					MenuSelectCard@ select_card = MenuSelectCard( terminal, map );
-					select_card.level = level + 1;
-					return menu.OpenChild( "Уровень " + select_card.level, select_card );
-				}
-				
-				if( menu.Button( "Сброс пароля" ) ) {
-					terminal.PASSWORD = 0;
-					string passwordInfo = "Установите пароль";
-					cr.RunClientScript( "client_screen_numberpad@ShowScreen", terminal.Id, 0, 0, passwordInfo, null );
-					return false;
-				}
-				
-				if( menu.Button( "Заблокировать" ) ) {
-					if( terminal.PASSWORD == 0 ) {
+				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) ) {
+					if( menu.Button( "Сброс пароля" ) ) {
+						terminal.PASSWORD = 0;
 						string passwordInfo = "Установите пароль";
 						cr.RunClientScript( "client_screen_numberpad@ShowScreen", terminal.Id, 0, 0, passwordInfo, null );
 						return false;
-					} else {
-						terminal.ACCESS = BLOCKED;
-						cr.Say( SAY_NETMSG, "|0xFFFF00 Вы заблокировали доступ к терминалу" ); 
-						return false;
+					}
+					
+					if( menu.Button( "Заблокировать" ) ) {
+						if( terminal.PASSWORD == 0 ) {
+							string passwordInfo = "Установите пароль";
+							cr.RunClientScript( "client_screen_numberpad@ShowScreen", terminal.Id, 0, 0, passwordInfo, null );
+							return false;
+						} else {
+							terminal.CONSOLE_PASSWORD = PASSWORD_ENABLED;
+							cr.Say( SAY_NETMSG, "|0xFFFF00 Вы заблокировали доступ к терминалу" ); 
+							return false;
+						}
 					}
 				}
 				
-			} else if( terminal.ACCESS == BLOCKED ) {
+			} else if( terminal.CONSOLE_PASSWORD == PASSWORD_ENABLED ) {
 				if( menu.Button( "Разблокировать" ) ) {
 					string passwordInfo;
 					if( terminal.PASSWORD != 0 ) {
@@ -157,31 +131,59 @@ class MenuTerminal: CenteredMenuHandler {
 
 	string@ Description( Critter& cr ) 
 	{
+		Map@ map = GetMap( map_id );
 		Item@ terminal = GetItem( terminal_id );
-		string card = _GetProtoName( terminal.ACCESS_CARD );
 		string info = "Терминал № ";
 		info += "|0xFFFF00 " + terminal.Id + "\n";
-		info += "|0x3CF800 Тип пропуска: \n[ ";
-		info += "|0xFFFF00 " + card;
-		info += "|0x3CF800  ]\n";
+
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) && terminal.ACCESS_CARD != 0 ) {
+			string card = _GetProtoName( terminal.ACCESS_CARD );
+			info += "|0x3CF800 Установленный тип пропуска: \n[ ";
+			info += "|0xFFFF00 " + card;
+			info += "|0x3CF800  ]\n";
+		}
 		
-		if( terminal.ACCESS == BLOCKED ) {
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) && FindTurrets( map, NPC_PID_LAS_TURRET ) ) { 
+			uint amount = 0;
+			info += "|0x3CF800 Подключено турелей: ";
+			Critter@[] turrets;
+			map.GetCritters( NPC_PID_LAS_TURRET, FIND_LIFE_AND_KO, turrets );
+			for( uint i = 0; i < turrets.length(); i ++ ) {
+				Critter@ turret = turrets[i];
+				if( valid( turret ) && ( turret.PARENT_TERMINAL == int( terminal.Id ) ) ) {
+					amount ++;
+				} else {
+					continue;
+				}
+			}
+			info += "|0x3CF800 [ ";
+			info += "|0xFFFF00 " + amount;
+			info += "|0x3CF800  ] \n";
+		}
+		
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) && terminal.FENCE_GROUP != 0 ) {
+			info += "|0x3CF800 Подконтрольный лазный барьер № \n[ ";
+			info += "|0xFFFF00 " + terminal.FENCE_GROUP;
+			info += "|0x3CF800  ]";
+		}
+		
+		if( terminal.CONSOLE_PASSWORD == PASSWORD_ENABLED ) {
 			info = "|0xFFFF00 Терминал заблокирован, введите пароль для разблокировки";
 		}
 		
 		if( terminal.POWERED == 0 ) {
-			info = "|0xFFFF00 Терминал обесточен";
+			info = "|0xFFFF00 Терминал обесточен \n";
 		}
 		
-		if( terminal.PASSWORD == 0 ) {
-			info += "|0xFFFF00 Внимание, пароль не задан!";
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) && terminal.PASSWORD == 0 ) {
+			info += "|0xFFFF00 Внимание, пароль не задан! \n";
 		}
 		
 		return info;
 	}
 }
 
-bool TransferToTerminal( Critter& cr, Item& targetItem, Item& cont ) //export to main
+bool TransferToTerminal( Critter& cr, Item& targetItem, Item& cont )
 {
 	if( !valid( cont ) ) { Log( "Потеря указателя на контейнер!" ); return false; 
 	}
@@ -209,7 +211,7 @@ bool TransferFromTerminal( Critter& cr, Item& targetItem, Item& cont )
 	return true;
 }
 
-
+//Child menu for card selection
 class MenuSelectCard: CenteredMenuHandler {
     uint terminal_id;
     uint map_id;
@@ -236,9 +238,8 @@ class MenuSelectCard: CenteredMenuHandler {
 		Item@[] cardItm;
 		terminal.GetItems( uint( -1 ), cardItm );
 		
-		if( cardItm.length() != 0 )
-		{
-			if ( menu.Button( "Предыдущий" ) ) {
+		if( cardItm.length() != 0 ) {
+			if( menu.Button( "Предыдущая" ) ) {
 				selectorPos--;
 				if( arrayPos == 0 ) {
 					arrayPos = cardItm.length() - 1;
@@ -251,7 +252,7 @@ class MenuSelectCard: CenteredMenuHandler {
 				return true;
 			}
 			
-			if ( menu.Button( "Следующий" ) ) {
+			if( menu.Button( "Следующая" ) ) {
 				selectorPos++;
 				if( arrayPos == cardItm.length() -1 ) {
 					arrayPos = 0;
@@ -264,12 +265,23 @@ class MenuSelectCard: CenteredMenuHandler {
 				return true;
 			}
 			
-			if ( menu.Button( "Подтвердить" ) ) {
+			if( menu.Button( "Подтвердить" ) ) {
 				cr.Say( SAY_EMOTE, "устанавливает новую карту доступа" );
 				Critter@[] crs = getCritters( cr.GetMap(), NPC_PID_LAS_TURRET, FIND_LIFE );
 				for( uint i = 0, countCr = crs.length(); i < countCr; i++ ) {
-					crs[i].ParamBase[ ST_VAR8 ] = terminal.ACCESS_CARD;	
+					Critter@ turret = crs[i];
+					if( turret.PARENT_TERMINAL == int( terminal.Id ) ) {
+						turret.SECURITY_ACCESS_CARD = terminal.ACCESS_CARD;
+						turret.LASER_FENCE_GRID = terminal.FENCE_GROUP;
+					} else {
+						continue;
+					}
 				}
+				return false;
+			}
+			
+			if( menu.Button( "Возврат" ) ) {
+				level = 0;
 				return false;
 			}
 		}
@@ -278,15 +290,18 @@ class MenuSelectCard: CenteredMenuHandler {
 
     string@ Description( Critter& cr ) {	
 		Item@ terminal = GetItem( terminal_id );
-		string card = _GetProtoName( terminal.ACCESS_CARD );
 		string info = "Терминал № ";
 		info += "|0xFFFF00 " + terminal.Id + "\n";
-		info += "|0x3CF800 Тип пропуска: \n[ ";
-		info += "|0xFFFF00 " + card;
-		info += "|0x3CF800   ]\nВыберите нужную позицию и нажмите";
-		info += "|0xFFFF00  Подтвердить";
-		info += "|0x3CF800  для завершения настройки.";
-		
+		Item@[] cardItm;
+		terminal.GetItems( uint( -1 ), cardItm );
+		if( cardItm.length() > 0 ) {
+			string card = _GetProtoName( terminal.ACCESS_CARD );
+			info += "|0x3CF800 Тип пропуска: \n[ ";
+			info += "|0xFFFF00 " + card;
+			info += "|0x3CF800   ]\nВыберите нужную позицию и нажмите";
+			info += "|0xFFFF00  Подтвердить";
+			info += "|0x3CF800  для завершения настройки.";
+		}
 		return info;
 	}	
 		
@@ -294,3 +309,373 @@ class MenuSelectCard: CenteredMenuHandler {
         return ButtonDecorator( "Скрыть меню", null );
     }
 }
+
+//Child menu for turret control assigment
+class MenuTurrets: CenteredMenuHandler {
+    uint terminal_id;
+    uint map_id;
+	uint level;
+	uint more_buttons;
+	
+    MenuTurrets( Item& terminal, Map& map ) {
+        terminal_id = terminal.Id;
+        map_id = map.Id;
+		level = 1;
+		more_buttons = 0;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Map@ map = GetMap( map_id );
+        Item@ terminal = GetItem( terminal_id );
+		
+        if( map is null || terminal is null ) {
+            return false;
+        }
+		
+		if( FindTurrets( map, NPC_PID_LAS_TURRET ) ) {
+			Critter@[] turrets;
+			map.GetCritters( NPC_PID_LAS_TURRET, FIND_LIFE_AND_KO, turrets );
+			for( uint i = 0; i < turrets.length(); i ++ ) {
+				more_buttons += 1;
+				Critter@ turret = turrets[i];
+				if( valid( turret ) && ( turret.PARENT_TERMINAL == 0 || turret.StatBase[ ST_VAR1 ] == int( terminal.Id ) ) ) {
+					string state = turret.PARENT_TERMINAL == 0 ? "Контроль: " : "Отключить: ";
+					if( menu.Button( state + turret.Id ) ) {
+						turret.PARENT_TERMINAL == 0 ? turret.PARENT_TERMINAL = int( terminal.Id ) : turret.PARENT_TERMINAL = 0;
+						return true;
+					}
+				} else {
+					continue;
+				}
+			}
+		}
+		
+		if( menu.Button( "Возврат" ) ) {
+			level = 0;
+			return false;
+		}
+		return true;
+    }
+
+    string@ Description( Critter& cr ) {	
+		Item@ terminal = GetItem( terminal_id );
+		Map@ map = GetMap( map_id );
+		cr.RunClientScript( "client_screen_test@ShowScreen", 0, 0, 0, "", null );
+		string info;
+		if( FindTurrets( map, NPC_PID_LAS_TURRET ) ) { //Добавить плазменную и гатлинг-турели
+			info += "|0x3CF800 Обнаружены совместимые турели: \n";
+			Critter@[] turrets;
+			map.GetCritters( NPC_PID_LAS_TURRET, FIND_LIFE_AND_KO, turrets );
+			for( uint i = 0; i < turrets.length(); i ++ ) {
+				Critter@ turret = turrets[i];
+				if( valid( turret ) ) {
+					info += "|0x3CF800 № ";
+					info += "|0xFFFF00 " + turret.Id;
+					info += "|0x3CF800  - ";
+					string state = turret.StatBase[ ST_VAR1 ] == 0 ? "не авторизована" : ( turret.StatBase[ ST_VAR1 ] == int( terminal.Id ) ? "авторизована" : "занята" );
+					info += "|0xFFFF00 " + state + " \n";
+				} else {
+					continue;
+				}
+			}
+			turrets.resize( 0 );
+		}		
+
+		return info;
+	}
+		
+	string@ ButtonCancel() {
+        return ButtonDecorator( "Скрыть меню", null );
+    }
+	
+	bool ShouldRedraw( Critter& cr ) {
+		return true;
+    }
+}
+
+bool FindTurrets( Map@ map, uint pid )
+{
+	Critter@[] turrets;
+	int countTurrets = map.GetCritters( pid, FIND_LIFE_AND_KO, turrets );
+	return ( countTurrets != 0 );
+}
+
+//Child menu for turret control
+class MenuTurretsCtrl: CenteredMenuHandler {
+    uint terminal_id;
+    uint map_id;
+	uint level;
+	uint more_buttons;
+	
+    MenuTurretsCtrl( Item& terminal, Map& map ) {
+        terminal_id = terminal.Id;
+        map_id = map.Id;
+		level = 2;
+		more_buttons = 0;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Map@ map = GetMap( map_id );
+        Item@ terminal = GetItem( terminal_id );
+		
+        if( map is null || terminal is null ) {
+            return false;
+        }
+		
+		if( FindTurrets( map, NPC_PID_LAS_TURRET ) ) {
+			Critter@[] turrets;
+			map.GetCritters( NPC_PID_LAS_TURRET, FIND_LIFE_AND_KO, turrets );
+			for( uint i = 0; i < turrets.length(); i ++ ) {
+				more_buttons += 1;
+				Critter@ turret = turrets[i];
+				if( valid( turret ) && ( turret.StatBase[ ST_VAR1 ] == int( terminal.Id ) ) ) {
+					string state = turret.IsKnockout() ? " Вкл турель: " : "Откл турель: ";
+					if( menu.Button( state + turret.Id ) ) {
+						int action = turret.IsKnockout() ? 0 : 1;
+						unsafe_sleep( turret, 0, 1, action, null, null );
+						if( action == 0 ) {
+							turret.SetEvent( CRITTER_EVENT_ATTACKED, "mob@_Attacked" );
+						}
+						return true;
+					}
+				} else {
+					continue;
+				}
+			}
+		}
+		
+		if( menu.Button( "Возврат" ) ) {
+			level = 1;
+			return false;
+		}
+		return true;
+    }
+
+    string@ Description( Critter& cr ) {	
+		Item@ terminal = GetItem( terminal_id );
+		Map@ map = GetMap( map_id );
+		string info;
+		if( FindTurrets( map, NPC_PID_LAS_TURRET ) ) { //Добавить плазменную и гатлинг-турели
+			info += "|0x3CF800 Подключенные турели: \n";
+			Critter@[] turrets;
+			map.GetCritters( NPC_PID_LAS_TURRET, FIND_LIFE_AND_KO, turrets );
+			for( uint i = 0; i < turrets.length(); i ++ ) {
+				Critter@ turret = turrets[i];
+				if( valid( turret ) && ( turret.PARENT_TERMINAL == int( terminal.Id ) ) ) {
+					info += "|0x3CF800 № ";
+					info += "|0xFFFF00 " + turret.Id;
+					int status = turret.Stat[ ST_CURRENT_HP ] * 100.0f / turret.Stat[ ST_MAX_LIFE ];
+					info += "|0x3CF800  статус: " ;
+					info += "|0xFFFF00 " + status;
+					info += "|0x3CF800  % - " ;
+					string state = turret.IsKnockout() ? "отключена" : "активна";
+					info += "|0xFFFF00 " + state + " \n";
+					if( turret.SECURITY_ACCESS_CARD != 0 ) {
+						string accessCard = _GetProtoName( turret.SECURITY_ACCESS_CARD );
+						info += "|0x3CF800 Доступ по: " ;
+						info += "|0xFFFF00 " + accessCard + "\n";
+					} else {
+						continue;
+					}
+				} else {
+					continue;
+				}
+			}
+			turrets.resize( 0 );
+		}		
+
+		return info;
+	}
+		
+	string@ ButtonCancel() {
+        return ButtonDecorator( "Скрыть меню", null );
+    }
+	
+	bool ShouldRedraw( Critter& cr ) {
+		return true;
+    }
+}
+
+//Child menu for GM Level commands
+class MenuTerminalGM: CenteredMenuHandler {
+    uint terminal_id;
+    uint map_id;
+	uint level;
+	
+    MenuTerminalGM( Item& terminal, Map& map ) {
+        terminal_id = terminal.Id;
+        map_id = map.Id;
+		level = 1;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Map@ map = GetMap( map_id );
+        Item@ terminal = GetItem( terminal_id );
+		
+        if( map is null || terminal is null ) {
+            return false;
+        }
+		string status;
+		
+		status = terminal.POWERED == 1 ? "да" : "нет";  
+		if( menu.Button( "Питание: " + status ) ) {
+			terminal.POWERED == 0 ? terminal.POWERED = 1 : terminal.POWERED = 0;
+		}
+		
+		status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) ? "да" : "нет"; 
+		if( menu.Button( "Контроль забора: " + status ) ) {
+			status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE );
+		}
+		
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) && menu.Button( "Назначить забор") ) {
+			MenuSelectFence@ select_fence = MenuSelectFence( terminal, map );
+			select_fence.level = level + 1;
+			return menu.OpenChild( "Уровень " + select_fence.level, select_fence );
+		}
+		
+		status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) ? "да" : "нет"; 
+		if( menu.Button( "Контроль турелей: " + status ) ) {
+			status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS );
+		}
+		
+		status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) ? "да" : "нет"; 
+		if( menu.Button( "Карты доступа: " + status ) ) {
+			status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS );
+		}
+		
+		status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) ? "да" : "нет"; 
+		if( menu.Button( "Пароль: " + status ) ) {
+			status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION );
+		}
+		
+		if( menu.Button( "Возврат" ) ) {
+			level = 0;
+			return false;
+		}
+		return true;
+    }
+
+    string@ Description( Critter& cr ) {	
+		Item@ terminal = GetItem( terminal_id );
+		Map@ map = GetMap( map_id );
+		string info = "ГМ меню управления терминалом";
+
+		return info;
+	}
+		
+	string@ ButtonCancel() {
+        return ButtonDecorator( "Скрыть меню", null );
+    }
+}
+
+//Child menu for GM Level commands
+//Child menu for card selection
+class MenuSelectFence: CenteredMenuHandler {
+    uint terminal_id;
+    uint map_id;
+	uint level;
+	int selectorPos;
+	uint arrayPos;
+	
+    MenuSelectFence( Item& terminal, Map& map ) {
+        terminal_id = terminal.Id;
+        map_id = map.Id;
+		level = 1;
+		selectorPos = 0;
+		arrayPos = 0;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Map@ map = GetMap( map_id );
+        Item@ terminal = GetItem( terminal_id );
+		
+        if( map is null || terminal is null ) {
+            return false;
+        }
+		
+		uint[] FenceEntires;	
+		for( int i = ENTIRE_LASER_FENCE_BEGIN; i < ENTIRE_LASER_FENCE_END; i++ ) {
+			int entireId = i;
+			int entires = map.CountEntire( entireId );
+			if( entires != 0 ) {
+				FenceEntires.insertLast( entireId );
+			} else {
+				continue;
+			}
+		}
+		
+		if( FenceEntires.length() != 0 ) {
+			if( menu.Button( "Предыдущий" ) ) {
+				selectorPos--;
+				if( arrayPos == 0 ) {
+					arrayPos = FenceEntires.length() - 1;
+					selectorPos = arrayPos;
+				} else {
+					arrayPos = selectorPos;
+				}
+				terminal.FENCE_GROUP = FenceEntires[ arrayPos ];
+				return true;
+			}
+			
+			if( menu.Button( "Следующий" ) ) {
+				selectorPos++;
+				if( arrayPos == FenceEntires.length() -1 ) {
+					arrayPos = 0;
+					selectorPos = arrayPos;
+				} else {
+					arrayPos = selectorPos;
+				}
+				terminal.FENCE_GROUP = FenceEntires[ arrayPos ];
+				return true;
+			}
+			
+			if( menu.Button( "Возврат" ) ) {
+				level = 1;
+				return false;
+			}
+		}
+		return true;
+    }
+
+    string@ Description( Critter& cr ) {	
+		Item@ terminal = GetItem( terminal_id );
+		Map@ map = GetMap( map_id );
+		
+		uint[] FenceEntires;	
+		for( uint i = ENTIRE_LASER_FENCE_BEGIN; i < ENTIRE_LASER_FENCE_END; i++ ) {
+			int entireId = i;
+			int entires = map.CountEntire( entireId );
+			if( entires != 0 ) {
+				FenceEntires.insertLast( entireId );
+			} else {
+				continue;
+			}
+		}
+		string info;
+		if( FenceEntires.length() != 0 ) {
+			info = "|0x3CF800 Обнаружены эмиттеры: \n";
+			for( uint j = 0; j < FenceEntires.length() ; j ++ ) {
+				string entire = FenceEntires[j];
+				info += "|0xFFFF00 " + entire;
+				info += "|0x3CF800 ; " ;
+			}
+			info[ info.length() - 2 ] = ' ';
+			info[ info.length() - 2 ] = '.';
+			
+			if( terminal.FENCE_GROUP != 0 ) {
+				info += "|0x3CF800 \nВыбранная группа: [ ";
+				info += "|0xFFFF00 " + terminal.FENCE_GROUP;
+				info += "|0x3CF800  ]";
+			}
+			
+		} else { 
+			info = "|0xFFFF00 Эмиттеров не обнаружено!";
+		}		
+		return info;
+	}	
+		
+	string@ ButtonCancel() {
+        return ButtonDecorator( "Скрыть меню", null );
+    }
+}
+#endif //TERMINAL

@@ -1,764 +1,173 @@
+#ifndef GATEWAY
+#define GATEWAY
+
 #include "_utils.fos"
+#include "gateway_h.fos"
+#include "terminal_h.fos"
 #include "_npc_pids.fos"
-#include "entire_h.fos"
+#include "_animation.fos"
+#include "npc_planes_h.fos"
 
-#define COUNT_LAZERS_NS 4
-#define LENGTH_LAZER_NS 3
-#define EVENT Val3
+const string[] SoundNames = { "saber_ambient_1.ogg", "saber_ambient_2.ogg", "saber_ambient_3.ogg", "saber_ambient_4.ogg" };
 
-import bool getStateLazer( Map@ map ) from "main";
-import bool getStateLazer( Critter& cr ) from "main";
-
-#ifndef __GATEWAY_INCLUDES
-
-	#define __GATEWAY_INCLUDES
-		
-	import bool AddAttackPlane( Critter& npc, uint priority, Critter& target, int minHp ) from "npc_planes";
-	import uint EraseAttackPlane( Critter& npc, Critter& target ) from "npc_planes";
-#endif
-
-#ifndef __GATEWAY_MAIN
-	#define __GATEWAY_MAIN
-#endif
-
-#ifndef __GATEWAY_UTILS
+void t_EnterHex( Critter& cr, Scenery& trigger, bool entered, uint8 dir, int val )
+{
+	if( cr.IsNpc() || isGM( cr ) ) { return; }
 	
-	#define __GATEWAY_UTILS
-
-	bool getEntureCoordinate(Map@ map, uint entireId, uint16& hexX = 0, uint16& hexY = 0){
-		
-		map.GetEntireCoords( entireId, 0, hexX, hexY );
-		if ( ( hexX == 0 ) && ( hexY == 0 ) ) return false;
-		
-		return true;
-	}
+	Map@ map = cr.GetMap();
+	if( !valid( map ) ) { return; }
 	
-	uint[]@ getValuesLazer(Critter& cr, int hx, int hy)
-	{	
-		Item@[] items = _getItems(cr.GetMap(), hx, hy);
-
-		if (items.length() == 0) return null;
-		
-		uint[] values = { cr.GetMap().Id, items[0].Id, COUNT_LAZERS_NS * LENGTH_LAZER_NS };
-		return values;
-	}
-
-	Item@[]@ _getItems(Map@ map, uint hx, uint hy)
-	{	
-		Item@[] items;
-		if( !valid( map ) ) return null;
-		
-		map.GetItems(hx, hy, items);
-		return items;
-	}
+	Location@ loc = map.GetLocation();
+	if( !valid( loc ) ) { return; }
 	
-	// удаление лазера через рекурсию
-	void DelItem( Map@ map, Item@ item, int length){
-		uint _id = item.Val0;	
-		
-		if (length != 0){
+	if( entered ) {
+		if( cr.Dir >= 0 && cr.Dir <= 2 ) {
+			Critter@[] turrets;
+			uint count = map.GetCritters( NPC_PID_LAS_TURRET, FIND_LIFE, turrets );
+			if( turrets.length() < 1 ) { return; }
 			
-			DeleteItem(item);
-			item.Update();
-			length--;
-			
-			Item@ _item = map.GetItem(_id);
-			DelItem(map, _item, length);
-		}
-		else
-			return;	
-	}
-	
-	bool CheckPlaceOfLazer(Map@ map, int x, int y){
-		Critter@[] crs;
-		int countCr = map.GetCritters(0, FIND_LIFE, crs); 
-		if (countCr == 0) return false;
-		
-		uint16 hexX = x, hexY = y;
-		
-		for (int i = 0; i < countCr; i++){		
-			if ((hexX == crs[i].HexX) && (hexY == crs[i].HexY)){
-				map.MoveHexByDir( hexX, hexY, ( crs[i].Dir + 3 ) % 6, 2 );
-				crs[i].TransitToHex( hexX, hexY, crs[i].Dir );
-			}
-		}
-		return true;
-	} 
-
-	void AddLazerGate(Map@ map, uint16 hexX, uint16 hexY, int length){
-		Item@[] lazers;
-		int k = -1;
-		for(int i = 0 ; i < length; i++)
-		{
-			uint pid = i % 3 == 1 ? PID_LAZER_FENCE_NS : PID_SHADOW;
-			uint16 trans = (i-3);
-			Item@ lazer = map.AddItem( hexX, hexY + trans, pid, 1 );	
-			if( !valid( lazer ) ) 
-			{
-				Log( "Failed to create lazer #" + i + " at [" + hexX + ", " + (hexY + trans) + "].");
-				continue;
-			}	
-			lazers.insertLast( lazer );
-			if (i > 0) 			lazers[i].Val0 = lazers[i - 1].Id; 
-			if (i == length-1) 	lazers[0].Val0 = lazers[i].Id;	
-			
-			CheckPlaceOfLazer(map, hexX, hexY + trans);
-			if (!addSound){
-				map.PlaySound("saber_on.ogg", hexX, hexY, 2);
-				uint[] values = { map.Id };
-				addSound = true;
-				lazers[i].EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ), "e_SoundLazerOn", values, false);
-			}
-			
-			lazers[i].SetScript( "_InitLazer" );
-			lazers[i].Update();
-		}	
-	}	
-#endif
-#ifndef __GATEWAY_LAZER
-	#define __GATEWAY_LAZER=-0
-
-	void _InitLazer( Item& item, bool firstTime )
-	{
-		item.SetEvent( ITEM_EVENT_WALK, "_CrossLazer" );
-	}
-		
-	void _CrossLazer(Item& item, Critter& cr, bool entered, uint8 dir)
-	{
-		if(entered) 
-		{	
-			if( !isGM( cr ) )// || cr.ParamBase[CR_THREAT_LEVEL] <= 0 )
-			{	
-				cr.ToDead( ANIM2_DEAD_LASER, null );
-				
-				Map@ map = cr.GetMap();
-				
-				uint16 hexX = 0, hexY = 0;
-				int entireId = LASER_NS_ENTIRE;
-				map.GetEntireCoords( entireId, 0, hexX, hexY );
-				map.PlaySound("saber_kill.ogg", hexX, hexY, 5);
-			}
-		}
-	}
-	
-	uint e_Wait( uint[] @ values ) {
-		//DelItem(GetMap( values[0]), GetItem(values[1]), values[2]);
-		removeAllLazers( GetMap( values[0] ) );
-		return 0;
-	}
-	
-	
-	const string[] SoundNames = {"saber_ambient_1.ogg", "saber_ambient_2.ogg", "saber_ambient_3.ogg", "saber_ambient_4.ogg" };
-	uint e_SoundLazerOn( uint[]@ values ) {
-		
-		if( !valid( values ) || values.length() != 1 )
-			return 0;
-		
-		Map@ map = GetMap( values[0]);
-		if (!valid(map)) return 0;
-
-		uint16 hexX = 0, hexY = 0;
-		int entireId = LASER_NS_ENTIRE;
-		map.GetEntireCoords( entireId, 0, hexX, hexY );
-		
-		Item@[] items = _getItems(map, hexX, hexY);
-		if( !valid(items) || items.length() == 0 ) return 0;
-		
-		map.PlaySound( SoundNames[ Random( 0, SoundNames.length() -1 ) ], hexX, hexY, 3 );
-		if( getStateLazer(map) ){
-			uint[] args = { map.Id };
-			EraseTimeEvent( items[0].EVENT );			
-			items[0].EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 4 ) ), "e_SoundLazerOn", args, false);
-		}
-		else EraseTimeEvent( items[0].EVENT );
-		return 0;
-	}
-	
-	
-#endif
-
-//модуль необходимый для быстрой отладки лазерных ворот, можно использовать для дальнейших изменений
-#ifndef __GATEWAY_RUN
-	#define __GATEWAY_RUN
-	
-	bool addSound = false;
-	
-	//~run gateway add_lazer 0 0 0
-	void add_lazer( Critter& cr, int turel, int p1 , int p2 )
-	{
-		if( getStateLazer(cr) ) 
-		{
-			cr.Say( SAY_NETMSG, "Лазер уже включен");
-			return;
-		}
-		
-		Map@ map = cr.GetMap();
-		
-		uint16 hx = 0, hy = 0;
-		int entireId = LASER_NS_ENTIRE;
-		map.GetEntireCoords( entireId, 0, hx, hy );
-		
-		int length = COUNT_LAZERS_NS * LENGTH_LAZER_NS;
-		AddLazerGate(map, hx, hy, length);
-	}
-	
-	//~run gateway del_lazer 0 0 0
-	void del_lazer( Critter& cr, int p0, int p1, int p2 )
-	{
-		removeAllLazers( cr.GetMap() );
-	}
-	
-	void removeAllLazers( Map@ map )
-	{
-		if( !valid( map ) )
-			return;
-		
-		Item@[] items;
-        uint16 x = 472, y = 340;
-		for( uint i = 0; i < COUNT_LAZERS_NS * LENGTH_LAZER_NS; i++ )
-		{
-			map.GetItems( x, y, items );
-			map.MoveHexByDir( x, y, 2, 1 );
-		}
-
-		if( items.length() == 0 ) 
-			return;
-		
-		for( uint i = 0, l = items.length(); i < l; i++ )
-		{
-			uint pid = items[i].GetProtoId();
-			if( pid == PID_LAZER_FENCE_NS || pid == PID_SHADOW )
-			{
-				if( items[i].EVENT != 0 )
-					EraseTimeEvent( items[0].EVENT );
-				
-				DeleteItem( items[i] );
-			}
-		}
-		
-		map.GetEntireCoords( LASER_NS_ENTIRE, 0, x, y );
-		map.PlaySound("saber_off.ogg", x, y, 5);
-		addSound = false;
-	}
-	
-#endif
-
-#ifndef __GATEWAY_TODO_CLASSES
-	
-	#define __GATEWAY_TODO_CLASSES
-
-	class LazerGuard
-	{
-		uint pid;
-		uint startHexX;
-		uint startHexY;
-		uint EndHexX;
-		uint EndHexY;
-		uint countLazer;
-		uint damage;
-		
-		LazerGuard(uint pid , uint startHexX, uint startHexY, uint EndHexX, uint EndHexY, 
-		uint countLazer, uint damage){
-			
-		}
-		
-		void AddItemHexs(){
-			
-		}
-		
-		void ItemWalk(Item& item, Critter& cr, bool entered, uint8 dir){
-			
-		}
-		void InitializeGate(Item& item, Critter& cr, bool entered, uint8 dir){
-			
-		}
-	}
-	
-#endif
-
-#ifndef __GATEWAY_ROBOT
-	
-	#define __GATEWAY_ROBOT
-
-	//NOTE: WTF IS IT?!
-	uint[] guards;//TODO: remove
-
-	//NOTE: unsafe!?
-	void InitRobot( Critter& cr, int p0, int p1, int p2, string@, int[]@ )
-	{
-		robotize( cr, p0, p1, p2 );
-	}
-
-	//~run gateway robotize 0 0 0
-	void robotize( Critter& cr, int p0, int p1, int p2 )
-	{
-		if( p0 == 0 )
-		{
-			cr.Say( SAY_NETMSG, "Неверно указан айди робота!" );
-			return;
-		}
-
-		Critter@ robot = GetCritter( p0 );
-		if( !valid(robot) )
-		{
-			cr.Say( SAY_NETMSG, "Робот не найден!" );
-			return;
-		}
-
-		if( robot.Stat[ ST_BODY_TYPE ] != BT_ROBOT )
-		{
-			cr.Say( SAY_NETMSG, "Цель не подходит!" );
-			return;
-		}
-		
-		InitDefenceProtocol( robot );
-	}
-
-	void InitDefenceProtocol( Critter& robot )
-	{
-		robot.Say( SAY_NORM, "Защитный протокол инициирован. Охраняю." );
-		robot.SetEvent(CRITTER_EVENT_SMTH_ATTACKED, "_agression");
-		robot.SetEvent( CRITTER_EVENT_SHOW_CRITTER, "_checkEnemy" ); 
-		robot.ClearEnemyStack();
-	}
-
-	void _checkEnemy( Critter& robot, Critter& player )
-	{
-		if( robot.IsDead() || !( player.IsPlayer() ) )
-			return;
-
-		EraseAttackPlane( robot, player );
-		robot.EraseEnemyFromStack( player.Id );
-		
-		GameVar@ access = ::GetUnicumVar( UVAR_loyality, robot.Id, player.Id );
-		
-		if( access < 5 )
-		{
-			if( Random( 0, 2 ) == 0 )
-				RadioMessage( 0, "ОБНАРУЖЕН НАРУШИТЕЛЬ В СЕКТОРЕ 'G'!" );
-
-			if( Random( 0, 1 ) == 0 )
-				access = 5;
-			
-			robot.Say( SAY_SHOUT_ON_HEAD, "НАРУШИТЕЛЬ !!! УНИЧТОЖИТЬ" );
-			robot.AddEnemyInStack( player.Id );
-			AddAttackPlane( robot, 0, player, -10 );
-		}
-	}
-
-	void _agression( Critter& robot, Critter& victim, Critter& attacker )
-	{
-		DEBUG_SAY( robot, "_agression: " + crInfo( attacker ) + " attacks " + crInfo( victim ) );//DEBUG ONLY
-		
-		if( attacker.Id == robot.Id ) return;
-		
-		GameVar@ attacker_access = ::GetUnicumVar( UVAR_loyality, robot.Id, attacker.Id );
-		GameVar@ victim_access = ::GetUnicumVar( UVAR_loyality, robot.Id, victim.Id );
-		
-		uint8 dir = GetDirection( robot.HexX, robot.HexY, attacker.HexX, attacker.HexY);
-	 
-		if( Random( 0, 3 ) == 0 )
-		{
-			robot.SetDir(dir);
-			robot.Say( SAY_SHOUT_ON_HEAD, "НАРУШЕНИЕ БЕЗОПАСНОСТИ !!! !!! ОХРАНА ОПОВЕЩЕНА" );
-			string attacker_desc = ( attacker_access < 6 ? "НЕИЗВЕСТНЫМ" : ( attacker_access < 7 ? "РАБОЧИМ" : "ОХРАННИКОМ" ) );
-			string victim_desc = ( victim_access < 6 ? "НЕИЗВЕСТНЫЙ" : ( victim_access < 7 ? "РАБОЧИЙ" : "ОХРАННИК" ) );
-			RadioMessage( 0, "НАРУШЕНИЕ ПОРЯДКА В СЕКТОРЕ 'G'! " + victim_desc + " БЫЛ АТАКОВАН " + attacker_desc + "." );
-		}
-		
-		if( attacker_access < 6 && victim_access > 5 ) //Если нападение неавторизованного на авторизованного.
-		{
-			if( !robot.CheckEnemyInStack( attacker.Id ) )
-			{
-					attacker_access = 4;
-					robot.Say( SAY_SHOUT_ON_HEAD, "НАРУШИТЕЛЬ !!! УНИЧТОЖИТЬ" );
-					robot.AddEnemyInStack( attacker.Id );
-					AddAttackPlane( robot, 0, attacker, -10 );
-			}
-		}
-	}
-
-	void t_EnterHex( Critter& cr, Scenery& trigger, bool entered, uint8 dir, int val )
-	{
-		if( cr.IsNpc() || isGM( cr ) )
-			return;
-
-		Map@ map = cr.GetMap();
-		if(!valid(map))return;
-		Location@ loc = map.GetLocation();
-		if(!valid(loc))return;
-		
-		if( map.GetProtoId() == 103 ) //Саттерский бот: подставляйте номер прототипа карты из Locations.cfg
-		{
-			if(entered)
-			{
-				if( cr.Dir >= 0 && cr.Dir <= 2 )
-				{
-					Critter@[] turrets;
-					//map.GetCritters( 1904, FIND_LIFE | FIND_ONLY_NPC, turrets );
-					uint count = map.GetCritters( NPC_PID_LAS_TURRET, FIND_LIFE, turrets );
-					if( turrets.length() < 1 ) return;
-					Critter@ turret = turrets[ Random( 0, turrets.length()-1 )];
-
-					if( val == 5 && cr.Param[CR_THREAT_LEVEL] == -1 ) return; //Не реагирует на авторизованных
-					
-					for( uint i = 0; i < count; i++ )
-					{
-						turrets[i].Say( SAY_EMOTE_ON_HEAD, "угрожающе повернулся" );
-						uint8 dir = GetDirection( turrets[i].HexX, turrets[i].HexY, cr.HexX, cr.HexY );
-						turrets[i].SetDir( dir );
-					}
-					
-					cr.SetEvent( CRITTER_EVENT_IDLE, null );
-					//cr.Wait( 500 );
-					//PlaySound( cr, "Alarm.ogg" );
-					//PlayMusic( cr, "Alarm.ogg", 1, 0 );
-
-					if( val == 4 )
-					{
-						if( cr.CountItem( turret.Param[ ST_VAR8 ] ) > 0 )
-						{
-							cr.Say( SAY_EMOTE_ON_HEAD, "показывает пропуск" );
-							cr.ParamBase[CR_THREAT_LEVEL] = -1;
-						}
-						else
-							cr.Wait( 500 );
-						
-						RunDialog( cr, turret, true );
-						return;
-					}
-					
-					if( cr.CountItem( turret.Param[ ST_VAR8 ] ) == 0 )
-					{
-						if( cr.ParamBase[CR_THREAT_LEVEL] == -1 )
-							return;
-						
-						if( val == 5 )
-						{
-							for( uint i = 0; i < count; i++ )
-							{
-								turrets[i].Say( SAY_SHOUT_ON_HEAD, "НАРУШИТЕЛЬ !!! УНИЧТОЖИТЬ" );
-								AddAttackPlane( turrets[i], 0, cr, -10 );
-							}
-							
-							if( !getStateLazer(cr) )
-							{
-								add_lazer(cr, 0, 0, 0);
-								Map@ map = cr.GetMap();
-								
-								uint16 hx = 0, hy = 0;
-								int entireId = LASER_NS_ENTIRE;
-								map.GetEntireCoords( entireId, 0, hx, hy );
-													
-								uint[]@ values = getValuesLazer(cr, hx, hy);
-								CreateTimeEvent( AFTER( REAL_SECOND(15) ), "e_Wait", values, true );	
-							}							
-							
-							cr.ParamBase[CR_THREAT_LEVEL] = 1;
-						}
-						else
-						{
-							RunDialog( cr, turret, true );
-							cr.Wait( 500 );
-						}
-					}
+			Critter@ turret = null;
+			for( uint j = 0; j < turrets.length(); j ++ ) {
+				@ turret = turrets[j];
+				if( turret.LASER_FENCE_GRID != 0 ) {
+					break;
 				}
 			}
-		}
-		else //Модокский старый код:
-		{
-			int 	ck = cr.ParamBase[ QST_GAMEMODE ];
 
-			GameVar@ citizenship = GetLocalVar( LVAR_modoc_citizenship, cr.Id );
-			GameVar@ border_mode = GetGlobalVar( GVAR_inf_modoc_border_mode );
-			GameVar@ faction = GetLocalVar( LVAR_faction, cr.Id );
+			if( val == 5 && cr.Param[ CR_THREAT_LEVEL ] == -1 ) { return; } //Не реагирует на авторизованных
 			
-			if( entered && border_mode.GetValue() != 5 && ( citizenship.GetValue() <= 1 && cr.Param[ QST_INVIS ] == 0 ||
-															citizenship.GetValue() == 10 ||
-															( border_mode.GetValue() == 1 && citizenship.GetValue() <= 2 ) ||
-															( border_mode.GetValue() == 2 && citizenship.GetValue() <= 3 ) ||
-															( border_mode.GetValue() == 3 && citizenship.GetValue() <= 3 ) ||
-															( border_mode.GetValue() == 4 && ( faction.GetValue() == 0 || faction.GetValue() >= 3 ) ) ) )
-			{
-				// Log("нелегал");
-				if( val == 5 )
+			for( uint i = 0; i < count; i++ ) {
+				uint8 dir = GetDirection( turrets[i].HexX, turrets[i].HexY, cr.HexX, cr.HexY );
+				turrets[i].SetDir( dir );
+			}
+			
+			cr.SetEvent( CRITTER_EVENT_IDLE, null );
+
+			if( val == 4 ) {
+				if( cr.CountItem( turret.SECURITY_ACCESS_CARD ) > 0 )
 				{
-					if( border_mode.GetValue() <= 2 && citizenship.GetValue() == 1 )
-					{
-						if( border_mode.GetValue() == 0 && ( cr.Dir == 0 || cr.Dir == 5 || cr.Dir == 4 ) )
-						{
-							cr.Say( SAY_EMOTE_ON_HEAD, "показывает пропуск" );
-							return;
-						}
-						else if( cr.Dir == 1 || cr.Dir == 2 || cr.Dir == 3 )
-						{
-							citizenship.opAssign( 0 );
-							cr.Say( SAY_EMOTE_ON_HEAD, "сдает пропуск охране" );
-							return;
-						}
-						else
-							AttackAndCatch( cr );
-					}
-					else if( border_mode.GetValue() <= 2 && citizenship.GetValue() == 2 && ( cr.Dir == 1 || cr.Dir == 2 || cr.Dir == 3 ) )
-						return;
-					else
-						AttackAndCatch( cr );
+					cr.Say( SAY_EMOTE_ON_HEAD, "показывает пропуск" );
+					cr.ParamBase[ CR_THREAT_LEVEL ] = -1;
+				} else {
+					cr.Wait( 500 );
 				}
-				else if( val == 4 )
-				{
-					if( citizenship.GetValue() == 1 && border_mode.GetValue() == 0 )
-						return;
-					// Log("кричим");
-					Critter@ gu = null;
-					for( uint i = 0, len = guards.length(); i < len; i++ )
-					{
-						Critter@ tgu = GetCritter( guards[ i ] );
-						if( (tgu is null) || GetDistantion( cr.HexX, cr.HexY, tgu.HexX, tgu.HexY ) > 15 || !tgu.IsSee( cr ) )
-							continue;
-						@gu = tgu;
-						if( tgu.Param[ ST_DIALOG_ID ] == 330 )
-							break;
+				RunDialog( cr, turret, true );
+				return;
+			}
+			
+			if( cr.CountItem( turret.SECURITY_ACCESS_CARD ) == 0 ) {
+				if( cr.ParamBase[ CR_THREAT_LEVEL ] == -1 ) {
+					return;
+				}
+				
+				if( val == 5 ) {
+					for( uint i = 0; i < count; i++ ) {
+						AddAttackPlane( turrets[i], 0, cr, -300 );
 					}
-					if( gu is null )
-						return;
-
-					// Log("123");
-
-					uint8 dir = GetDirection( gu.HexX, gu.HexY, cr.HexX, cr.HexY );
-
-					// uint8 dir2 = (dir+3)%6;
-
-					// Log("мой "+cr.Dir+" а dir "+dir);
-
-					if( cr.Dir == dir || cr.Dir == ( ( dir + 1 ) % 6 ) || cr.Dir == ( dir + 5 ) % 6 )
-						return;
-
-					// Log("345");
-
-					gu.Say( SAY_SHOUT_ON_HEAD, "Стоять! Тебе нельзя в город!" );
-					gu.SetDir( dir );
-					cr.SetEvent( CRITTER_EVENT_IDLE, null );
-					cr.Wait( 1000 );
+					
+					uint16 hx = 0, hy = 0;
+					uint8 dir = 0;
+					int entireId = turret.LASER_FENCE_GRID;
+					map.GetEntireCoords( entireId, 1, hx, hy, dir );
+					Item@ deathHexCheck = map.GetItem( hx, hy, PID_DEATH_HEX ); 
+					if( !valid( deathHexCheck ) ) { 
+						ToggleLaserFence( map, entireId );
+						uint[] values = { map.Id, entireId }; 
+						CreateTimeEvent( AFTER( REAL_SECOND( 60 ) ), "e_ToggleFence", values, true );
+					}
+					cr.ParamBase[ CR_THREAT_LEVEL ] = 1;
+				} else {
+					RunDialog( cr, turret, true );
+					cr.Wait( 2000 );
 				}
 			}
 		}
 	}
+}
 
-	void AttackAndCatch( Critter& cr )
-	{
-		Map@ map = cr.GetMap();
-		if( map is null )
-			return;
+uint e_ToggleFence( uint[]@ values )
+{
+	Map@ map = GetMap( values[0] );
+	int entireId = values[1];
+	ToggleLaserFence( map, entireId );
+	return 0;
+}
 
-		for( uint i = 0; i < guards.length(); i++ )
-		{
-			Critter@ guard = GetCritter( guards[ i ] );
-			if( guard is null )
-				continue;
-
-			uint len = GetDistantion( cr.HexX, cr.HexY, guard.HexX, guard.HexY );
-			if( len > 25 || !guard.IsSee( cr ) || ( cr.GetMap().Id != guard.GetMap().Id ) )
-				continue;
-
-			AddAttackPlane( guard, 0, cr, -10 );
-		}
-	}
-
-	void _KoAndCatch( Critter& cr, uint anim2begin, uint anim2idle, uint anim2end, uint lostAp, uint knockDist )
-	{
-		int  ck = cr.ParamBase[ QST_GAMEMODE ];
-
-		bool ck2 = false;
-
-		if( !cr.IsDead() /*&& ck!=ACT_CODE && ck!=ACT_GM*/ )
-		{
-			for( uint i = 0; i < guards.length(); i++ )
-			{
-				Critter@ guard = GetCritter( guards[ i ] );
-
-				if( (guard is null) )
-					continue;
-				if( cr.GetMap().Id != guard.GetMap().Id )
-					continue;
-
-				EraseAttackPlane( guard, cr );
-
-				if( ck2 || ( !guard.IsSee( cr ) ) )
-					continue;
-
-				if( !catch( cr ) )
-					Log( "Fail with catch!" );
-
-				ck2 = true;
-			}
-		}
-
-		cr.SetEvent( CRITTER_EVENT_KNOCKOUT, null );
-	}
-
-	void _KoAndCatch2( Critter& cr, uint anim2begin, uint anim2idle, uint anim2end, uint lostAp, uint knockDist )
-	{
-		cr.SetEvent( CRITTER_EVENT_KNOCKOUT, null );
+void ToggleLaserFence( Map& map, int entireId )
+{
+	uint entires = map.CountEntire( entireId );
+	uint16 hx = 0, hy = 0;
+	uint8 dir = 0;
+	for( uint i = 0; i < entires; i++ )  {
+		map.GetEntireCoords( entireId, i, hx, hy, dir );
 		
-		Map@ map = cr.GetMap();
-		if(!valid(map))	return;
+		uint distance = 2;
+		uint16 laserFencePid = PID_LAZER_FENCE_NS;
 		
-		Critter@[] turrets;
-		map.GetCritters( NPC_PID_LAS_TURRET, FIND_LIFE | FIND_ONLY_NPC, turrets );
-		if( turrets.length() < 1 ) { Log( "Робо-лерой куда-то проебался!" ); return; }
-		Critter@ turret = turrets[0];
-		EraseAttackPlane( turret, cr );
+		if( dir == 1 ) {
+			distance = 5;
+			laserFencePid = PID_LAZER_FENCE_WE;
+		}
 		
-		cr.ParamBase[CR_THREAT_LEVEL] = 0;
-		// if( !cr.IsDead() )
-			// catch( cr );
-	}
-
-	bool catch( Critter& cr )
-	{
-		bool ch = false;
-		Map @ map = cr.GetMap();
-		if( map is null )
-			return false;
-		Location @ loc = map.GetLocation();
-		if( ( loc.GetProtoId() >= 1 && loc.GetProtoId() <= 4 ) || loc.GetProtoId() == 6 )
-		{
-			Map @ map2 = GetLocationByPid( 5, 0 ).GetMapByIndex( 0 );
-			if( map2 is null )
-			{
-				Log( "gw map" );
-				return false;
+		Item@ deathHex = null;
+		@deathHex = map.GetItem( hx, hy, PID_DEATH_HEX );
+		uint16 tx = hx, ty = hy;
+		if( !valid( deathHex ) ) { 
+		
+			@deathHex = map.AddItem( hx, hy, PID_DEATH_HEX, 1 );
+			CheckVictims( map, hx, hy );
+			deathHex.DEATH_HEX_TYPE = ANIM2_DEAD_LASER;
+			
+			map.MoveHexByDir( tx, ty, dir, 1 );
+			if( dir == 1 ) {
+				map.MoveHexByDir( tx, ty, 0, 1 );
 			}
-			ch = cr.TransitToMap( map2.Id, 0 );
-			return ch;
-		}
-		if( loc.GetProtoId() == 5 ) //Модок.
-		{
-			ch = cr.TransitToHex( 490 + Random( -5, 5 ), 346 + Random( -5, 5 ), 6 );
-			cr.Say( SAY_NETMSG, "Вас выкинули из Модока. Оно и к лучшему, правда?" );
-			return ch;
-		}
-		if( map.GetProtoId() == 103 ) //Саттер.
-		{
-			ch = cr.TransitToHex( 490 + Random( -2, 2 ), 346 + Random( -2, 2 ), 6 );
-			cr.Say( SAY_NETMSG, "Вас выкинули из Форта. Лучше не испытывайте судьбу второй раз, робот шуток не понимает." );
-		}
-		return ch;
-
-	/*	uint16 hexX=0, hexY=0;
-
-			if(!map.GetEntireCoords (58, 0, hexX, hexY)) return false;
-
-			Item@ toCont = map.	GetItem(hexX, hexY, 188); //ищем шкаф с pid 188 на гексе #58
-
-			if(valid(toCont))
-			{
-					Item@[] FI;
-					cr.GetItems(SLOT_INV,items);
-					cr.GetItems(SLOT_HAND1,items);
-					cr.GetItems(SLOT_HAND2,items);
-
-					MoveItems(items,  toCont, cr.Id); //прячем вещички в шкаф с замком 300
+			Item@ fenceVFX = map.AddItem( tx, ty, laserFencePid, 1 );
+			map.PlaySound( "saber_on.ogg" , tx, ty, 3 );
+			
+		} else {
+			DeleteItem( deathHex );
+			
+			map.MoveHexByDir( tx, ty, dir, 1 );
+			if( dir == 1 ) {
+				map.MoveHexByDir( tx, ty, 0, 1 );
 			}
-
-			uint last = map.GetData(55); // в какую клетку в последний раз пихали
-
-			bool ch=false;
-
-			for(uint i=0; i<3 && !ch; i++) //пробуем засунуть в одну из клеток по очереди
-			{
-					if(!map.GetEntireCoords(55+last, 0, hexX, hexY)) continue;
-
-					ch = cr.TransitToHex(hexX, hexY, 2);
-
-					last+=1; if(last>2) last=0;
+			Item@ fenceVFX = map.GetItem( tx, ty, laserFencePid );
+			if( valid( fenceVFX ) ) {
+				DeleteItem( fenceVFX ); 
+				map.PlaySound( "saber_off.ogg" , tx, ty, 3 );
 			}
-
-			map.SetData(55, last);
-
-			return ch;
-	 */
-	}
-
-	void addGuard( Critter& npc )
-	// void _InitGuard(Critter& npc, bool firstTime)
-	{
-		guards.insertLast( npc.Id );
-	}
-
-	void r_toHex( Critter& master, Critter@ slave, int val )
-	{
-		Map@ map = master.GetMap();
-
-		if( map is null )
-			return;
-
-		uint16 hexX = 0, hexY = 0;
-
-		if( !map.GetEntireCoords( val, 0, hexX, hexY ) )
-			return;
-
-		master.TransitToHex( hexX, hexY, 5 );
-	}
-
-	bool d_isGoOut( Critter& master, Critter@ slave )
-	{
-		Map@ map = master.GetMap();
-
-		if( map is null )
-			return false;
-
-		uint16 hexX = 0, hexY = 0;
-
-		if( !map.GetEntireCoords( 83, 0, hexX, hexY ) )
-			return false;
-
-		if( master.HexX == hexX && master.HexY == hexY )
-			return true;
-
-		uint8 dir = GetDirection( master.HexX, master.HexY, hexX, hexY );
-
-		return ( dir > 0 && dir < 4 );
-
-	}
-
-	void AttackAndCatch( Critter& player, int id, int param1, int param2 )
-	{
-		Critter@ cr = GetCritter( uint( id ) );
-		if( cr is null )
-			return;
-		AttackAndCatch( cr );
-	}
-
-	void Release( Critter& player, int id, int param1, int param2 )
-	{
-		Critter@ cr = GetCritter( id );
-		if( cr is null )
-			return;
-		Map@ map = cr.GetMap();
-		if( map is null || map.GetProtoId() != 18 )
-			return;
-		if( cr.HexX >= 120 || cr.HexX <= 100 || cr.HexY >= 220 || cr.HexY <= 210 )
-			return;
-
-		//	uint16 hexX=0, hexY=0;
-		//	if(!map.GetEntireCoords(0, 0, hexX, hexY) || !cr.TransitToHex(hexX, hexY, 5)) return;
-		//	player.Say(SAY_NETMSG, "Transfer ok.");
-		//	if(param1==0) return;
-		//	hexX=0; hexY=0;
-		//	if(!map.GetEntireCoords(58, 0, hexX, hexY)) return;
-
-		cr.TransitToHex( player.HexX + 1, player.HexY + 1, 5 );
-		Item@ toCont = map.GetItem( 117, 208, 188 );   // ищем шкаф с pid 188 на гексе #58
-		if( valid( toCont ) )
-		{
-			Item@[] items;
-			toCont.GetItems( cr.Id, items );
-
-			MoveItems( items, cr );       // прячем вещички в шкаф с замком 300
-
-			player.Say( SAY_NETMSG, "Item return ok." );
+		}
+		for( uint steps = 0; steps < distance; steps ++ ) {
+			if( dir == 1 && ( steps == 1 || steps == 3 || steps == 5 ) ) {
+				map.MoveHexByDir( hx, hy, 0, 1 );
+			} else {
+				map.MoveHexByDir( hx, hy, dir, 1 );
+			}
+			
+			@deathHex = map.GetItem( hx, hy, PID_DEATH_HEX ); 
+			if( !valid( deathHex ) ) { 
+				@deathHex = map.AddItem( hx, hy, PID_DEATH_HEX, 1 );
+				CheckVictims( map, hx, hy );
+				deathHex.DEATH_HEX_TYPE = ANIM2_DEAD_LASER;
+			} else {
+				DeleteItem( deathHex );
+			}
 		}
 	}
-	
-#endif
+}
+
+void CheckVictims( Map& map, uint16 hx, uint16 hy )
+{
+	Critter@[] victims; 
+	map.GetCrittersHex( hx, hy, 0, FIND_LIFE_AND_KO, victims );
+	if( victims.length() > 0 ) {
+		for( uint j = 0; j < victims.length(); j++ ) {
+			Critter@ victim = victims[ j ];
+			victim.ToDead( ANIM2_DEAD_LASER, null );
+			map.PlaySound( "saber_kill.ogg", victim.HexX, victim.HexY, 5 );
+		}
+	}
+}
+
+#endif //GATEWAY
