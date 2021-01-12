@@ -1,0 +1,242 @@
+#ifndef AI_TURRETS
+#define AI_TURRETS
+
+#include "_utils.fos"
+#include "ai_turrets_h.fos"
+#include "npc_planes_h.fos"
+#include "gateway_h.fos"
+
+import bool MovePosition( Critter& player ) from "mio_deviants_toolkit";
+
+void _TurretInit( Critter& turret, bool firstTime )
+{
+	turret.SetEvent( CRITTER_EVENT_SHOW_CRITTER,	"_CritterChecKillList" );
+	turret.SetEvent( CRITTER_EVENT_HIDE_CRITTER,	"_CritterOutOfSight" );
+    turret.SetEvent( CRITTER_EVENT_IDLE,			"_Idle" );
+    turret.SetEvent( CRITTER_EVENT_PLANE_BEGIN,		"_PlaneBegin" );
+	turret.SetEvent( CRITTER_EVENT_PLANE_END,		"_PlaneEnd" );
+    turret.SetEvent( CRITTER_EVENT_DEAD,			"_MyDeath" );
+    turret.SetEvent( CRITTER_EVENT_ATTACKED,		"_Attacked" );
+	
+	turret.ShowCritterDist1 = RADIUS_WARN;
+    turret.SetEvent( CRITTER_EVENT_SHOW_CRITTER_1,	"_CritterInWarningRange" );
+	turret.SetEvent( CRITTER_EVENT_HIDE_CRITTER_1,	"_CritterOutOfWarningRange" );
+	
+	turret.ShowCritterDist2 = RADIUS_KILL;
+	turret.SetEvent( CRITTER_EVENT_SHOW_CRITTER_2,	"_CritterInAttackRange" );
+}
+
+void _CritterChecKillList( Critter& turret, Critter& target )
+{
+	//bool markedForTermination = false;
+	//if( markedForTermination( target ) ) {
+	//	AddAttackPlane( turret, AI_PLANE_ATTACK_PRIORITY, target.Id );
+	//}
+}
+
+void _CritterOutOfSight( Critter& turret, Critter& target )
+{
+	if( turret.CheckEnemyInStack( target.Id ) ) {	
+		turret.EraseEnemyFromStack( target.Id );
+		EraseAttackPlane( turret, target );
+	}
+}
+
+void _Idle( Critter& turret )
+{
+	if( turret.IsPlayer() )
+	{
+		turret.SetEvent( CRITTER_EVENT_IDLE, null );
+		return;
+	}
+
+	if( turret.IsDead() || turret.IsKnockout() )
+	{
+		return;
+	}
+
+	if( turret.IsBusy() || !turret.IsNoPlanes() )
+	{
+		return;
+	}
+}
+
+// CRITTER_EVENT_PLANE_BEGIN
+/*
+#define REASON_GO_HOME                           ( 10 )
+#define REASON_FOUND_IN_ENEMY_STACK              ( 11 )
+#define REASON_FROM_DIALOG                       ( 12 )
+#define REASON_FROM_SCRIPT                       ( 13 )
+#define REASON_RUN_AWAY                          ( 14 )
+*/
+int _PlaneBegin( Critter& turret, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem )
+{
+    if( plane.Type == AI_PLANE_ATTACK )
+    {
+        Critter@ target = GetCritter( plane.Attack_TargId );
+        if( !valid( target ) ) {
+			return PLANE_RUN_GLOBAL;
+		}
+
+        if( target.Stat[ ST_TEAM_ID ] == turret.Stat[ ST_TEAM_ID ] ) {
+			return PLANE_DISCARD; 
+		}
+
+     } else if ( reason == REASON_FROM_SCRIPT ) {
+		return PLANE_KEEP;
+	}
+    return PLANE_RUN_GLOBAL;
+}
+
+int _PlaneEnd( Critter& turret, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem ) {
+	return PLANE_RUN_GLOBAL;
+}
+
+void _MyDeath( Critter& turret, Critter@ killer )
+{
+    turret.ClearEnemyStack();
+	//óáèðàåì âàðêè - clear StatBase[ ST_VAR ]
+	turret.PARENT_TERMINAL = 0;
+	turret.SECURITY_ACCESS_CARD = 0;
+	turret.LASER_FENCE_GRID = 0;
+}
+
+bool _Attacked( Critter& turret, Critter& target )
+{
+	AddAttackPlane( turret, AI_PLANE_ATTACK_PRIORITY, target.Id );
+    return true;
+}
+
+void _CritterInWarningRange( Critter& turret, Critter& target )
+{
+	if( !turret.IsSee(target) ) {
+		return;
+	}
+	if( hasItem( target, turret.SECURITY_ACCESS_CARD ) ) {
+		return;
+	} else {
+		turret.Say( SAY_NORM_ON_HEAD, "ÏÐÎÏÓÑÊ ÍÅ ÎÁÍÀÐÓÆÅÍ! 15 ÑÅÊÓÍÄ ÍÀ ÓÕÎÄ ÈÇ ÎÕÐÀÍßÅÌÎÉ ÇÎÍÛ!" );
+		target.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+		target.Wait( 500 );
+		
+		uint16 hx = turret.HexX, hy = turret.HexY;
+		uint16 tx = target.HexX, ty = target.HexY;
+		Map@ map = turret.GetMap();
+		map.PlaySound( "MAROBTAA.ACM", hx, hy, 10 );
+		uint dir = GetDirection( hx, hy, tx, ty );
+		turret.SetDir( dir );
+		turret.SetHomePos( turret.HexX, turret.HexY, turret.Dir );
+		uint[] values = { turret.Id, target.Id, dir, 30 }; //30 iterations for 500ms each
+		CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "e_targetLock", values, true );
+		map.PlaySound( "WRW1XXX1.ACM", hx, hy, 10 );
+	}
+}
+
+void _CritterOutOfWarningRange( Critter& turret, Critter& target )
+{
+	if( hasItem( target, turret.SECURITY_ACCESS_CARD ) ) {
+		return;
+	}
+	Map@ map = turret.GetMap();
+	uint16 hx = turret.HexX, hy = turret.HexY;
+	uint16 tx = target.HexX, ty = target.HexY;
+	map.PlaySound( "MAROBTAA.ACM", hx, hy, 10 );
+	uint dir = GetDirection( hx, hy, tx, ty );
+	turret.SetDir( dir );
+	turret.SetHomePos( turret.HexX, turret.HexY, turret.Dir );
+	turret.Say( SAY_NORM_ON_HEAD, "ÂÎÇÎÁÍÎÂËÅÍÈÅ ÎÕÐÀÍÛ ÏÅÐÈÌÅÒÐÀ!" );
+}
+
+void _CritterInAttackRange( Critter& turret, Critter& target )
+{
+	if( hasItem( target, turret.SECURITY_ACCESS_CARD ) ) {
+		return;
+	} 
+	attackProtocol( turret, target, "ÏÎÌÅ×ÅÍ ÍÀ ÓÍÈ×ÒÎÆÅÍÈÅ!" );
+}
+
+uint e_targetLock( uint[]@ values )
+{
+	Critter@ turret = GetCritter( values[0] );
+	Critter@ target = GetCritter( values[1] );
+	uint dir = values[2];
+	uint ticksLeft = values[3];
+	
+	if( hasItem( target, turret.SECURITY_ACCESS_CARD ) ) {
+		return 0;
+	}
+	
+	uint16 hx = turret.HexX, hy = turret.HexY;
+	uint16 tx = target.HexX, ty = target.HexY;
+	if( ticksLeft > 0 )
+	{
+		ticksLeft --;
+		values[3] = ticksLeft;
+		
+		if( ticksLeft == 10 ) {
+			turret.Say( SAY_NORM_ON_HEAD, "5 ÑÅÊÓÍÄ!" );
+		}
+		
+		if( GetDistantion( hx, hy, tx, ty ) > RADIUS_WARN ) {
+			return 0;
+		}
+		
+		if( GetDistantion( hx, hy, tx, ty ) <= RADIUS_KILL ) {
+			activateFence( turret );
+			return 0;
+		}
+
+		uint newdir = GetDirection( hx, hy, tx, ty );
+		if( newdir != dir ) {
+			attackProtocol( turret, target, "ÏÎÏÛÒÊÀ ÏÐÎÍÈÊÍÎÂÅÍÈß! ÓÍÈ×ÒÎÆÈÒÜ!" );
+			activateFence( turret );
+			return 0;
+		}
+		return REAL_MS( 500 );
+		
+	} else {
+		attackProtocol( turret, target, "ÏÐÎÒÎÊÎË ÓÍÈ×ÒÎÆÅÍÈß ÂÊËÞ×ÅÍ!" );
+		activateFence( turret );
+		return 0;
+	}
+}
+
+void attackProtocol( Critter& turret, Critter& target, string@ warn = "" )
+{
+	AddAttackPlane( turret, AI_PLANE_ATTACK_PRIORITY, target.Id );
+	turret.Say( SAY_NORM_ON_HEAD, warn );
+}
+
+void plane_Trespasser( Critter& turret )
+{
+	Map@ map = turret.GetMap();
+	NpcPlane@ plane = turret.GetCurPlane();	
+	Critter@ target = GetCritter( plane.Identifier );
+	uint16 hx = turret.HexX, hy = turret.HexY;
+	uint16 tx = target.HexX, ty = target.HexY;
+}
+
+void activateFence( Critter& turret )
+{
+	Map@ map = turret.GetMap();
+	uint16 hx = 0, hy = 0;
+	uint8 dir = 0;
+	int entireId = turret.LASER_FENCE_GRID;
+	map.GetEntireCoords( entireId, 1, hx, hy, dir );
+	Item@ deathHexCheck = map.GetItem( hx, hy, PID_DEATH_HEX ); 
+	if( !valid( deathHexCheck ) ) { 
+		ToggleLaserFence( map, entireId );
+		uint[] values = { map.Id, entireId }; 
+		CreateTimeEvent( AFTER( REAL_SECOND( 60 ) ), "e_ToggleFence", values, true );
+	}
+}
+
+uint e_ToggleFence( uint[]@ values )
+{
+	Map@ map = GetMap( values[0] );
+	int entireId = values[1];
+	ToggleLaserFence( map, entireId );
+	return 0;
+}
+
+#endif //AI_TURRETS
