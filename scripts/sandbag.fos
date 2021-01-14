@@ -1,304 +1,93 @@
-// Author: rifleman17
-#include "_macros.fos"
-#include "_msgstr.fos"
-#include "utils_for_array.fos"
+#ifndef SANDBAG
+#define SANDBAG
 
-#define PID_SINGLE_SANDBAG        ( PID_SANDBAG_1 ) // единичный мешок           флаги: ITEM_SHOOT_THRU
-#define PID_DOUBLE_SANDBAG        ( PID_SANDBAG_2 ) // два мешка на одном гексе  флаги:
-#define PID_TRIPLE_SANDBAG        ( PID_SANDBAG_3 ) // стопка из трех мешков     флаги:
-#define PID_QUADRO_SANDBAG        ( PID_SANDBAG_4 ) // стопка из четырех мешков  флаги:
-#define PID_QUINTO_SANDBAG        ( PID_SANDBAG_5 ) // стопка из пяти мешков     флаги:
-#define STR_TEAR_SANDBAG          ( 200 )           // Мешок порвался у вас в руках.
-#define STR_CANT_PLACE_SANDBAG    ( 201 )           // В этом месте больше невозможно уложить ни одного мешка.
-#define STR_TEAR_REPAIR           ( 202 )           // Вы рвете мешок и песок рассыпается на землю.
-#define MIN_ENTIRE_DIST           ( 5 )             // Минимальное расстояние до ближайшего ентайр гекса, на котором можно расположить мешок
+#include "_utils.fos"
+#include "sandbag_h.fos"
 
-void _SandBagInit( Item& sb, bool firstTime )
+import bool PickItem( Critter& cr, Item& targetItem ) from "main";
+
+bool SandbagCheck( Critter& cr, Item& sandbag, Item& target )
 {
-    SETFLAG( sb.Flags, ITEM_GAG );
-    sb.SetEvent( ITEM_EVENT_DROP, "_SandBagDrop" );
-    sb.SetEvent( ITEM_EVENT_SKILL, "_SandBagSkill" );
-    sb.SetEvent( ITEM_EVENT_USE_ON_ME, "_SandBagUseOnMe" );
-}
-
-bool AddSandBag( Map& map, Critter& player, uint16 x, uint16 y, Item& sandBag )
-{
-    Item @[] items;
-    uint pidCur = sandBag.GetProtoId();
-
-    if( pidCur != PID_SINGLE_SANDBAG )
-        return false;
+    Map@ map = cr.GetMap();
+    if( !valid( map ) ) { return false; }
+	if( !valid( sandbag ) && !valid( target ) ) { return false; }
+	if( sandbag.GetProtoId() != PID_SINGLE_SANDBAG ) { return false; }
 	
-	if( sandBag.Info != 0 )
+    uint16 targetPid = target.GetProtoId();
+	uint16 index = Sandbags.find( targetPid );
+	
+	if(	index == -1 ) { return false; }
+	
+	Critter@[] critters; 
+	map.GetCrittersHex( target.HexX, target.HexY, 0, FIND_LIFE_AND_KO, critters );
+	if( critters.length() > 0 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Существо мешает установить мешки." );
 		return false;
+	}
 	
-    if( map.GetItems( x, y, items ) > 0 )
-    {
-        for( uint i = 0, l = items.length(); i < l; i++ )
-        {
-            Item @ item = items[ i ];
-
-            if( !valid( item ) )
-                continue;
-
-			if( item.Info != 0 )
-				continue;
-			
-            if( item.Id == sandBag.Id ) //Невозможная ситуация, мешок ещё в руках.
-                continue;
-
-            uint iPid = item.GetProtoId();
-            switch( iPid )
-            {
-            case PID_SINGLE_SANDBAG:
-                pidCur = PID_DOUBLE_SANDBAG;
-                DeleteItem( item );
-                break;
-            case PID_DOUBLE_SANDBAG:
-                pidCur = PID_TRIPLE_SANDBAG;
-                DeleteItem( item );
-                break;
-            case PID_TRIPLE_SANDBAG:
-                pidCur = PID_QUADRO_SANDBAG;
-                DeleteItem( item );
-                break;
-            case PID_QUADRO_SANDBAG:
-                pidCur = PID_QUINTO_SANDBAG;
-                DeleteItem( item );
-                break;
-            case PID_QUINTO_SANDBAG:
-                player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_PLACE_SANDBAG );
-				DeleteItem( sandBag );
-				player.AddItem( PID_SINGLE_SANDBAG, 1 );
-                return false;
-            default:
-                break;
-            }
-        }
-    }
-	
-    if( pidCur != sandBag.GetProtoId() )
-    {
-        if( !ChangeSandBagProto( sandBag, pidCur ) )
-        {
-            Log( "SandBag ChangeProto() failed. ErrText = " + GetLastError() );
-            return false;
-        }
-        sandBag.Update();
-    }
-	
-    MoveItem( sandBag, 1, map, x, y );
-    return true;
-}
-
-bool ChangeSandBagProto( Item& sb, int16 pidNew )
-{
-    if( !sb.ChangeProto( pidNew ) )
-        return false;
-    sb.Flags = sb.Proto.Flags;
-    SETFLAG( sb.Flags, ITEM_GAG );
-    return true;
-}
-
-// Попытка забрать верхний мешок из стопки
-bool TakeSandBag( Map& map, Critter& player, Item& takeFrom )
-{
-    uint pid = takeFrom.GetProtoId();
-    bool lastSB = false;
-    uint newPid = 0;
-    switch( pid )
-    {
-    case PID_SINGLE_SANDBAG:
-        lastSB = true;
-        break;
-    case PID_DOUBLE_SANDBAG:
-        newPid = PID_SINGLE_SANDBAG;
-        break;
-    case PID_TRIPLE_SANDBAG:
-        newPid = PID_DOUBLE_SANDBAG;
-        break;
-    case PID_QUADRO_SANDBAG:
-        newPid = PID_TRIPLE_SANDBAG;
-        break;
-    case PID_QUINTO_SANDBAG:
-        newPid = PID_QUADRO_SANDBAG;
-        break;
-    default:
-        // Неверный прототип предмета
-        return false;
-    }
-    // Проверка, сможет ли игрок поднять мешок
-    int freeWeight = player.Stat[ ST_CARRY_WEIGHT ] - player.ItemsWeight();
-    ProtoItem @ sandBagProto = GetProtoItem( PID_SINGLE_SANDBAG );
-    if( !valid( sandBagProto ) )
-    {
-        Log( "Sandbag get proto failed. ErrText = " + GetLastError() );
-        return false;
-    }
-    if( freeWeight < int(sandBagProto.Weight) )
-    {
-        player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_OVERWEIGHT );
-        return false;
-    }
-    if( player.StatBase[ ST_LEVEL ] <= 3 )
-    {
-        player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_OVERWEIGHT );
-        return false;
-    }
-    // Если это последний мешок в стопке на земле - перемещаем предмет в инвентарь персонажа
-    // Иначе, уменьшаем высоту стопки
-    if( lastSB )
-    {
-        MoveItem( takeFrom, 0, player );
-        return true;
-    }
-    else
-    {
-        if( !ChangeSandBagProto( takeFrom, newPid ) )
-        {
-            Log( "SandBag ChangeProto() failed. ErrText = " + GetLastError() );
-            return false;
-        }
-        takeFrom.Update();
-        _CritAddItem( player, PID_SINGLE_SANDBAG, 1 );
-        return true;
-    }
-}
-// Признак - этот протитип - относится к мешкам
-bool IsSandBag( uint pid )
-{
-    return ( pid == PID_SINGLE_SANDBAG || pid == PID_DOUBLE_SANDBAG || pid == PID_TRIPLE_SANDBAG || pid == PID_QUADRO_SANDBAG || pid == PID_QUINTO_SANDBAG );
-}
-// При использовании итема на итем. При false вызывается обработчик криттера, потом глобальный on_use_item. При true выход.
-bool _SandBagUseOnMe( Item& item, Critter& cr, Item@ usedItem )
-{
-    if( !valid( usedItem ) )
-        return false;
-
-    if( !IsSandBag( usedItem.GetProtoId() ) )
-        return false;
-    uint16 x = 0, y = 0;
-    Map @ map = item.GetMapPosition( x, y );
-    if( valid( map ) )
-    {
-        return AddSandBag( map, cr, x, y, usedItem );
-    }
-    return true;
-}
-
-import bool isGM( Critter& player ) from "gm";
-
-// При использовнии навыка на итеме. При false вызывается обработчик криттера, потом глобальный on_use_skill. При true выход.
-bool _SandBagSkill( Item& item, Critter& cr, int skill )
-{
-    uint pid = item.GetProtoId();
-    if( !IsSandBag( pid ) )
-        return false;
-
-	if( cr.IsNpc() )
-    {
-        if( pid == PID_SINGLE_SANDBAG )
-        {
-            DeleteItem( item );
-        }
-        else
-        {
-            pid--;
-            ChangeSandBagProto( item, pid );
-            item.Update();
-        }
-        return true;
-    }
-	
-    if( cr.StatBase[ ST_LEVEL ] <= 3 )
-    {
-        cr.Say( SAY_NETMSG, "Недоступно до 4-го уровня." );
-        return true;
-    }
-
-    switch( skill )
-    {
-    case SKILL_PICK_ON_GROUND:
-        if( @cr.GetMap() != null )
-        {
-            TakeSandBag( cr.GetMap(), cr, item );
-        }
-        return true;
-    case SK_REPAIR:
-        if( pid == PID_SINGLE_SANDBAG )
-        {
-			if( item.Info != 0 )
+	Item@[] shadows;
+	if( map.GetItems( target.HexX, target.HexY, shadows ) > 0 ) {
+		for( uint i = 0; i < shadows.length(); i++ ) {
+			if( shadows[i].GetProtoId() == PID_SHADOW ) {
+				cr.Say( SAY_NETMSG, "|0xFFFF00 Вышедший в оффлайн игрок на этой точке мешает установить мешки." );
 				return false;
-
-            DeleteItem( item );
-            cr.AddItem ( PID_SANDBAG_EMPTY, 1 );
-			cr.Say( SAY_EMOTE, "Вытряхивает песок из мешка" ); //С мебелью должен быть другой текст.
-        }
-        else
-        {
-            pid--;
-            cr.AddItem( PID_SANDBAG_EMPTY, 1 );
-            ChangeSandBagProto( item, pid );
-        }
-        return true;
-    case SKILL_TAKE_CONT:
-        return false;
-    case SKILL_TAKE_ALL_CONT:
-        return true;
-    default:
-        return false;
-    }
-    return false;
-}
-// При выбросе итема.
-void _SandBagDrop( Item& item, Critter& cr )
-{
-    if( !IsSandBag( item.GetProtoId() ) )
-        return;
+			}
+		}
+	}
 	
-    uint16 x = 0, y = 0;
-    Map @ map = item.GetMapPosition( x, y );
-    if( valid( map ) )
-        AddSandBag( map, cr, x, y, item );
+	if( index == Sandbags.length() -1 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы не можете сделать эту груду мешков выше." );
+		return false;
+	}
+	AddSandbag( cr, sandbag, target );
+	return true;
 }
 
-bool CheckIsNearEntire( Item& item ) // Проверка, что рядом с предметом нет EntireHex'a
+bool AddSandbag( Critter& cr, Item& sandbag, Item& target )
 {
-    if( item.MapId < 1 )
-        return false;
-    Map @ map = GetMap( item.MapId );
-    if( !valid( map ) )
-        return false;
-    uint[] entires;
-    uint[] ignoreEntries = { 154, 155, 156, 157, 158, 159 }; // Список исключений
-    uint16[] hexX;
-    uint16[] hexY;
-    uint count = map.GetEntires( -1, entires, hexX, hexY );
-    for( uint i = 0; i < count; i++ )
-    {
-        if( !Present( entires[ i ], ignoreEntries ) && ::GetDistantion( item.HexX, item.HexY, hexX[ i ], hexY[ i ] ) < MIN_ENTIRE_DIST )
-        {
-            return true;
-        }
-    }
-    return false;
+	uint16 targetPid = target.GetProtoId();
+	uint16 index = Sandbags.find( targetPid );
+	if( index < Sandbags.length() -1 ) {
+		_SubItem( sandbag, 1 );
+		target.ChangeProto( Sandbags[index + 1] );
+		if( target.GetProtoId() == PID_QUINTO_SANDBAG ) {
+			UNSETFLAG( target.Flags, ITEM_SHOOT_THRU );
+			UNSETFLAG( target.Flags, ITEM_LIGHT_THRU );
+		}
+		target.Update();
+	}
+	return true;
 }
 
-// / DEBUG
-void SandContour( Critter& cr, int len, int num, int )
+bool TakeSandbag( Critter& cr, Item& sandbag )
 {
-    Map @ map = cr.GetMap();
-    if( !valid( map ) )
-        return;
-    num = CLAMP( num - 1, 0, 4 );
-    uint16 x = cr.HexX;
-    uint16 y = cr.HexY;
-    for( int dir = 0; dir < 6; dir++ )
-    {
-        for( int i = 0; i < len; i++ )
-        {
-            map.AddItem( x, y, PID_SINGLE_SANDBAG + num, 1 );
-            map.MoveHexByDir( x, y, dir, 1 );
-        }
-    }
+	uint16 sandbagPid = sandbag.GetProtoId();
+	uint16 index = Sandbags.find( sandbagPid );
+	if(	index == -1 ) {
+		return false;
+	} else if( index <= Sandbags.length() && index != 0 ) {
+		
+		int freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] - cr.ItemsWeight();
+		ProtoItem@ sandBagProto = GetProtoItem( PID_SINGLE_SANDBAG );
+		if( !valid( sandBagProto ) ) { return false; }
+			
+		if( freeWeight < int( sandBagProto.Weight ) ) {
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_OVERWEIGHT );
+			return false;
+		}
+		
+		if( sandbag.GetProtoId() == PID_QUINTO_SANDBAG ) {
+			SETFLAG( sandbag.Flags, ITEM_SHOOT_THRU );
+			SETFLAG( sandbag.Flags, ITEM_LIGHT_THRU );
+		}
+		
+		cr.AddItem( PID_SINGLE_SANDBAG, 1 );
+		sandbag.ChangeProto( Sandbags[index - 1] );
+		sandbag.Update();
+	} else {
+		PickItem( cr, sandbag );
+	}
+	return true;
 }
+
+#endif //SANDBAG
