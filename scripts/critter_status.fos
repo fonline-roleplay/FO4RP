@@ -55,7 +55,7 @@ void BleedCritter( Critter& cr, int8 bleedValue )
     int eventCount = cr.GetTimeEvents( CTE_BLEED, indexes, durations, rates );
 	if( eventCount > 0 ) cr.EraseTimeEvents( CTE_BLEED );
 	
-	uint time = ( cr.Param[ QST_GAMEMODE ] == GAME_TEST ? 1 : 60 ); //Для тестеров кровьь течёт ежесекундно.
+	uint time = ( cr.Param[ QST_GAMEMODE ] == GAME_TEST ? 1 : 60 ); //Для тестеров кровь течёт ежесекундно.
 
 	cr.StatBase[ ST_BLEED ] += bleedValue;
 	if( cr.StatBase[ ST_BLEED ] > 0 )
@@ -65,8 +65,6 @@ void BleedCritter( Critter& cr, int8 bleedValue )
 	
     cr.AddTimeEvent( "cte_bleed", REAL_SECOND( time ), CTE_BLEED, 0 ); //Обновление таймера позволяет не откинуться от кровотечения посреди боя.
 }
-
-int spoil_Val = 3;
 
 uint cte_bleed( Critter& cr, int identifier, uint& rate )
 {
@@ -92,9 +90,8 @@ uint cte_bleed( Critter& cr, int identifier, uint& rate )
 		cr.Say( SAY_NETMSG, "Вы чувствуете слабость от обильной кровопотери." );
 	
 	if( cr.ParamBase [BP_BLOOD_LOSS] > maxHP - __DeadHitPoints ) //Смертельная кровопотеря. 
-    { //Пока что является конечной точкой для логики вытекания, хотя на деле ИРЛ тело ещё доооолго может кровоточить после преодоления "смертельного" рубежа кровопотери.
-		//Защита от "излишней" кровопотери, приводящей к невозможности реснуть и поднять на ноги умершего от неё.
-    	cr.ParamBase [BP_BLOOD_LOSS] = maxHP; 
+    { 
+		cr.ParamBase [BP_BLOOD_LOSS] = maxHP; 
         UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLEED );
 		cr.StatBase[ ST_BLEED ] = 0;
 
@@ -116,42 +113,9 @@ uint cte_bleed( Critter& cr, int identifier, uint& rate )
 	//Кровь вытекает под существо:
 	uint16 hx = cr.HexX, hy = cr.HexY;
 	Map@ map = cr.GetMap();
-	if( valid(map) )
-	{
-		//Ищем уже имеющуюся кровь под существом:
-		bool wasBlooded = false;
-		
-		Item@[] dirt;
-		map.GetItems( hx, hy, dirt );
-		if( valid( dirt ) ) 
-		{
-			for( uint i = 0; i < dirt.length(); i ++ )
-			{
-				if(!valid(dirt[i])) continue; //hotfix
-				uint itempid = dirt[i].GetProtoId();
-				if( bloods[0].find( itempid ) != -1 ) //Если это малая лужа - увеличиваем её.
-				{
-					dirt[i].Val0++;
-					if( dirt[i].Val0 >= spoil_Val )
-						dirt[i].ChangeProto( bloods[1][Random( 0, bloods[1].length() - 1 )] );
-					wasBlooded = true;
-					break;
-				}
-				if( bloods[1].find( itempid ) != -1 ) //Если это большая лужа - просто "усиливаем" её.
-				{
-					dirt[i].Val0++;
-					wasBlooded = true;
-					break;
-				}
-			}
-		}
-		if( !wasBlooded )
-		{
-			AddBlood( map.Id, hx, hy, 0 ); //Ненавижу костыли, но ничего не поделаешь.
-		}
+	if( valid( map ) ) {
+		CheckBlood( map, hx, hy );
 	}
-	else
-		Log("!map");
 	
 	int time = 30;
 	if( cr.Param[ QST_GAMEMODE ] == GAME_TEST ) time = 3;
@@ -160,41 +124,72 @@ uint cte_bleed( Critter& cr, int identifier, uint& rate )
 	return REAL_SECOND( time );
 }
 
-void AddBlood( uint MapId, uint16 hx, uint16 hy, uint size )
-{ //А всё потому, что конструкция Item@ blood = map.AddItem(); не работала! УЖАС! :cry:
-	Map@ map = GetMap( MapId );
-	if(!valid(map)) return;
+void CheckBlood( Map& map, uint16 hx, uint16 hy )
+{
+	bool wasBlooded = false;
+	Item@[] dirt;
+	map.GetItems( hx, hy, dirt );
+	if( valid( dirt ) ) {
+		for( uint i = 0; i < dirt.length(); i ++ ) {
+			if( !valid( dirt[i] ) ) {
+				continue;
+			}
+			uint dirtPid = dirt[i].GetProtoId();
+			if( bloods[0].find( dirtPid ) != -1 ) { //Если это малая лужа - увеличиваем её.
+				dirt[i].BLOOD_AMOUNT++;
+				if( dirt[i].BLOOD_AMOUNT >= spoil_Val )
+					dirt[i].ChangeProto( bloods[1][Random( 0, bloods[1].length() - 1 )] );
+				wasBlooded = true;
+				break;
+			}
+			
+			if( bloods[1].find( dirtPid ) != -1 ) { //Если это большая лужа - просто "усиливаем" её.
+				dirt[i].BLOOD_AMOUNT++;
+				wasBlooded = true;
+				break;
+			}
+		}
+	}
 	
+	if( !wasBlooded ) {
+		AddBlood( map, hx, hy, 0 );
+	}
+}
+
+void AddBlood( Map& map, uint16 hx, uint16 hy, uint size )
+{
 	uint pid = bloods[size][Random( 0, bloods[size].length() - 1)];
 	map.AddItem( hx, hy, pid, 1 );
 	
-	Item@ blood;
+	Item@ blood = null;
 	Item@[] ground;
 	map.GetItems( hx, hy, ground );
 
-	if(!valid(ground))return;
-	for(uint i=0;i<ground.length();i++)
-		if( bloods[size].find( ground[i].GetProtoId() ) > -1 ) 
-		{
+	if( !valid( ground ) ) { return; }
+	for( uint i = 0; i < ground.length(); i++ ) {
+		if( bloods[size].find( ground[i].GetProtoId() ) > -1 ) {
 			@blood = ground[i];
+			if( size == 2 ) {
+				blood.BLOOD_AMOUNT = 4;
+			}
 			break;
 		}
+	}
 		
-	if( valid(blood) )
-	{
+	if( valid( blood ) ) {
 		uint[] values = { blood.Id };
-		blood.Val1 = CreateTimeEvent( __FullSecond + REAL_HOUR( 1 ), "e_dryup", values, true );
+		blood.Val1 = CreateTimeEvent( __FullSecond + REAL_MINUTE( 1 + 15 * blood.BLOOD_AMOUNT ), "e_dryup", values, true );
 	}
 }
 
 uint e_dryup( uint[]@ values )
 {
-	if( !valid(values) ) return 0;
+	if( !valid(values) ) { return 0; }
 	
 	Item@ blood = GetItem( values[0] );
-	if( !valid(blood) ) return 0;
+	if( !valid( blood ) ) { return 0; }
 	
-	DeleteItem(blood);
+	DeleteItem( blood );
 	return 0;
 }
 
@@ -205,7 +200,8 @@ void DropBleed( Critter& cr )
     uint[] durations;
     uint8 eventCount = cr.GetTimeEvents( CTE_BLEED, indexes, durations, rates );
 
-    if( eventCount > 0 )
+    if( eventCount > 0 ) {
         cr.EraseTimeEvents (CTE_BLEED);
+	}
 }
 #endif // CRITTER_STATUS
