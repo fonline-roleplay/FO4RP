@@ -333,23 +333,15 @@ EXPORT int getParam_Hp( CritterMutual& cr, uint )
     return cr.Params[ ST_CURRENT_HP ];
 }
 
-/* from TLA
-   EXPORT int getParam_MaxLife(CritterMutual& cr, uint)
-   {
-        int val = cr.Params[ST_MAX_LIFE] + cr.Params[ST_MAX_LIFE_EXT] + cr.Params[ST_STRENGTH] + cr.Params[ST_ENDURANCE] * 2;
-        return CLAMP(val, 1, 9999);
-   }*/
-
 EXPORT int getParam_MaxLife( CritterMutual& cr, uint )
 {
-    // int val = cr.Params[ST_MAX_LIFE] + cr.Params[ST_MAX_LIFE_EXT] + cr.Params[ST_STRENGTH] + cr.Params[ST_ENDURANCE] * 2;
-    int val = cr.Params[ ST_MAX_LIFE ] + cr.Params[ ST_MAX_LIFE_EXT ] + cr.Params[ ST_STRENGTH ] * 4 + cr.Params[ ST_ENDURANCE ] * 8; // Roleplay
+    int val = cr.Params[ ST_MAX_LIFE ] + cr.Params[ ST_MAX_LIFE_EXT ] + cr.Params[ ST_STRENGTH ] * 3 + cr.Params[ ST_ENDURANCE ] * 5; 
     return CLAMP( val, 1, 9999 );
 }
 
 EXPORT int getParam_MaxAp( CritterMutual& cr, uint )
 {
-    int val = cr.Params[ ST_ACTION_POINTS ] + cr.Params[ ST_ACTION_POINTS_EXT ] + APPOINTS_BASE; // + getParam_Agility( cr, 0 ) / 2;
+    int val = cr.Params[ ST_ACTION_POINTS ] + cr.Params[ ST_ACTION_POINTS_EXT ] + APPOINTS_BASE;
     return CLAMP( val, 1, 9999 );
 }
 
@@ -384,14 +376,6 @@ EXPORT int getParam_MaxWeight(CritterMutual& cr, uint)
 	
 	int val = max( cr.Params[ ST_CARRY_WEIGHT ] + cr.Params[ ST_CARRY_WEIGHT_EXT ], 0 );
     val += 1000 * ( CW_BASE + (cr.Params[ ST_STRENGTH ] * ( CW_PER_STR - cr.Params[ TRAIT_SMALL_FRAME ] * SMALL_FRAME_CW_MALUS_DIV ) ) );
-	
-	// Old Tla
-    // int val = max(cr.Params[ST_CARRY_WEIGHT] + cr.Params[ST_CARRY_WEIGHT_EXT], 0);
-    // val += CONVERT_GRAMM(25 + getParam_Strength(cr, 0) * (25 - cr.Params[TRAIT_SMALL_FRAME] * 10));
-	
-	// Old TNF
-	// int val = cr.Params[ ST_CARRY_WEIGHT ] + cr.Params[ ST_CARRY_WEIGHT_EXT ];
-    // val +=  ( getParam_Strength( cr, 0 ) * 10 + ( cr.Params[ TRAIT_SMALL_FRAME ] ? 0 : 20 ) ) * 1000;
 	
     return CLAMP(val, 0, 2000000000);
 }
@@ -461,15 +445,6 @@ EXPORT int getParam_MaxCritical( CritterMutual& cr, uint )
     int val = cr.Params[ ST_MAX_CRITICAL ] + cr.Params[ ST_MAX_CRITICAL_EXT ];
     return CLAMP( val, -100, 100 );
 }
-
-/* from TLA
-   EXPORT int getParam_Ac(CritterMutual& cr, uint)
-   {
-        int val = cr.Params[ST_ARMOR_CLASS] + cr.Params[ST_ARMOR_CLASS_EXT] + getParam_Agility(cr, 0) + cr.Params[ST_TURN_BASED_AC];
-        Item* armor = cr.ItemSlotArmor;
-        if(armor->GetId() && armor->IsArmor()) val += armor->Proto->Armor_AC * (100 - armor->GetDeteriorationProc()) / 100;
-        return CLAMP(val, 0, 90);
-   }*/
 
 EXPORT int getParam_Ac( CritterMutual& cr, uint )
 {
