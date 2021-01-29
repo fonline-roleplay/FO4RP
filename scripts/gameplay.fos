@@ -5,6 +5,8 @@
 #include "_global_events.fos"
 #include "gathering_h.fos"
 #include "wildplant_h.fos"
+#include "waterworks_h.fos"
+#include "local_population_h.fos"
 
 import void FullHeal( Critter& cr ) from "gm";
 
@@ -29,19 +31,14 @@ import void RottenFood( Map@ map ) from "rotting";
 
 import bool MovePosition( Critter& player ) from "mio_deviants_toolkit";
 
-import bool F_Dragging( Critter& player ) from "mio_social";
 import void ToiletBowl( Critter& cr ) from "mio_tests";
 import void SetDate( Critter& cr ) from "mio_tests";
 import void Version( Critter& cr ) from "mio_tests";
 
-import void MobsAutoInit() from "local_population";
-import void ForceSpawnMobs() from "local_population";
-
-import void FoceWellsCharge() from "waterworks";
-import void FoceWaterPumpsCharge() from "waterworks";
-
 import void QuakeScreen(Critter& cr, uint noise, uint timeMs) from "effects";
 import void FlushScreen(Critter& cr, uint fromColor, uint toColor, uint timeMs) from "effects";
+
+import void ChangeCritterSpeed( Critter& cr ) from "speed";
 
 bool SwitchGameMode( Critter& cr, int mode )
 {
@@ -603,7 +600,7 @@ uint cte_Dirt( Critter& cr, int identifier, uint& rate )
 	{
 		Chance += ( 100 * ItemsWeight( cr ) / cr.Stat[ ST_CARRY_WEIGHT ] );
 
-		if( cr.IsRuning || F_Dragging( cr ) ) { Dirt += 1; Chance += 100; }
+		if( cr.IsRuning ) { Dirt += 1; Chance += 100; }
 	}
 
 	Chance = CLAMP( Chance, 0, 200 );
@@ -995,7 +992,7 @@ void checkShadow( Critter& cr )
 			return;
 	}
 	
-	if( cr.IsDead() || F_Dragging( cr ) )
+	if( cr.IsDead() )
 	{
 		DeleteItem( shadow );
 		cr.ParamBase[ CR_SHADOW_ID ] = 0;
@@ -1003,7 +1000,7 @@ void checkShadow( Critter& cr )
 	}
 
 	MoveItem( shadow, 1, map, cr.HexX, cr.HexY );
-	
+
 	if( shadow.GetProtoId() != PID_SHADOW )
 	{
 		DeleteItem( shadow );		
@@ -1019,15 +1016,17 @@ void _InitShadow( Item& item, bool firstTime )
 	item.SetEvent( ITEM_EVENT_WALK, "e_ShadowMoving" );
 }
 
-void e_ShadowMoving( Item& item, Critter& cr, bool entered, uint8 dir) 
+void e_ShadowMoving( Item& item, Critter& cr, bool entered, uint8 dir ) 
 {
-	if( item.Val0 != int( cr.Id ) )
+	if( item.Val0 != int( cr.Id ) ) {
 		return;
+	}
 	
-	if( entered ) return;
+	if( entered ) { return; }
+	
+	CheckDragging( cr );
 	
 	MoveItem( item, 1, cr.GetMap(), cr.HexX, cr.HexY );
-	
 	_testInfo( cr, CR_TEST_MODE_SPEED, SAY_EMOTE, "Moving at [" + cr.HexX + ", " + cr.HexY + "]" );
 	
 	if( cr.ParamBase[ CR_IS_WINDUPED ] != 0 ) {
@@ -1062,4 +1061,100 @@ uint cte_MovingAP( Critter& cr, int identifier, uint& rate )
 	return REAL_SECOND( 1 );
 }
 
+void CheckDragging( Critter& cr )
+{
+	if( cr.ParamBase[ CR_YOU_DRAG ] != 0 ) {
+		Critter@ target = GetCritter( cr.ParamBase[ CR_YOU_DRAG ] );
+		if( !valid( target ) ) {
+			cr.ParamBase[ CR_YOU_DRAG ] = 0;
+		}
+		if( cr.IsRuning || cr.IsDead() || cr.IsKnockout() || ( !target.IsDead() && !target.IsKnockout() ) ) { 	
+			DropCr( cr, target );
+		} else if( GetDistantion( cr.HexX, cr.HexY, target.HexX, target.HexY ) > 2 ) { 
+			DropCr( cr, target );
+		} else {		
+			Map@ map = cr.GetMap();
+			uint16 hx = cr.HexX, hy = cr.HexY;
+			uint8 crDir = cr.Dir;
+			uint8 revDir = ( crDir + 3 ) % 6;
+			map.MoveHexByDir( hx, hy, revDir, 1 );
+			uint[] values = { cr.Id, target.Id, hx, hy, crDir };
+			CreateTimeEvent( AFTER( REAL_MS( 100 ) ), "e_TeleportIt", values, false );
+		} 
+	}
+}
+
+uint e_TeleportIt( uint[]@ values )
+{
+	Critter@ cr = GetCritter( values[0] );
+	Critter@ target = GetCritter( values[1] );
+	if( !valid( target ) ) {
+		cr.ParamBase[ CR_YOU_DRAG ] = 0;
+	}
+	uint16 hx = values[2];
+	uint16 hy = values[3];
+	uint8 crDir = values[4];
+	Map@ map = target.GetMap();
+	if( map.IsHexPassed( hx, hy ) ) {
+		target.TransitToHex( hx, hy, crDir, 0 );
+	} else {
+		DropCr( cr, target );
+	}
+	return 0;
+}
+
+void DragAndDrop( Critter& cr, Critter@ target )
+{
+	if( cr.IsRuning ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Пока вы бежите вы не можете тащить тело." );
+		return;
+	}
+	
+	if( !valid( target ) ) { 
+		cr.ParamBase[ CR_YOU_DRAG ] = 0;
+		return; 
+	}
+	
+	if( target.Mode[ MODE_NO_PUSH ] != 0 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы не можете сделать этого." );
+		return;
+	}
+	
+	if( !target.IsDead() && !target.IsKnockout() ) { 
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Цель должна лежать или быть мертва!" );
+		return; 
+	}	
+	
+	if( GetDistantion( cr.HexX, cr.HexY, target.HexX, target.HexY ) > 1 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Цель слишком далеко." );
+		return;
+	}
+	
+	if( target.ParamBase[ CR_DRAGS_YOU ] == int( cr.Id ) ) {
+		DropCr( cr, target );
+		return;
+	}
+	
+	if( target.Param[ CR_DRAGS_YOU ] != int( cr.Id ) && target.Param[ CR_DRAGS_YOU ] != 0 ) {	
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Тело уже тащат." ); 	
+		return;	
+	}
+	
+	if( cr.Param[ CR_YOU_DRAG ] != int( target.Id ) && cr.Param[ CR_YOU_DRAG ] != 0 ) {	
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы не можете тащить больше 1 тела." ); 	
+		return;	
+	}
+	
+	target.ParamBase[ CR_DRAGS_YOU] = cr.Id;
+	cr.ParamBase[ CR_YOU_DRAG ] = target.Id;
+	cr.Say( SAY_NETMSG, "|0xFFFF00 Вы тащите тело." );
+	ChangeCritterSpeed( cr );
+}
+
+void DropCr( Critter@ cr, Critter@ target ) {
+	cr.ParamBase[ CR_YOU_DRAG ] = 0;
+	target.ParamBase[ CR_DRAGS_YOU ] = 0;
+	cr.Say( SAY_NETMSG, "|0xFFFF00 Вы отпустили тело." );
+	ChangeCritterSpeed( cr );
+}
 #endif //GAMEPLAY
