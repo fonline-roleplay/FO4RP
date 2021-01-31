@@ -2,6 +2,10 @@
 #include "wait_time_h.fos"
 #include "npc_planes_h.fos"
 #include "firestarter_h.fos"
+#include "terminal_h.fos"
+#include "vending_h.fos"
+#include "fish_h.fos"
+#include "combat_h.fos"
 
 import void CheckCartPicMap( Item& furniture ) from "furniture";
 
@@ -9,21 +13,13 @@ import void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo ) from 
 import bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param ) from "main";
 import void ShowInputBoxScreen( Critter& cr, string funcName, uint16 textLength, uint8 flags ) from "main";
 
-import void CombatAttack( Critter& cr, Critter@ target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16 hexX, uint16 hexY ) from "combat";
-import uint GetAimApCost( int hitLocation ) from "combat";
-import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attackerId ) from "combat";
-
 import void Actions( Critter& cr, uint8 actionType, uint16 pickType ) from "context_callback";
-
-import bool PrepareFishing( Critter& cr, Item& fishingRod, int hexX, int hexY ) from "fish";
 
 import void tryGetSand( Critter& cr, Item& shovel, int hexX, int hexY ) from "digging";
 
 import void skin( Critter& cr, int crType ) from "skins";
 
 import int  GetDeteriorationProcent( Item& item ) from "repair";
-
-import void OpenDoor( Critter& player ) from "mio_tests";
 
 import void LoadClientHistoryBase( Critter& cr, bool all ) from "history_menu";
 import void SaveCritterHistory( Critter& cr, string saveText ) from "history_menu";
@@ -43,14 +39,63 @@ import Item@ getPopup( Critter& player ) from "popups";
 import bool changePopup( Critter& player, string description ) from "popups";
 import bool delPopup( Critter& player ) from "popups";
 
-import void StartMenuVendingMachine( Critter& cr, Item& vendmach ) from "vending";
-import void StartMenuTerminal( Critter& cr, Item& terminal ) from "terminal";
+import bool e_UseAutoCloseDoor( Item& door, Critter& cr, int skill ) from "item";
 
 const string[] glass_break_sounds = { "glass_break1.ogg", "glass_break2.ogg", "glass_break3.ogg", "glass_break4.ogg" };
 
+bool Action( Critter& player, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen )
+{
+	uint16 moverHexX = player.HexX, moverHexY = player.HexY, aimHexX = 0, aimHexY = 0;
+	if( valid( targetCr ) ) { 
+		aimHexX = targetCr.HexX;   
+		aimHexY = targetCr.HexY;
+		
+	} else if( valid( targetItem ) ) { 
+		aimHexX = targetItem.HexX; 
+		aimHexY = targetItem.HexY; 
+	} else if( valid( targetScen ) ) { 
+		aimHexX = targetScen.HexX;
+		aimHexY = targetScen.HexY; 
+	} else { return false; }
+
+	uint dist = GetDistantion( moverHexX, moverHexY, aimHexX, aimHexY );
+	if( dist > 1 ) { 
+		player.Say( SAY_NETMSG, "Слишком далеко." ); 
+		return false; 
+	}
+	uint8 dir = GetDirection( moverHexX, moverHexY, aimHexX, aimHexY );
+	player.SetDir( dir );
+	player.Action( ACTION_PICK_CRITTER, 3, null );
+	return true;
+}
+
 void unsafe_OpenDoor( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
 {
-	OpenDoor( player );
+	if( player.IsDead() || player.IsKnockout() || player.IsBusy() || player.Timeout[ TO_SK_STEAL ] > 0 ) { return; }
+
+	Map@ map = player.GetMap();
+	uint16 hexX, hexY;
+	uint8 dir;
+	for( uint8 i = 0; i < 6; i++ )
+	{
+		hexX = player.HexX;
+		hexY = player.HexY;
+		dir = ( player.Dir + i + 2 ) % 6;
+		map.MoveHexByDir( hexX, hexY, dir, 1 );
+		Item@ door = map.GetDoor( hexX, hexY );
+		if( valid( door ) )
+		{
+			if( !Action( player, null, door, null ) ) { break; }
+			player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
+			UseSkillOnLocker( player, door, SKILL_PICK_ON_GROUND );
+			e_UseAutoCloseDoor( door, player, -1 );
+
+			Critter@[] critters;
+			uint8 crs = map.GetCrittersHex( door.HexX, door.HexY, 30, FIND_ALL | FIND_ONLY_PLAYERS, critters );
+			for( uint8 i = 0, l = critters.length(); i < l; i++ ) { critters[ i ].RunClientScript( "client_main@SoundDoor", critters[ i ].Id, door.Id, 0, null, null ); }
+			break;
+		}
+	}
 }
 
 void unsafe_MobGoHome( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
@@ -364,10 +409,11 @@ void unsafe_inputDigits( Critter& player, int itemId, int digits, int param2, st
 {
     Item@ item = GetItem( itemId );
 	if( valid( item ) ) {
-		if( InteractContainer.find( item.GetProtoId() ) != -1 && ( item.GetProtoId() != PID_SLOT_MACHINE && item.GetProtoId() != PID_SLOT_MACHINE2 ) ) { //вендинговые аппараты
+		uint16 Pid = item.GetProtoId();
+		if( Pid == PID_VENDING_CIGS || Pid == PID_VENDING_NUKA || Pid == PID_VENDING_OMNI || Pid == PID_VENDING_FRIDGE1 || Pid == PID_VENDING_FRIDGE2 || Pid == PID_VENDING_NEWSP1 || Pid == PID_VENDING_NEWSP2 || Pid == PID_VENDING_NEWSP3 ) { //вендинговые аппараты
 			item.Val6 = digits;
 			StartMenuVendingMachine( player, item );
-		} else if( item.GetProtoId() == PID_TERMINAL ) { //Терминал управления турелями
+		} else if( Pid == PID_TERMINAL ) { //Терминал управления турелями
 			if( item.Val6 == 0 ) {
 				item.Val6 = digits;
 				player.Say( SAY_NETMSG, "|0xFFFF00 Вы установили новый пароль: " + digits );
@@ -377,9 +423,12 @@ void unsafe_inputDigits( Critter& player, int itemId, int digits, int param2, st
 			} else {
 				player.Say( SAY_NETMSG, "|0xFFFF00 Пароль не подходит!" );
 			}
+			StartMenuTerminal( player, item );
+		} else if( Pid == PID_JUKEBOX1 || Pid == PID_JUKEBOX2 || Pid == PID_JUKEBOX3 || Pid == PID_JUKEBOX4 ) { //музыкальный аппарат
+			item.Val6 = digits;
+			StartMenuJukebox( player, item );
 		}
 		player.RunClientScript( "client_screen_numberpad@HideScreen", 0, 0, 0, "", null );
-		StartMenuTerminal( player, item );
 	}
 }
 
