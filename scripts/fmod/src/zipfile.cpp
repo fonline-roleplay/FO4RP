@@ -88,7 +88,7 @@ namespace FOFMOD
 			}
 				
 			// return back to original position;
-			fseek( this->handle, SEEK_SET, cur );
+			fseek( this->handle, cur, SEEK_SET );
 			mz_zip_reader_end( &this->zipFile );
 		}
 	}

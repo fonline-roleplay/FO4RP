@@ -165,6 +165,37 @@ namespace FOFMOD
 		}
 	}
 
+	void Channel::GetLoopCount( int* value )
+	{
+		if( this->handle )
+		{
+			this->handle->getLoopCount( value );
+		}
+	}
+	void Channel::SetLoopCount( int count )
+	{
+		if( this->handle )
+		{
+			this->handle->setLoopCount( count );
+		}
+	}
+
+	void Channel::SetLoopPoints( unsigned int loopStart, unsigned int loopStartType, unsigned int loopEnd, unsigned int loopEndType )
+	{
+		if( this->handle )
+		{
+			this->handle->setLoopPoints( loopStart, loopStartType, loopEnd, loopEndType );
+		}
+	}
+
+	void Channel::GetLoopPoints( unsigned int* loopStart, unsigned int loopStartType, unsigned int* loopEnd, unsigned int loopEndType )
+	{
+		if( this->handle )
+		{
+			this->handle->getLoopPoints( loopStart, loopStartType, loopEnd, loopEndType );
+		}
+	}
+
 
 
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -316,6 +347,40 @@ namespace FOFMOD
 		if( ptr )
 		{
 			ptr->Set3DVelocity( x, y, z );
+		}
+	}
+
+	int Script_Channel_GetLoopCount( FOFMOD::Channel* ptr )
+	{
+		int result = 0;
+		if( ptr )
+		{
+			ptr->GetLoopCount( &result );
+		}
+		return result;
+	}
+
+	void Script_Channel_SetLoopCount( int count, FOFMOD::Channel* ptr )
+	{
+		if( ptr )
+		{
+			ptr->SetLoopCount( count );
+		}
+	}
+
+	void Script_Channel_GetLoopPoints( unsigned int* loopStart, unsigned int loopStartType, unsigned int* loopEnd, unsigned int loopEndType, FOFMOD::Channel* ptr )
+	{
+		if( ptr )
+		{
+			ptr->GetLoopPoints( loopStart, loopStartType, loopEnd, loopEndType );
+		}
+	}
+
+	void Script_Channel_SetLoopPoints( unsigned int loopStart, unsigned int loopStartType, unsigned int loopEnd, unsigned int loopEndType, FOFMOD::Channel* ptr )
+	{
+		if( ptr )
+		{
+			ptr->SetLoopPoints( loopStart, loopStartType, loopEnd, loopEndType );
 		}
 	}
 }

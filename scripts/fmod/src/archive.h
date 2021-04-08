@@ -35,7 +35,7 @@ namespace FOFMOD
 
 
 	class AArchiveFile : public IArchiveFile
-	{
+	{	
 		protected:
 			ArchiveMemoryObjectMap objects;
 			FILE* handle;

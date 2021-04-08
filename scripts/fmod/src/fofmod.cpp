@@ -1,12 +1,4 @@
 
-
-
-
-
-
-
-
-
 #include "fofmod.h"
 #include "_defines.fos"
 #include "fonline.h"
@@ -262,9 +254,9 @@ void RegisterASInterface()
 		r = ASEngine->RegisterObjectBehaviour("FMODChannel", asBEHAVE_RELEASE, "void f()", 					asFUNCTION(FOFMOD::Script_Channel_Release), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log("Failed to register release for %s %d \n ", "FMODChannel", r);
-		r = ASEngine->RegisterObjectMethod("FMODSound@", "FMODSound@ GetSound()",	 						asFUNCTION(FOFMOD::Script_Channel_GetSound), asCALL_CDECL_OBJLAST);
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "FMODSound@ GetSound()",	 						asFUNCTION(FOFMOD::Script_Channel_GetSound), asCALL_CDECL_OBJLAST);
 		if( !r )
-			Log(STR_BIND_ERROR, "FMODChannel::SetPlaybackPosition", r );
+			Log(STR_BIND_ERROR, "FMODChannel::GetSound", r );
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "void SetPlaybackPosition(uint positionMs)", 		asFUNCTION(FOFMOD::Script_Channel_SetPlaybackPosition), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::SetPlaybackPosition", r );

@@ -164,7 +164,6 @@ namespace FOFMOD
 
 		this->indexedArchives.clear();
 		this->initialized = false;
-
 	}
 
 	void System::Update()
@@ -286,7 +285,7 @@ namespace FOFMOD
 	void System::DeleteCachedSound( CachedDataMap::iterator iterator )
 	{
 		// mother fucker
-		this->playingSoundsData.erase( iterator );
+		this->cachedSoundsData.erase( iterator );
 	}
 
 
@@ -305,26 +304,42 @@ namespace FOFMOD
 
 		if( snd )
 		{
-			(*chn) = new FOFMOD::Channel();
-			this->FSystem->playSound( snd->handle, group, true, &( (*chn)->handle) );
-
-			FOFMOD::System::ChannelCallbackData* cbdata = new FOFMOD::System::ChannelCallbackData();
-			cbdata->system = this;
-			cbdata->sound  = snd;
-
 			if( cacheData )
 			{
+				// addref for play
 				cacheData->Addref();
-				cbdata->cacheData = cacheData;
 			}
 
-			snd->Addref(); // we're referencing it for callback, release there, system sound release through FOFMOD sound release
-			(*chn)->handle->setCallback( FOFMOD::System::ChannelCallback );
-			(*chn)->handle->setUserData( cbdata );
+			(*chn) = new FOFMOD::Channel();
+			FMOD_RESULT result = this->FSystem->playSound( snd->handle, group, true, &( (*chn)->handle) );
+			if( result == FMOD_OK )
+			{
+				FOFMOD::System::ChannelCallbackData* cbdata = new FOFMOD::System::ChannelCallbackData();
+				cbdata->system = this;
+				cbdata->sound  = snd;
 
-			if( !paused )
-				(*chn)->handle->setPaused( false );
-			
+				if( cacheData )
+				{
+					cbdata->cacheData = cacheData;
+				}
+
+				snd->Addref(); // we're referencing it for callback, release there, system sound release through FOFMOD sound release
+				(*chn)->handle->setCallback( FOFMOD::System::ChannelCallback );
+				(*chn)->handle->setUserData( cbdata );
+
+				if( !paused )
+					(*chn)->handle->setPaused( false );
+			}
+			else
+			{
+				if( cacheData )
+				{
+					cacheData->Release();
+				}
+
+				delete *chn;
+				*chn = NULL;
+			}
 		}
 
 		#ifdef FOFMOD_DEBUG
@@ -352,8 +367,6 @@ namespace FOFMOD
 
 	void System::SoundFromMemory( void* ptr, unsigned int size, FOFMOD::Sound** sptr )
 	{
-
-		const unsigned int CREATEFLAGS_STREAM = FMOD_OPENMEMORY_POINT | FMOD_CREATESTREAM;
 
 		FMOD_CREATESOUNDEXINFO memLoadInfo = { sizeof(FMOD_CREATESOUNDEXINFO), size };
 
@@ -392,14 +405,47 @@ namespace FOFMOD
 
 	void System::SoundFromFile( const std::string& filename, FOFMOD::Sound** sptr, CacheSoundData** cache )
 	{
-		// Make it work in stream, need a streamed sound file solution
+
 		FMOD::Sound* fsnd = NULL;
-		FMOD_RESULT result = this->FSystem->createSound ( filename.c_str() , FMOD_DEFAULT, NULL, &fsnd );
-		if( result == FMOD_OK )
+		FILE* file = fopen( filename.c_str(), "rb" );
+		if( file )
 		{
-			*sptr = new FOFMOD::Sound();
-			(*sptr)->handle = fsnd;
+			FOFMOD_DEBUG_LOG("File opened \n");
+
+			fseek( file, 0, SEEK_END );
+			unsigned int size = ftell( file );
+			char* binary = (char*)malloc(size);
+			rewind( file );
+
+			unsigned int readSize = fread( binary, 1, size, file );
+			fclose( file );
+			if( readSize == size ) 
+			{
+				FOFMOD_DEBUG_LOG("Play sound from file read ok <%d> <%d> \n", size, readSize);
+
+				FMOD_CREATESOUNDEXINFO memLoadInfo = { sizeof(FMOD_CREATESOUNDEXINFO), size };
+			
+				FMOD_RESULT result = this->FSystem->createSound(  (const char*)(binary), CREATEFLAGS_STREAM, &memLoadInfo, &fsnd );
+				if( result == FMOD_OK )
+				{
+					*sptr = new FOFMOD::Sound();
+					(*sptr)->handle = fsnd;
+					this->AddCachedSound( filename, binary, size, cache );
+				}
+				else
+				{
+					FOFMOD_DEBUG_LOG("Createsound eror <%s> \n", FMOD_ErrorString(result) );
+					// could not create a file on heap
+					free( binary );
+				}
+			}
+			else
+			{
+				// error reading file to heap
+				free( binary );
+			}
 		}
+		
 	}
 
 	void System::GetSound( const std::string& filename, FOFMOD::Sound** sptr, CacheSoundData** cache  )
@@ -412,18 +458,13 @@ namespace FOFMOD
 		}
 		else
 		{
-			FILE* file;
-			if( ( file = fopen( filename.c_str(), "r" ) ) != NULL )
-			{
-				// file exist
-				fclose( file );
-				FOFMOD_DEBUG_LOG("Play sound from file \n")
-				this->SoundFromFile( filename, sptr, cache );
-			}
-			else
+			FOFMOD_DEBUG_LOG("Play sound from file \n")
+			this->SoundFromFile( filename, sptr, cache );
+
+			if( !(*sptr) )
 			{
 				// check for archives
-				FOFMOD_DEBUG_LOG("Play sound from archive \n")
+				FOFMOD_DEBUG_LOG("Sound from file failed, trying sound from archive. \n")
 				this->SoundFromArchive( filename, sptr, cache );
 			}
 		}
@@ -437,7 +478,7 @@ namespace FOFMOD
 			*cache = new FOFMOD::System::CacheSoundData( this );
 			(*cache)->data = data;
 			(*cache)->size = size;
-			std::pair< CachedDataMap::iterator, bool > insertionResult = this->playingSoundsData.insert( std::pair< std::string , FOFMOD::System::CacheSoundData* >( filename, (*cache) ) );
+			std::pair< CachedDataMap::iterator, bool > insertionResult = this->cachedSoundsData.insert( std::pair< std::string , FOFMOD::System::CacheSoundData* >( filename, (*cache) ) );
 			if( insertionResult.second )
 			{
 				(*cache)->it = insertionResult.first;
@@ -458,8 +499,8 @@ namespace FOFMOD
 
 	void System::GetCachedSound( const std::string& filename, CacheSoundData** cache )
 	{
-		CachedDataMap::iterator found = this->playingSoundsData.find( filename );
-		if( found != this->playingSoundsData.end () )
+		CachedDataMap::iterator found = this->cachedSoundsData.find( filename );
+		if( found != this->cachedSoundsData.end () )
 		{
 			*cache = found->second;
 		}
@@ -572,7 +613,7 @@ namespace FOFMOD
 	}
 
 	void System::Set3DListenerUp( float x, float y, float z )
-	{
+	{ 
 		SETLISTENERDATA(up, x, y, z);
 		this->FSystem->set3DListenerAttributes( 0, NULL, NULL, NULL, &(this->listener.up) );
 	}

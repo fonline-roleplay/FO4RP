@@ -43,7 +43,7 @@ namespace FOFMOD
 				CacheSoundData(FOFMOD::System* ownerSystem );
 				~CacheSoundData();
 				CachedDataMap::iterator it;
-				FOFMOD::System* owner; // i am such a bastard
+				FOFMOD::System* owner;
 				void* data;
 				unsigned int size;
 
@@ -69,16 +69,17 @@ namespace FOFMOD
 															void* commanddata1, 
 															void* commanddata2 );
 
+			static const unsigned int CREATEFLAGS_STREAM = FMOD_OPENMEMORY_POINT | FMOD_CREATESTREAM;
+
 		protected:
 			FMOD::System* FSystem;
 			FMOD::ChannelGroup*   soundChannelGroup;
 			FMOD::ChannelGroup*   musicChannelGroup;
 			bool initialized;
+			
 			// streamed sounds cannot be reused between different plays, so each new sound be generating own stream, but the prototype data is same.
-			CachedDataMap 	 playingSoundsData;
-			//SoundMap soundCache;
-			//void AddCachedSound( const std::string& soundName, FOFMOD::Sound* sound );
-			//void DeleteCachedSound( const SoundMap::iterator& sndIterator );
+			CachedDataMap 	 cachedSoundsData;
+
 			ArchiveFilePtrVec indexedArchives;
 			FOFMOD::Listener3D listener;
 			void SoundFromMemory( void* ptr, unsigned int size, FOFMOD::Sound** sptr );
@@ -98,13 +99,6 @@ namespace FOFMOD
 			FMOD_RESULT Initialize( unsigned int channelCount );
 
 			// Caching and resource management
-			//void PreloadSounds( const std::string& dir );
-			//void PreloadSoundFile( const std::string& path );
-			//void PreloadZipFile( const std::string& path );
-			//void PreloadMemoryFile( const char* ptr, const unsigned int size, const char* path );
-			//void DeleteCachedSound( const std::string& soundName );
-			//void DeleteAllCachedSounds();
-			//FOFMOD::Sound* GetCachedSound( const std::string& soundName );
 			bool TouchArchive( const std::string& filename );
 			void DeleteCachedSound( CachedDataMap::iterator iterator );
 			///////////////////////////////////
