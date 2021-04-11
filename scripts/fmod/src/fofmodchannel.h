@@ -37,7 +37,6 @@ namespace FOFMOD
 			void SetLoopCount( int count );
 			void SetLoopPoints( unsigned int loopStart, unsigned int loopStartType, unsigned int loopEnd, unsigned int loopEndType );
 			void GetLoopPoints( unsigned int* loopStart, unsigned int loopStartType, unsigned int* loopEnd, unsigned int loopEndType );
-			
 	};
 
 

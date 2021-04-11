@@ -372,16 +372,16 @@ void RegisterASInterface()
 		r = ASEngine->RegisterGlobalFunction("void FMOD_Set3DSettings(float dopplerScale, float distanceFactor, float rolloffScale)",  	asFUNCTION(FMOD_Set3DSettings), asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_Set3DSettings", r );
-		r = ASEngine->RegisterGlobalFunction("void FMOD_Set3DListenerPosition()",   								asFUNCTION(FMOD_Set3DListenerPosition), 		asCALL_CDECL );
+		r = ASEngine->RegisterGlobalFunction("void FMOD_Set3DListenerPosition(float x, float y, float z)",   		asFUNCTION(FMOD_Set3DListenerPosition), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_Set3DListenerPosition", r );
-		r = ASEngine->RegisterGlobalFunction("void FMOD_Set3DListenerVelocity()",   								asFUNCTION(FMOD_Set3DListenerVelocity), 		asCALL_CDECL );
+		r = ASEngine->RegisterGlobalFunction("void FMOD_Set3DListenerVelocity(float x, float y, float z)",   		asFUNCTION(FMOD_Set3DListenerVelocity), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_Set3DListenerVelocity", r );
-		r = ASEngine->RegisterGlobalFunction("void FMOD_Set3DListenerForward()",   									asFUNCTION(FMOD_Set3DListenerForward), 		asCALL_CDECL );
+		r = ASEngine->RegisterGlobalFunction("void FMOD_Set3DListenerForward(float x, float y, float z)",   		asFUNCTION(FMOD_Set3DListenerForward), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_Set3DListenerForward", r );
-		r = ASEngine->RegisterGlobalFunction("void FMOD_Set3DListenerUp()",   										asFUNCTION(FMOD_Set3DListenerUp), 		asCALL_CDECL );
+		r = ASEngine->RegisterGlobalFunction("void FMOD_Set3DListenerUp(float x, float y, float z)",   				asFUNCTION(FMOD_Set3DListenerUp), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_Set3DListenerUp", r );
 		

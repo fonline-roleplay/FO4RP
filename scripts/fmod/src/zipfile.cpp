@@ -26,10 +26,10 @@ namespace FOFMOD
 
 	void ZipFile::Touch()
 	{
-		FOFMOD_DEBUG_LOG( "Trying to touch %s \n", this->currentFilePath );
+		//FOFMOD_DEBUG_LOG( "Trying to touch %s \n", this->currentFilePath );
 		if( this->IsOpened() )
 		{
-			FOFMOD_DEBUG_LOG( "File is opened, continue touch.. \n" );
+			//FOFMOD_DEBUG_LOG( "File is opened, continue touch.. \n" );
 			this->DropContent();
 
 			/// cache current position and go back to start of the file
@@ -39,21 +39,21 @@ namespace FOFMOD
 			mz_zip_zero_struct( &this->zipFile );
 			this->zipStatus =  mz_zip_reader_init_cfile( &this->zipFile, this->handle, 0,  0 );
 			mz_uint count =  mz_zip_reader_get_num_files( &this->zipFile );
-			FOFMOD_DEBUG_LOG( "Files count <%d> in archive, initcfile result <%d>  last error <%s> \n", count, this->zipStatus, mz_zip_get_error_string ( this->zipFile.m_last_error ) );
+			//FOFMOD_DEBUG_LOG( "Files count <%d> in archive, initcfile result <%d>  last error <%s> \n", count, this->zipStatus, mz_zip_get_error_string ( this->zipFile.m_last_error ) );
 			for( unsigned int i = 0; i < count; i ++ )
 			{
-				FOFMOD_DEBUG_LOG( "Processing file num <%d> in archive... \n", i );
+				//FOFMOD_DEBUG_LOG( "Processing file num <%d> in archive... \n", i );
 				mz_zip_archive_file_stat file_stat;
 				if ( !mz_zip_reader_file_stat( &this->zipFile, i, &file_stat ) )
 				{
-					FOFMOD_DEBUG_LOG( "mz_zip_reader_file_stat() failed!\n" );
+					//FOFMOD_DEBUG_LOG( "mz_zip_reader_file_stat() failed!\n" );
 					continue;
 				}
 				else
 				{
 					if( mz_zip_reader_is_file_a_directory( &this->zipFile, i ) )
 					{
-						FOFMOD_DEBUG_LOG( "file is a directory %s \n", file_stat.m_filename );
+						//FOFMOD_DEBUG_LOG( "file is a directory %s \n", file_stat.m_filename );
 						continue;
 					}
 					else
@@ -71,16 +71,16 @@ namespace FOFMOD
 							strcpy( archive_mem_obj.memObj.name, (const char*) &file_stat.m_filename );
 							this->AddContent( archive_mem_obj.memObj.name, archive_mem_obj );
 
-							FOFMOD_DEBUG_LOG( "Supported file base <%d> offset <%d>size <%d> uncomp size <%d> name <%s> \n", 
-							archive_mem_obj.memObj.base,
-							archive_mem_obj.memObj.offset,
-							archive_mem_obj.memObj.size,
-							archive_mem_obj.uncompressed_size,
-							archive_mem_obj.memObj.name);
+							//FOFMOD_DEBUG_LOG( "Supported file base <%d> offset <%d>size <%d> uncomp size <%d> name <%s> \n", 
+							// archive_mem_obj.memObj.base,
+							// archive_mem_obj.memObj.offset,
+							// archive_mem_obj.memObj.size,
+							// archive_mem_obj.uncompressed_size,
+							// archive_mem_obj.memObj.name);
 						}
 						else
 						{
-							FOFMOD_DEBUG_LOG( "file is not supported %s \n", file_stat.m_filename );
+							//FOFMOD_DEBUG_LOG( "file is not supported %s \n", file_stat.m_filename );
 							continue;
 						}
 					}
