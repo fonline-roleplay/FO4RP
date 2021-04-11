@@ -423,21 +423,16 @@ namespace FOFMOD
 			{
 				FOFMOD_DEBUG_LOG("Play sound from file read ok <%d> <%d> \n", size, readSize);
 
-				FMOD_CREATESOUNDEXINFO memLoadInfo = { sizeof(FMOD_CREATESOUNDEXINFO), size };
-			
-				FMOD_RESULT result = this->FSystem->createSound(  (const char*)(binary), CREATEFLAGS_STREAM, &memLoadInfo, &fsnd );
-				if( result == FMOD_OK )
+				this->SoundFromMemory( binary, size, sptr );
+
+				if( !(*sptr) )
 				{
-					*sptr = new FOFMOD::Sound();
-					(*sptr)->handle = fsnd;
-					this->AddCachedSound( filename, binary, size, cache );
+					free ( binary );
 				}
 				else
 				{
-					FOFMOD_DEBUG_LOG("Createsound eror <%s> \n", FMOD_ErrorString(result) );
-					// could not create a file on heap
-					free( binary );
-				}
+					this->AddCachedSound( filename, binary, size, cache );
+				}		
 			}
 			else
 			{

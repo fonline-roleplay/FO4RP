@@ -295,7 +295,24 @@ void RegisterASInterface()
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "float GetVolume()", 								asFUNCTION(FOFMOD::Script_Channel_GetVolume), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::GetVolume", r );
-
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Set3DPosition(float x, float y, float z)", 	asFUNCTION(FOFMOD::Script_Channel_Set3DPosition), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::Set3DPosition", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Set3DVelocity(float x, float y, float z)", 	asFUNCTION(FOFMOD::Script_Channel_Set3DVelocity), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::Set3DVelocity", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "int GetLoopCount()", 							asFUNCTION(FOFMOD::Script_Channel_GetLoopCount), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::GetLoopCount", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void SetLoopCount(int count)", 					asFUNCTION(FOFMOD::Script_Channel_SetLoopCount), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::SetLoopCount", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void GetLoopPoints(uint& loopStart, uint loopStartType, uint& loopEnd, uint loopEndType)", 	asFUNCTION(FOFMOD::Script_Channel_GetLoopPoints), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::GetLoopPoints", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void SetLoopPoints(uint loopStart, uint loopStartType,uint loopEnd, uint loopEndType)", 	asFUNCTION(FOFMOD::Script_Channel_SetLoopPoints), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::SetLoopPoints", r );
 
 
 		r = ASEngine->RegisterGlobalFunction("bool FMOD_Initialize(uint channelCount)", 					asFUNCTION(FMOD_Initialize), 		asCALL_CDECL );
