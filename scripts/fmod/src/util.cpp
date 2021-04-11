@@ -21,6 +21,20 @@ int cstr_ends_with( const char* src, const char* ends )
 	return ret;
 }
 
+int  cstr_start_with( const char* src, const char* starts )
+{
+	int ret = 0;
+	const char* pos = strstr( src, starts );
+	if( pos )
+	{
+		if( pos == src )
+		{
+			ret = 1;
+		}
+	}
+	return ret;
+}
+
 char* cstr_copy_heap( const char* src )
 {
 	char* result = NULL;

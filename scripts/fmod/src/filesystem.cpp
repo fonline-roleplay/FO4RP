@@ -2,7 +2,6 @@
 #define __FOFMOD_FILESYSTEM__
 
 #include "filesystem.h"
-#include "unistd.h"
 
 int filesystem_access( const char* fname )
 {

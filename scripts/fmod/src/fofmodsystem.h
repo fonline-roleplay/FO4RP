@@ -76,6 +76,7 @@ namespace FOFMOD
 			FMOD::ChannelGroup*   soundChannelGroup;
 			FMOD::ChannelGroup*   musicChannelGroup;
 			bool initialized;
+
 			
 			// streamed sounds cannot be reused between different plays, so each new sound be generating own stream, but the prototype data is same.
 			CachedDataMap 	 cachedSoundsData;

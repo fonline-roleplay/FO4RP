@@ -17,6 +17,9 @@ namespace FOFMOD
 	const int fileExtNum = 4;
 	const std::string fileExtensions[fileExtNum] = { std::string(".ogg"), std::string(".flac"), std::string(".wav"), std::string(".mp3") };
 
+	const char* SoundWorkDir = ".\\data\\sounds\\sfx\\";
+	const char* MusicWorkDir = ".\\data\\sound\\music\\";
+
 	bool IsValidSoundExtension( const char* filename )
 	{
 		bool result = false;
