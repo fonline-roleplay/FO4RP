@@ -1,41 +1,36 @@
+#ifndef __MAIN_MODULE__
+#define __MAIN_MODULE__
+
 #include "_utils.fos"
-
-#include "teams_table.fos"
-
 #include "_teams.fos" //Он вообще нужен?
-#include "miniutils_h.fos" //Переделать в полноценный "var.fos"
-
-//Возможно, стоит засунуть в "_utils.fos"
 #include "_npc_pids.fos"
-#include "wait_time_h.fos"
+#include "_global_events.fos"
+#include "_ltp.fos"
 
 #include "apregen_h.fos"
-
-#define __MAIN_MODULE__
-#include "_global_events.fos"
-
-#include "npc_names_holder_h.fos"
-
-#include "combat_h.fos"
-
 #include "behaviours.fos"
-
-#include "_ltp.fos"
+#include "bootlegging_h.fos"
 #include "brahmins_h.fos"
-#include "terminal_h.fos"
-#include "npc_planes_h.fos"
-#include "sandbag_h.fos"
-#include "wildplant_h.fos"
+#include "casino_h.fos"
+#include "combat_h.fos"
 #include "firestarter_h.fos"
-#include "gathering_h.fos"
-#include "smithing_h.fos"
 #include "fish_h.fos"
 #include "flask_h.fos"
-#include "casino_h.fos"
-#include "bootlegging_h.fos"
 #include "food_h.fos"
-#include "waterworks_h.fos"
+#include "furnace_h.fos"
+#include "gathering_h.fos"
+#include "homebrew_h.fos"
+#include "npc_names_holder_h.fos"
+#include "npc_planes_h.fos"
+#include "repair_h.fos"
+#include "sandbag_h.fos"
+#include "smithing_h.fos"
+#include "teams_table.fos"
+#include "terminal_h.fos"
 #include "vending_h.fos"
+#include "waterworks_h.fos"
+#include "wait_time_h.fos"
+#include "wildplant_h.fos"
 
 // Imports
 import void CheckCartPicMap( Item& furniture ) from "furniture";
@@ -57,11 +52,6 @@ import void DropRadiation( Critter& cr ) from "radiation";
 import void AffectRadiation( Critter& cr, int value ) from "radiation";
 
 import void WorldmapInit() from "worldmap";
-
-import bool AskAction( Critter& cr, Item& item ) from "repair";
-import bool InstallRadio( Critter& cr, Item& radio, Item& armor ) from "repair";
-import int  GetDeteriorationProcent( Item& item ) from "repair";
-import void SetDeterioration( Item& item, int deteriorationProcent ) from "repair";
 
 import void robotRepairSkill (Critter& cr, Critter& targetCr, bool alreadyAllowed) from "robot_repair";
 
@@ -118,14 +108,9 @@ import void registerMines() from "traps_mines";
 import void ShowTheWay( Critter& cr, Critter@ targetCr ) from "mio_social";
 import void LordOfDestruction( Critter& cr, Item& item, int8 type ) from "mio_social";
 
-import void DescriptionUse( Critter& player, Item& item ) from "mio_tests";
 import void ScouringStick( Critter& cr, Item& item ) from "mio_tests";
 
 import NpcNamesHolder@ getNpcNamesHolder() from "npc_names_holder";
-
-import bool ShowMenuBrew( Critter& cr, Item& target ) from "homebrew";
-import bool TransferToPot( Critter& cr, Item& targetItem, Item& cont ) from "homebrew";
-import bool TransferFromPot( Critter& cr, Item& targetItem, Item& cont ) from "homebrew";
 
 import void hearshot( Critter& cr, ProtoItem& weapon, uint8 weaponMode ) from "rp_combat"; 
 
@@ -842,6 +827,12 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 
 	if( UseItemOnStill( cr, item, targetItem ) ) { return true; } // проверка самогонного аппарата
 	
+	// проверка покраски брони
+	if( valid( item ) && valid( targetItem ) && item.GetProtoId() == PID_COLORS && targetItem.GetType() == ITEM_TYPE_ARMOR ) {
+		TryPaintArmor( cr, item, targetItem ); 
+		return true; 
+	} 
+	
 	// Brhamins
 	if( valid( targetCr ) && targetCr.StatBase[ ST_BODY_TYPE ] == BT_BRAHMIN && BrahminPetting( cr, item, targetCr ) ) {
 		return true;
@@ -864,7 +855,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		case( PID_LOADED_DICE ):
 			DiceUse( cr, item );
 			return true;
-		case(  PID_DECK_OF_CARDS ):
+		case( PID_DECK_OF_CARDS ):
 		case( PID_MARKED_DECK_OF_CARDS ):
 			CardsUse( cr, item );
 			return true;			
@@ -876,14 +867,6 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			return true;
 		case( PID_MapSolt ):
 			ShowTheWay( cr, targetCr );
-			return true;
-		case( PID_RPSTUFF1 ):
-		case( PID_RPSTUFF2 ):
-		case( PID_RPSTUFF3 ):
-		case( PID_RPSTUFF4 ):
-		case( PID_WEDRING_F ):
-		case( PID_WEDRING_M ):				
-			DescriptionUse( cr, item ); 
 			return true;
 	}
 
@@ -1088,7 +1071,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 
 	//Skinning
 	if( valid( targetCr) ) {
-		if( blades.find( pid ) != -1 ) {
+		if( SkinningTools.find( pid ) != -1 ) {
 			PrepareSkinning( cr, item, targetCr );
 			return true;
 		}
@@ -1754,47 +1737,57 @@ uint e_DepleteBattery( uint[]@ values )
 {
 	uint itemId = values[ 0 ];
 	Item@ flashlight = GetItem( itemId );
-	if( valid(flashlight) )
+	if( !valid( flashlight ) ) { return 0; }
+
+	if( flashlight.Val0 > 0 ) {
+		flashlight.Val0--;
+		return REAL_MINUTE( 1 );
+	}
+
+	switch( flashlight.Accessory )
 	{
-		if( flashlight.Val0 > 0)
+		case( ACCESSORY_HEX ):
 		{
-			flashlight.Val0--;
-			return REAL_MINUTE( 1 );
-		}
-	
-		switch( flashlight.Accessory )
-		{
-			case( ACCESSORY_HEX ):
-			{
-				uint16 hexX=0, hexY=0;
-				Map@ map = flashlight.GetMapPosition( hexX, hexY );
+			uint16 hexX = 0, hexY = 0;
+			Map@ map = flashlight.GetMapPosition( hexX, hexY );
+			if( valid( map ) ) {
 				map.AddItem( hexX, hexY, PID_FLASHLIGHT_OFF, 1 );
+			}
+			
+			EraseTimeEvent( flashlight.Val3 );
+			flashlight.Val3 = 0;
+			_SubItem( flashlight, 1 );
+			break;
+		}
 		
-				EraseTimeEvent( flashlight.Val3 );
-				_SubItem( flashlight, 1 );
-				break;
-			}
-			case( ACCESSORY_CRITTER ):
-			{
-				uint cr_id = flashlight.CritId;
-				Critter@ cr = GetCritter( cr_id );
+		case( ACCESSORY_CRITTER ):
+		{
+			uint cr_id = flashlight.CritId;
+			Critter@ cr = GetCritter( cr_id );
+			if( valid( cr ) ) {
 				flashlight_off( cr, flashlight );
-				break;
 			}
-			case( ACCESSORY_CONTAINER ):
-			{
-				uint cont_id = flashlight.ContainerId;
-				Item@ cont = GetItem( cont_id );
+			break;
+		}
+		
+		case( ACCESSORY_CONTAINER ):
+		{
+			uint cont_id = flashlight.ContainerId;
+			Item@ cont = GetItem( cont_id );
+			if( valid( cont ) ) {
 				cont.AddItem( PID_FLASHLIGHT_OFF, 1, 0 );
 				EraseTimeEvent( flashlight.Val3 );
-				_SubItem( flashlight, 1 );
-				break;
-			}
-			default:
-			{
-				EraseTimeEvent( flashlight.Val3 );
+				flashlight.Val3 = 0;
 				_SubItem( flashlight, 1 );
 			}
+			break;
+		}
+		
+		default:
+		{
+			EraseTimeEvent( flashlight.Val3 );
+			flashlight.Val3 = 0;
+			_SubItem( flashlight, 1 );
 		}
 	}
 	return 0;
@@ -2001,6 +1994,11 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				}
 				return true;
 			}
+			// Интерфейс плавильни
+			if( Pid == PID_FURNACE_SMALL ) {
+				StartMenuFurnace( cr, targetItem );
+				return true;
+            }
 		}
 	}
 	
@@ -2027,56 +2025,47 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
     {
 		case( SKILL_PICK_ON_GROUND ): 
 		{
-			
-			if( !(targetScen is null) && CanCook( targetScen ) )
-			{
-				return UseCookingStuff( targetScen, cr );
-			}
-
-			// Готовка на открытом пламени - Open fire cooking
-			if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_FIREPLACE2 || targetItem.GetProtoId() == PID_CHOPPED_FIREWOOD ) && targetItem.Val0 >= 1 )
-			{	
-				AskCooking( cr );
-				return true;
-			}
-
-			// Меню закрепленной бочкой для огня
-			if( valid( targetItem ) && ( ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_BRAZIER ) && targetItem.Val0 == 0 && !FLAG( targetItem.Flags, ITEM_CAN_PICKUP ) ) )
-			{	
-				ShowMenuFireBarrel( cr, targetItem );
-				return true;
-			}
-
 			// Scenery
-			if( valid( targetScen ) )
-			{
+			if( valid( targetScen ) ) {
+				// помывка - washing
 				if( water_sources.find( targetScen.ProtoId ) != -1 ) {
 					Cleaning( cr, 0, targetScen.ProtoId );
+				// Готовка - cooking
+				} else if( CanCook( targetScen ) ) {
+					return UseCookingStuff( targetScen, cr );
+				// fail
 				} else {
 						cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
 				}
-				return true;
 			}
-			// Light Switches
-			if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_SWITCH1_DIR2 || targetItem.GetProtoId() == PID_SWITCH1_DIR3 || targetItem.GetProtoId() == PID_SWITCH2_DIR2 || targetItem.GetProtoId() == PID_SWITCH2_DIR3 || targetItem.GetProtoId() == PID_SWITCH3_DIR2 || targetItem.GetProtoId() == PID_SWITCH3_DIR3 ) ) {
-				UseLightSwitch( cr, targetItem ); 
-				return true;
-			}
+			
+			// Items
+			if( valid( targetItem ) ) {
+				// Готовка на открытом пламени - Open fire cooking
+				if( ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_FIREPLACE2 || targetItem.GetProtoId() == PID_CHOPPED_FIREWOOD ) && targetItem.Val0 >= 1 ) {	
+					AskCooking( cr );
+					
+				// Меню закрепленной бочкой для огня
+				} else if( ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_BRAZIER ) && targetItem.Val0 == 0 && !FLAG( targetItem.Flags, ITEM_CAN_PICKUP ) ) {	
+					ShowMenuFireBarrel( cr, targetItem );
+					
+				// Light Switches
+				} else if( targetItem.GetProtoId() == PID_SWITCH1_DIR2 || targetItem.GetProtoId() == PID_SWITCH1_DIR3 || targetItem.GetProtoId() == PID_SWITCH2_DIR2 || targetItem.GetProtoId() == PID_SWITCH2_DIR3 || targetItem.GetProtoId() == PID_SWITCH3_DIR2 || targetItem.GetProtoId() == PID_SWITCH3_DIR3 ) {
+					UseLightSwitch( cr, targetItem ); 
+					
+				// Explosion
+				} else if( ( targetItem.GetProtoId() == PID_ACTIVE_MINE || targetItem.GetProtoId() == PID_ACTIVE_MINE_PLASMA || targetItem.GetProtoId() == PID_ACTIVE_MINE_PULSE ) && OnUseExplode( cr, targetItem, null, null, null, 0 ) ) {
 
-			// Explosion
-			if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_ACTIVE_MINE || targetItem.GetProtoId() == PID_ACTIVE_MINE_PLASMA || targetItem.GetProtoId() == PID_ACTIVE_MINE_PULSE ) && OnUseExplode( cr, targetItem, null, null, null, 0 ) )
-				return true;
-		
-			// Pick some item
-			if( valid( targetItem ) )
-			{
-				uint16 targetItemPid = targetItem.GetProtoId();
-				if( Wildplants.find( targetItemPid ) != -1 ) {
-					PickPlant( cr, targetItem );
-				} else if( Sandbags.find( targetItemPid ) != -1 ) {
-					TakeSandbag( cr, targetItem );
+				// Pick some item
 				} else {
-					PickItem( cr, targetItem );
+					uint16 targetItemPid = targetItem.GetProtoId();
+					if( Wildplants.find( targetItemPid ) != -1 ) {
+						PickPlant( cr, targetItem );
+					} else if( Sandbags.find( targetItemPid ) != -1 ) {
+						TakeSandbag( cr, targetItem );
+					} else {
+						PickItem( cr, targetItem );
+					}
 				}
 			}
 			return true; 
@@ -2329,13 +2318,13 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			}
 
 			// Radio
-			if( valid( targetItem ) && FLAG( targetItem.Flags, ITEM_RADIO ) && targetItem.Accessory == ACCESSORY_CRITTER && targetItem.CritId == cr.Id )
+			/*if( valid( targetItem ) && FLAG( targetItem.Flags, ITEM_RADIO ) && targetItem.Accessory == ACCESSORY_CRITTER && targetItem.CritId == cr.Id )
 			{
 				if( isPlayer ) {
 					EditRadioSettings( cr, targetItem );
 				}
 				return true;
-			}
+			}*/
 
 			if( valid( targetItem ) && targetItem.Accessory == ACCESSORY_CRITTER && AskAction( cr, targetItem ) )
 				return true;
@@ -2446,12 +2435,21 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			}
 			
 			//Перенос потухших бочек для костров
-			if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_BRAZIER ) && targetItem.Val0 == 0 )
-			{	
+			if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_FIREBARREL || targetItem.GetProtoId() == PID_BRAZIER ) && targetItem.Val0 == 0 ) {	
 				LockInPlace( cr, targetItem );
 				return true;
 			}
 			
+			if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_DECK_OF_CARDS || targetItem.GetProtoId() == PID_MARKED_DECK_OF_CARDS ) ) {
+				targetItem.Val3 = 134217727;
+				targetItem.Val4 = 134217727;
+				cr.Action( ACTION_PICK_CRITTER, 3, null );
+				cr.Say( SAY_EMOTE, "Тасует карты" );
+				Map @ map = cr.GetMap();
+				map.PlaySound( "SHUFFLE.ACM", cr.HexX, cr.HexY, 2 );
+				return true;
+			}
+	
 			break; 
 		}
 		
@@ -2657,7 +2655,7 @@ bool useWater( Critter& cr )
 
 		if( valid(water) ) 
 		{	
-			if( water_bottles[i][0] == PID_BOTTLE_DIRTY_FULL || water_bottles[i][0] == PID_GLASS_BOTTLE_DIRTY_FULL )
+			if( water_bottles[i][0] == PID_GLASS_BOTTLE_DIRTY_FULL )
 				AffectRadiation( cr, 1 );
 
 			cr.AddItem( water_bottles[i][1], 1 );
@@ -4301,7 +4299,7 @@ uint e_RefreshLoot( uint[] @ values )
 
 int[][] armor_delay = {
 	{ PID_POWERED_ARMOR, PID_HARDENED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR_MK2 },
-	{ PID_PURPLE_ROBE, PID_KEEPBRIGE_ROBE, PID_BLACK_ROBE, PID_SANDROBE },
+	{ PID_PURPLE_ROBE, PID_BLACK_ROBE, PID_SANDROBE },
 	{ PID_LEATHER_JACKET, PID_CURED_LEATHER_ARMOR, PID_CURED_LEATHER_ARMOR_MK_II },
 	{ PID_LEATHER_ARMOR, PID_LEATHER_ARMOR_MK_II, PID_LEATHER_ARMOR_MK_III },
 	{ PID_METAL_ARMOR, PID_METAL_ARMOR_MK_II, PID_TESLA_ARMOR},
@@ -5224,3 +5222,4 @@ uint e_UpdateContainer( uint[]@ val )
 	return 0;
 }
 
+#endif //__MAIN_MODULE__
