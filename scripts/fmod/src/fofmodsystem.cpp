@@ -11,14 +11,19 @@
 #include "stdio.h"
 #include "perfcounter.h"
 #include <cstring>
+#include "cwalk.h"
+
+// stdbool.h fuckery
+#undef bool 
+#undef true
+#undef false
 
 namespace FOFMOD
 {	
 	const int fileExtNum = 4;
 	const std::string fileExtensions[fileExtNum] = { std::string(".ogg"), std::string(".flac"), std::string(".wav"), std::string(".mp3") };
-
-	const char* SoundWorkDir = ".\\data\\sounds\\sfx\\";
-	const char* MusicWorkDir = ".\\data\\sound\\music\\";
+	const char* PathToSounds = ".\\data\\sounds\\sfx\\";
+	const char* PathToMusic  = ".\\data\\sounds\\music\\";
 
 	bool IsValidSoundExtension( const char* filename )
 	{
@@ -37,12 +42,24 @@ namespace FOFMOD
 		return result;
 	}
 
-	System::CacheSoundData::CacheSoundData() // BANNED
+	System::IndexedArchiveFile::IndexedArchiveFile() {} // ban
+
+	System::IndexedArchiveFile::IndexedArchiveFile(FOFMOD::IArchiveFile* arch )
 	{
-		// BANNED
-		// BANNED
-		// BANNED
+		this->arch = arch;
+		this->isMapped = false;
 	}
+
+	System::IndexedArchiveFile::~IndexedArchiveFile()
+	{
+		if( this->arch )
+		{
+			delete this->arch;
+			this->arch = NULL;
+		}
+	}
+
+	System::CacheSoundData::CacheSoundData() {} // BANNED
 
 	System::CacheSoundData::CacheSoundData(FOFMOD::System* ownerSystem )
 	{
@@ -197,7 +214,7 @@ namespace FOFMOD
 			    {
 			    	// continue initialize
 			    	FOFMOD_DEBUG_LOG("FMOD version %u \n", version);
-					result = this->FSystem->init( channelCount, FMOD_INIT_NORMAL, 0 );
+					result = this->FSystem->init( channelCount, FMOD_INIT_NORMAL | FMOD_INIT_3D_RIGHTHANDED, 0 );
 					if (result != FMOD_OK)
 					{
 					    Log("FMOD error! (%d) %s\n", result, FMOD_ErrorString(result));
@@ -272,7 +289,9 @@ namespace FOFMOD
 				// file exist and opened
 				zipFile->Touch();
 				zipFile->Close();
-				this->indexedArchives.push_back( zipFile );
+				FOFMOD::System::IndexedArchiveFile* indexedArch = new FOFMOD::System::IndexedArchiveFile( zipFile );
+				this->indexedArchives.push_back( indexedArch );
+				this->MapArchive( this->indexedArchives.size() - 1 );
 				result = true;
 			}
 			else
@@ -292,7 +311,7 @@ namespace FOFMOD
 	}
 
 
-	void System::Play( const std::string& soundName, FMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused )
+	void System::Play( const std::string& soundName, SOUND_TYPE type, FMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused )
 	{
 		#ifdef FOFMOD_DEBUG
 			#ifdef __PERFCOUNT__
@@ -303,7 +322,7 @@ namespace FOFMOD
 
 		FOFMOD::Sound* snd   =  NULL;
 		CacheSoundData* cacheData = NULL;
-		this->GetSound( soundName, &snd, &cacheData );
+		this->GetSound( soundName, type, &snd, &cacheData );
 
 		if( snd )
 		{
@@ -352,11 +371,100 @@ namespace FOFMOD
 		#endif // FOFMOD_DEBUG
 	}
 
+	void System::MapArchive( unsigned int index )
+	{
+		if( index < this->indexedArchives.size() )
+		{
+			FOFMOD_DEBUG_LOG("Mapping archive at index %d \n", index );
+			IndexedArchiveFile* iaf = this->indexedArchives[index];
+			if( !(iaf->isMapped) )
+			{
+				//FOFMOD_DEBUG_LOG("Not mapped \n");
+				IArchiveFile* arch = iaf->arch;
+				std::vector< std::string > strVec;
+				arch->GetSymbolNames( strVec );
+				for( unsigned int i = 0, j = strVec.size(); i < j; i++ )
+				{
+					// the symbol name is basically a filename with path in an archive file with file directories inside
+					FOFMOD::System::SoundAlias alias;
+					alias.fullname = strVec[i];
+					alias.index    = index;
+					//FOFMOD_DEBUG_LOG("fullname index %s %d \n", alias.fullname.c_str(), i );
+					struct cwk_segment segment;
+					if( cwk_path_get_first_segment( alias.fullname.c_str(), &segment) )
+					{
+						// has segments
+						memset( &segment, 0, sizeof( struct cwk_segment ) );
+						if( cwk_path_get_last_segment( alias.fullname.c_str(), &segment ) )
+						{
+							// last segment if actual filename in path;
+							alias.name.assign( segment.begin, segment.size );
+							if( alias.name.size() > 0 )
+							{
+								FOFMOD_DEBUG_LOG("alias name %s \n", alias.name.c_str() );
+								cwk_path_get_previous_segment( &segment );
+								bool isMusic = false;
+								bool isSound = false;
+
+								if( memcmp( segment.begin, "music", segment.size ) == 0 )
+								{
+									isMusic = true;
+								}
+								else
+								if ( memcmp( segment.begin, "sfx", segment.size ) == 0 )
+								{
+									isSound = true;
+								}
+
+								cwk_path_get_previous_segment( &segment );
+								if( memcmp( segment.begin, "sound", segment.size) == 0 )
+								{
+									if( !cwk_path_get_previous_segment( &segment ) ) // there is nothing behind sounds
+									{
+										// all good
+										std::map< std::string, SoundAlias >* mapPtr = NULL;
+										if( isMusic )
+										{
+											mapPtr = &this->musicNames;
+										}
+										else
+										if( isSound )
+										{
+											mapPtr = &this->soundNames;
+										}
+
+										if( mapPtr )
+										{
+											std::map< std::string, SoundAlias >::iterator exist = mapPtr->find( alias.name );
+											if( exist != mapPtr->end() )
+											{
+												mapPtr->erase( exist ); // there can be only one
+												FOFMOD_DEBUG_LOG("Mapping duplicate <%s> <%s> \n", alias.name.c_str(), ( isSound ? "sound" : "music" ) );
+											}
+											//FOFMOD_DEBUG_LOG("Mapping sound dir as name <%s> <%s> \n", alias.fullname.c_str(), alias.name.c_str() );
+											mapPtr->insert( std::pair< std::string, SoundAlias >( alias.name, alias ) );
+										}
+									}
+								}
+							}
+						}
+					}
+					else
+					{
+						// the file is located in root dir of the archive
+						// do not do anything, fuck this file
+					}
+				}
+			}
+
+			iaf->isMapped = true;
+		}
+	}
 
 	FOFMOD::Channel* System::PlaySound( const std::string& soundName, bool paused )
 	{	
 		FOFMOD::Channel* chn = NULL;
-		this->Play( soundName, this->soundChannelGroup, &chn, paused );
+		this->Play( soundName, SOUND_TYPE::SOUND, this->soundChannelGroup, &chn, paused );
 		return chn;
 	}
 
@@ -364,7 +472,7 @@ namespace FOFMOD
 	{
 
 		FOFMOD::Channel* chn = NULL;
-		this->Play( soundName, this->musicChannelGroup, &chn, paused );
+		this->Play( soundName, SOUND_TYPE::MUSIC, this->musicChannelGroup, &chn, paused );
 		return chn;
 	}
 
@@ -374,7 +482,7 @@ namespace FOFMOD
 		FMOD_CREATESOUNDEXINFO memLoadInfo = { sizeof(FMOD_CREATESOUNDEXINFO), size };
 
 		FMOD::Sound* fsnd = NULL;
-		FMOD_RESULT result = this->FSystem->createSound(  (const char*)(ptr), CREATEFLAGS_STREAM, &memLoadInfo, &fsnd );
+		FMOD_RESULT result = this->FSystem->createSound(  (const char*)(ptr), CREATEFLAGS_STREAM , &memLoadInfo, &fsnd );
 		if( result == FMOD_OK )
 		{
 			*sptr = new FOFMOD::Sound();
@@ -382,31 +490,54 @@ namespace FOFMOD
 		}
 	}
 
-	void System::SoundFromArchive( const std::string& filename, FOFMOD::Sound** sptr, CacheSoundData** cache )
+	void System::SoundFromArchive( const std::string& filename, const std::string cacheName, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache )
 	{
-		//check for archives for target file
-		for( ArchiveFilePtrVec::iterator ari = this->indexedArchives.begin(); ari < this->indexedArchives.end(); ari++ )
+		SoundAlias* alias = NULL;
+		std::map< std::string, SoundAlias >::iterator found;
+		switch( type )
 		{
-			unsigned int size = 0;
-			void* binary = (*ari)->GetContent( filename.c_str(), &size );
-			if( binary )
+			case( SOUND_TYPE::SOUND ):
 			{
-				this->SoundFromMemory( binary, size, sptr );
-				if( !( *sptr ) )
-				{
-					// could not create the sound
-					free( binary );
-				}
-				else
-				{
-					this->AddCachedSound( filename, binary, size, cache );
-				}
+				found = this->soundNames.find( filename );
+				if( found == this->soundNames.end() ) // no such file in indexed archives
+					return;
 				break;
+			}
+			case( SOUND_TYPE::MUSIC ):
+			{
+				found = this->musicNames.find( filename );
+				if( found == this->musicNames.end() ) // no such file in indexed archives
+					return;
+				break;
+			}
+			default:
+				return;
+		}
+
+
+		alias = &(found->second);
+		//FOFMOD_DEBUG_LOG("Alias found %s %s \n", alias->name.c_str(), alias->fullname.c_str() );
+
+		IndexedArchiveFile* iaf = this->indexedArchives[ alias->index ];
+
+		unsigned int size = 0;
+		void* binary = iaf->arch->GetContent( alias->fullname.c_str(), &size );
+		if( binary )
+		{
+			this->SoundFromMemory( binary, size, sptr );
+			if( !( *sptr ) )
+			{
+				// could not create the sound
+				free( binary );
+			}
+			else
+			{	
+				this->AddCachedSound( cacheName, binary, size, cache );
 			}
 		}
 	}
 
-	void System::SoundFromFile( const std::string& filename, FOFMOD::Sound** sptr, CacheSoundData** cache )
+	void System::SoundFromFile( const std::string& filename, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache )
 	{
 
 		FMOD::Sound* fsnd = NULL;
@@ -446,9 +577,31 @@ namespace FOFMOD
 		
 	}
 
-	void System::GetSound( const std::string& filename, FOFMOD::Sound** sptr, CacheSoundData** cache  )
-	{
-		this->GetCachedSound( filename, cache );
+	void System::GetSound( const std::string& filename, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache  )
+	{	
+
+		std::string pathName;
+		switch ( type )
+		{
+			case( SOUND_TYPE::SOUND ):
+			{
+				pathName.assign( PathToSounds );
+				pathName += filename;
+				break;
+			}
+
+			case( SOUND_TYPE::MUSIC ):
+			{
+				pathName.assign( PathToMusic );
+				pathName += filename;
+				break;	
+			}
+			default:
+				return;
+		}
+
+
+		this->GetCachedSound( pathName, cache );
 		if( *cache )
 		{
 			FOFMOD_DEBUG_LOG("Play sound from cached \n");
@@ -457,13 +610,13 @@ namespace FOFMOD
 		else
 		{
 			FOFMOD_DEBUG_LOG("Play sound from file \n")
-			this->SoundFromFile( filename, sptr, cache );
+			this->SoundFromFile( pathName, type, sptr, cache );
 
 			if( !(*sptr) )
 			{
 				// check for archives
 				FOFMOD_DEBUG_LOG("Sound from file failed, trying sound from archive. \n")
-				this->SoundFromArchive( filename, sptr, cache );
+				this->SoundFromArchive( filename, pathName, type, sptr, cache );
 			}
 		}
 	}

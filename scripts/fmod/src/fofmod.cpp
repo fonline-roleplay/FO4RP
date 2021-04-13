@@ -244,7 +244,6 @@ void RegisterASInterface()
 			Log(STR_BIND_ERROR, "FMODSound::IsValid", r );
 
 
-
 		r = ASEngine->RegisterObjectType( "FMODChannel", 0, asOBJ_REF );
 		if( !r )
 			Log("Failed to register object type %s %d \n ", "FMODChannel", r );
@@ -300,7 +299,7 @@ void RegisterASInterface()
 			Log(STR_BIND_ERROR, "FMODChannel::Set3DPosition", r );
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Set3DVelocity(float x, float y, float z)", 	asFUNCTION(FOFMOD::Script_Channel_Set3DVelocity), asCALL_CDECL_OBJLAST);
 		if( !r )
-			Log(STR_BIND_ERROR, "FMODChannel::Set3DVelocity", r );
+			Log(STR_BIND_ERROR, "FMODChannel::Set3DVelocity", r );	
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "int GetLoopCount()", 							asFUNCTION(FOFMOD::Script_Channel_GetLoopCount), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::GetLoopCount", r );
@@ -313,6 +312,14 @@ void RegisterASInterface()
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "void SetLoopPoints(uint loopStart, uint loopStartType,uint loopEnd, uint loopEndType)", 	asFUNCTION(FOFMOD::Script_Channel_SetLoopPoints), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::SetLoopPoints", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Set3DMinMaxDistance(float min, float max)", 	asFUNCTION(FOFMOD::Script_Channel_Set3DMinMaxDistance), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::Set3DMinMaxDistance", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Get3DMinMaxDistance(float& min, float& max)", 	asFUNCTION(FOFMOD::Script_Channel_Get3DMinMaxDistance), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::Get3DMinMaxDistance", r );
+
+
 
 
 		r = ASEngine->RegisterGlobalFunction("bool FMOD_Initialize(uint channelCount)", 					asFUNCTION(FMOD_Initialize), 		asCALL_CDECL );

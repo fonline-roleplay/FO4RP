@@ -4,6 +4,7 @@
 #include "memory.h"
 #include <map>
 #include <string>
+#include <vector>
 #include "stdio.h"
 
 namespace FOFMOD
@@ -31,6 +32,7 @@ namespace FOFMOD
 			virtual ArchiveMemoryObject_t* GetSymbol( const char* name ) = 0;
 			virtual void* GetContent( const char* name, unsigned int* size ) = 0;
 			virtual void* GetContent( ArchiveMemoryObject_t* symbol, unsigned int* size) = 0;
+			virtual void  GetSymbolNames( std::vector< std::string >& strVec ) = 0;
 	};
 
 
@@ -58,6 +60,7 @@ namespace FOFMOD
 			ArchiveMemoryObject_t*  GetSymbol( const char* name ) override;
 			void* GetContent( const char* name, unsigned int* size ) = 0;
 			void* GetContent( ArchiveMemoryObject_t* symbol, unsigned int* size) = 0;
+			void  GetSymbolNames( std::vector< std::string >& strVec ) override;
 	};
 
 };

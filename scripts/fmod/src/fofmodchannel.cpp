@@ -196,6 +196,22 @@ namespace FOFMOD
 		}
 	}
 
+	void Channel::Set3DMinMaxDistance( float minDistance, float maxDistance )
+	{
+		if( this->handle )
+		{
+			this->handle->set3DMinMaxDistance( minDistance, maxDistance );
+		}
+	}
+
+	void Channel::Get3DMinMaxDistance( float* minDistance, float* maxDistance )
+	{
+		if( this->handle )
+		{
+			this->handle->get3DMinMaxDistance( minDistance, maxDistance );
+		}
+	}
+
 
 
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -381,6 +397,22 @@ namespace FOFMOD
 		if( ptr )
 		{
 			ptr->SetLoopPoints( loopStart, loopStartType, loopEnd, loopEndType );
+		}
+	}
+
+	void Script_Channel_Set3DMinMaxDistance( float minDistance, float maxDistance, FOFMOD::Channel* ptr )
+	{
+		if( ptr )
+		{
+			ptr->Set3DMinMaxDistance( minDistance, maxDistance );
+		}
+	}
+	
+	void Script_Channel_Get3DMinMaxDistance( float* minDistance, float* maxDistance, FOFMOD::Channel* ptr )
+	{
+		if( ptr )
+		{
+			ptr->Get3DMinMaxDistance( minDistance, maxDistance );
 		}
 	}
 }

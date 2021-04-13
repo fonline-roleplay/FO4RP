@@ -8,7 +8,7 @@
 #include "file.h"
 #include "fofmoddef.h"
 #include "fofmodsystem.h"
-
+#include "util.h"
 
 
 namespace FOFMOD
@@ -126,6 +126,130 @@ namespace FOFMOD
 		}
 		return result;
 	}
+
+
+
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+	// void FOZipFile::Touch()
+	// {
+	// 	// touch as zipfile then alias music/sound files
+	// 	ZipFile::Touch();
+	// 	for( ArchiveMemoryObjectMap::iterator cur = this->objects.begin(); cur != this->objects.end(); cur++ )
+	// 	{
+	// 		ArchiveMemoryObject_t* obj = &(cur->second);
+	// 		if( obj )
+	// 		{
+	// 			if( obj->memObj.name )
+	// 			{
+	// 				const char* const soundExtensions[] = { ".ogg", ".mp3", ".flac", ".wav" };
+	// 				const unsigned int soundExtNum      = 4;
+	// 				const char* extension;
+	// 				unsigned int extLen;
+	// 				cwk_path_get_extension( obj->memObj.name, &extension, &extLen );
+	// 				if( extLen && extension )
+	// 				{
+	// 					unsigned int indexer = 0;
+	// 					while( indexer < soundExtNum )
+	// 					{
+	// 						if( strcmp( extension, soundExtensions[indexer] ) == 0 )
+	// 						{
+	// 							this->MapSoundFile( obj );
+	// 							break;
+	// 						}
+	// 					}
+	// 				}
+	// 			}
+	// 		}
+	// 	}
+	// }
+
+
+
+	// void FOZipFile::MapSoundFile( ArchiveMemoryObject_t* symbol )
+	// {
+	// 	struct cwk_segment segment;
+	// 	if( cwk_path_get_first_segment( symbol->memObj.name, &segment) )
+	// 	{
+	// 		// has segments
+	// 		memset( &segment, 0, sizeof( struct cwk_segment ) );
+	// 		if( cwk_path_get_last_segment( symbol->memObj.name, &segment ) )
+	// 		{
+	// 			// last segment if actual filename in path;
+	// 			const char* filename = (char*)malloc( segment.size );
+	// 			if( filename )
+	// 			{
+	// 				memcpy( (void*)filename, segment.begin, segment.size );
+	// 				cwk_path_get_previous_segment( &segment );
+	// 				bool isMusic = false;
+	// 				bool isSound = false;
+
+	// 				if( strcmp( segment.begin, "music") == 0 )
+	// 				{
+	// 					isMusic = true;
+	// 				}
+	// 				else
+	// 				if ( strcmp( segment.begin, "sfx" ) == 0 )
+	// 				{
+	// 					isSound = true;
+	// 				}
+
+	// 				cwk_path_get_previous_segment( &segment );
+
+	// 				if( strcmp( segment.begin, "sounds") == 0 )
+	// 				{
+	// 					if( !cwk_path_get_previous_segment( &segment ) ) // there is nothing behind sounds
+	// 					{
+	// 						// all good
+	// 						std::map< std::string, std::string >* mapPtr = NULL;
+	// 						if( isMusic )
+	// 						{
+	// 							mapPtr = &this->musicNames;
+	// 						}
+	// 						else
+	// 						if( isSound )
+	// 						{
+	// 							mapPtr = &this->soundNames;
+	// 						}
+
+	// 						if( mapPtr )
+	// 						{
+	// 							mapPtr->insert( std::pair< std::string, std::string >( std::string( filename ), std::string( symbol->memObj.name ) ) );
+	// 						}
+	// 					}
+	// 				}
+
+	// 				free( (void*)filename );
+	// 				filename = NULL;
+	// 			}
+	// 		}
+	// 	}
+	// 	else
+	// 	{
+	// 		// the file is located in root dir of the archive
+	// 		// do not do anything, fuck this file
+	// 	}
+	// }
+
+	// void* FOZipFile::GetContent( const char* name, unsigned int* size)
+	// {
+	// 	// get regular object and try to map into alised name if requested name has no results on search
+	// 	void* result = NULL;
+
+
+	// 	return result;
+	// }
+
+	// void* FOZipFile::GetContent( ArchiveMemoryObject_t* symbol, unsigned int* size)
+	// {
+	// 	void* result = NULL;
+
+
+	// 	return result;
+	// }
 
 }
 

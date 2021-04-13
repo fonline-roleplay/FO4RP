@@ -27,7 +27,29 @@ namespace FOFMOD
 
 		typedef std::map< std::string, FOFMOD::Sound* > SoundMap;
 		typedef std::vector< FOFMOD::Sound* > SoundVec;
-		typedef std::vector< FOFMOD::IArchiveFile* > ArchiveFilePtrVec;
+
+
+		// for archives sound mapping
+		class SoundAlias
+		{
+			public:
+				std::string name;
+				std::string fullname;
+				unsigned int index;
+		};
+
+		class IndexedArchiveFile
+		{
+			private:
+				IndexedArchiveFile();
+			public:
+				bool isMapped;
+				IndexedArchiveFile( FOFMOD::IArchiveFile* arch );
+				~IndexedArchiveFile();
+				FOFMOD::IArchiveFile* arch;
+		};
+
+		typedef std::vector< FOFMOD::System::IndexedArchiveFile* > IndexedArchiveFilePtrVec;
 
 		class CacheSoundData;
 		typedef std::map< std::string, CacheSoundData* > CachedDataMap;
@@ -61,6 +83,12 @@ namespace FOFMOD
 				FOFMOD::System::CacheSoundData* cacheData;
 		};
 
+		enum SOUND_TYPE
+		{
+			SOUND,
+			MUSIC
+		};
+
 
 		public:
 			static FMOD_RESULT F_CALLBACK ChannelCallback( FMOD_CHANNELCONTROL *channelcontrol, 
@@ -69,27 +97,29 @@ namespace FOFMOD
 															void* commanddata1, 
 															void* commanddata2 );
 
-			static const unsigned int CREATEFLAGS_STREAM = FMOD_OPENMEMORY_POINT | FMOD_CREATESTREAM;
+			static const unsigned int CREATEFLAGS_STREAM = FMOD_OPENMEMORY_POINT | FMOD_CREATESTREAM | FMOD_3D | FMOD_3D_LINEARSQUAREROLLOFF;
 
 		protected:
 			FMOD::System* FSystem;
 			FMOD::ChannelGroup*   soundChannelGroup;
 			FMOD::ChannelGroup*   musicChannelGroup;
 			bool initialized;
-
+			std::map< std::string, SoundAlias > soundNames;
+			std::map< std::string, SoundAlias > musicNames;
 			
 			// streamed sounds cannot be reused between different plays, so each new sound be generating own stream, but the prototype data is same.
 			CachedDataMap 	 cachedSoundsData;
 
-			ArchiveFilePtrVec indexedArchives;
+			IndexedArchiveFilePtrVec indexedArchives;
 			FOFMOD::Listener3D listener;
 			void SoundFromMemory( void* ptr, unsigned int size, FOFMOD::Sound** sptr );
-			void SoundFromArchive( const std::string& filename, FOFMOD::Sound** sptr, CacheSoundData** cache );
-			void SoundFromFile( const std::string& filename, FOFMOD::Sound** sptr, CacheSoundData** cache );
-			void GetSound( const std::string& filename, FOFMOD::Sound** sptr, CacheSoundData** cache );
+			void SoundFromArchive( const std::string& filename, const std::string cacheName, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache );
+			void SoundFromFile( const std::string& filename, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache );
+			void GetSound( const std::string& filename, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache );
 			void AddCachedSound( const std::string& filename, void* data, unsigned int size, CacheSoundData** cache );	
 			void GetCachedSound( const std::string& filename, CacheSoundData** cache );
-			void Play( const std::string& soundName, FMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused );
+			void Play( const std::string& soundName, SOUND_TYPE type,  FMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused );
+			void MapArchive( unsigned int index );
 			
 
 		public:

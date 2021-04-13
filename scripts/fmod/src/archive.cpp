@@ -178,6 +178,30 @@ namespace FOFMOD
 		return result;
 	}
 
+	void AArchiveFile::GetSymbolNames( std::vector< std::string >& strVec )
+	{
+		
+		unsigned int objCount = this->objects.size();
+		if( objCount > 0 )
+		{
+			unsigned int frontIndex = strVec.size();
+			strVec.resize( this->objects.size() + frontIndex );
+			for( ArchiveMemoryObjectMap::iterator cur = this->objects.begin(); cur != this->objects.end(); cur++ )
+			{
+				ArchiveMemoryObject_t* obj = &(cur->second);
+				if( obj )
+				{
+					if( obj->memObj.name )
+					{
+						//FOFMOD_DEBUG_LOG("index %d \n", frontIndex);
+						strVec[frontIndex] = obj->memObj.name;
+						//FOFMOD_DEBUG_LOG("KURWA %s \n", strVec[frontIndex]);
+					}
+				}
+				frontIndex++;
+			}
+		}
+	}
 }
 
 

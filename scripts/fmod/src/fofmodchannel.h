@@ -37,6 +37,8 @@ namespace FOFMOD
 			void SetLoopCount( int count );
 			void SetLoopPoints( unsigned int loopStart, unsigned int loopStartType, unsigned int loopEnd, unsigned int loopEndType );
 			void GetLoopPoints( unsigned int* loopStart, unsigned int loopStartType, unsigned int* loopEnd, unsigned int loopEndType );
+			void Set3DMinMaxDistance( float minDistance, float maxDistance );
+			void Get3DMinMaxDistance( float* minDistance, float* maxDistance );
 	};
 
 
@@ -68,6 +70,8 @@ namespace FOFMOD
 	// positioning
 	extern void Script_Channel_Set3DPosition( float x, float y, float z, FOFMOD::Channel* ptr );
 	extern void Script_Channel_Set3DVelocity( float x, float y, float z, FOFMOD::Channel* ptr );
+	extern void Script_Channel_Set3DMinMaxDistance( float minDistance, float maxDistance, FOFMOD::Channel* ptr );
+	extern void Script_Channel_Get3DMinMaxDistance( float* minDistance, float* maxDistance, FOFMOD::Channel* ptr );
 
 	// loops
 	extern int Script_Channel_GetLoopCount( FOFMOD::Channel* ptr );
