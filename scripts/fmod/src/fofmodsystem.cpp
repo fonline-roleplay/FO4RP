@@ -12,6 +12,7 @@
 #include "perfcounter.h"
 #include <cstring>
 #include "cwalk.h"
+#include "macros.h"
 
 // stdbool.h fuckery
 #undef bool 
@@ -22,8 +23,9 @@ namespace FOFMOD
 {	
 	const int fileExtNum = 4;
 	const std::string fileExtensions[fileExtNum] = { std::string(".ogg"), std::string(".flac"), std::string(".wav"), std::string(".mp3") };
-	const char* PathToSounds = ".\\data\\sounds\\sfx\\";
-	const char* PathToMusic  = ".\\data\\sounds\\music\\";
+	const char* PathToSounds = "./data/sound/sfx/";
+	const char* PathToMusic  = "./data/sound/music/";
+	const char  PathSeparator = '/'; // should be platform specific, and not here
 
 	bool IsValidSoundExtension( const char* filename )
 	{
@@ -141,6 +143,9 @@ namespace FOFMOD
 			{
 				FOFMOD::Sound* snd = cbdata->sound;
 				snd->Release();
+				FOFMOD::Channel* chn = cbdata->channel;
+				chn->Invalidate();
+				chn->Release();
 				FOFMOD::System::CacheSoundData* cacheData = cbdata->cacheData;
 
 				if( cacheData )
@@ -149,7 +154,7 @@ namespace FOFMOD
 				}
 
 				delete cbdata;
-				FOFMOD_DEBUG_LOG("Channel <%d> play end \n");
+				FOFMOD_DEBUG_LOG("Channel <%u> play end \n", channel);
 			}
 		}
 		
@@ -339,12 +344,14 @@ namespace FOFMOD
 				FOFMOD::System::ChannelCallbackData* cbdata = new FOFMOD::System::ChannelCallbackData();
 				cbdata->system = this;
 				cbdata->sound  = snd;
+				cbdata->channel = *chn;
 
 				if( cacheData )
 				{
 					cbdata->cacheData = cacheData;
 				}
 
+				(*chn)->Addref(); // to invalidate and release in callback
 				snd->Addref(); // we're referencing it for callback, release there, system sound release through FOFMOD sound release
 				(*chn)->handle->setCallback( FOFMOD::System::ChannelCallback );
 				(*chn)->handle->setUserData( cbdata );
@@ -401,9 +408,9 @@ namespace FOFMOD
 							alias.name.assign( segment.begin, segment.size );
 							if( alias.name.size() > 0 )
 							{
-								FOFMOD_DEBUG_LOG("alias name %s \n", alias.name.c_str() );
+								//FOFMOD_DEBUG_LOG("alias name %s \n", alias.name.c_str() );
 								cwk_path_get_previous_segment( &segment );
-								bool isMusic = false;
+								bool isMusic = false; 
 								bool isSound = false;
 
 								if( memcmp( segment.begin, "music", segment.size ) == 0 )
@@ -441,7 +448,7 @@ namespace FOFMOD
 												mapPtr->erase( exist ); // there can be only one
 												FOFMOD_DEBUG_LOG("Mapping duplicate <%s> <%s> \n", alias.name.c_str(), ( isSound ? "sound" : "music" ) );
 											}
-											//FOFMOD_DEBUG_LOG("Mapping sound dir as name <%s> <%s> \n", alias.fullname.c_str(), alias.name.c_str() );
+											//FOFMOD_DEBUG_LOG("Mapping <%s> dir as name <%s> <%s> \n", ( isSound ? "sound" : "music" ), alias.fullname.c_str(), alias.name.c_str() );
 											mapPtr->insert( std::pair< std::string, SoundAlias >( alias.name, alias ) );
 										}
 									}
@@ -490,38 +497,57 @@ namespace FOFMOD
 		}
 	}
 
-	void System::SoundFromArchive( const std::string& filename, const std::string cacheName, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache )
+	void System::SoundFromArchive( const std::string& filename, const std::string cacheName, SOUND_TYPE type, unsigned int flags, FOFMOD::Sound** sptr, CacheSoundData** cache )
 	{
 		SoundAlias* alias = NULL;
-		std::map< std::string, SoundAlias >::iterator found;
-		switch( type )
-		{
-			case( SOUND_TYPE::SOUND ):
-			{
-				found = this->soundNames.find( filename );
-				if( found == this->soundNames.end() ) // no such file in indexed archives
-					return;
-				break;
-			}
-			case( SOUND_TYPE::MUSIC ):
-			{
-				found = this->musicNames.find( filename );
-				if( found == this->musicNames.end() ) // no such file in indexed archives
-					return;
-				break;
-			}
-			default:
-				return;
-		}
-
-
-		alias = &(found->second);
-		//FOFMOD_DEBUG_LOG("Alias found %s %s \n", alias->name.c_str(), alias->fullname.c_str() );
-
-		IndexedArchiveFile* iaf = this->indexedArchives[ alias->index ];
+		std::map< std::string, SoundAlias >::iterator found = this->soundNames.end();
 
 		unsigned int size = 0;
-		void* binary = iaf->arch->GetContent( alias->fullname.c_str(), &size );
+		void* binary = NULL;
+
+		if( !ISFLAG( flags, FOFMOD::System::SOUND_FLAG::NO_LOOKUP ) )
+		{
+			//FOFMOD_DEBUG_LOG("Lookup mapped name %s %d \n", filename.c_str(), type );
+			switch( type )
+			{
+				case( SOUND_TYPE::SOUND ):
+				{
+					//FOFMOD_DEBUG_LOG("Looking in soundNames \n");
+					found = this->soundNames.find( filename );
+					if( found == this->soundNames.end() ) 
+						return;
+					break;
+				}
+				case( SOUND_TYPE::MUSIC ):
+				{
+					found = this->musicNames.find( filename );
+					if( found == this->musicNames.end() )
+						return;
+					break;
+				}
+				default:
+					return;
+			}
+
+			alias = &(found->second);
+			//FOFMOD_DEBUG_LOG("Alias found %s %s \n", alias->name.c_str(), alias->fullname.c_str() );
+
+			IndexedArchiveFile* iaf = this->indexedArchives[ alias->index ];
+
+			binary = iaf->arch->GetContent( alias->fullname.c_str(), &size );
+		}
+		else
+		{
+			// from end to begin, last indexed archive in priority
+			for( IndexedArchiveFilePtrVec::reverse_iterator it = this->indexedArchives.rbegin(); it != this->indexedArchives.rend(); it++ )
+			{
+				IndexedArchiveFile* iaf = *it;
+				binary = iaf->arch->GetContent( filename.c_str(), &size );
+				if( binary )
+					break;
+			}
+		}
+	
 		if( binary )
 		{
 			this->SoundFromMemory( binary, size, sptr );
@@ -581,25 +607,36 @@ namespace FOFMOD
 	{	
 
 		std::string pathName;
-		switch ( type )
+		unsigned int flags = 0;
+		if( filename.find ( PathSeparator ) != std::string::npos ) // its a path based filename, override lookup
 		{
-			case( SOUND_TYPE::SOUND ):
-			{
-				pathName.assign( PathToSounds );
-				pathName += filename;
-				break;
-			}
-
-			case( SOUND_TYPE::MUSIC ):
-			{
-				pathName.assign( PathToMusic );
-				pathName += filename;
-				break;	
-			}
-			default:
-				return;
+			pathName = filename;
+			SETFLAG( flags, FOFMOD::System::SOUND_FLAG::NO_LOOKUP );
 		}
+		else
+		{
+			switch ( type )
+			{
+				case( SOUND_TYPE::SOUND ):
+				{
+					pathName.assign( PathToSounds );
+					pathName += filename;
+					break;
+				}
 
+				case( SOUND_TYPE::MUSIC ):
+				{
+					pathName.assign( PathToMusic );
+					pathName += filename;
+					break;	
+				}
+				default:
+					return;
+			}
+		}
+		
+
+		FOFMOD_DEBUG_LOG("PathName %s  filename %s \n", pathName.c_str(), filename.c_str() );
 
 		this->GetCachedSound( pathName, cache );
 		if( *cache )
@@ -616,7 +653,7 @@ namespace FOFMOD
 			{
 				// check for archives
 				FOFMOD_DEBUG_LOG("Sound from file failed, trying sound from archive. \n")
-				this->SoundFromArchive( filename, pathName, type, sptr, cache );
+				this->SoundFromArchive( filename, pathName, type, flags, sptr, cache );
 			}
 		}
 	}

@@ -22,25 +22,14 @@ namespace FOFMOD
 			ZipFile();
 			~ZipFile();
 
+		void  Open( const char* filename ) override;
+		void  Open() override;
 		void  Touch() override;
+		void  Close() override;
 		void* GetContent( const char* name, unsigned int* size) override;
 		void* GetContent( ArchiveMemoryObject_t* symbol, unsigned int* size) override;
 
 	};
-
-
-	// class FOZipFile : ZipFile
-	// {
-	// 	protected:
-	// 		std::map< std::string, std::string > soundNames;
-	// 		std::map< std::string, std::string > musicNames;
-	// 		void MapSoundFile( ArchiveMemoryObject_t* symbol );
-
-	// 	public:
-	// 		void Touch() override;
-	// 		void* GetContent( const char* name, unsigned int* size) override;
-	// 		void* GetContent( ArchiveMemoryObject_t* symbol, unsigned int* size) override;
-	// };
-
+	
 };
 #endif // __ZIPFILE_H__

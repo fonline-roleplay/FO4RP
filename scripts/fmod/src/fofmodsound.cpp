@@ -44,7 +44,7 @@ namespace FOFMOD
 		#endif
 		)
 		{
-			FOFMOD_DEBUG_LOG(" Deleting sound %d at refcount %d \n ", this->handle, this->refcount );
+			FOFMOD_DEBUG_LOG(" Deleting scriptSound %u at refcount %u \n ", this->handle, this->refcount );
 			delete this;
 		}
 	}

@@ -21,7 +21,7 @@ namespace FOFMOD
 
 	ZipFile::~ZipFile()
 	{
-
+		this->Close();
 	}
 
 	void ZipFile::Touch()
@@ -71,16 +71,9 @@ namespace FOFMOD
 							strcpy( archive_mem_obj.memObj.name, (const char*) &file_stat.m_filename );
 							this->AddContent( archive_mem_obj.memObj.name, archive_mem_obj );
 
-							//FOFMOD_DEBUG_LOG( "Supported file base <%d> offset <%d>size <%d> uncomp size <%d> name <%s> \n", 
-							// archive_mem_obj.memObj.base,
-							// archive_mem_obj.memObj.offset,
-							// archive_mem_obj.memObj.size,
-							// archive_mem_obj.uncompressed_size,
-							// archive_mem_obj.memObj.name);
 						}
 						else
 						{
-							//FOFMOD_DEBUG_LOG( "file is not supported %s \n", file_stat.m_filename );
 							continue;
 						}
 					}
@@ -90,6 +83,30 @@ namespace FOFMOD
 			// return back to original position;
 			fseek( this->handle, cur, SEEK_SET );
 			mz_zip_reader_end( &this->zipFile );
+		}
+	}
+
+	void ZipFile::Open( const char* filename )
+	{
+		//FOFMOD_DEBUG_LOG("Zipfile Open filename \n");
+		AArchiveFile::Open( filename );
+
+		if( this->IsOpened() )
+		{
+			mz_zip_zero_struct( &this->zipFile );
+			this->zipStatus =  mz_zip_reader_init_cfile( &this->zipFile, this->handle, 0,  0 );
+		}
+	}
+
+	void ZipFile::Open()
+	{
+		//FOFMOD_DEBUG_LOG("Zipfile Open \n");
+		AArchiveFile::Open();
+
+		if( this->IsOpened() )
+		{
+			mz_zip_zero_struct( &this->zipFile );
+			this->zipStatus =  mz_zip_reader_init_cfile( &this->zipFile, this->handle, 0,  0 );
 		}
 	}
 
@@ -111,145 +128,40 @@ namespace FOFMOD
 		void* result = NULL;
 		if( symbol )
 		{
-			if( !this->IsOpened() )
-			{
-				this->Open();
-			}
-
 			if( symbol->memObj.size && symbol->uncompressed_size )
 			{
-				mz_zip_zero_struct( &this->zipFile );
-				this->zipStatus =  mz_zip_reader_init_cfile( &this->zipFile, this->handle, 0,  0 );
+				if( !this->IsOpened() )
+				{
+					this->Open();
+
+					// couldnt open
+					if( !this->IsOpened() )
+						return result;
+				}
+
+				unsigned int cur = ftell( this->handle );
+				rewind( this->handle );;
+
 				result = mz_zip_reader_extract_to_heap( &this->zipFile, symbol->index, size, 0 );
-				mz_zip_reader_end( &this->zipFile );
+
+				fseek( this->handle, cur, SEEK_SET );
 			}
+
 		}
 		return result;
 	}
 
 
+	void  ZipFile::Close()
+	{
+		if( this->IsOpened() )
+		{
+			mz_zip_reader_end( &this->zipFile );
+			this->zipStatus = 0; 
+		}
 
-	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-	// void FOZipFile::Touch()
-	// {
-	// 	// touch as zipfile then alias music/sound files
-	// 	ZipFile::Touch();
-	// 	for( ArchiveMemoryObjectMap::iterator cur = this->objects.begin(); cur != this->objects.end(); cur++ )
-	// 	{
-	// 		ArchiveMemoryObject_t* obj = &(cur->second);
-	// 		if( obj )
-	// 		{
-	// 			if( obj->memObj.name )
-	// 			{
-	// 				const char* const soundExtensions[] = { ".ogg", ".mp3", ".flac", ".wav" };
-	// 				const unsigned int soundExtNum      = 4;
-	// 				const char* extension;
-	// 				unsigned int extLen;
-	// 				cwk_path_get_extension( obj->memObj.name, &extension, &extLen );
-	// 				if( extLen && extension )
-	// 				{
-	// 					unsigned int indexer = 0;
-	// 					while( indexer < soundExtNum )
-	// 					{
-	// 						if( strcmp( extension, soundExtensions[indexer] ) == 0 )
-	// 						{
-	// 							this->MapSoundFile( obj );
-	// 							break;
-	// 						}
-	// 					}
-	// 				}
-	// 			}
-	// 		}
-	// 	}
-	// }
-
-
-
-	// void FOZipFile::MapSoundFile( ArchiveMemoryObject_t* symbol )
-	// {
-	// 	struct cwk_segment segment;
-	// 	if( cwk_path_get_first_segment( symbol->memObj.name, &segment) )
-	// 	{
-	// 		// has segments
-	// 		memset( &segment, 0, sizeof( struct cwk_segment ) );
-	// 		if( cwk_path_get_last_segment( symbol->memObj.name, &segment ) )
-	// 		{
-	// 			// last segment if actual filename in path;
-	// 			const char* filename = (char*)malloc( segment.size );
-	// 			if( filename )
-	// 			{
-	// 				memcpy( (void*)filename, segment.begin, segment.size );
-	// 				cwk_path_get_previous_segment( &segment );
-	// 				bool isMusic = false;
-	// 				bool isSound = false;
-
-	// 				if( strcmp( segment.begin, "music") == 0 )
-	// 				{
-	// 					isMusic = true;
-	// 				}
-	// 				else
-	// 				if ( strcmp( segment.begin, "sfx" ) == 0 )
-	// 				{
-	// 					isSound = true;
-	// 				}
-
-	// 				cwk_path_get_previous_segment( &segment );
-
-	// 				if( strcmp( segment.begin, "sounds") == 0 )
-	// 				{
-	// 					if( !cwk_path_get_previous_segment( &segment ) ) // there is nothing behind sounds
-	// 					{
-	// 						// all good
-	// 						std::map< std::string, std::string >* mapPtr = NULL;
-	// 						if( isMusic )
-	// 						{
-	// 							mapPtr = &this->musicNames;
-	// 						}
-	// 						else
-	// 						if( isSound )
-	// 						{
-	// 							mapPtr = &this->soundNames;
-	// 						}
-
-	// 						if( mapPtr )
-	// 						{
-	// 							mapPtr->insert( std::pair< std::string, std::string >( std::string( filename ), std::string( symbol->memObj.name ) ) );
-	// 						}
-	// 					}
-	// 				}
-
-	// 				free( (void*)filename );
-	// 				filename = NULL;
-	// 			}
-	// 		}
-	// 	}
-	// 	else
-	// 	{
-	// 		// the file is located in root dir of the archive
-	// 		// do not do anything, fuck this file
-	// 	}
-	// }
-
-	// void* FOZipFile::GetContent( const char* name, unsigned int* size)
-	// {
-	// 	// get regular object and try to map into alised name if requested name has no results on search
-	// 	void* result = NULL;
-
-
-	// 	return result;
-	// }
-
-	// void* FOZipFile::GetContent( ArchiveMemoryObject_t* symbol, unsigned int* size)
-	// {
-	// 	void* result = NULL;
-
-
-	// 	return result;
-	// }
+		AArchiveFile::Close();
+	}
 
 }
 

@@ -18,10 +18,7 @@ namespace FOFMOD
 
 	Channel::~Channel()
 	{
-		if( this->handle )
-		{
 
-		}
 	}
 
 	void Channel::Addref()
@@ -43,7 +40,7 @@ namespace FOFMOD
 		#endif
 		)
 		{
-			FOFMOD_DEBUG_LOG(" Deleting channel %d at refcount %d \n ", this->handle, this->refcount );
+			//FOFMOD_DEBUG_LOG("Deleting scriptChannel %u at refcount %u \n ", this->handle, this->refcount );
 			delete this;
 		}
 	}
@@ -210,6 +207,12 @@ namespace FOFMOD
 		{
 			this->handle->get3DMinMaxDistance( minDistance, maxDistance );
 		}
+	}
+
+
+	void Channel::Invalidate()
+	{
+		this->handle = NULL;
 	}
 
 

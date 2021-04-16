@@ -78,8 +78,9 @@ namespace FOFMOD
 			public:
 				ChannelCallbackData();
 				~ChannelCallbackData();
-				FOFMOD::System* system;
-				FOFMOD::Sound*  sound;
+				FOFMOD::System*  system;
+				FOFMOD::Channel* channel;
+				FOFMOD::Sound*   sound;
 				FOFMOD::System::CacheSoundData* cacheData;
 		};
 
@@ -87,6 +88,12 @@ namespace FOFMOD
 		{
 			SOUND,
 			MUSIC
+		};
+
+
+		enum SOUND_FLAG
+		{
+			NO_LOOKUP = 1
 		};
 
 
@@ -113,7 +120,7 @@ namespace FOFMOD
 			IndexedArchiveFilePtrVec indexedArchives;
 			FOFMOD::Listener3D listener;
 			void SoundFromMemory( void* ptr, unsigned int size, FOFMOD::Sound** sptr );
-			void SoundFromArchive( const std::string& filename, const std::string cacheName, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache );
+			void SoundFromArchive( const std::string& filename, const std::string cacheName, SOUND_TYPE type, unsigned int flags, FOFMOD::Sound** sptr, CacheSoundData** cache );
 			void SoundFromFile( const std::string& filename, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache );
 			void GetSound( const std::string& filename, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache );
 			void AddCachedSound( const std::string& filename, void* data, unsigned int size, CacheSoundData** cache );	

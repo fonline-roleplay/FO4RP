@@ -39,6 +39,8 @@ namespace FOFMOD
 			void GetLoopPoints( unsigned int* loopStart, unsigned int loopStartType, unsigned int* loopEnd, unsigned int loopEndType );
 			void Set3DMinMaxDistance( float minDistance, float maxDistance );
 			void Get3DMinMaxDistance( float* minDistance, float* maxDistance );
+
+			void Invalidate(); // for external signal processing, fmod doesnt invalidate my handle
 	};
 
 

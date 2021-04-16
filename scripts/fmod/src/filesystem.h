@@ -5,4 +5,5 @@
 extern int filesystem_access( const char* fname );
 
 
+
 #endif // __FOFMOD_FILESYSTEM_H__

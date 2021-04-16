@@ -157,7 +157,6 @@ namespace FOFMOD
 		}
 
 		this->objects.clear();
-
 	}
 
 	bool AArchiveFile::IsOpened()
@@ -174,7 +173,7 @@ namespace FOFMOD
 		{
 			result = &found->second;
 		}
-
+ 
 		return result;
 	}
 
