@@ -39,6 +39,8 @@ namespace FOFMOD
 			void GetLoopPoints( unsigned int* loopStart, unsigned int loopStartType, unsigned int* loopEnd, unsigned int loopEndType );
 			void Set3DMinMaxDistance( float minDistance, float maxDistance );
 			void Get3DMinMaxDistance( float* minDistance, float* maxDistance );
+			void Set3DLevel( float level );
+			void Get3DLevel( float* value );
 
 			void Invalidate(); // for external signal processing, fmod doesnt invalidate my handle
 	};
@@ -74,6 +76,8 @@ namespace FOFMOD
 	extern void Script_Channel_Set3DVelocity( float x, float y, float z, FOFMOD::Channel* ptr );
 	extern void Script_Channel_Set3DMinMaxDistance( float minDistance, float maxDistance, FOFMOD::Channel* ptr );
 	extern void Script_Channel_Get3DMinMaxDistance( float* minDistance, float* maxDistance, FOFMOD::Channel* ptr );
+	extern void Script_Channel_Set3DLevel( float level, FOFMOD::Channel* ptr );
+	extern float Script_Channel_Get3DLevel( FOFMOD::Channel* ptr );
 
 	// loops
 	extern int Script_Channel_GetLoopCount( FOFMOD::Channel* ptr );

@@ -209,6 +209,22 @@ namespace FOFMOD
 		}
 	}
 
+	void Channel::Set3DLevel( float level )
+	{
+		if( this->handle )
+		{
+			this->handle->set3DLevel( level );
+		}
+	}
+
+	void Channel::Get3DLevel( float* value )
+	{
+		if( this->handle )
+		{
+			this->handle->get3DLevel( value );
+		}
+	}
+
 
 	void Channel::Invalidate()
 	{
@@ -417,6 +433,26 @@ namespace FOFMOD
 		{
 			ptr->Get3DMinMaxDistance( minDistance, maxDistance );
 		}
+	}
+
+	void Script_Channel_Set3DLevel( float level, FOFMOD::Channel* ptr )
+	{
+		if( ptr )
+		{
+			ptr->Set3DLevel( level );
+		}
+	}
+
+	float Script_Channel_Get3DLevel( FOFMOD::Channel* ptr )
+	{
+		float result = 0.0f;
+
+		if( ptr )
+		{
+			ptr->Get3DLevel( &result );
+		}
+
+		return result;
 	}
 }
 

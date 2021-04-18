@@ -319,6 +319,13 @@ void RegisterASInterface()
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::Get3DMinMaxDistance", r );
 
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Set3DLevel(float level)", 	asFUNCTION(FOFMOD::Script_Channel_Set3DLevel), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::Set3DLevel", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "float Get3DLevel()", 			asFUNCTION(FOFMOD::Script_Channel_Get3DLevel), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::Get3DLevel", r );
+
 
 
 
