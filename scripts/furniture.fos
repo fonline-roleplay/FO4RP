@@ -2,23 +2,8 @@
 #define FURNITURE
 
 #include "_utils.fos"
-
-#define SK_DESTROY	SK_REPAIR
-#define SK_MIN		100
-
-#define State		Val9
-#define Durability	Val8
-#define HolderCr	Val7
-
-#define MAX_POWER	100
-#define GetPower	#(item, power)		item.Durability * CLAMP( MAX_POWER - power, 0, MAX_POWER )
-
-import void LockerBudge( Item& item ) from "lockers";
-import bool UseItemOnLocker( Critter& cr, Item& locker, Item& item ) from "lockers";
-import bool IsKeyAviable( Critter& cr, uint lockerId ) from "lockers";
-import bool UseSkillOnLocker( Critter& cr, Item& locker, int skill ) from "lockers";
-
-import void Item_SetFrame( Item& item, uint8 frame ) from "item";
+#include "furniture_h.fos"
+#include "lockers_h.fos"
 
 import bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param ) from "main";
 
@@ -70,6 +55,7 @@ void InitFurnitures()
 		.add( Furniture( "Компостная бочка", PID_SHIT_BAREL_EMPTY ).add( PID_SHIT_BAREL_FULL ) )
 		.add( Furniture( "Компостная ванна", PID_SHIT_BATH_X_EMPTY ).add( PID_SHIT_BATH2_Y_EMPTY ).add( PID_SHIT_BATH1_X_FULL ).add( PID_SHIT_BATH2_Y_FULL ) )
 		.add( Furniture( "Сундук", PID_CR_CHEST ).add(367).add(369) )
+		.add( Furniture( "Контейнер", PID_CONTAINER_1 ).add( PID_BOX_3 ) )
 		;
 }
 
@@ -84,8 +70,8 @@ class MenuFuriture: CenteredMenuHandler {
 
 	bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-		Map@ map = GetMap(m_map_id);
-		Item@ furniture = GetItem(m_target_id);
+		Map@ map = GetMap( m_map_id );
+		Item@ furniture = GetItem( m_target_id );
 		if( map is null || furniture is null ) {
 			return false;
 		}
@@ -101,6 +87,7 @@ class MenuFuriture: CenteredMenuHandler {
 				SwitchLootability( cr, furniture );
 				return true;
 			}
+			
 		} else {
 			if( furniture.LockerId != 0 ) {
 				if( menu.Button( FLAG( furniture.LockerCondition, LOCKER_LOCKED ) ? "Отпереть" : "Запереть" ) ) {
@@ -130,47 +117,40 @@ class MenuFuriture: CenteredMenuHandler {
 			}			
 		}
 		
-		if( menu.Button("Повернуть") ) 
-		{
+		if( menu.Button( "Повернуть" ) ) {
 			Rotate( cr, furniture );
 			return true;
 		}
 		
-		if( menu.Button( ( isDragging ? "Перестать" : "Начать" ) + " толкать" ) )
-		{
+		if( menu.Button( ( isDragging ? "Перестать" : "Начать" ) + " толкать" ) ) {
 			Drag( cr, furniture );	
 			return false;
 		}
 		
 		bool canUse = true;
 		string text = "";
-		if( canPickup( cr, furniture ) )
-		{
-			if( menu.Button( "Поднять" ) )
-			{
+		if( canPickup( cr, furniture ) ) {
+			if( menu.Button( "Поднять" ) ) {
 				if( isDragging ) StopDragging( cr, furniture );
 				Pickup( cr, furniture );	
 				return false;
 			}
-		}
-		else if( isContainer( furniture ) )
-		{
+		} else if( isContainer( furniture ) ) {
 			string action = "";
 			bool isChangeble = furniture.Proto.Container_Changeble;
-			if( isChangeble )
+			if( isChangeble ) {
 				action = FLAG( furniture.LockerCondition, LOCKER_ISOPEN ) ? "Закрыть" : "Открыть";
-			else
+			} else {
 				action = "Содержимое";
+			}
 			
-			if( menu.Button( action ) )
-			{
+			if( menu.Button( action ) ) {
 				if( isDragging ) StopDragging( cr, furniture );
 				UseSkillOnLocker( cr, furniture, SKILL_PICK_ON_GROUND );	
 				return false;
 			}
 			
-			if( menu.Button( "Осмотреть" ) )
-			{
+			if( isContainer( furniture ) && menu.Button( "Взломать" ) ) {
 				if( isDragging ) StopDragging( cr, furniture );
 				UseSkillOnLocker( cr, furniture, SK_LOCKPICK );	
 				return false;
@@ -180,21 +160,29 @@ class MenuFuriture: CenteredMenuHandler {
 	}
 
 	string@ Description(Critter& cr) {
-		Item@ furniture = GetItem(m_target_id);
+		string info;
+		Item@ furniture = GetItem( m_target_id );
 		float max_weight = cr.Stat[ ST_CARRY_WEIGHT ] * ContainerBonusWeight( furniture ) * 0.001;
-		string info = StyledText( "", "Вес: ", ItemsWeight( furniture ) * 0.001 + " / " + max_weight );
-		if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
-		{
+		float cont_weight = ItemsWeight( furniture ) * 0.001;
+		
+		info += StyledText( "", "Вес: ", cont_weight + " / " + max_weight );
+		
+		if( cr.Param[ QST_GAMEMODE ] == GAME_TEST ) {
 			info += " [" + cr.Stat[ ST_CARRY_WEIGHT ] * 0.001 + " x " + ContainerBonusWeight( furniture ) + "]";
 		}
+		
 		info += "\n";
 		
-		if( isContainer( furniture ) )
-		{		
+		if( isContainer( furniture ) ) {		
 			info += StyledText( "\n", "Объём: ", ContainmentVolume( furniture ) + " / " + furniture.Proto.Container_Volume );
 		}
+		
 		return info;
 	}
+	
+	string@ ButtonCancel() {
+        return ButtonDecorator( "Скрыть меню", null );
+    }
 }
 
 bool StartMenuFuriture( Critter& cr, Item& target)
@@ -235,7 +223,7 @@ bool _Skill( Item& furniture, Critter& cr, int skill )
 		case( SK_FIRST_AID ): return Drag( cr, furniture );			
 		case( SK_TRAPS ): 
 			return Rotate( cr, furniture, false );
-		case( SK_REPAIR ): return SwitchLootability( cr, furniture ); //Rotate( cr, furniture );
+		case( SK_REPAIR ): return SwitchLootability( cr, furniture );
 		case( SKILL_PICK_ON_GROUND ): return StartMenuFuriture( cr, furniture );
 		case( SKILL_PUT_CONT ): return FailedAttempt( cr, "Это сюда не влезет." );
 	}
@@ -270,14 +258,12 @@ bool Pickup( Critter& cr, Item& furniture )
 	bool DoorOrContainer = ( isContainer( furniture ) || furniture.GetType() == ITEM_TYPE_DOOR );
 	bool isPickingUp = true;
 
-	if( !isGM(cr) && ( !FLAG( furniture.Flags, ITEM_CAN_PICKUP ) || furniture.Durability > 0 ) )
-	{
-		if( DoorOrContainer )
+	if( !isGM(cr) && ( !FLAG( furniture.Flags, ITEM_CAN_PICKUP ) || furniture.Durability > 0 ) ) {
+		if( DoorOrContainer ) {
 			isPickingUp = false;
-		else 
-		{
+		} else {
 			LogItemMovement( cr, furniture, "не может поднять вмонтированную мебель" ); 
-			cr.Say( SAY_NETMSG, "Требуется демонтаж." );
+			cr.Say( SAY_NETMSG, "|0xFFFF00 Требуется демонтаж." );
 			return true;
 		}
 	}
@@ -289,7 +275,7 @@ bool Pickup( Critter& cr, Item& furniture )
 			if( FLAG( furniture.LockerCondition, LOCKER_JAMMED ) || FLAG( furniture.LockerCondition, LOCKER_BROKEN ) || FLAG( furniture.LockerCondition, LOCKER_NOOPEN ) )
 			{
 				LogItemMovement( cr, furniture, "не может поднять запертую мебель" ); 
-				cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
+				cr.Say( SAY_NETMSG, "|0xFFFF00 Из этого ничего не вышло." );
 				return true;
 			}
 			
@@ -300,17 +286,14 @@ bool Pickup( Critter& cr, Item& furniture )
 				return true;
 			}
 			
-			if( FLAG( furniture.LockerCondition, LOCKER_ELECTRO ) )
-			{
+			if( FLAG( furniture.LockerCondition, LOCKER_ELECTRO ) ) {
 				LogCrimeMovement( cr, furniture, "вводит код электронного для замка мебели" ); 
 				cr.RunClientScript( "client_screen_codedoor@ShowScreen", furniture.Id, furniture.Val1, 0, "Введите код", null );
 				return true;
 			}
 
-			if( FLAG( furniture.LockerCondition, LOCKER_LOCKED ) )
-			{
-				if( !IsKeyAviable( cr, furniture.LockerId ) )
-				{
+			if( FLAG( furniture.LockerCondition, LOCKER_LOCKED ) ) {
+				if( !IsKeyAviable( cr, furniture.LockerId ) ) {
 					LogCrimeMovement( cr, furniture, "не может без ключа открыть мебель" ); 
 					cr.Say( SAY_NETMSG, "Заперто." );
 					LockerBudge( furniture );
@@ -319,10 +302,10 @@ bool Pickup( Critter& cr, Item& furniture )
 			}
 		}
 		
-		if( !furniture.Proto.Container_Changeble || !FLAG( furniture.LockerCondition, LOCKER_ISOPEN ) )
-		{
-			if( furniture.Proto.Container_Changeble )
+		if( !furniture.Proto.Container_Changeble || !FLAG( furniture.LockerCondition, LOCKER_ISOPEN ) ) {
+			if( furniture.Proto.Container_Changeble ) {
 				furniture.LockerOpen();
+			}
 			
 			ShowContainer( cr, furniture, furniture.Proto.GroundLevel ? TRANSFER_HEX_CONT_DOWN : TRANSFER_HEX_CONT_UP );
 			LogItemMovement( cr, furniture, "заглядывает внутрь" ); 
@@ -334,8 +317,7 @@ bool Pickup( Critter& cr, Item& furniture )
 		return true;
 	}
 	
-	if( DoorOrContainer && furniture.Proto.Container_Changeble )
-	{
+	if( DoorOrContainer && furniture.Proto.Container_Changeble ) {
 		LogItemMovement( cr, furniture, "закрывает мебель" );
 		furniture.LockerClose();
 	}
@@ -343,15 +325,15 @@ bool Pickup( Critter& cr, Item& furniture )
 	int freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] - ItemsWeight( cr ),
 		contWeight = ItemsWeight( furniture );
 		
-	if( !isGM(cr) && freeWeight < contWeight )
-	{
-		cr.Say( SAY_NETMSG, "Слишком тяжело." );
+	if( !isGM(cr) && freeWeight < contWeight ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Слишком тяжело." );
 		LogItemMovement( cr, furniture, "не может поднять тяжёлую мебель" );
 		return true;
 	}
 
-	if( DoorOrContainer ) 
+	if( DoorOrContainer ) {
 		UNSETFLAG( furniture.Flags, ITEM_CAN_USE );
+	}
 	
 	MoveItem( furniture, 1, cr );
 	LogItemMovement( cr, furniture, "поднимает мебель (" + cr.HexX + ", " + cr.HexY + ")" );
@@ -372,22 +354,18 @@ bool SwitchLootability( Critter& cr, Item& furniture )
 	if( !isGM(cr) && furniture.LockerId != 0 )
 	{
 		LogCrimeMovement( cr, furniture, "не может сдвинуть мебель, запертую на замок" );
-		cr.Say( SAY_NETMSG, "Данный объект так просто не сдвинуть. Сначала снимите замок." );	
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Данный объект так просто не сдвинуть. Сначала снимите замок." );	
 		return true;
 	}
 	
 	bool DoorOrContainer = ( isContainer( furniture ) || furniture.GetType() == ITEM_TYPE_DOOR );
 	
 	string state = "";
-	if( !FLAG( furniture.Flags, ITEM_CAN_PICKUP ) )
-	{
+	if( !FLAG( furniture.Flags, ITEM_CAN_PICKUP ) ) {
 		UNSETFLAG( furniture.Flags, ITEM_CAN_USE );
 		SETFLAG( furniture.Flags, ITEM_CAN_PICKUP );
 		state = "поднимаем";
-	}
-	else 
-	{
-		//if( DoorOrContainer ) 
+	} else {
 		SETFLAG( furniture.Flags, ITEM_CAN_USE );
 		UNSETFLAG( furniture.Flags, ITEM_CAN_PICKUP );
 		state = "неподъёмен";
@@ -398,19 +376,17 @@ bool SwitchLootability( Critter& cr, Item& furniture )
 	return true;
 }
 
-//import bool Rotate( Critter@ cr, Item& furniture, bool clockwise = true ) from "furniture";
-bool Rotate( Critter@ cr, Item& furniture, bool clockwise = true ) //exported
+bool Rotate( Critter@ cr, Item& furniture, bool clockwise = true )
 {
 	InitFurnitures();
 	return furnitures.rotate( cr, furniture, clockwise );
 }
 
-//import bool Drag( Critter@ cr, Item& furniture ) from "furniture";
 bool Drag( Critter@ cr, Item& furniture ) //exported
 {
 	if( cr.IsRuning )
 	{
-		cr.Say( SAY_NETMSG, "Персонаж в режиме бега, шагните разок что бы сбросить режим." );
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Персонаж в режиме бега, шагните разок что бы сбросить режим." );
 		return true;
 	}
 	
@@ -500,21 +476,18 @@ uint cte_DraggingFurniture( Critter& cr, int identifier, uint& rate )
 
 void DraggingSound( Map& map, Item& furniture, uint x, uint y )
 {
-	if( furniture.HexX == x && furniture.HexY == y )
-		return;
+	if( furniture.HexX == x && furniture.HexY == y ) { return;
+	}
 	
 	bool isCart = furniture.GetProtoId() == PID_CR_CART;
 
 	string sound = "";
 	
 	
-	if( isCart )
-	{	
+	if( isCart ) {	
 		string[]CartSoundNames = { "cart1.ogg",  "cart2.ogg" };
 		sound = CartSoundNames[ Random( 0, CartSoundNames.length() - 1 ) ];
-	}
-	else
-	{
+	} else {
 		string[] DraggingSoundNames = { "FurnitureDragging1.ogg",  "FurnitureDragging2.ogg", "FurnitureDragging3.ogg", "FurnitureDragging4.ogg", "FurnitureDragging5.ogg" };
 		sound = DraggingSoundNames[ Random( 0, DraggingSoundNames.length() - 1 ) ];
 	}
@@ -524,7 +497,8 @@ void DraggingSound( Map& map, Item& furniture, uint x, uint y )
 
 void CheckCartPicMap( Item& furniture ) 
 {
-	if( furniture.GetProtoId() != PID_CR_CART ) return;
+	if( furniture.GetProtoId() != PID_CR_CART ) { return;
+	}
 	
 	uint[] values = { furniture.Id };
 	CreateTimeEvent( __FullSecond + REAL_SECOND( 1 ), "furniture@e_checkCartPicMap", values, true );
@@ -532,24 +506,24 @@ void CheckCartPicMap( Item& furniture )
 
 uint e_checkCartPicMap( uint[]@ values )
 {
-	if( !valid( values ) || values.length() != 1 )
-		return 0;
+	if( !valid( values ) || values.length() != 1 ) { return 0;
+	}
 	
 	Item@ cart = GetItem( values[0] );
-	if( !valid( cart ) ) return 0;
+	if( !valid( cart ) ) { return 0;
+	}
 	
-	setCartPicMap( cart, cart.State );
+	setCartPicMap( cart, cart.FurnitureState );
 	return 0;
 }
 
 bool setCartPicMap( Item& furniture, uint dir )
 {
-	if( furniture.GetProtoId() != PID_CR_CART )
-		return false;
+	if( furniture.GetProtoId() != PID_CR_CART ) { return false;
+	}
 	
-	if( int(dir) != furniture.State )
-	{
-		furniture.State = dir;
+	if( int(dir) != furniture.FurnitureState ) {
+		furniture.FurnitureState = dir;
 		furniture.PicMap = GetStrHash( "art\\items\\misc\\cart\\cart_dir" + dir + ".fofrm" );
 	}
 	
@@ -560,50 +534,14 @@ bool setCartPicMap( Item& furniture, uint dir )
 	return true;
 }
 
-//import bool isFurniture( Item@ item ) from "furniture";
 bool isFurniture( Item@ item ) //exported
 {
-	if( !valid( item ) ) return false;
+	if( !valid( item ) ) { return false;
+	}
 	
 	InitFurnitures();
 	
 	return furnitures.has( item.GetProtoId() );
-}
-
-class Tool
-{
-	uint pid;
-	uint power;
-	
-	Tool( uint pid, uint power )
-	{
-		this.pid = pid;
-		this.power = power;
-	}
-	
-	bool check( Critter& cr, Item& target, uint tool )
-	{
-		if( tool != pid ) return false;
-		
-		return UseOn( cr, target );
-	}
-	
-	bool UseOn( Critter& cr, Item& target )
-	{
-		if( target.Durability <= 0 )
-			return FailedAttempt( cr, "Объект не требует демонтажа, он уже готов к переноске." );
-			
-		if( !isGM(cr) && cr.Stat[ ST_LEVEL ] < 3 )
-			return FailedAttempt( cr, "Недоступно до 4-го уровня." );
-
-		if( !isGM(cr) && cr.Timeout[ TO_SK_REPAIR ] > 0 )
-			return FailedAttempt( cr, "Вы слишком устали." );
-		
-		cr.Say( SAY_EMOTE_ON_HEAD, "Демонтирует" );
-		cr.TimeoutBase[ TO_SK_REPAIR ] = __FullSecond + REAL_MINUTE(10) * target.Durability;
-		target.Durability--;
-		return true;
-	}	
 }
 
 FurnitureList@ CreateFurniture( string name )
@@ -616,80 +554,71 @@ class FurnitureList
 	string name;
 	Furniture@[] list;
 	
-	FurnitureList( string name )
-	{
+	FurnitureList( string name ) {
 		this.name = name;
 	}
 	
-	FurnitureList@ add( Furniture@ item )
-	{
+	FurnitureList@ add( Furniture@ item ) {
 		list.insertLast( item );
 		return this;
 	}
 		
-	bool rotate( Critter@ cr, Item& furniture, bool clockwise = true )
-	{
-		for( uint i = 0; i < list.length(); i++ )
-			if( list[i].Rotate( furniture, clockwise ) )
-			{
+	bool rotate( Critter@ cr, Item& furniture, bool clockwise = true ) {
+		for( uint i = 0; i < list.length(); i++ ) {
+			if( list[i].Rotate( furniture, clockwise ) ) {
 				LogItemMovement( cr, furniture, "поворачивает " + ( clockwise ? "по" : "против" ) + " часовой" );
 				return true;
 			}
+		}
 			
 		return false;
 	}
 	
 bool Drag( Critter& cr, Item& furniture ) 
 {
-	if( furniture.HolderCr != 0 && furniture.HolderCr != int(cr.Id) )
-	{
-		cr.Say( SAY_NORM, "*пытается остановить*" );//TODO: Можно тут роллы сделать, и в случае успеха - забирать управление или останавливать процесс.
+	if( furniture.HolderCr != 0 && furniture.HolderCr != int(cr.Id) ) {
+		cr.Say( SAY_NORM, "*пытается остановить*" );
 		return true;
 	}
 	
-	if( cr.GetTimeEvents( CTE_FURNITURE_DRAGGING, null, null, null ) > 0 )
-	{
+	if( cr.GetTimeEvents( CTE_FURNITURE_DRAGGING, null, null, null ) > 0 ) {
 		StopDragging( cr, furniture );
 		return true;
 	}
 	
-	if( furniture.GetType() == ITEM_TYPE_DOOR )
+	if( furniture.GetType() == ITEM_TYPE_DOOR ) {
 		return false;
+	}
 	
-	if( !isGM(cr) && furniture.LockerId != 0 )
-	{
+	if( !isGM(cr) && furniture.LockerId != 0 ) {
 		LogCrimeMovement( cr, furniture, "не может сдвинуть мебель, запертую на замок" );
-		cr.Say( SAY_NETMSG, "Данный объект так просто не сдвинуть. Сначала снимите замок." );	
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Данный объект так просто не сдвинуть. Сначала снимите замок." );	
 		return true;
 	}
 	
-	if( !isGM(cr) && ( !FLAG( furniture.Flags, ITEM_CAN_PICKUP ) || furniture.Durability > 0 ) )
-	{
+	if( !isGM(cr) && ( !FLAG( furniture.Flags, ITEM_CAN_PICKUP ) || furniture.Durability > 0 ) ) {
 		LogCrimeMovement( cr, furniture, "не может толкать вмонтированную мебель" ); 
-		cr.Say( SAY_NETMSG, "Требуется демонтаж." );
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Требуется демонтаж." );
 		return true;
 	}
 	
-	if( FLAG( furniture.LockerCondition, LOCKER_JAMMED ) || FLAG( furniture.LockerCondition, LOCKER_BROKEN ) || FLAG( furniture.LockerCondition, LOCKER_NOOPEN ) )
-	{
+	if( FLAG( furniture.LockerCondition, LOCKER_JAMMED ) || FLAG( furniture.LockerCondition, LOCKER_BROKEN ) || FLAG( furniture.LockerCondition, LOCKER_NOOPEN ) ) {
 		LogCrimeMovement( cr, furniture, "не может толкать заблокированную мебель" ); 
-		cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Из этого ничего не вышло." );
 		return true;
 	}
 	
-	if( ( furniture.Proto.Container_Changeble && !FLAG( furniture.LockerCondition, LOCKER_ISOPEN ) ) || FLAG( furniture.LockerCondition, LOCKER_LOCKED ) )
-	{
+	if( ( furniture.Proto.Container_Changeble && !FLAG( furniture.LockerCondition, LOCKER_ISOPEN ) ) || FLAG( furniture.LockerCondition, LOCKER_LOCKED ) ) {
 		LogCrimeMovement( cr, furniture, "пытается укатить закрытую мебель" ); 
-		cr.Say( SAY_NETMSG, "Нельзя перемещать закрытую и запертую мебель." );
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Нельзя перемещать закрытую и запертую мебель." );
 		return true;
 	}
 
 	int freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] * ContainerBonusWeight( furniture ),
 		contWeight = ItemsWeight( furniture );
 		
-	if( !isGM(cr) && freeWeight < contWeight )
-	{
-		cr.Say( SAY_NETMSG, "Слишком тяжело." );
+	if( !isGM(cr) && freeWeight < contWeight ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Слишком тяжело." );
 		LogItemMovement( cr, furniture, "не может толкать тяжёлую мебель" );
 		return true;
 	}
@@ -708,10 +637,11 @@ bool Drag( Critter& cr, Item& furniture )
 	
 	bool has( uint pid )
 	{
-		for( uint i = 0; i < list.length(); i++ )
-			if( list[i].has( pid ) )
+		for( uint i = 0; i < list.length(); i++ ) {
+			if( list[i].has( pid ) ) {
 				return true;
-			
+			}
+		}
 		return false;
 	}
 }
@@ -741,54 +671,55 @@ class Furniture
 	
 	bool has( uint pid )
 	{
-		if( basePID == pid ) return true;
+		if( basePID == pid ) { return true;
+		}
 		
-		for( uint i = 0; i < pids.length(); i++ )
-			if( pids[i] == pid )
+		for( uint i = 0; i < pids.length(); i++ ) {
+			if( pids[i] == pid ) {
 				return true;
-			
+			}
+		}
 		return false;
 	}
 	
 	Furniture@ add( uint rotation_picture_pid )
 	{
-		if( rotation_picture_pid != 0 )
+		if( rotation_picture_pid != 0 ) {
 			pids.insertLast( rotation_picture_pid );
-		
+		}
 		return this;
 	}
 	
 	bool setPic( Item& target )
 	{
-		return setPic( target, target.State );
+		return setPic( target, target.FurnitureState );
 	}
 
 	bool setPic( Item& target, uint index )
 	{
-		if( index >= pids.length() ) 
-			return false;
+		if( index >= pids.length() ) { return false;
+		}
 		
 		return setItemPic( target, pids[index] );
 	}
 	
 	bool ChangeState( Item& target, bool clockwise = true )
 	{
-		if( clockwise )
-			target.State++;
-		else
-			target.State--;
-
-		int state = target.State;
+		if( clockwise ) {
+			target.FurnitureState++;
+		} else {
+			target.FurnitureState--;
+		}
 		
-		if( state >= int( pids.length() ) )
-		{
-			target.State = 0;
+		int state = target.FurnitureState;
+		
+		if( state >= int( pids.length() ) ) {
+			target.FurnitureState = 0;
 			return true;
 		}
 		
-		if( state < 0 )
-		{
-			target.State = pids.length() - 1;
+		if( state < 0 ) {
+			target.FurnitureState = pids.length() - 1;
 			return true;
 		}
 		
@@ -797,10 +728,12 @@ class Furniture
 	
 	bool Rotate( Item& target, bool clockwise = true )
 	{
-		if( target.GetProtoId() != basePID || pids.length() == 0 ) return false;
+		if( target.GetProtoId() != basePID || pids.length() == 0 ) { return false;
+		}
 		
-		if( !setCartPicMap( target, ( target.State + ( clockwise ? 1 : 6 ) ) % 6 ) )
+		if( !setCartPicMap( target, ( target.FurnitureState + ( clockwise ? 1 : 6 ) ) % 6 ) ) {
 			ChangeState( target, clockwise );
+		}
 		
 		setPic( target );
 		return true;
@@ -819,4 +752,82 @@ bool setItemPic( Item& target, uint protoPID )
 	target.Update();
 	return true;
 }
+
+void Item_SetFrame( Item& item, uint8 frame ) // Sprite& sprite) // ItemCl& itemCl
+{
+    item.AnimStayBegin      = frame;
+    item.AnimStayEnd        = frame;
+    item.AnimShowBegin      = frame;
+    item.AnimShowEnd        = frame;
+    item.AnimHideBegin      = frame;
+    item.AnimHideEnd        = frame;
+
+    return;
+}
+
+bool ContainerCheck( Critter& cr, Item@ container, Item@ target )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) ) { return false; }
+	if( !valid( container ) && !valid( target ) ) { return false; }
+	
+	uint16 containerPid = container.GetProtoId();
+	if( containerPid != PID_CONTAINER_1 ) { return false; }
+	
+    uint16 targetPid = target.GetProtoId();
+	uint16 index = Containers.find( targetPid );
+	
+	if(	index == -1 ) { return false; }
+	
+	Critter@[] critters; 
+	map.GetCrittersHex( target.HexX, target.HexY, 0, FIND_LIFE_AND_KO, critters );
+	if( critters.length() > 0 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Существо мешает установить контейнер." );
+		return false;
+	}
+	
+	Item@[] shadows;
+	if( map.GetItems( target.HexX, target.HexY, shadows ) > 0 ) {
+		for( uint i = 0; i < shadows.length(); i++ ) {
+			if( shadows[i].GetProtoId() == PID_SHADOW ) {
+				cr.Say( SAY_NETMSG, "|0xFFFF00 Вышедший в оффлайн игрок на этой точке мешает установить контейнер." );
+				return false;
+			}
+		}
+	}
+	
+	if( index == Containers.length() -1 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы не можете сделать стэк контейнеров выше." );
+		return false;
+	}
+	AddContainer( cr, container, target, map );
+	return true;
+}
+
+void AddContainer( Critter& cr, Item& container, Item& target, Map& map )
+{
+	if( valid( container ) && valid( target ) ) {	
+		Item@[] stuff_container;
+		container.GetItems( uint( -1 ), stuff_container );
+		Item@[] stuff_target;
+		target.GetItems( uint( -1 ), stuff_target );
+		
+		uint16 hx = target.HexX, hy = target.HexY;
+		uint16 newPid = ( target.GetProtoId() == PID_CONTAINER_1 ? PID_CONTAINER_2 : PID_CONTAINER_3 );
+		
+		Item@ newContainer = map.AddItem( hx, hy, newPid, 1 );
+		if( stuff_container.length() > 0 ) {
+			MoveItems( stuff_container, newContainer, 0 );
+		}
+		
+		if( stuff_target.length() > 0 ) {
+			MoveItems( stuff_target, newContainer, 0 );
+		}
+		
+		DeleteItem( target );
+		_SubItem( container, 1 );
+		newContainer.Update();
+	}
+}
+
 #endif //FURNITURE
