@@ -6,6 +6,7 @@
 #include "gateway_h.fos"
 #include "_npc_pids.fos"
 #include "entire_h.fos"
+#include "autodoc_h.fos"
 
 import void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string@ param3, int[] @ param4 ) from "general_unsafe";
 
@@ -63,7 +64,7 @@ class MenuTerminal: CenteredMenuHandler {
 		}
 		bool LaserOn = checkLaserFence( terminal, map );
 		
-		if( terminal.POWERED > 0 ) {
+		if( terminal.TERMINAL_POWERED > 0 ) {
 			if( terminal.CONSOLE_PASSWORD == PASSWORD_DISABLED ) {
 				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) ) {
 					if( terminal.FENCE_GROUP != 0 && map.CountEntire( terminal.FENCE_GROUP ) > 0 ) {
@@ -106,6 +107,20 @@ class MenuTerminal: CenteredMenuHandler {
 					}
 				}
 				
+				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_AUTODOC ) ) {
+					if( menu.Button( "Авторизация Автодока" ) ) {
+						MenuAutodoc@ menu_autodoc = MenuAutodoc( terminal, map );
+						menu_autodoc.level = level + 1;
+						return menu.OpenChild( "Уровень " + menu_autodoc.level, menu_autodoc );
+					}
+					
+					if( menu.Button( "Управение Автодоком" ) ) {
+						MenuAutodocCtrl@ menu_autodoc_ctrl = MenuAutodocCtrl( terminal, map );
+						menu_autodoc_ctrl.level = level + 1;
+						return menu.OpenChild( "Уровень " + menu_autodoc_ctrl.level, menu_autodoc_ctrl );
+					}
+				}
+
 				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) ) {
 					if( menu.Button( "Сброс пароля" ) ) {
 						terminal.PASSWORD = 0;
@@ -195,7 +210,7 @@ class MenuTerminal: CenteredMenuHandler {
 			info = "|0xFFFF00 Терминал заблокирован, введите пароль для разблокировки";
 		}
 		
-		if( terminal.POWERED == 0 ) {
+		if( terminal.TERMINAL_POWERED == 0 ) {
 			info = "|0xFFFF00 Терминал обесточен \n";
 		}
 		
@@ -207,7 +222,7 @@ class MenuTerminal: CenteredMenuHandler {
 	}
 	
 	string@ ButtonCancel() {
-        return ButtonDecorator( "Скрыть меню", null );
+        return ButtonDecorator( "", null );
     }
 	
 	bool ShouldRedraw( Critter& cr ) {
@@ -305,6 +320,22 @@ class MenuSelectCard: CenteredMenuHandler {
 					if( turret.PARENT_TERMINAL == int( terminal.Id ) ) {
 						turret.SECURITY_ACCESS_CARD = terminal.ACCESS_CARD;
 						turret.LASER_FENCE_GRID = terminal.FENCE_GROUP;
+						turret.SetScript( "ai_turrets@_TurretInit" );
+					} else {
+						continue;
+					}
+				}
+				return false;
+			}
+			
+			if( menu.Button( "Отключить пропуски" ) ) {
+				cr.Say( SAY_EMOTE, "Отключает пропуски" );
+				Critter@[] crs = getCritters( cr.GetMap(), NPC_PID_LAS_TURRET, FIND_LIFE );
+				for( uint i = 0, countCr = crs.length(); i < countCr; i++ ) {
+					Critter@ turret = crs[i];
+					if( turret.PARENT_TERMINAL == int( terminal.Id ) ) {
+						turret.SECURITY_ACCESS_CARD = 0;
+						turret.LASER_FENCE_GRID = 0;
 						turret.SetScript( "ai_turrets@_TurretInit" );
 					} else {
 						continue;
@@ -418,7 +449,7 @@ class MenuTurrets: CenteredMenuHandler {
 	}
 		
 	string@ ButtonCancel() {
-        return ButtonDecorator( "Скрыть меню", null );
+        return ButtonDecorator( "", null );
     }
 	
 	bool ShouldRedraw( Critter& cr ) {
@@ -521,7 +552,7 @@ class MenuTurretsCtrl: CenteredMenuHandler {
 	}
 		
 	string@ ButtonCancel() {
-        return ButtonDecorator( "Скрыть меню", null );
+        return ButtonDecorator( "", null );
     }
 	
 	bool ShouldRedraw( Critter& cr ) {
@@ -550,9 +581,9 @@ class MenuTerminalGM: CenteredMenuHandler {
         }
 		string status;
 		
-		status = terminal.POWERED == 1 ? "да" : "нет";  
+		status = terminal.TERMINAL_POWERED == 1 ? "да" : "нет";  
 		if( menu.Button( "Питание: " + status ) ) {
-			terminal.POWERED == 0 ? terminal.POWERED = 1 : terminal.POWERED = 0;
+			terminal.TERMINAL_POWERED == 0 ? terminal.TERMINAL_POWERED = 1 : terminal.TERMINAL_POWERED = 0;
 		}
 		
 		status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) ? "да" : "нет"; 
@@ -574,6 +605,11 @@ class MenuTerminalGM: CenteredMenuHandler {
 		status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) ? "да" : "нет"; 
 		if( menu.Button( "Карты доступа: " + status ) ) {
 			status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS );
+		}
+		
+		status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_AUTODOC ) ? "да" : "нет"; 
+		if( menu.Button( "Упр автодоком: " + status ) ) {
+			status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_AUTODOC ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_AUTODOC ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_AUTODOC );
 		}
 		
 		status = FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) ? "да" : "нет"; 
@@ -710,4 +746,159 @@ class MenuSelectFence: CenteredMenuHandler {
         return ButtonDecorator( "Скрыть меню", null );
     }
 }
+
+//Child menu for autodoc assigment
+class MenuAutodoc: CenteredMenuHandler {
+    uint terminal_id;
+    uint map_id;
+	uint level;
+	int selectorPos;
+	uint arrayPos;
+	
+    MenuAutodoc( Item& terminal, Map& map ) {
+        terminal_id = terminal.Id;
+        map_id = map.Id;
+		level = 1;
+		selectorPos = 0;
+		arrayPos = 0;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Map@ map = GetMap( map_id );
+        Item@ terminal = GetItem( terminal_id );
+		
+        if( map is null || terminal is null ) {
+            return false;
+        }
+		
+		Item@[] Autodocs;
+		map.GetItems( PID_OBJECT_AUTODOC, Autodocs );
+		Item@ autodoc = null;
+		
+		if( Autodocs.length() != 0 ) {
+			if( menu.Button( "Предыдущий" ) ) {
+				selectorPos--;
+				if( arrayPos == 0 ) {
+					arrayPos = Autodocs.length() - 1;
+					selectorPos = arrayPos;
+				} else {
+					arrayPos = selectorPos;
+				}
+				@autodoc = Autodocs[arrayPos];
+				terminal.ACTIVE_AUTODOC = autodoc.Id;
+				return true;
+			}
+			
+			if( menu.Button( "Следующий" ) ) {
+				selectorPos++;
+				if( arrayPos == Autodocs.length() -1 ) {
+					arrayPos = 0;
+					selectorPos = arrayPos;
+				} else {
+					arrayPos = selectorPos;
+				}
+				@autodoc = Autodocs[arrayPos];
+				terminal.ACTIVE_AUTODOC = autodoc.Id;
+				return true;
+			}
+			
+			@autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+			if( valid( autodoc ) ) {
+				if( menu.Button( "Подключиться" ) ) {
+					int len = Autodocs.length();
+					if( len > 1 ) {
+						for( int j = 0; j < len; j ++ ) {
+							Item@ doc = Autodocs[j];
+							if( doc.AUTODOC_TERMINAL == int( terminal.Id ) ) {
+								doc.AUTODOC_TERMINAL = 0;
+							}
+						}
+					}
+					autodoc.AUTODOC_TERMINAL = terminal.Id;
+				}
+				
+				if( autodoc.AUTODOC_TERMINAL != 0 && menu.Button( "Сброс" ) ) {
+					autodoc.AUTODOC_TERMINAL = 0;
+					terminal.ACTIVE_AUTODOC = 0;
+				}
+			}
+		}
+		
+		if( menu.Button( "Возврат" ) ) {
+			level = 0;
+			return false;
+		}
+		return true;
+    }
+
+    string@ Description( Critter& cr ) {	
+		Item@ terminal = GetItem( terminal_id );
+		Map@ map = GetMap( map_id );
+		cr.RunClientScript( "client_screen_test@ShowScreen", 0, 0, 0, "", null );
+		string info = "";
+		if( terminal.ACTIVE_AUTODOC != 0 ) {
+			Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+			if( valid( autodoc ) ) { 
+				if( autodoc.AUTODOC_TERMINAL == int( terminal.Id ) ) {
+					info += "Подключен автодок № " + "|0xFFFF00 " + autodoc.Id;
+				} else {
+					info += "Выбран автодок № " + "|0xFFFF00 " + autodoc.Id;
+				}
+			}
+		}
+		return info;
+	}
+		
+	string@ ButtonCancel() {
+        return ButtonDecorator( "", null );
+    }
+	
+	bool ShouldRedraw( Critter& cr ) {
+		return true;
+    }
+}
+
+
+//Child menu for autodoc control
+class MenuAutodocCtrl: CenteredMenuHandler {
+    uint terminal_id;
+    uint map_id;
+	uint level;
+	uint more_buttons;
+	
+    MenuAutodocCtrl( Item& terminal, Map& map ) {
+        terminal_id = terminal.Id;
+        map_id = map.Id;
+		level = 2;
+		more_buttons = 0;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Map@ map = GetMap( map_id );
+        Item@ terminal = GetItem( terminal_id );
+		
+        if( map is null || terminal is null ) {
+            return false;
+        }
+		
+		if( menu.Button( "Возврат" ) ) {
+			level = 1;
+			return false;
+		}
+		return true;
+    }
+
+    string@ Description( Critter& cr ) {	
+		Item@ terminal = GetItem( terminal_id );
+		Map@ map = GetMap( map_id );
+		string info = "";
+		
+		return info;
+	}
+		
+	string@ ButtonCancel() {
+        return ButtonDecorator( "Скрыть меню", null );
+    }
+}
+
 #endif //TERMINAL
