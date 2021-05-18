@@ -18,7 +18,10 @@ namespace FOFMOD
 
 	Channel::~Channel()
 	{
-
+		if( this->IsPlaying() )
+		{
+			this->Stop();
+		}
 	}
 
 	void Channel::Addref()
