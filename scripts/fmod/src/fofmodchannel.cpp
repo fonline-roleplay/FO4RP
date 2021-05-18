@@ -20,7 +20,9 @@ namespace FOFMOD
 	{
 		if( this->IsPlaying() )
 		{
-			this->Stop();
+			// there is no way to get handle to this object anymore, thus it cannot become unpaused, thus we have to remove it.
+			if( this->IsPaused() )
+				this->Stop();
 		}
 	}
 
