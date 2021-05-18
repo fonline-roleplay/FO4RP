@@ -18,10 +18,13 @@ namespace FOFMOD
 
 	Channel::~Channel()
 	{
-		if( this->IsPlaying() )
+		bool result = false;
+		this->IsPlaying( &result );
+		if( result )
 		{
 			// there is no way to get handle to this object anymore, thus it cannot become unpaused, thus we have to remove it.
-			if( this->IsPaused() )
+			this->IsPaused( &result );
+			if( result )
 				this->Stop();
 		}
 	}
