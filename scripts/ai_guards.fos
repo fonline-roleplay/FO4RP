@@ -21,14 +21,13 @@ void _AiGuardsInit( Critter& npc, bool firstTime )
 	npc.SetEvent( CRITTER_EVENT_PLANE_END,		"_PlaneEnd" );
     npc.SetEvent( CRITTER_EVENT_DEAD,			"_MyDeath" );
     npc.SetEvent( CRITTER_EVENT_ATTACKED,		"_Attacked" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_DEAD,		"_FindKiller" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACK,	"_AssistAttack" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACKED,	"_AssistAttacked" );
 }
 
 void _CritterLookAt( Critter& npc, Critter& target )
 {
-	uint16 hx = npc.HexX, hy = npc.HexY;
-	uint16 tx = target.HexX, ty = target.HexY;
-	uint dir = GetDirection( hx, hy, tx, ty );
-	npc.SetDir( dir );
 	if( npc.CheckEnemyInStack( target.Id ) ) {
 		if( target.IsDead() ) { 
 			npc.EraseEnemyFromStack( target.Id );
@@ -37,15 +36,18 @@ void _CritterLookAt( Critter& npc, Critter& target )
 		AddAttackPlane( npc, 0, target );
 		return;
 	}
+	if( Random( 0, 100 ) == 100 ) {
+		uint16 hx = npc.HexX, hy = npc.HexY;
+		uint16 tx = target.HexX, ty = target.HexY;
+		uint dir = GetDirection( hx, hy, tx, ty );
+		npc.SetDir( dir );
+	}
 }
 
 void _CritterOutOfSight( Critter& npc, Critter& target )
 {
 	if( npc.CheckEnemyInStack( target.Id ) ) {
 		npc.DropPlanes();
-		uint16 hx = npc.HexX, hy = npc.HexY;
-		uint16 tx = target.HexX, ty = target.HexY;
-		uint dir = GetDirection( hx, hy, tx, ty );
 		if( npc.IsSee( target ) ) {
 			if( target.IsDead() ) { 
 				npc.EraseEnemyFromStack( target.Id );
@@ -55,6 +57,9 @@ void _CritterOutOfSight( Critter& npc, Critter& target )
 			npc.AddEnemyInStack( target.Id );
 			AddAttackPlane( npc, 0, target );
 		} else {
+			uint16 hx = npc.HexX, hy = npc.HexY;
+			uint16 tx = target.HexX, ty = target.HexY;
+			int dir = GetDirection( hx, hy, tx, ty );
 			AddWalkPlane( npc, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, dir, true, 1 );
 		}
 	}
@@ -73,6 +78,32 @@ void _Idle( Critter& npc )
 
 	if( npc.IsBusy() || !npc.IsNoPlanes() ) {
 		return;
+	}
+}
+
+void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
+{
+    if( npc.IsPlayer() ) { return; }
+    if( npc.IsDead() ) { return; }
+    if( npc.Stat[ ST_TEAM_ID ] == 0 || npc.Stat[ ST_TEAM_ID ] == 33 ) { return; }			// 0 группа не групируеться
+    if( npc.Stat[ ST_TEAM_ID ] != fromCrit.Stat[ ST_TEAM_ID ] ) { return; }					// ктото не из нашей группы
+ 
+	if( fromCrit.IsPlayer() ) { 
+		AddAttackPlane( npc, 10, fromCrit ); 
+	}
+
+    if( message == MSG_GROUP_ATTACK ) {
+        Critter@ target = ::GetCritter( value );
+        
+		if( !valid( target ) ) { return; }
+		
+		Map@ mapNpc = npc.GetMap();
+		Map@ mapTarget = target.GetMap();
+		
+		if( mapNpc.Id != mapTarget.Id ) { return; }
+		
+		npc.AddEnemyInStack( target.Id );
+		AddAttackPlane( npc, 0, target );
 	}
 }
 
@@ -110,33 +141,56 @@ bool _Attacked( Critter& npc, Critter& target )
         EraseAttackPlane( npc, target );
 		return true;
 	}
+	npc.DropPlanes();
 	npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
 	npc.AddEnemyInStack( target.Id );
 	AddAttackPlane( npc, 0, target );
     return true;
 }
 
-// Пришло сообщение отправленное с помощью Critter::SendMessage.
-void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
+void _FindKiller( Critter& npc, Critter& fromCrit, Critter@ killer )
 {
     if( npc.IsPlayer() ) { return; }
     if( npc.IsDead() ) { return; }
     if( npc.Stat[ ST_TEAM_ID ] == 0 || npc.Stat[ ST_TEAM_ID ] == 33 ) { return; }			// 0 группа не групируеться
     if( npc.Stat[ ST_TEAM_ID ] != fromCrit.Stat[ ST_TEAM_ID ] ) { return; }					// ктото не из нашей группы
-    if( fromCrit.IsPlayer() ) { AddAttackPlane( npc, 10, fromCrit ); }
+ 
+	if( fromCrit.IsPlayer() ) { 
+		AddAttackPlane( npc, 10, fromCrit ); 
+	}
+	
+	if( npc.IsSee( killer ) ) {
+		if( killer.IsDead() ) { 
+			npc.EraseEnemyFromStack( killer.Id );
+			return;
+		}
+		npc.SendMessage( MSG_GROUP_ATTACK, killer.Id, MESSAGE_TO_WHO_SEES_ME );
+		npc.AddEnemyInStack( killer.Id );
+		AddAttackPlane( npc, 0, killer );
+	}
+}
 
-    if( message == MSG_GROUP_ATTACK ) {
-        Critter@ target = ::GetCritter( value );
-        
-		if( !valid( target ) ) { return; }
-		
-		Map@ mapNpc = npc.GetMap();
-		Map@ mapTarget = target.GetMap();
-		
-		if( mapNpc.Id != mapTarget.Id ) { return; }
-		
-		npc.AddEnemyInStack( target.Id );
-		AddAttackPlane( npc, 0, target );
+void _AssistAttack( Critter& cr, Critter& fromCr, Critter& target )
+{
+	if( fromCr.Stat[ ST_TEAM_ID ] == 0 || fromCr.Stat[ ST_TEAM_ID ] == 33 ) { return; }
+	if( fromCr.Stat[ ST_TEAM_ID ] == cr.Stat[ ST_TEAM_ID ] ) {
+		if( target.Stat[ ST_TEAM_ID ] != cr.Stat[ ST_TEAM_ID ] && !target.IsDead() ) {
+			cr.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
+			cr.AddEnemyInStack( target.Id );
+			AddAttackPlane( cr, 0, target );
+		}
+	}
+}
+
+void _AssistAttacked( Critter& cr, Critter& fromCr, Critter& attacker )
+{
+	if( fromCr.Stat[ ST_TEAM_ID ] == 0 || fromCr.Stat[ ST_TEAM_ID ] == 33 ) { return; }
+	if( fromCr.Stat[ ST_TEAM_ID ] == cr.Stat[ ST_TEAM_ID ] ) {
+		if( attacker.Stat[ ST_TEAM_ID ] != cr.Stat[ ST_TEAM_ID ] && !attacker.IsDead() ) {
+			cr.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
+			cr.AddEnemyInStack( attacker.Id );
+			AddAttackPlane( cr, 0, attacker );
+		}
 	}
 }
 
