@@ -13,6 +13,7 @@
 #include "casino_h.fos"
 #include "combat_h.fos"
 #include "cooking_h.fos"
+#include "critter_item_movement_h.fos"
 #include "drugs_h.fos"
 #include "effects_h.fos"
 #include "explode_h.fos"
@@ -79,8 +80,6 @@ import NpcNamesHolder@ getNpcNamesHolder() from "npc_names_holder";
 
 import int GetMapLevelByPid( uint pid ) from "globalmap_group";
 import bool LocIsCity( uint locPid ) from "globalmap_group";
-
-import void GetRandomPidFromCategory( Critter& cr, uint cat ) from "store";
 
 import string CurrentDateTimeYears( uint gameTime, int delta_years, int style ) from "time";
 
@@ -2310,12 +2309,6 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		
 		case( SK_SCIENCE ): 
 		{
-			if( isPlayer && inHeaven(cr) )
-			{
-				Pray( cr );
-				return true;
-			}
-		
 			// Handcuffs
 			if( ( valid( targetCr ) ) && ( targetCr.Param[ HANDCUFFS ] != 0 ) || ( cr.Param[ HANDCUFFS ] != 0 ) )
 			{
@@ -2375,8 +2368,10 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 						return false;
 					}
 					
-					if( cr.Timeout[ TO_SK_STEAL ] > 0 && !isGM( cr ) ) {
-						if( !targetCr.IsDead() ) targetCr.Say(SAY_EMOTE,"Сопротивляется" );
+					if( cr.Timeout[ TO_SK_STEAL ] > 0 && !isGM( cr ) && targetCr.ModeBase[ MODE_NO_STEAL ] == 0 ) {
+						if( !targetCr.IsDead() ) {
+							targetCr.Say(SAY_EMOTE,"Сопротивляется" );
+						}
 						cr.Say(SAY_EMOTE,"Пытается что-то отобрать" );
 						cr.Say(SAY_NETMSG, "|0xFFFF00 Вы слишком устали, что бы успешно отобрать вещь.");
 						
@@ -2747,125 +2742,10 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 	return false;
 }
 
-//import bool inHeaven( Critter& cr ) from "main";
-bool inHeaven( Critter& cr ) //exported
-{
-	if( cr.IsDead() ) return false;
-	
-	Map@ crMap = cr.GetMap();
-	if( !valid( crMap ) ) return false;
-	
-	Location@ crLoc = crMap.GetLocation();
-	if( !valid( crLoc ) ) return false;
-	
-	int pid = crLoc.GetProtoId();
-	
-	//pid == LOCATION_Deadloc
-	return pid == LOCATION_Hell; //Лока для трупов отключена.
-}
-
-void Pray( Critter& cr )
-{
-	cr.Say( SAY_EMOTE, "Молится" );
-	
-	GameVar@ canPray = GetGlobalVar( GVAR_Pray_Battleground );
-	if( canPray.GetValue() == 0 ) {
-		cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 100 * Random( 5, 10 ), cr.HexX, cr.HexY );
-		return;
-	}		
-	
-	if( cr.GetTimeEvents( CTE_PRAY, null, null, null ) == 0 )
-		cr.AddTimeEvent( "cte_PRAY", REAL_SECOND( 3 ), CTE_PRAY, 0 );
-}
-
-uint cte_PRAY( Critter& cr, int identifier, uint& rate )
-{
-	string[] data = { "main@answer_PrayForItem", "Вы молитесь, что бы получить..", "Лут", "Пожертвовать всем", "Исцеление", "Искупление" };
-		//"Холодное", "Стрелковое", "Аммуниция", "Метательное", "Инструменты", "Броня", "Вещества", "Пища", "Ценности", "Расходники", "Хлам", "Пожертвовать всем", "Исцеление", "Искупление" };
-	DIALOG_MENU( cr, data );
-	return 0;
-}
-
-void answer_PrayForItem( Critter& cr, uint answerI, string& answerS )
-{
-	GetRandomPidFromCategory( cr, answerI );
-}
-
 void Say( Critter@ target, uint type, string text )
 {
 	if( valid( target ) )
 		target.Say( type, text );
-}
-
-bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
-{
-	bool LootedRucksack = false;
-	Item@[] RuckSacks;
-	
-	bool isCritter = valid( targetCr );
-	
-	if( isCritter )
-		targetCr.GetItems( -1, RuckSacks );
-	else if( valid( targetItem ) )
-		targetItem.GetItems( uint( -1 ), RuckSacks );
-	else
-		return false;
-	
-	for( uint i = 0, iEnd = RuckSacks.length(); i < iEnd; i++ )
-	{
-		int pid = RuckSacks[i].GetProtoId();
-		bool isContainer = RuckSacks[i].GetType() == ITEM_TYPE_CONTAINER;
-		bool isBag = (pid == PID_BAG);
-		bool isPack = (pid == PID_BACKPACK);
-		if( isBag || isPack || isContainer ) {
-			if( !isGM( cr ) ) {
-				string action_text = "Снимает " + (isPack ? "рюкзак" : "что-то" );
-				cr.Say(SAY_EMOTE, action_text );
-				CrimeLog( cr, crInfo( cr ) + strlwr( action_text ) + " у " + crInfo( targetCr ) );
-				MoveItem( RuckSacks[i], 1, cr.GetMap(), cr.HexX, cr.HexY );
-				Say( targetCr, SAY_NETMSG, "Вы не в силах сопротивляться, пока у вас отбирают " + (isPack ? "рюкзак" : "что-то" ) + "." );
-				cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
-			} else {
-				MoveItem( RuckSacks[i], 1, cr );
-				string action_text = (isPack ? "рюкзак" : "что-то" ) + ( isCritter ? " у игрока" : " с тела" );
-				cr.Say( SAY_NETMSG, "Вы забрали " + action_text + "."  );
-				CrimeLog( cr, crInfo( cr ) + " забирает ГМкой " + action_text + " " + crInfo( targetCr ) );
-			}
-			LootedRucksack = true;
-			return true;
-		}
-	}
-	if( isCritter && !LootedRucksack ) 
-	{
-		Item@[] armors;
-		uint count = targetCr.GetItems( SLOT_ARMOR, armors );
-		if( count == 0 || !valid(armors[0]) ) 
-		{
-			cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
-			return true;
-		}
-		
-		CrimeLog( cr, crInfo( cr ) + " пытается снять броню " + crInfo( targetCr ) );
-		cr.Say( SAY_EMOTE, "пытается снять броню" );
-		cr.Say( SAY_NETMSG, "Вы снимаете с цели всё что можете." );
-		targetCr.Say( SAY_NETMSG, "Вашу броню пытаются снять!" );
-		if( uint( cr.Stat[ ST_LAST_STEAL_CR_ID ] ) == targetCr.Id ) {
-			cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
-			cr.StatBase[ ST_STEAL_COUNT ] ++;
-			TryToTakeArmor( cr, targetCr );
-		} else {
-			if( isGM( cr ) ) {
-				cr.Say( SAY_NETMSG, "Вы забрали у персонажа броню." );
-				CrimeLog( cr, crInfo( cr ) + " снимает ГМкой броню с " + crInfo( targetCr ) );
-				cr.StatBase[ ST_STEAL_COUNT ] = 7;
-				TryToTakeArmor( cr, targetCr );
-			}
-			cr.StatBase[ ST_STEAL_COUNT ] = 0;
-			cr.StatBase[ ST_LAST_STEAL_CR_ID ] = targetCr.Id;
-		}
-		return true;
-	}
-	return false;
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -4237,39 +4117,6 @@ uint e_RefreshLoot( uint[] @ values )
 }
 
 /////////////////////////////////////////
-
-int[][] armor_delay = {
-	{ PID_POWERED_ARMOR, PID_HARDENED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR_MK2 },
-	{ PID_PURPLE_ROBE, PID_BLACK_ROBE, PID_SANDROBE },
-	{ PID_LEATHER_JACKET, PID_CURED_LEATHER_ARMOR, PID_CURED_LEATHER_ARMOR_MK_II },
-	{ PID_LEATHER_ARMOR, PID_LEATHER_ARMOR_MK_II, PID_LEATHER_ARMOR_MK_III },
-	{ PID_METAL_ARMOR, PID_METAL_ARMOR_MK_II, PID_TESLA_ARMOR},
-};
-
-void TryToTakeArmor( Critter& cr, Critter& target ) {
-	bool success = false;
-	Item@[] armors;
-	uint count = target.GetItems( SLOT_ARMOR, armors );
-	if( count == 0 || !valid(armors[0]) ) return;
-	int armor = armors[0].GetProtoId();
-	if( armor_delay[0].find( armor ) != -1 ) return; //ПАшки неснимаемые.
-	uint delay = cr.Stat[ST_STEAL_COUNT],
-			i = 1, iEnd = armor_delay.length();
-	for( ;i < iEnd; i++ )
-		if( armor_delay[i].find( armor ) != -1 ) {
-			success = true;
-			break;
-		}
-	if( delay >= 6 ) success = true;
-	if( success && delay >= i) 
-	{
-		MoveItem( armors[0], 1, cr );
-		target.Say(SAY_NETMSG, "С вас сняли броню.");
-		cr.Say(SAY_NETMSG, "Вы сняли броню с жертвы.");
-		CrimeLog( cr, crInfo( cr ) + " снимает броню с " + crInfo( target ) );
-	}
-	else cr.Say(SAY_NETMSG, "Итерация №" + delay + " из " +(i==5?6:i)+".");
-}
 
 void unsafe_swap_invis( Critter& cr, int, int, int, string@, int[]@ )
 {
