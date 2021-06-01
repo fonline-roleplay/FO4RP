@@ -178,8 +178,8 @@ void CallStartCallbacks()
             continue;
         }
 
-        int funcId = module->GetFunctionIdByName( sc->func_name.c_str());
-        if( funcId == 0 )
+        asIScriptFunction* sfunc = module->GetFunctionByName( sc->func_name.c_str());
+        if( !sfunc )
         {
             Log("FAIL! Can't find function.\n");
             continue;
@@ -188,7 +188,7 @@ void CallStartCallbacks()
         Log("Ok.\n");
 
         asIScriptContext* ctx = ASEngine->CreateContext();
-        ctx->Prepare( funcId );
+        ctx->Prepare( sfunc );
 
         int r = ctx->Execute();
         ctx->Release();
