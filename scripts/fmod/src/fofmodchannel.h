@@ -8,6 +8,8 @@
 
 namespace FOFMOD
 {
+	class Sound;
+	
 	class Channel : public IRefcountable
 	{
 		protected:
@@ -15,10 +17,13 @@ namespace FOFMOD
 
 		public:
 			FMOD::Channel* handle;
+			FOFMOD::Sound* sound;
 			Channel();
 			~Channel();
 			void Addref() override;
 			void Release() override;
+			void SetHandle( FMOD::Channel* chn );
+			void SetSound( FOFMOD::Sound* snd );
 			void SetPlaybackPosition( unsigned int positionMs );
 			void GetPlaybackPosition( unsigned int* value );
 			void GetSound( FOFMOD::Sound** value );

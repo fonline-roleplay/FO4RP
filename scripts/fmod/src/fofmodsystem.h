@@ -5,23 +5,40 @@
 #include "refcount.h"
 #include <string>
 #include <map>
-#include "fofmodlistener.h"
 #include "fofmodsound.h"
+#include "fofmodlistener.h"
 #include "fofmodchannel.h"
 #include "archive.h"
 #include "zipfile.h"
 #include "memory.h"
+#include "cachedata.h"
 
+typedef enum SOUND_TYPE : int
+{
+	SOUND,
+	MUSIC
+	
+} FOFMOD_SOUND_TYPE;
+
+
+typedef enum SOUND_FLAG : unsigned int
+{
+	NO_LOOKUP = 0x00000001
+	
+} FOFMOD_SOUND_FLAG;
 
 namespace FOFMOD
 {
-
-	
 	extern const int fileExtNum ;
 	extern const std::string fileExtensions[];
 	extern bool IsValidSoundExtension( const char* filename );
-
-
+	
+	class Sound;
+	class Channel;
+	
+	class CacheSoundData;
+	typedef std::map< std::string, CacheSoundData* > CachedDataMap;
+		
 	class System
 	{
 
@@ -51,28 +68,6 @@ namespace FOFMOD
 
 		typedef std::vector< FOFMOD::System::IndexedArchiveFile* > IndexedArchiveFilePtrVec;
 
-		class CacheSoundData;
-		typedef std::map< std::string, CacheSoundData* > CachedDataMap;
-
-		class CacheSoundData : IRefcountable
-		{
-
-			protected:
-				CacheSoundData();
-				unsigned int refcount;
-
-			public:
-				CacheSoundData(FOFMOD::System* ownerSystem );
-				~CacheSoundData();
-				CachedDataMap::iterator it;
-				FOFMOD::System* owner;
-				void* data;
-				unsigned int size;
-
-				void Addref() override;
-				void Release() override;
-		};
-
 		class ChannelCallbackData
 		{
 			public:
@@ -80,20 +75,6 @@ namespace FOFMOD
 				~ChannelCallbackData();
 				FOFMOD::System*  system;
 				FOFMOD::Channel* channel;
-				FOFMOD::Sound*   sound;
-				FOFMOD::System::CacheSoundData* cacheData;
-		};
-
-		enum SOUND_TYPE
-		{
-			SOUND,
-			MUSIC
-		};
-
-
-		enum SOUND_FLAG
-		{
-			NO_LOOKUP = 1
 		};
 
 
@@ -115,17 +96,18 @@ namespace FOFMOD
 			std::map< std::string, SoundAlias > musicNames;
 			
 			// streamed sounds cannot be reused between different plays, so each new sound be generating own stream, but the prototype data is same.
-			CachedDataMap 	 cachedSoundsData;
+			FOFMOD::CachedDataMap 	 cachedSoundsData;
 
 			IndexedArchiveFilePtrVec indexedArchives;
 			FOFMOD::Listener3D listener;
 			void SoundFromMemory( void* ptr, unsigned int size, FOFMOD::Sound** sptr );
-			void SoundFromArchive( const std::string& filename, const std::string cacheName, SOUND_TYPE type, unsigned int flags, FOFMOD::Sound** sptr, CacheSoundData** cache );
-			void SoundFromFile( const std::string& filename, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache );
-			void GetSound( const std::string& filename, SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache );
+			void SoundFromArchive( const std::string& filename, const std::string cacheName, FOFMOD_SOUND_TYPE type, unsigned int flags, FOFMOD::Sound** sptr, CacheSoundData** cache );
+			void SoundFromFile( const std::string& filename, FOFMOD_SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache );
+			void GetSound( const std::string& filename, FOFMOD_SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache );
 			void AddCachedSound( const std::string& filename, void* data, unsigned int size, CacheSoundData** cache );	
 			void GetCachedSound( const std::string& filename, CacheSoundData** cache );
-			void Play( const std::string& soundName, SOUND_TYPE type,  FMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused );
+			void Play( const std::string& soundName, FOFMOD_SOUND_TYPE type,  FMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused );
+			FMOD_RESULT PlaySound( FOFMOD::Sound* snd, FMOD::ChannelGroup* group, bool paused, FOFMOD::Channel* chn );
 			void MapArchive( unsigned int index );
 			
 
@@ -138,7 +120,10 @@ namespace FOFMOD
 
 			// Caching and resource management
 			bool TouchArchive( const std::string& filename );
+			bool IsArchiveTouched( const std::string& filename );
+			void UntouchArchive( const std::string& filename );
 			void DeleteCachedSound( CachedDataMap::iterator iterator );
+			FOFMOD::Sound* GetSound( const std::string& filename, FOFMOD_SOUND_TYPE type );
 			///////////////////////////////////
 
 			// Playback and controls

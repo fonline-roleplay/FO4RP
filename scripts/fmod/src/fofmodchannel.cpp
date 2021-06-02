@@ -14,8 +14,9 @@ namespace FOFMOD
 	{
 		this->refcount = 0;
 		this->handle = NULL;
+		this->sound = NULL;
 	}
-
+	
 	Channel::~Channel()
 	{
 		bool result = false;
@@ -27,8 +28,12 @@ namespace FOFMOD
 			if( result )
 				this->Stop();
 		}
+		
+		this->SetSound( NULL );
 	}
 
+
+	
 	void Channel::Addref()
 	{
 		#if defined ( FO_GCC )
@@ -48,10 +53,65 @@ namespace FOFMOD
 		#endif
 		)
 		{
-			//FOFMOD_DEBUG_LOG("Deleting scriptChannel %u at refcount %u \n ", this->handle, this->refcount );
+			FOFMOD_DEBUG_LOG("Deleting scriptChannel %u at refcount %u \n ", this->handle, this->refcount );
 			delete this;
 		}
 	}
+	
+	void Channel::SetHandle( FMOD::Channel* chn )
+	{
+		if( chn )
+		{
+			if( this->handle )
+			{
+				if( this->handle == chn )
+				{
+					return;
+				}
+			}
+			
+			this->handle = chn;
+		}
+		else
+		{
+			if( this->handle )
+			{
+				this->Invalidate();
+			}
+		}
+	}
+
+	void Channel::SetSound( FOFMOD::Sound* snd )
+	{
+		if( snd )
+		{
+			if( this->sound )
+			{
+				if( this->sound == snd )
+				{
+					return;
+				}
+				else
+				{
+					this->sound->Release();
+					
+				}
+			}
+			
+			this->sound = snd;
+			snd->Addref();
+			
+		}
+		else
+		{
+			if( this->sound )
+			{
+				this->sound->Release();
+				this->sound = NULL;
+			}
+		}
+	}
+
 
 	void Channel::SetPlaybackPosition( unsigned int positionMs )
 	{
@@ -69,12 +129,12 @@ namespace FOFMOD
 		}
 	}
 
-	// TODO
 	void Channel::GetSound( FOFMOD::Sound** value )
 	{
-		if( this->handle )
+		if( this->sound )
 		{
-			
+			*value = this->sound;
+			(*value)->Addref();
 		}
 	}
 

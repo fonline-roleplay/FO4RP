@@ -4,10 +4,15 @@
 
 #include "fofmoddef.h"
 #include "refcount.h"
-
+#include "cachedata.h"
 
 namespace FOFMOD
 {
+	class System;
+	
+	class CacheSoundData;
+	typedef std::map< std::string, CacheSoundData* > CachedDataMap;
+	
 	class Sound : public IRefcountable
 	{
 		protected:
@@ -15,11 +20,14 @@ namespace FOFMOD
 
 		public:
 			FMOD::Sound*   handle;
+			FOFMOD::CacheSoundData* cacheData;
 			Sound();
 			~Sound();
 			bool IsValid();
 			void Addref() override;
 			void Release() override;
+			void SetCache( FOFMOD::CacheSoundData* cdata );
+			void SetHandle( FMOD::Sound* snd );
 			unsigned int GetLength();
 			void SetLoopCount( int loopCount );
 			int GetLoopCount();

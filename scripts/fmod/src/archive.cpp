@@ -129,6 +129,11 @@ namespace FOFMOD
 			}
 		}
 	}
+	
+	const char* AArchiveFile::GetCurrentFilename()
+	{
+		return this->currentFilePath;
+	}
 
 
 	void AArchiveFile::Close( )

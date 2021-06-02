@@ -1,11 +1,10 @@
 #ifndef __FOFMOD_SOUND__
 #define __FOFMOD_SOUND__
 
-#include "fofmodsound.h"
 #include <stddef.h>
 #include "_defines.fos"
 #include "fonline.h"
-
+#include "fofmodsound.h"
 
 namespace FOFMOD
 {
@@ -14,15 +13,14 @@ namespace FOFMOD
 	{
 		this->refcount = 0;
 		this->handle  = NULL;
+		this->cacheData = NULL;
 	}
-
+	
+	
 	Sound::~Sound()
 	{
-		if( this->handle )
-		{
-			this->handle->release();
-			this->handle = NULL;
-		}
+		this->SetHandle( NULL );
+		this->SetCache( NULL );
 	}
 
 	void Sound::Addref()
@@ -44,11 +42,71 @@ namespace FOFMOD
 		#endif
 		)
 		{
-			FOFMOD_DEBUG_LOG(" Deleting scriptSound %u at refcount %u \n ", this->handle, this->refcount );
+			FOFMOD_DEBUG_LOG(" Deleting Sound %u at refcount %u \n ", this->handle, this->refcount );
 			delete this;
 		}
 	}
 
+	void  Sound::SetCache( FOFMOD::CacheSoundData* cdata )
+	{
+		if( cdata )
+		{
+			if( this->cacheData )
+			{
+				if( this->cacheData == cdata )
+				{
+					// same memory object
+					// do nothing
+					return;
+				}
+				else
+				{
+					// different
+					this->cacheData->Release();
+				}
+			}
+			
+			this->cacheData = cdata;
+			cdata->Addref();
+		}
+		else
+		{
+			if( this->cacheData )
+			{
+				this->cacheData->Release();
+				this->cacheData = NULL;
+			}
+		}
+	}
+	
+	void Sound::SetHandle( FMOD::Sound* snd )
+	{
+		if( snd )
+		{
+			if( this->handle )
+			{
+				if( this->handle == snd )
+				{
+					return;
+				}
+				else
+				{
+					this->handle->release();
+				}
+			}
+			
+			this->handle = snd;
+		}
+		else
+		{
+			if( this->handle )
+			{
+				this->handle->release();
+				this->handle = NULL;
+			}
+		}
+	}
+	
 
 	unsigned int Sound::GetLength()
 	{
