@@ -338,7 +338,7 @@ namespace FOFMOD
 			}
 
 			(*chn) = new FOFMOD::Channel();
-			FMOD_RESULT result = this->FSystem->playSound( snd->handle, group, true, &( (*chn)->handle) );
+			FMOD_RESULT result = this->PlaySound( snd, group, chn, true );
 			if( result == FMOD_OK )
 			{
 				FOFMOD::System::ChannelCallbackData* cbdata = new FOFMOD::System::ChannelCallbackData();
@@ -376,6 +376,13 @@ namespace FOFMOD
 			FOFMOD_DEBUG_LOG("PlaySound handle time <%f ms> sound <%s> \n ", perfcounter.Get(), soundName.c_str() );
 			#endif // __PERFCOUNT__
 		#endif // FOFMOD_DEBUG
+	}
+	
+	FMOD_RESULT System::PlaySound( FOFMOD::Sound* sound, FMOD::ChannelGroup* group, FOFMOD::Channel* chn, bool paused )
+	{
+		FMOD_RESULT result = FMOD_OK;
+		result = this->FSystem->playSound( sound->handle, group, paused, &( (*chn)->handle ) );
+		return result;
 	}
 
 	void System::MapArchive( unsigned int index )
@@ -492,8 +499,7 @@ namespace FOFMOD
 		FMOD_RESULT result = this->FSystem->createSound(  (const char*)(ptr), CREATEFLAGS_STREAM , &memLoadInfo, &fsnd );
 		if( result == FMOD_OK )
 		{
-			*sptr = new FOFMOD::Sound();
-			(*sptr)->handle = fsnd;
+			*sptr = new FOFMOD::Sound( fsnd );
 		}
 	}
 
@@ -656,6 +662,14 @@ namespace FOFMOD
 				this->SoundFromArchive( filename, pathName, type, flags, sptr, cache );
 			}
 		}
+	}
+	
+	FOFMOD::Sound* System::GetSound( const std::string& filename, SOUND_TYPE type )
+	{
+		FOFMOD::Sound* result = NULL;
+		FOFMOD::System::CacheSoundData* cache = NULL:
+		this->GetSound( filename, type, &result, &cache );
+		return result;
 	}
 
 	void System::AddCachedSound( const std::string& filename, void* data, unsigned int size, CacheSoundData** cache )

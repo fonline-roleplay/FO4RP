@@ -22,6 +22,7 @@ namespace FOFMOD
 		this->IsPlaying( &result );
 		if( result )
 		{
+			result = false;
 			// there is no way to get handle to this object anymore, thus it cannot become unpaused, thus we have to remove it.
 			this->IsPaused( &result );
 			if( result )

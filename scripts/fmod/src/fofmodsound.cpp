@@ -15,6 +15,12 @@ namespace FOFMOD
 		this->refcount = 0;
 		this->handle  = NULL;
 	}
+	
+	Sound::Sound( FMOD::Sound* handle )
+	{
+		this->refcount = 0;
+		this->handle = handle;
+	}
 
 	Sound::~Sound()
 	{
@@ -24,6 +30,7 @@ namespace FOFMOD
 			this->handle = NULL;
 		}
 	}
+	
 
 	void Sound::Addref()
 	{
@@ -48,8 +55,7 @@ namespace FOFMOD
 			delete this;
 		}
 	}
-
-
+	
 	unsigned int Sound::GetLength()
 	{
 		unsigned int result = 0;

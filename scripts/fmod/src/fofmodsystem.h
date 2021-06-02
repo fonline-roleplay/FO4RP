@@ -126,6 +126,7 @@ namespace FOFMOD
 			void AddCachedSound( const std::string& filename, void* data, unsigned int size, CacheSoundData** cache );	
 			void GetCachedSound( const std::string& filename, CacheSoundData** cache );
 			void Play( const std::string& soundName, SOUND_TYPE type,  FMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused );
+			FMOD_RESULT PlaySound( FOFMOD::Sound* sound, FMOD::ChannelGroup* group, FOFMOD::Channel* chn, bool paused );
 			void MapArchive( unsigned int index );
 			
 
@@ -159,6 +160,7 @@ namespace FOFMOD
 			void Set3DListenerVelocity( float x, float y, float z );
 			void Set3DListenerForward( float x, float y, float z );
 			void Set3DListenerUp( float x, float y, float z );
+			FOFMOD::Sound* GetSound( const std::string& filename, SOUND_TYPE type );
 			///////////////////////////////////
 	};
 

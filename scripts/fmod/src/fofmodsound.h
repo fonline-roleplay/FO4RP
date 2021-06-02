@@ -16,6 +16,7 @@ namespace FOFMOD
 		public:
 			FMOD::Sound*   handle;
 			Sound();
+			Sound( FMOD::Sound* handle );
 			~Sound();
 			bool IsValid();
 			void Addref() override;
