@@ -107,6 +107,9 @@ namespace FOFMOD
 		this->FSystem = NULL;
 		this->soundChannelGroup = NULL;
 		this->musicChannelGroup = NULL;
+		this->indexedArchives.clear();
+		this->soundNames.clear();
+		this->musicNames.clear();
 	}
 
 	System::~System()
@@ -128,6 +131,8 @@ namespace FOFMOD
 		}
 
 		this->indexedArchives.clear();
+		this->soundNames.clear();
+		this->musicNames.clear();
 		this->initialized = false;
 	}
 
@@ -220,9 +225,9 @@ namespace FOFMOD
 		FOFMOD_DEBUG_LOG("Touch archive file at path <%s>. \n", filename.c_str() );
 		bool result = false;
 		
-		if( IsArchiveTouched( filename ) )
+		if( this->IsArchiveTouched( filename ) )
 		{
-			FOFMOD_DEBUG_LOG("Already touched. \n", filename.c_str() );
+			FOFMOD_DEBUG_LOG("Already touched <%s>. \n", filename.c_str() );
 			return true;
 		}
 
@@ -231,7 +236,6 @@ namespace FOFMOD
 		_strlwr( (char*)&ext );
 		if( strcmp( ext, ".zip" ) == 0 )
 		{
-			FOFMOD_DEBUG_LOG("Its a fuggen zip \n" );
 			FOFMOD::ZipFile* zipFile = new FOFMOD::ZipFile();
 			zipFile->Open( filename.c_str() );
 			if( zipFile->IsOpened() )
@@ -256,17 +260,22 @@ namespace FOFMOD
 	
 	bool System::IsArchiveTouched( const std::string& filename )
 	{
-		for( IndexedArchiveFilePtrVec::iterator it = this->indexedArchives.begin(); IndexedArchiveFilePtrVec::iterator end = this->indexedArchives.end(); it++ )
+		for( IndexedArchiveFilePtrVec::iterator it = this->indexedArchives.begin(); it != this->indexedArchives.end(); it++ )
 		{
 			IndexedArchiveFile* iaf = *it;
 			if( iaf )
 			{
 				FOFMOD::IArchiveFile* arch = iaf->arch;
 				const char* archFilename = arch->GetCurrentFilename();
-				if( filename == archFilename )
+				if( archFilename )
 				{
-					return true;
+					if( filename == archFilename ) 
+					{
+						return true;
+					}
 				}
+				else
+					return false;
 			}
 		}
 		return false;
@@ -277,7 +286,7 @@ namespace FOFMOD
 	{
 		if( this->IsArchiveTouched( filename ) )
 		{
-			for( IndexedArchiveFilePtrVec::iterator it = this->indexedArchives.begin(); IndexedArchiveFilePtrVec::iterator end = this->indexedArchives.end(); it++ )
+			for( IndexedArchiveFilePtrVec::iterator it = this->indexedArchives.begin(); it != this->indexedArchives.end(); it++ )
 			{
 				IndexedArchiveFile* iaf = *it;
 				if( iaf )

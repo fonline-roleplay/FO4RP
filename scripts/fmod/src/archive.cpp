@@ -14,8 +14,10 @@ namespace FOFMOD
 
 	AArchiveFile::AArchiveFile()
 	{
+		this->objects.clear();
 		this->handle 			= NULL;
 		this->currentFilePath 	= NULL;
+		this->mode				= NULL;
 		this->isOpened 		 	= false;
 
 	}

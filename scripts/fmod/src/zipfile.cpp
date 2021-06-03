@@ -16,7 +16,9 @@ namespace FOFMOD
 
 	ZipFile::ZipFile()
 	{
-
+		this->zipStatus = 0;
+		mz_zip_zero_struct( &this->zipFile );
+		this->zipFileSize = 0;
 	}
 
 	ZipFile::~ZipFile()
@@ -140,7 +142,7 @@ namespace FOFMOD
 				}
 
 				unsigned int cur = ftell( this->handle );
-				rewind( this->handle );;
+				rewind( this->handle );
 
 				result = mz_zip_reader_extract_to_heap( &this->zipFile, symbol->index, size, 0 );
 
