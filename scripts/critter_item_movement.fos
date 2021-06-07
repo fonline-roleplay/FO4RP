@@ -6,8 +6,8 @@
 #include "critter_item_movement_h.fos"
 
 #ifdef __CLIENT
-# define Critter    CritterCl
-# define Item       ItemCl
+	# define Critter    CritterCl
+	# define Item       ItemCl
 #endif
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -50,19 +50,32 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 
 #ifndef __CLIENT
 	if( toSlot == SLOT_GROUND ) {
-		if( item.GetProtoId() == PID_SINGLE_SANDBAG ) {
-			Item@[] sandbags;
+		uint16 itmPid = item.GetProtoId();
+		if( itmPid == PID_SINGLE_SANDBAG || ContainersX1.find( itmPid ) != -1 ) {
+			Item@[] ground;
 			Map@ map = cr.GetMap();
-			if( map.GetItems( cr.HexX, cr.HexY, sandbags ) > 0 ) {
-				for( uint i = 0; i < sandbags.length(); i++ ) {
-					uint16 sandbagPid = sandbags[i].GetProtoId();
-					if( Sandbags.find( sandbagPid ) != -1 ) {
-						cr.Say( SAY_NETMSG, "|0xFFFF00 Необходимо отойти чтобы установить мешок." );
+			if( map.GetItems( cr.HexX, cr.HexY, ground ) > 0 ) {
+				for( uint i = 0; i < ground.length(); i++ ) {
+					uint16 groundPid = ground[i].GetProtoId();
+					
+					uint16[] list;
+					string thing = "контейнер";
+					
+					if( itmPid == PID_SINGLE_SANDBAG ) {
+						list = Sandbags;
+						thing = "мешок";
+					} else {
+						list = ContainersX1;
+					}
+					
+					if( list.find( groundPid ) != -1 ) {
+						cr.Say( SAY_NETMSG, "|0xFFFF00 Необходимо отойти, чтобы установить " + thing + "." );
 						return false;
 					}
 				}
 			}
 		}
+
 		LogItemMovement( cr, item, "кладёт на землю" );
 		if( item.IsStackable() ) {
 			uint[] values = { item.Id };
@@ -155,7 +168,7 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 
 #ifdef __SERVER
 
-import void ChangeCritterSpeed( Critter& cr ) from "speed";                        // q3: pm speed
+#include "speed_h.fos"
 
 // Call on critter item moved.
 import void ChangeWindup( Critter& cr, bool ignore_bussy ) from "main";
@@ -428,7 +441,7 @@ void ArmorEffects( Critter& cr, int8 sign )
 	Item@ item = cr.GetItem( 0, SLOT_ARMOR );
 	if( valid( item ) ) {
 		uint PID = item.GetProtoId();
-		if( PID == PID_POWERED_ARMOR ) {
+		if( PID == PID_POWERED_ARMOR || PID == PID_POWERED_ARMOR_NEVADA || PID == PID_HYENA_PA || PID == PID_HYENA_PA_MK2 ) {
 			cr.ChangeCrType( ArmorSkin( cr, CRTYPE_PA ) ); 
 		}
 		
@@ -546,6 +559,121 @@ void ShellAmountChanger( Item& item, uint amount)
 	
     item.Update();
 }
+
+// Steal container or armor
+bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
+{
+	bool LootedRucksack = false;
+	Item@[] RuckSacks;
+	
+	bool isCritter = valid( targetCr );
+	
+	if( isCritter ) {
+		targetCr.GetItems( -1, RuckSacks );
+	} else if( valid( targetItem ) ) {
+		targetItem.GetItems( uint( -1 ), RuckSacks );
+	} else {
+		return false;
+	}
+	
+	for( uint i = 0, iEnd = RuckSacks.length(); i < iEnd; i++ ) {
+		int pid = RuckSacks[i].GetProtoId();
+		bool isContainer = RuckSacks[i].GetType() == ITEM_TYPE_CONTAINER;
+		bool isBag = (pid == PID_BAG);
+		bool isPack = (pid == PID_BACKPACK);
+		if( isBag || isPack || isContainer ) {
+			if( !isGM( cr ) ) {
+				string action_text = "Снимает " + (isPack ? "рюкзак" : "что-то" );
+				cr.Say(SAY_EMOTE, action_text );
+				CrimeLog( cr, crInfo( cr ) + strlwr( action_text ) + " у " + crInfo( targetCr ) );
+				MoveItem( RuckSacks[i], 1, cr.GetMap(), cr.HexX, cr.HexY );
+				targetCr.Say( SAY_NETMSG, "Вы не в силах сопротивляться, пока у вас отбирают " + (isPack ? "рюкзак" : "что-то" ) + "." );
+				cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
+			} else {
+				MoveItem( RuckSacks[i], 1, cr );
+				string action_text = (isPack ? "рюкзак" : "что-то" ) + ( isCritter ? " у игрока" : " с тела" );
+				cr.Say( SAY_NETMSG, "Вы забрали " + action_text + "."  );
+				CrimeLog( cr, crInfo( cr ) + " забирает ГМкой " + action_text + " " + crInfo( targetCr ) );
+			}
+			LootedRucksack = true;
+			return true;
+		}
+	}
+	
+	if( isCritter && !LootedRucksack ) {
+		Item@[] armors;
+		uint count = targetCr.GetItems( SLOT_ARMOR, armors );
+		if( count == 0 || !valid( armors[0] ) ) {
+			cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
+			return true;
+		}
+		
+		CrimeLog( cr, crInfo( cr ) + " пытается снять броню " + crInfo( targetCr ) );
+		cr.Say( SAY_EMOTE, "пытается снять броню" );
+		cr.Say( SAY_NETMSG, "Вы снимаете с цели всё что можете." );
+		targetCr.Say( SAY_NETMSG, "Вашу броню пытаются снять!" );
+		
+		if( uint( cr.Stat[ ST_LAST_STEAL_CR_ID ] ) == targetCr.Id ) {
+			cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
+			cr.StatBase[ ST_STEAL_COUNT ] ++;
+			TryToTakeArmor( cr, targetCr );
+		} else {
+			if( isGM( cr ) ) {
+				cr.Say( SAY_NETMSG, "Вы забрали у персонажа броню." );
+				CrimeLog( cr, crInfo( cr ) + " снимает ГМкой броню с " + crInfo( targetCr ) );
+				cr.StatBase[ ST_STEAL_COUNT ] = 7;
+				TryToTakeArmor( cr, targetCr );
+			}
+			cr.StatBase[ ST_STEAL_COUNT ] = 0;
+			cr.StatBase[ ST_LAST_STEAL_CR_ID ] = targetCr.Id;
+		}
+		return true;
+	}
+	return false;
+}
+
+int[][] armor_delay = {
+	{ PID_POWERED_ARMOR, PID_HARDENED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR_MK2 },
+	{ PID_PURPLE_ROBE, PID_BLACK_ROBE, PID_SANDROBE },
+	{ PID_LEATHER_JACKET, PID_CURED_LEATHER_ARMOR, PID_CURED_LEATHER_ARMOR_MK_II },
+	{ PID_LEATHER_ARMOR, PID_LEATHER_ARMOR_MK_II, PID_LEATHER_ARMOR_MK_III },
+	{ PID_METAL_ARMOR, PID_METAL_ARMOR_MK_II, PID_TESLA_ARMOR},
+};
+
+void TryToTakeArmor( Critter& cr, Critter& target ) 
+{
+	bool success = false;
+	Item@[] armors;
+	uint count = target.GetItems( SLOT_ARMOR, armors );
+	
+	if( count == 0 || !valid( armors[0] ) ) { return; }
+	int armor = armors[0].GetProtoId();
+	
+	if( armor_delay[0].find( armor ) != -1 ) { return; } //ПАшки неснимаемые.
+	
+	uint delay = cr.Stat[ST_STEAL_COUNT], i = 1, iEnd = armor_delay.length();
+			
+	for( ; i < iEnd; i++ ) {
+		if( armor_delay[i].find( armor ) != -1 ) {
+			success = true;
+			break;
+		}
+	}
+	
+	if( delay >= 6 ) { 
+		success = true;
+	}
+	
+	if( success && delay >= i) {
+		MoveItem( armors[0], 1, cr );
+		target.Say(SAY_NETMSG, "С вас сняли броню.");
+		cr.Say(SAY_NETMSG, "Вы сняли броню с жертвы.");
+		CrimeLog( cr, crInfo( cr ) + " снимает броню с " + crInfo( target ) );
+	} else {
+		cr.Say( SAY_NETMSG, "Итерация №" + delay + " из " +( i == 5 ? 6 : i ) + "." );
+	}
+}
+
 #endif // __SERVER
 
 #endif //CRITTER_ITEM_MOVEMENT

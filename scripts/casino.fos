@@ -4,12 +4,6 @@
 #include "_utils.fos"
 #include "casino_h.fos"
 
-import int BitUnpacker( int storage, uint8 index, uint8 bit ) from "mio_deviants_toolkit";
-import int BitZeroing( int storage, uint8 index, uint8 bit ) from "mio_deviants_toolkit";
-import int BitPacker( int cell, int storage, uint8 index, uint8 bit ) from "mio_deviants_toolkit";
-import int BitChange( int number, int storage, uint8 index, uint8 bit ) from "mio_deviants_toolkit";
-import uint8 ChoiceMask( int[] list ) from "mio_deviants_toolkit";
-
 //Точка входа из main.fos при юзе денег из руки / инвентаря
 bool SlotMachineCheck( Critter& cr, Item@ cash, Item@ target ) //exported - проверки на разное перед началом работы
 {
@@ -277,7 +271,7 @@ void StartMenuSlotMachine( Critter& cr, Item& target) // exported
     }
 
     iMenuHandler@ handler = MenuSlotMachine(target, map);
-    iDialogBox@ menu = OpenMenu(cr, "Однорукий Бандит", handler);
+    iDialogBox@ menu = OpenMenu( cr, "Однорукий Бандит", handler );
 }
 
 //COIN_FLIPPING
@@ -305,95 +299,351 @@ void DiceUse( Critter& cr, Item& item )
 }
 
 //CARDS_MECHANICS
-int[] CardsSide( int storage )
+bool CardsUse( Critter& cr, Item& deck, Item& table )
 {
-	int[] color = {};
-	for( uint8 i = 0; i < 27; i++ ) { 
-		color.insertLast( BitUnpacker( storage, i, 1 ) ); 
+	if( !valid( deck ) ) { return false; }
+	if( !valid( table ) ) { return false; }
+	
+	Item@[] stuff;
+	deck.GetItems( uint( -1 ), stuff );
+	uint len = stuff.length();
+	if( len == 0 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Колода пуста!" );
+		return true;
 	}
-	return color;
+	
+	Item@ cardTransfer = null;
+	Item@[] cardDeck;
+	
+	for( uint i=0; i < len; i++ ) {
+		@cardTransfer = stuff[i];
+		
+		if( !valid( cardTransfer ) ) { continue; }
+		
+		uint16 cardPid = cardTransfer.GetProtoId();
+		if( Cards.find( cardPid ) != -1 ) {
+			cardDeck.insertLast( cardTransfer );
+		}
+	}
+	
+	uint len2 = cardDeck.length();
+	if( len2 == 0 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 В колоде нет карт!" );
+		return true;
+	}
+	
+	Item@ card = cardDeck[ Random( 0, len -1 ) ];
+	uint16 cardPid = card.GetProtoId();
+	string desc = _GetProtoShortDisc( cardPid );
+	cr.Say( SAY_NORM, "|0x3CF800 - " + "|0xFFFF00 " + desc + "|0x3CF800  -" );
+	cr.Say( SAY_EMOTE_ON_HEAD, "вытягивает: " + "|0x7CFC00 " + desc + "|0xFF00FF ." );
+	MoveItem( card, 1, table, 0 );
+	
+	return true;
 }
 
-void CardsUse( Critter& cr, Item& item )
+bool CardsUse( Critter& cr, Item& deck, Critter& targetCr )
 {
-	if( item.Val3 == 0 && item.Val4 == 0 ) { 
-		cr.Say( SAY_NETMSG, "Колода опустела, нужно перетасовать." ); 
-		return;
+	if( !valid( deck ) ) { return false; }
+	if( !valid( targetCr ) ) { return false; }
+	
+	Item@[] stuff;
+	deck.GetItems( uint( -1 ), stuff );
+	uint len = stuff.length();
+	if( len == 0 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Колода пуста!" );
+		return true;
 	}
+	
+	Item@ cardTransfer = null;
+	Item@[] cardDeck;
+	
+	for( uint i=0; i < len; i++ ) {
+		@cardTransfer = stuff[i];
+		
+		if( !valid( cardTransfer ) ) { continue; }
+		
+		uint16 cardPid = cardTransfer.GetProtoId();
+		if( Cards.find( cardPid ) != -1 ) {
+			cardDeck.insertLast( cardTransfer );
+		}
+	}
+	
+	uint len2 = cardDeck.length();
+	if( len2 == 0 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 В колоде нет карт!" );
+		return true;
+	}
+	
+	Item@ card = cardDeck[ Random( 0, len -1 ) ];
+	
+	Item@ cardsHand = null;
+	if( hasItem( targetCr, PID_CARDS_HAND ) ) {
+		@ cardsHand = getItem( targetCr, PID_CARDS_HAND, -1 );
+	} else {
+		@ cardsHand = targetCr.AddItem( PID_CARDS_HAND, 1 );
+	}
+	
+	MoveItem( card, 1, cardsHand, 0 );
+	ChangeCardsHandPic( targetCr, cardsHand );
+	cr.Say( SAY_EMOTE_ON_HEAD, "сдает карту." );
+	targetCr.Say( SAY_NETMSG, "|0xFFFF00 Вам сдали карту." );
+	return true;
+}
 
-	string emote = cr.Param[ ST_GENDER ] == 0 ? "Вытянул" : ( cr.Param[ ST_GENDER ] == 1 ? "Вытянула" : "Вытянуло" );
-	int[] SideMask;
-	bool colorSide = Random( 0, 1 ) == 0 ? false : true;
-	
-	if( colorSide ) {
-		if( item.Val3 > 0 ) { 
-			SideMask = CardsSide( item.Val3 ); 
-		} else { 
-			SideMask = CardsSide( item.Val4 ); 
-			colorSide = false; 
-		}
-	} else {
-		if( item.Val4 > 0 ) { 
-			SideMask = CardsSide( item.Val4 ); 
-		} else { 
-			SideMask = CardsSide( item.Val3 ); 
-			colorSide = true; 
+bool ShuffleDeck( Critter& cr, Item& deck )
+{
+	if( !valid( deck ) ) { return false; }
+	Item@[] stuff;
+	Item@ card = null;
+	cr.GetItems( -1, stuff );
+	uint len = stuff.length();
+	if( len > 0 ) {
+		for( uint i=0; i < len; i++ ) {
+			@card = stuff[i];
+			
+			if( !valid( card ) ) { continue; }
+			
+			uint16 cardPid = card.GetProtoId();
+			if( Cards.find( cardPid ) != -1 ) {
+				MoveItem( card, 1, deck, 0 );
+			}
 		}
 	}
-	
-	int Card = ChoiceMask( SideMask );
-	string[] picture = { "вальта", "даму", "короля", "туза" };
-	string[] picturechat = { "Валет", "Дама", "Король", "Туз" };
-	string[] lear = { "буби", "черви", "треф", "пик" };
-	string result = " ";
-	string resultchat = " ";
-	
-	if( colorSide ) {
-		if( Card <= 12 ) {
-			if( Card <= 8 ) { 
-				result += ( Card + 2 ) + "-ку " + lear[ 0 ]; 
-				resultchat += ( Card + 2 )+ " " + UINTColor( COLOR_LRED ) + lear[ 0 ]; 
-			} else { 
-				result += picture[ Card - 9 ] + " " +lear[ 0 ];
-				resultchat += picturechat[ Card - 9 ] + " " + UINTColor( COLOR_LRED ) + lear[ 0 ];
-			}
-		} else if( Card <= 25 ) {
-			if( Card <= 21 ) { 
-				result += ( Card - 11 ) + "-ку " + lear[ 1 ]; 
-				resultchat += ( Card - 11 )+ " " + UINTColor( COLOR_LRED ) + lear[ 1 ]; 
-			} else { result += picture[ Card - 22 ] + " " +lear[ 1 ];
-				resultchat += picturechat[ Card - 22 ] + " " + UINTColor( COLOR_LRED )+lear[ 1 ]; 
-			}
-		} else { result += "цветного джокера"; 
-			resultchat += UINTColor( COLOR_LRED )+"Цветной джокер"; 
-		}
-		item.Val3 = BitZeroing( item.Val3, Card, 1 );
+	string emote;
+	if( deck.GetProtoId() == PID_CARDS_DECK ) {
+		emote = "тасует карты";
 	} else {
-		if( Card <= 12 ) {
-			if( Card <= 8 ) { 
-				result += ( Card + 2 ) + "-ку " + lear[ 2 ];
-				resultchat += ( Card + 2 )+" " +UINTColor( COLOR_GRAY )+lear[ 2 ];
-			} else { 
-				result += picture[ Card - 9 ] +" "+lear[ 2 ];
-				resultchat += picturechat[ Card - 9 ] +" "+UINTColor( COLOR_GRAY )+lear[ 2 ];
-			}
-		} else if( Card <= 25 ) {
-			if( Card <= 21 ) { 
-				result += ( Card - 11 )+ "-ку " +lear[ 3 ]; 
-				resultchat += ( Card - 11 )+" " +UINTColor( COLOR_GRAY )+lear[ 3 ]; 
-			} else { 
-				result += picture[ Card - 22 ] +" "+lear[ 3 ];
-				resultchat += picturechat[ Card - 22 ] +" "+UINTColor( COLOR_GRAY ) + lear[ 3 ]; 
-			}
-		} else { 
-			result += "бесцветного джокера";
-			resultchat += UINTColor( COLOR_GRAY )+"Бесцветный джокер"; 
-		}
-		item.Val4 = BitZeroing( item.Val4, Card, 1 );
+		emote = "набирает карты";
 	}
-	cr.Say( SAY_NORM, UINTColor( COLOR_TEXT )+"-" +UINTColor( COLOR_YELLOW )+resultchat +UINTColor( COLOR_TEXT )+" -" );
-	cr.Say( SAY_EMOTE_ON_HEAD, emote + result );
+	
+	cr.Say( SAY_EMOTE, emote );
+	Map @ map = cr.GetMap();
+	if( valid( map ) ) {
+		map.PlaySound( "SHUFFLE.ACM", cr.HexX, cr.HexY, 2 );
+	}
+	return true;
+}
+
+bool TransferToCardsHand( Critter& cr, Item& card, Item& cardsHand )
+{
+	if( !valid( card ) ) { return false; }
+	if( !valid( cardsHand ) ) { return false; }
+	
+	uint16 cardPid = card.GetProtoId();
+	if( Cards.find( cardPid) == -1 ) {
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Сюда можно только добавить карты." );
+		return false; 
+	} else {
+		MoveItem( card, 1, cardsHand, 0 );
+		ChangeCardsHandPic( cr, cardsHand );
+	}
+	
+	ShowContainer( cr, cardsHand, TRANSFER_SELF_CONT );
+	return true;
+}
+
+bool TransferFromCardsHand( Critter& cr, Item& card, Item& cardsHand )
+{
+	if( !valid( cardsHand ) ) { return false; }
+	
+	uint transferAmount = cr.ItemTransferCount();
+	MoveItem( card, transferAmount, cr );
+	
+	Item@[] cards;
+	cardsHand.GetItems( uint( -1 ), cards );
+	uint len = cards.length();
+	if( len <= 0 ) {
+		DeleteItem( cardsHand );
+		return true;
+	} else {
+		ChangeCardsHandPic( cr, cardsHand );
+	}
+	
+	return true;
+}
+
+bool ShowCardSHand( Critter& cr, Item& cardsHand, Item& table )
+{
+	if( !valid( cardsHand ) ) { return false; }
+	if( !valid( table ) ) { return false; }
+	
+	Item@[] cards;
+	cardsHand.GetItems( uint( -1 ), cards );
+	uint len = cards.length();
+	Item@ card = null;
+	
+	string inform;
+	string desc;
+	string inform2;
+	for( uint i = 0; i < len; i++ ) {
+		@card = cards[i];
+		if( !valid( card ) ) { continue; }
+		
+		uint16 cardPid = card.GetProtoId();
+		if( Cards.find( cardPid ) == -1 ) { continue ; }
+		desc = _GetProtoShortDisc( cardPid );
+		inform += "|0x7CFC00 " + desc + "|0xFF00FF , ";
+		MoveItem( card, 1, table, 0 );
+		ChangeCardsHandPic( cr, cardsHand );
+		inform2 += "|0xFFFF00 " + desc + "|0x3CF800 , ";
+	}
+	inform[ inform.length() - 2 ] = '.';
+	inform[ inform.length() - 1 ] = ' ';
+	inform2[ inform2.length() - 2 ] = '.';
+	inform2[ inform2.length() - 1 ] = ' ';
+	cr.Say( SAY_NORM, "|0x3CF800 - " + "|0xFFFF00 " + inform2 + "|0x3CF800  -" );
+	cr.Say( SAY_EMOTE_ON_HEAD, "показывает: " + "|0x7CFC00 " + inform );
+	DeleteItem( cardsHand );
+	return true;
+}
+
+void CheckCardsHand( Critter& cr, Item& cardsHand )
+{
+	if( !valid( cardsHand ) ) { return; }
+	Item@[] cards;
+	cardsHand.GetItems( uint( -1 ), cards );
+	uint len = cards.length();
+	Item@ card = null;
+	
+	string desc;
+	string inform = "Ваша рука: ";
+	for( uint i = 0; i < len; i++ ) {
+		@card = cards[i];
+		if( !valid( card ) ) { continue; }
+		
+		uint16 cardPid = card.GetProtoId();
+		if( Cards.find( cardPid ) == -1 ) { continue ; }
+		desc = _GetProtoShortDisc( cardPid );
+		inform += "|0xFFFF00 " + desc + "|0x3CF800 , ";
+	}
+	inform[ inform.length() - 2 ] = '.';
+	inform[ inform.length() - 1 ] = ' ';
+	cr.Say( SAY_NETMSG, inform );
+}
+
+void ShowCard( Critter& cr, Item& card )
+{
+	if( !valid( card ) ) { return; }
+	string inform = "показывает: " + "|0x7CFC00 ";
+	string desc;
+	uint16 cardPid = card.GetProtoId();
+	desc = _GetProtoShortDisc( cardPid );
+	inform += "|0x7CFC00 " + desc + "|0xFF00FF .";
+	cr.Say( SAY_NORM, "|0x3CF800 - " + "|0xFFFF00 " + desc + "|0x3CF800  -" );
+	cr.Say( SAY_EMOTE_ON_HEAD, inform );
+}
+
+class MenuCard: CenteredMenuHandler {
+    uint target_id;
+    uint map_id;
+	
+    MenuCard( Item& target, Map& map ) {
+        target_id = target.Id;
+        map_id = map.Id;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Map@ map = GetMap( map_id );
+        Item@ target = GetItem( target_id );
+		
+        if( map is null || target is null ) {
+            return false;
+        }
+		
+		if( menu.Button( "Собрать карты" ) ) {
+			Item@ cardsHand = null;
+			if( hasItem( cr, PID_CARDS_HAND ) ) {
+				@ cardsHand = getItem( cr, PID_CARDS_HAND, -1 );
+			} else {
+				@ cardsHand = cr.AddItem( PID_CARDS_HAND, 1 );
+			}
+			
+			ShuffleDeck( cr, cardsHand );
+			ChangeCardsHandPic( cr, cardsHand );
+			return false;
+		}
+		
+		if( menu.Button( "Собрать колоду" ) ) {
+			Item@ deck = cr.AddItem( PID_CARDS_DECK, 1 );
+			ShuffleDeck( cr, deck );
+			return false;
+		}
+		return true;
+    }
+	
+	// UI менюхи
+    string@ Description( Critter& cr ) {
+		string info;
+		info = "Выберите действие: ";
+        return info;
+    }
+	
+    string@ ButtonCancel() {
+        return ButtonDecorator( "Скрыть меню", null);
+    }
+}
+
+void StartMenuCard( Critter& cr, Item& target )
+{
+    Map@ map = cr.GetMap();
+    if( map is null ) {
+        return;
+    }
+
+    iMenuHandler@ handler = MenuCard( target, map );
+    iDialogBox@ menu = OpenMenu( cr, "Карты", handler );
 }
 
 
+void ChangeCardsHandPic( Critter& cr, Item& cardsHand )
+{
+	if( !valid( cardsHand ) ) { return; }
+	
+	Item@[] cards;
+	cardsHand.GetItems( uint( -1 ), cards );
+	uint len = cards.length();
+	switch( len ) 
+	{
+		case( 1 ):
+			cardsHand.PicInv = GetStrHash( "art\\inven\\misc\\cards_in_hand\\cards_in_hand_01.png" );
+			break;
+		case( 2 ):
+			cardsHand.PicInv = GetStrHash( "art\\inven\\misc\\cards_in_hand\\cards_in_hand_02.png" );
+			break;
+		case( 3 ):
+			cardsHand.PicInv = GetStrHash( "art\\inven\\misc\\cards_in_hand\\cards_in_hand_03.png" );
+			break;
+		case( 4 ):
+			cardsHand.PicInv = GetStrHash( "art\\inven\\misc\\cards_in_hand\\cards_in_hand_04.png" );
+			break;
+		case( 5 ):
+			cardsHand.PicInv = GetStrHash( "art\\inven\\misc\\cards_in_hand\\cards_in_hand_05.png" );
+			break;
+		case( 6 ):
+			cardsHand.PicInv = GetStrHash( "art\\inven\\misc\\cards_in_hand\\cards_in_hand_06.png" );
+			break;							
+		case( 7 ):
+			cardsHand.PicInv = GetStrHash( "art\\inven\\misc\\cards_in_hand\\cards_in_hand_07.png" );
+			break;
+		case( 8 ):
+			cardsHand.PicInv = GetStrHash( "art\\inven\\misc\\cards_in_hand\\cards_in_hand_08.png" );
+			break;
+		case( 9 ):
+			cardsHand.PicInv = GetStrHash( "art\\inven\\misc\\cards_in_hand\\cards_in_hand_09.png" );
+			break;
+		default:
+			cardsHand.PicInv = GetStrHash( "art\\inven\\misc\\cards_in_hand\\cards_in_hand_10.png" );
+			break;
+	}
+	cardsHand.Update();
+}
+
+//~run casino _GetCards 0 0 0
+void _GetCards( Critter& player, int param0, int param1, int param2 )
+{
+	for( uint16 cardPid = PID_CARDS_CLUBS_02; cardPid <= PID_CARDS_JOKER_02; cardPid ++ ) {
+		player.AddItem( cardPid, 1 );
+	}
+}
 #endif //CASINO

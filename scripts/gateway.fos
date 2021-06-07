@@ -9,6 +9,116 @@
 #include "npc_planes_h.fos"
 #include "entire_h.fos"
 
+void ToggleDoorBlocker( Map& map, Item& door, bool create )
+{
+    if( !valid( map ) ) { return; }
+
+	uint16 dir = 0;
+	uint16 blocker_count = 0;
+
+	uint16 tx = door.HexX;
+	uint16 ty = door.HexY;
+
+	uint16 doorPid = door.GetProtoId();
+
+	switch( doorPid ) 
+	{
+		case( PID_FARM_GATE_EW ):
+		case( PID_GARAGE_GATE_EW ):
+			dir = 1;
+			blocker_count = 3;
+			break;
+		case( PID_FARM_GATE_NS ):
+		case( PID_GARAGE_GATE_NS ):
+			dir = 0;
+			blocker_count = 3;
+			break;
+		case( PID_CATHEDRAL_DOOR_EW ):
+		case( PID_VC_GATE_SMALL_EW ):
+		case( PID_GARAGE_GATE_SMALL_EW ):
+		case( PID_FARM_GATE_SMALL_EW ):
+			dir = 1;
+			blocker_count = 1;
+			break;
+		case( PID_GARAGE_GATE_SMALL_NS ):
+			dir = 0;
+			blocker_count = 1;
+			break;
+	}	
+
+	if ( create == false ) { // удаление
+		for ( uint16 i = 0; i < blocker_count; i++ ) { // петля №1
+			if( dir == 1 )	{
+				if( ( i == 1 || i == 3 || i == 5 ) ) {
+					map.MoveHexByDir( tx, ty, 0, 1 );
+				} else {
+					map.MoveHexByDir( tx, ty, 1, 1 );
+				}
+
+			} else {
+				map.MoveHexByDir( tx, ty, 5, 1 );
+			}
+			
+			Item@ blockItem = map.GetItem( tx, ty, PID_DOOR_BLOCKER );
+			if( valid( blockItem ) ) {
+				DeleteItem( blockItem ); 
+			}	
+		}
+
+		tx = door.HexX;
+		ty = door.HexY;
+
+		for ( uint16 i = 0; i < blocker_count; i++ ) { // петля №2
+			if( dir == 1 )	{
+				if( ( i == 1 || i == 3 || i == 5 ) ) {
+					map.MoveHexByDir( tx, ty, 4, 1 );
+				} else	{
+					map.MoveHexByDir( tx, ty, 3, 1 );
+				}
+			} else	{
+				map.MoveHexByDir( tx, ty, 2, 1 );
+			}
+			
+			Item@ blockItem = map.GetItem( tx, ty, PID_DOOR_BLOCKER );
+			if( valid( blockItem ) ) {
+				DeleteItem( blockItem ); 
+			}	
+		}
+		return;
+	}
+
+	for ( uint16 i = 0; i < blocker_count; i++ ) { // петля №1
+		if( dir == 1 )	{
+			if( ( i == 1 || i == 3 || i == 5 ) ) {
+				map.MoveHexByDir( tx, ty, 0, 1 );
+			} else {
+				map.MoveHexByDir( tx, ty, 1, 1 );
+			}
+		} else	{
+			map.MoveHexByDir( tx, ty, 5, 1 );
+		}
+		
+		map.AddItem( tx, ty, PID_DOOR_BLOCKER, 1 );
+	}
+
+	tx = door.HexX;
+	ty = door.HexY;
+
+	for ( uint16 i = 0; i < blocker_count; i++ ) { // петля №2
+		if( dir == 1 ) {
+			if( ( i == 1 || i == 3 || i == 5 ) ) {
+				map.MoveHexByDir( tx, ty, 4, 1 );
+			} else	{
+				map.MoveHexByDir( tx, ty, 3, 1 );
+			}
+		} else	{
+			map.MoveHexByDir( tx, ty, 2, 1 );
+		}
+		
+		map.AddItem( tx, ty, PID_DOOR_BLOCKER, 1 );
+	}
+}
+
 void ToggleLaserFence( Map& map, int entireId )
 {
 	if( entireId < ENTIRE_LASER_FENCE_BEGIN && entireId > ENTIRE_LASER_FENCE_END ) { return; }
@@ -56,6 +166,7 @@ void ToggleLaserFence( Map& map, int entireId )
 				map.PlaySound( "saber_off.ogg" , tx, ty, 3 );
 			}
 		}
+		
 		for( uint steps = 0; steps < distance; steps ++ ) {
 			if( dir == 1 && ( steps == 1 || steps == 3 || steps == 5 ) ) {
 				map.MoveHexByDir( hx, hy, 0, 1 );
@@ -125,6 +236,89 @@ void ToggleForceField( Map& map, Item& emitter )
 	
 	map.MoveHexByDir( hx, hy, dir, 1 );
 	map.AddItem( hx, hy, fieldPid, 1 );
+}
+
+//ДВЕРЬ С ДИАЛОГОМ
+//Открытие двери и создание таймивента на ее закрытие
+void SecurityDoorOpenClose( Critter& player ) 
+{
+	Item @door = GetItem( player.ParamBase[ ST_LAST_DOOR_ID ] );
+		uint event_id = door.Val7;
+		uint duration = 0;
+		uint[] values;
+		
+		if( event_id == 0 ) {
+			event_id = CreateDoorEvent( door, duration, values );
+		}
+		
+		if( !GetTimeEvent( event_id, duration, values ) ) { 
+			event_id = CreateDoorEvent( door, duration, values );
+		}
+		
+		values[EVENT_ON_OFF] = 1;
+		duration = REAL_SECOND( 3 );
+		door.LockerOpen();
+		Map@ map = player.GetMap();
+		ToggleDoorBlocker( map, door, false );
+		SetTimeEvent( event_id, duration, values );
+		
+		//Log("Id двери: "+values[DOOR_ID]);
+		//Log("Номер события: "+values[EVENT_ID]);
+		//Log("Дверь должна закрыться через "+duration+" секунд");
+}
+
+//Создание таймивента
+uint CreateDoorEvent( Item @item, uint &duration, uint[] &values ) 
+{
+	uint[] values_array = { item.Id, 1, 0 };
+	duration = REAL_SECOND( 1 );
+	item.Val7 = CreateTimeEvent( AFTER( duration ), "e_CloseSecurityDoor", values_array, false );
+	values = values_array;
+	values[EVENT_ID] = item.Val7;
+	
+	return item.Val7;
+}
+
+uint e_CloseSecurityDoor( uint[]@ values )
+{
+	if( values[EVENT_ON_OFF] == 0 ) {														
+		return REAL_SECOND( 1 );				
+	}
+	
+	Item @door = GetItem( values[DOOR_ID] );
+	
+	door.LockerClose();
+	
+	uint16 hexX = 0, hexY = 0;
+	Map@ map = door.GetMapPosition( hexX, hexY );
+	ToggleDoorBlocker( map, door, true );
+	//Log( "Дверь закрылась" );
+	
+	values[EVENT_ON_OFF] = 0;
+	
+	return REAL_SECOND( 1 );
+}
+
+//Функция удаления таймивента на предмете по id, вызов командой
+//#run gateway start itemId
+void unsafe_start( Critter& cr, int p0, int p1, int p2, string@, int[]@ ) 
+{ if( isGM( cr )) start( cr, p0, p1, p2 ); }
+
+//~run gateway start 0 0 0
+void start( Critter& cr, int p0, int p1, int p2 ) 
+{
+	Item @item = GetItem( p0 );
+	int event_id = item.Val7;
+
+	if( item.Val7 == 0 ) 										
+	{
+		cr.Say( SAY_NORM, "Coбытие "+event_id+" не найдено." );
+		return;
+	}
+	
+	cr.Say( SAY_NORM, "Coбытие "+event_id+" удалено." );
+	
+	item.Val7 = 0;
 }
 
 #endif //GATEWAY

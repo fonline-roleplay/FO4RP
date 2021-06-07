@@ -90,9 +90,9 @@ bool FMOD_Initialize( unsigned int channelCount )
 
 FOFMOD::Sound* FMOD_GetSound( ScriptString& soundName, int soundType )
 {
-	FMODCHECK(NULL);
+	FMODCHECK(NULL)
 	FOFMOD::Sound* ret = NULL;
-	ret = FMODSystem->GetSound( soundName.c_std_str(), soundType );
+	ret = FMODSystem->GetSound( soundName.c_std_str(), (FOFMOD_SOUND_TYPE)soundType );
 	if( ret )
 	{
 		ret->Addref();
@@ -240,7 +240,7 @@ void RegisterASInterface()
 		r = ASEngine->RegisterObjectBehaviour("FMODSound", asBEHAVE_ADDREF, "void f()", 					asFUNCTION(FOFMOD::Script_Sound_Addref), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log("Failed to register addref for %s %d \n ", "FMODSound", r );
-		r = ASEngine->RegisterObjectBehaviour("FMODSound", asBEHAVE_RELEASE, "void f()", 					asFUNCTION(FOFMOD::Script_Sound_Addref), asCALL_CDECL_OBJLAST);
+		r = ASEngine->RegisterObjectBehaviour("FMODSound", asBEHAVE_RELEASE, "void f()", 					asFUNCTION(FOFMOD::Script_Sound_Release), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log("Failed to register release for %s %d \n ", "FMODSound", r);
 		r = ASEngine->RegisterObjectMethod("FMODSound", "uint GetLength()", 								asFUNCTION(FOFMOD::Script_Sound_GetLength), asCALL_CDECL_OBJLAST);
@@ -411,11 +411,9 @@ void RegisterASInterface()
 		r = ASEngine->RegisterGlobalFunction("void FMOD_Set3DListenerUp(float x, float y, float z)",   				asFUNCTION(FMOD_Set3DListenerUp), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_Set3DListenerUp", r );
-		
-		r = ASEngine->RegisterGlobalFunction("FMODSound@ FMOD_GetSound( string& filename, int soundType )"  		asFUNCTION(FMOD_GetSound), 		asCALL_CDECL );
+		r = ASEngine->RegisterGlobalFunction("FMODSound@ FMOD_GetSound( string& soundName, int soundType )",   		asFUNCTION(FMOD_GetSound), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_GetSound", r );
-		
 		//if( !r )
 		// 	Log("Failed to register object type %s %d \n ", "FMODSystem", r );
 	}

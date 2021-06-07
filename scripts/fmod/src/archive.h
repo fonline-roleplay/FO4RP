@@ -26,6 +26,7 @@ namespace FOFMOD
 		public:
 			virtual void  Open( const char* filename  ) = 0;
 			virtual void  Open() = 0;
+			virtual const char* GetCurrentFilename() = 0;
 			virtual void  Touch() = 0;
 			virtual void  Close() = 0;
 			virtual bool  IsOpened() = 0;
@@ -54,6 +55,7 @@ namespace FOFMOD
 			
 			void  Open( const char* filename ) override;
 			void  Open() override;
+			const char* GetCurrentFilename() override;
 			void  Touch() = 0;
 			void  Close() override;
 			bool  IsOpened() override;

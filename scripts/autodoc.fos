@@ -1,0 +1,597 @@
+#ifndef AUTODOC
+#define AUTODOC
+
+#include "_utils.fos"
+#include "autodoc_h.fos"
+#include "effects_h.fos"
+#include "critter_status_h.fos"
+#include "drugs_h.fos"
+
+bool ChargeAutodoc( Critter& cr, Item@ biogel, Item@ autodoc ) 
+{
+	if( !valid( biogel ) || !valid( autodoc ) ) { return false; }
+	
+	Map@ map = cr.GetMap();
+	if( !valid( map ) ) { return false; }
+	
+	if( biogel.GetProtoId() != PID_BIO_GEL ) { return false; }
+	if( autodoc.GetProtoId() != PID_OBJECT_AUTODOC ) { return false; }
+	
+	autodoc.AUTODOC_BIOGEL_LEVEL += 25;
+	cr.Say( SAY_EMOTE_ON_HEAD, "заправляет биогель" );
+	
+	if( autodoc.AUTODOC_BIOGEL_LEVEL >= AUTODOC_BIOGEL_MAX ) {
+		autodoc.AUTODOC_BIOGEL_LEVEL = AUTODOC_BIOGEL_MAX;
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы заправили биогель под крышку бака." );
+	} 
+	
+	_SubItem( biogel, 1 );
+	return true;
+}
+
+string AutodocScan( Map& map, Item& terminal, Item& autodoc )
+{
+	string info = ">";
+	
+	if( !valid( terminal ) ) { 
+		info = "|0xFF0000 Повреждение терминала!";
+		return info;
+	}
+	
+	if( !valid( autodoc ) ) { 
+		info = "|0xFF0000 Повреждение автодока!";
+		return info;
+	}
+	
+	if( !valid( map ) ) { 
+		info = "|0xFF0000 Вы в варпе!";
+		return info;
+	}
+	
+	if( autodoc.AUTODOC_EVENT != 0 && autodoc.AUTODOC_PATIENT != 0 ) {
+		info = "|0xFFFF00 Внимание, идет процедура! ";
+
+		Critter@ patient = GetCritter( autodoc.AUTODOC_PATIENT );
+		if( !valid( patient ) ) { return "|0xFFFF00 Сбой биосканера!"; }
+		
+		int time = autodoc.AUTODOC_TIMER;
+		int minutes = floor( time / 60 );
+		int seconds = time - floor( minutes * 60 );
+		string zeroM1 = "";
+		string zeroM = "";
+		string zeroS = "";
+		
+		if( minutes < 10 ) {
+			zeroM1 = "0";
+		}
+		
+		if( minutes < 1 ) {
+			zeroM = "0";
+		}
+		
+		if( floor( seconds / 10 ) < 1 ) {
+			zeroS = "0";
+		}
+
+		info += "|0x3CF800 \nДо завершения осталось: " + "|0xFFFF00 " + zeroM1 + zeroM + minutes + "|0x3CF800 :" + "|0xFFFF00 " + zeroS + seconds;	
+		return info;
+	}
+	
+	uint16 hx = autodoc.HexX, hy = autodoc.HexY;
+	
+	//check for junk inside autodoc
+	Item@[] junk; 
+	map.GetItems( hx, hy, junk );
+	int len = junk.length();
+	autodoc.AUTODOC_ERROR = 0;
+	
+	if( len > 2 ) {
+		autodoc.AUTODOC_PATIENT = 0;
+		autodoc.AUTODOC_ERROR = 1;
+		info = "|0xFFFF00 Ошибка, обнаружено инородное тело!";
+		return info;
+	}
+	
+	Critter@[] critters;
+	map.GetCrittersHex( hx, hy, 0, FIND_ALL, critters );
+	int len2 = critters.length();
+	
+	//check for more than 1 critter
+	if( len2 > 1 ) {
+		autodoc.AUTODOC_PATIENT = 0;
+		autodoc.AUTODOC_ERROR = 1;
+		info = "|0xFFFF00 Ошибка, множественные сигнатуры!";
+		return info;
+		
+	} else if( len2 == 1 ) {
+		autodoc.AUTODOC_PATIENT = critters[0].Id;
+		Critter@ patient = critters[0];
+		if( valid( patient ) ) {
+			if( patient.Stat[ ST_BODY_TYPE ] > BT_CHILDREN ) {
+				autodoc.AUTODOC_PATIENT = 0;
+				autodoc.AUTODOC_ERROR = 1;
+				info = "|0xFFFF00 Ошибка, внутри не человек!";
+				return info;
+			}
+			
+			//check if critter has items
+			Item@[] stuff; 
+			patient.GetItems( -1, stuff );
+			int len3 = stuff.length();
+			
+			if( len3 > 0 ) {
+				autodoc.AUTODOC_PATIENT = 0;
+				autodoc.AUTODOC_ERROR = 1;
+				info = "|0xFFFF00 Ошибка, пациент не голый!";
+				return info;
+			}
+			
+			//begin bioscan
+			info += "|0x3CF800 Пациент: " + "|0xFFFF00 ";
+			patient.Stat[ ST_GENDER ] == GENDER_MALE ? info += "Мужчина" : info += "Женщина";
+			info += "|0x3CF800 .";
+			
+			//dead patient status
+			if( patient.IsDead() ) {
+				if( patient.ParamBase[ CR_DEATH_STAGE ] == 100 ) {
+					autodoc.AUTODOC_PATIENT = 0;
+					autodoc.AUTODOC_ERROR = 1;
+					info += "|0xFF0000 \nПациент мертв!";
+				} else {
+					info += "|0xFFFF00 \nПациент в критическом состоянии!";
+				}
+				return info;
+			}
+			
+			//live patient status
+			info += " ОЗ:" + "|0xFFFF00  " + patient.Param[ ST_CURRENT_HP ] + "|0x3CF800 /" + "|0xFFFF00 " + patient.Param[ ST_MAX_LIFE ];
+			int baseHP = patient.ParamBase[ ST_MAX_LIFE ];
+			if( baseHP != 0 ) {
+				string colour = "|0xFF0000 ";
+				baseHP > 0 ? colour = "|0xFFFF00 " : colour;
+				info += "|0xFFFF00  Отклонение: "+ colour + baseHP + "|0x3CF800  ОЗ.";
+			}
+			
+			if( patient.IsAddicted() ) {
+				info += "|0xFFFF00  Обнаружена наркотическая зависимость!";
+			}
+			
+			if( patient.Param[ CR_JETTED ] > 0 ) {
+				info += "|0xFFFF00  Обнаружен эффект Джета!";
+			}
+			
+			if( patient.Stat[ ST_DRUNK ] > 0 ) {
+				info += "|0x3CF800  Алкоголь в крови: " + "|0xFFFF00 " + patient.Stat[ ST_DRUNK ] + "|0x3CF800 %";
+			}
+
+			if( patient.Stat[ ST_POISONING_LEVEL ] > 0 ) {
+				info += "|0x3CF800  Отравление: " + "|0xFFFF00 " + patient.Stat[ ST_POISONING_LEVEL ] + "|0x3CF800 %";
+			}
+			
+			if( patient.Stat[ ST_RADIATION_LEVEL ] > 0 ) {
+				info += "|0x3CF800  Радиационное заражение: " + "|0xFFFF00 " + patient.Stat[ ST_RADIATION_LEVEL ];
+			}
+			
+			if( patient.IsInjured() ) {
+				info += "|0xFFFF00  ";
+				patient.IsDmgEye() 	  ? info += "Повреждение глаза; " 		: info += "";
+				patient.IsDmgTwoLeg() ? info += "Повреждение правой ноги; "  : info += "";
+				patient.IsDmgLeg()    ? info += "Повреждение левой ноги; " : info += "";
+				patient.IsDmgTwoArm() ? info += "Повреждение правой руки; "  : info += "";
+				patient.IsDmgArm()    ? info += "Повреждение левой руки; " : info += "";
+				info[ info.length() - 2 ] = '.';
+				info[ info.length() - 1 ] = ' ';
+			}
+
+			if( FLAG( patient.StatBase[ ST_CRSTATUS ], CR_STATUS_BULLET_OVER ) ) {
+				info += "|0xFFFF00  В теле инородный объект.";
+			}
+			
+			if( FLAG( patient.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG ) ) {
+				info += "|0xFFFF00  Обнаружена открытая рана.";
+			}
+		}
+	} else {
+		autodoc.AUTODOC_PATIENT = 0;
+		autodoc.AUTODOC_ERROR = 0;
+		info = "|0xFFFF00 Внимание, пациент отсутствует!";
+	}
+	return info;
+}
+
+//========== AUTODOC_PROCEDURE_REQUIREMENTS_CHECK ===============//
+bool AutodocChecks( Item& autodoc, Critter@ patient, uint16 procedure )
+{
+	if( !valid( autodoc ) ) { return false; }
+	if( !valid( patient ) ) { return false; }
+	
+	int duration;
+	int biogelRequirement;
+	
+	switch( procedure ) 
+	{
+		case( AUTODOC_PROCEDURE_HEAL ):
+			duration = PROCERUDE_HEAL_DURATION;
+			biogelRequirement = AUTODOC_HEAL_BIOGEL;
+			break;
+		case( AUTODOC_PROCEDURE_WOUND ):
+			duration = PROCERUDE_WOUND_DURATION;
+			biogelRequirement = AUTODOC_WOUND_BIOGEL;
+			break;	
+		case( AUTODOC_PROCEDURE_BULLET ):
+			duration = PROCERUDE_BULLET_DURATION;
+			biogelRequirement = AUTODOC_BULLET_BIOGEL;
+			break;	
+		case( AUTODOC_PROCEDURE_BLOOD ):
+			duration = PROCERUDE_BLOOD_DURATION;
+			biogelRequirement = AUTODOC_BLOOD_BIOGEL;
+			break;	
+		case( AUTODOC_PROCEDURE_REABILITATE ):
+			duration = PROCERUDE_REABILITATE_DURATION;
+			biogelRequirement = AUTODOC_REABILITATE_BIOGEL;
+			break;	
+		case( AUTODOC_PROCEDURE_MEND_EYE ):
+			duration = PROCERUDE_MEND_DURATION;
+			biogelRequirement = AUTODOC_MEND2_BIOGEL;
+			break;
+		case( AUTODOC_PROCEDURE_MEND_RLEG ):
+		case( AUTODOC_PROCEDURE_MEND_LLEG ):
+		case( AUTODOC_PROCEDURE_MEND_RARM ):
+		case( AUTODOC_PROCEDURE_MEND_LARM ):
+			duration = PROCERUDE_MEND_DURATION;
+			biogelRequirement = AUTODOC_MEND1_BIOGEL;
+			break;	
+		case( AUTODOC_PROCEDURE_REANIMATE ):
+			duration = PROCERUDE_REANIMATE_DURATION;
+			biogelRequirement = AUTODOC_REANIMATE_BIOGEL;
+			break;
+		case( AUTODOC_PROCEDURE_MODD_STR_UP ):
+		case( AUTODOC_PROCEDURE_MODD_STR_DN ):	
+		case( AUTODOC_PROCEDURE_MODD_PER_UP ):
+		case( AUTODOC_PROCEDURE_MODD_PER_DN ):
+		case( AUTODOC_PROCEDURE_MODD_END_UP ):
+		case( AUTODOC_PROCEDURE_MODD_END_DN ):
+		case( AUTODOC_PROCEDURE_MODD_CHA_UP ):
+		case( AUTODOC_PROCEDURE_MODD_CHA_DN ):
+		case( AUTODOC_PROCEDURE_MODD_AGI_UP ):
+		case( AUTODOC_PROCEDURE_MODD_AGI_DN ):
+		case( AUTODOC_PROCEDURE_MODD_ORGAN ):
+		case( AUTODOC_PROCEDURE_MODD_GENDER ):		
+			duration = PROCEDURE_MODD_DURATION;
+			biogelRequirement = AUTODOC_MODD_BIOGEL;
+			break;
+		case( AUTODOC_PROCEDURE_KILL ):
+			duration = PROCERUDE_KILL_DURATION;
+			biogelRequirement = AUTODOC_KILL_BIOGEL;
+			break;
+		default:
+			duration = 0;
+			biogelRequirement = 0;
+			break;
+	}
+	
+	autodoc.AUTODOC_TIMER = duration / 1000;
+	
+	if( autodoc.AUTODOC_BIOGEL_LEVEL < biogelRequirement ) { return false; }
+	
+	autodoc.AUTODOC_BIOGEL_LEVEL -= biogelRequirement;
+	Map@ map = patient.GetMap();
+	
+	autodoc.AUTODOC_DOOR_BLOCK = 1;
+	ToggleDocBlockers( map, autodoc );
+	patient.Say( SAY_NETMSG, "|0xFFFF00 Вас подхватили манипуляторы, надежно фиксируя ноги." );
+	
+	map.PlaySound( "STEAM.ACM", autodoc.HexX, autodoc.HexY, 5 );
+	
+	uint[] values = { autodoc.Id, map.Id, procedure };
+	autodoc.AUTODOC_EVENT = CreateTimeEvent( AFTER( REAL_MS( 0 ) ),"e_AutodocProcedure", values, true );
+	
+	uint[] val = { autodoc.Id, map.Id };
+	autodoc.AUTODOC_EVENT = CreateTimeEvent( AFTER( REAL_MS( 0 ) ),"e_AutodocSFX", val, true );
+	
+	toggleDocAnimState( autodoc );
+	return true;
+}
+
+//========== AUTODOC_PROCEDURE_END ===============//
+uint e_AutodocProcedure( uint[]@ values )
+{
+	Item@ autodoc = GetItem( values[0] );
+	if( !valid( autodoc ) ) { return 0; }
+
+	Critter@ patient = GetCritter( autodoc.AUTODOC_PATIENT );
+	if( !valid( patient ) ) { return 0; }
+	
+	Map@ map = GetMap( values[1] );
+	if( !valid( map ) ) { return 0; }
+	
+	if( autodoc.AUTODOC_TIMER > 0 ) {
+		autodoc.AUTODOC_TIMER --;
+		
+		if( Random( 1, 2 ) == 2 ) {
+			map.PlaySound( AutodocSounds[ Random( 0, AutodocSounds.length() -1 ) ], autodoc.HexX, autodoc.HexY, 5 );
+		}
+		
+		if( Random( 1, 10 ) == 10 ) {
+			FlushScreen( patient, COLOR_RED, 0, 5000 );
+		}
+		return REAL_SECOND( 1 );
+	}
+	
+	uint procedure = values[2];
+
+	switch( procedure ) 
+	{
+		case( AUTODOC_PROCEDURE_HEAL ):
+			patient.StatBase[ ST_CURRENT_HP ] = patient.Stat[ ST_MAX_LIFE ];
+			ChangeStatus( patient, CR_STATUS_BLEED, 0, false );
+			break;
+		case( AUTODOC_PROCEDURE_WOUND ):
+			ChangeStatus( patient, CR_STATUS_HEAVY_DMG, 0, false );
+			ChangeStatus( patient, CR_STATUS_BLEED, 0, false );
+			break;
+		case( AUTODOC_PROCEDURE_BULLET ):
+			ChangeStatus( patient, CR_STATUS_BULLET_OVER, 0, false );
+			ChangeStatus( patient, CR_STATUS_BLEED, 0, false );
+			break;
+		case( AUTODOC_PROCEDURE_BLOOD ):
+			ChangeStatus( patient, CR_STATUS_BLOOD_TOXIC, 0, false );
+			patient.StatBase[ ST_POISONING_LEVEL ] = 0;
+			patient.StatBase[ ST_RADIATION_LEVEL ] = 0;
+			patient.StatBase[ ST_DRUNK ] = 0;
+			DropDrugEffects( patient );
+			patient.AddictionBase[ ADDICTION_JET ] = 0;
+			patient.AddictionBase[ ADDICTION_BUFFOUT ] = 0;
+			patient.AddictionBase[ ADDICTION_MENTATS ] = 0;
+			patient.AddictionBase[ ADDICTION_PSYCHO ] = 0;
+			patient.AddictionBase[ ADDICTION_RADAWAY ] = 0;
+			patient.AddictionBase[ ADDICTION_TREB ] = 0;
+			patient.AddictionBase[ ADDICTION_VINT ] = 0;
+			patient.ParamBase[ CR_JETTED ] = 0;
+			break;
+		case( AUTODOC_PROCEDURE_REABILITATE ):
+		{
+			patient.ParamBase[ ST_MAX_LIFE ] < 0 ? patient.ParamBase[ ST_MAX_LIFE ] += 5 : patient.ParamBase[ ST_MAX_LIFE ] = 0;
+			patient.StatBase[ ST_CURRENT_HP ] = patient.Stat[ ST_MAX_LIFE ];
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MEND_EYE ):
+			patient.ParamBase[ DAMAGE_EYE ] = 0;
+			break;
+		case( AUTODOC_PROCEDURE_MEND_RLEG ):
+			patient.ParamBase[ DAMAGE_RIGHT_LEG ] = 0;
+			break;
+		case( AUTODOC_PROCEDURE_MEND_LLEG ):
+			patient.ParamBase[ DAMAGE_LEFT_LEG ] = 0;
+			break;
+		case( AUTODOC_PROCEDURE_MEND_RARM ):
+			patient.ParamBase[ DAMAGE_RIGHT_ARM ] = 0;
+			break;
+		case( AUTODOC_PROCEDURE_MEND_LARM ):
+			patient.ParamBase[ DAMAGE_LEFT_ARM ] = 0;
+			break;
+		case( AUTODOC_PROCEDURE_REANIMATE ):
+			patient.ToLife();
+			break;
+		case( AUTODOC_PROCEDURE_MODD_STR_UP ):
+		{
+			if( patient.PerkBase[ PE_LOOSE_STRENGTH ] == 1 ) {
+				patient.PerkBase[ PE_LOOSE_STRENGTH ] --; 
+			} else if( patient.PerkBase[ PE_GAIN_STRENGTH ] == 0 && ( Random( 1, 10 ) < ( 10 - patient.StatBase[ ST_STRENGTH ] ) ) ) {
+				patient.PerkBase[ PE_GAIN_STRENGTH ] ++;
+			} else {
+				patient.Say( SAY_NETMSG, "|0xFF0000 Операция не принесла результата" );
+			}
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MODD_STR_DN ):	
+		{
+			if( patient.PerkBase[ PE_GAIN_STRENGTH ] == 1 ) {
+				patient.PerkBase[ PE_GAIN_STRENGTH ] --;
+			} else if( patient.PerkBase[ PE_LOOSE_STRENGTH ] == 0 ) {
+				patient.PerkBase[ PE_LOOSE_STRENGTH ] ++; 
+			} else {
+				patient.Say( SAY_NETMSG, "|0xFF0000 Операция не принесла результата" );
+			}
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MODD_PER_UP ):
+		{
+			if( patient.PerkBase[ PE_LOOSE_PERCEPTION ] == 1 ) {
+				patient.PerkBase[ PE_LOOSE_PERCEPTION ] --; 
+			} else if( patient.PerkBase[ PE_GAIN_PERCEPTION ] == 0 && ( Random( 1, 10 ) < ( 10 - patient.StatBase[ ST_PERCEPTION ] ) ) ) {
+				patient.PerkBase[ PE_GAIN_PERCEPTION ] ++;
+			} else {
+				patient.Say( SAY_NETMSG, "|0xFF0000 Операция не принесла результата" );
+			}
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MODD_PER_DN ):
+		{
+			if( patient.PerkBase[ PE_GAIN_PERCEPTION ] == 1 ) {
+				patient.PerkBase[ PE_GAIN_PERCEPTION ] --;
+			} else if( patient.PerkBase[ PE_LOOSE_PERCEPTION ] == 0 ) {
+				patient.PerkBase[ PE_LOOSE_PERCEPTION ] ++; 
+			} else {
+				patient.Say( SAY_NETMSG, "|0xFF0000 Операция не принесла результата" );
+			}
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MODD_END_UP ):
+		{
+			if( patient.PerkBase[ PE_LOOSE_ENDURANCE ] == 1 ) {
+				patient.PerkBase[ PE_LOOSE_ENDURANCE ] --; 
+			} else if( patient.PerkBase[ PE_GAIN_ENDURANCE ] == 0 && ( Random( 1, 10 ) < ( 10 - patient.StatBase[ ST_ENDURANCE ] ) ) ) {
+				patient.PerkBase[ PE_GAIN_ENDURANCE ] ++;
+			} else {
+				patient.Say( SAY_NETMSG, "|0xFF0000 Операция не принесла результата" );
+			}
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MODD_END_DN ):
+		{
+			if( patient.PerkBase[ PE_GAIN_ENDURANCE ] == 1 ) {
+				patient.PerkBase[ PE_GAIN_ENDURANCE ] --;
+			} else if( patient.PerkBase[ PE_LOOSE_ENDURANCE ] == 0 ) {
+				patient.PerkBase[ PE_LOOSE_ENDURANCE ] ++; 
+			} else {
+				patient.Say( SAY_NETMSG, "|0xFF0000 Операция не принесла результата" );
+			}
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MODD_CHA_UP ):
+		{
+			if( patient.PerkBase[ PE_LOOSE_CHARISMA ] == 1 ) {
+				patient.PerkBase[ PE_LOOSE_CHARISMA ] --; 
+			} else if( patient.PerkBase[ PE_GAIN_CHARISMA ] == 0 && ( Random( 1, 10 ) < ( 10 - patient.StatBase[ ST_CHARISMA ] ) ) ) {
+				patient.PerkBase[ PE_GAIN_CHARISMA ] ++;
+			} else {
+				patient.Say( SAY_NETMSG, "|0xFF0000 Операция не принесла результата" );
+			}
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MODD_CHA_DN ):
+		{
+			if( patient.PerkBase[ PE_GAIN_CHARISMA ] == 1 ) {
+				patient.PerkBase[ PE_GAIN_CHARISMA ] --;
+			} else if( patient.PerkBase[ PE_LOOSE_CHARISMA ] == 0 ) {
+				patient.PerkBase[ PE_LOOSE_CHARISMA ] ++; 
+			} else {
+				patient.Say( SAY_NETMSG, "|0xFFFF00 Операция не принесла результата" );
+			}
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MODD_AGI_UP ):
+		{
+			if( patient.PerkBase[ PE_LOOSE_AGILITY ] == 1 ) {
+				patient.PerkBase[ PE_LOOSE_AGILITY ] --; 
+			} else if( patient.PerkBase[ PE_GAIN_AGILITY ] == 0 && ( Random( 1, 10 ) < ( 10 - patient.StatBase[ ST_AGILITY ] ) ) ) {
+				patient.PerkBase[ PE_GAIN_AGILITY ] ++;
+			} else {
+				patient.Say( SAY_NETMSG, "|0xFF0000 Операция не принесла результата" );
+			}
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MODD_AGI_DN ):
+		{
+			if( patient.PerkBase[ PE_GAIN_AGILITY ] == 1 ) {
+				patient.PerkBase[ PE_GAIN_AGILITY ] --;
+			} else if( patient.PerkBase[ PE_LOOSE_AGILITY ] == 0 ) {
+				patient.PerkBase[ PE_LOOSE_AGILITY ] ++; 
+			} else {
+				patient.Say( SAY_NETMSG, "|0xFF0000 Операция не принесла результата" );
+			}
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MODD_ORGAN ):
+		{
+			if( patient.PerkBase[ PE_SEXUAL_IMPROVEMENT ] == 0 ) {
+				patient.PerkBase[ PE_SEXUAL_IMPROVEMENT ] ++;
+			} else {
+				patient.Say( SAY_NETMSG, "|0xFF0000 Операция не принесла результата" );
+			}
+			break;
+		}
+		case( AUTODOC_PROCEDURE_MODD_GENDER ):	
+		{
+			if( patient.Stat[ ST_GENDER ] == GENDER_MALE ) {
+				patient.StatBase[ ST_GENDER ] = GENDER_FEMALE;
+				patient.StatBase[ ST_BASE_CRTYPE ] = CRTYPE_DEFAULT_F;
+			} else {
+				patient.StatBase[ ST_GENDER ] = GENDER_MALE;
+				patient.StatBase[ ST_BASE_CRTYPE ] = CRTYPE_DEFAULT_M;
+			}
+			patient.ChangeCrType( patient.StatBase[ ST_BASE_CRTYPE ] );
+			break;
+		}
+		case( AUTODOC_PROCEDURE_KILL ):
+			patient.ToDead( ANIM2_DEAD_FUSED, null );
+			patient.ParamBase[ CR_DEATH_STAGE ] = 100;
+			break;
+		default:
+			break;
+	}
+	
+	autodoc.AUTODOC_DOOR_BLOCK = 0;
+	ToggleDocBlockers( map, autodoc );
+	patient.Say( SAY_NETMSG, "|0xFFFF00 Манипуляторы отключились, Вы вновь можете ходить." );
+	
+	map.PlaySound( "STEAM.ACM", autodoc.HexX, autodoc.HexY, 5 );
+	
+	EraseTimeEvent( autodoc.AUTODOC_EVENT );
+	autodoc.AUTODOC_EVENT = 0;
+	toggleDocAnimState( autodoc );
+	
+	Item@ terminal = GetItem( autodoc.AUTODOC_TERMINAL );
+	if( valid( map ) && valid( terminal ) ) {
+		AutodocScan( map, terminal, autodoc );
+	}
+	return 0;
+}
+
+//========== TECHNICAL_ANIMATION_STATE_CHANGER ===============//
+void toggleDocAnimState( Item& autodoc )
+{
+	uint16 hexX = 0, hexY = 0;
+	Map@ map = autodoc.GetMapPosition( hexX, hexY );
+	if( !valid( map ) ) { return; }
+	
+	uint16 hx = autodoc.HexX, hy = autodoc.HexY;
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	map.MoveHexByDir( hx, hy, 3, 1 );
+	Item@ autodocF = map.GetItem( hx, hy, PID_OBJECT_AUTODOC_F );
+	if( valid( autodocF ) ) {
+		if( autodoc.AUTODOC_EVENT > 0 ) {
+			autodocF.PicMap = PIC_AUTODOC_ANIM_ON;
+			UNSETFLAG( autodocF.Flags, ITEM_SHOW_ANIM_EXT );
+		} else {
+			autodocF.PicMap = autodocF.Proto.PicMap;
+			SETFLAG( autodocF.Flags, ITEM_SHOW_ANIM_EXT );
+		}
+		autodocF.Update();
+	}
+}
+//========== CONSTANT_WORK_SOUND ===============//
+uint e_AutodocSFX( uint[]@ val )
+{
+	Item@ autodoc = GetItem( val[0] );
+	if( !valid( autodoc ) ) { return 0; }
+	
+	Map@ map = GetMap( val[1] );
+	if( !valid( map ) ) { return 0; }
+	
+	if( autodoc.AUTODOC_TIMER > 0 )
+	{
+		map.PlaySound( "SODOORSM.ACM", autodoc.HexX, autodoc.HexY, 5 );
+		return REAL_SECOND( 1 );
+	}
+	
+	return 0;
+}
+//========== TECHNICAL_BLOCKER ===============//
+void ToggleDocBlockers( Map& map, Item& autodoc )
+{
+	if( !valid( map ) ) { return; }
+	if( !valid( autodoc) ) { return; }
+
+	uint16 tx = autodoc.HexX, ty = autodoc.HexY;
+	
+	map.MoveHexByDir( tx, ty, 2, 1 );
+	Item@ blocker = map.GetItem( tx, ty, PID_INVISIBLE_BLOCK );
+	
+	if( !valid( blocker ) && autodoc.AUTODOC_DOOR_BLOCK == 1 ) {
+		map.AddItem( tx, ty, PID_INVISIBLE_BLOCK, 1 );
+	} else if( autodoc.AUTODOC_TIMER <= 0 ) {
+		DeleteItem( blocker );
+	}
+	
+	map.MoveHexByDir( tx, ty, 4, 1 );
+	@blocker = map.GetItem( tx, ty, PID_INVISIBLE_BLOCK );
+	
+	if( !valid( blocker ) && autodoc.AUTODOC_DOOR_BLOCK == 1 ) {
+		map.AddItem( tx, ty, PID_INVISIBLE_BLOCK, 1 );
+	} else if( autodoc.AUTODOC_TIMER <= 0 ) {
+		DeleteItem( blocker );
+	}
+}
+#endif //AUTODOC

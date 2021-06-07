@@ -1,10 +1,14 @@
 #include "_utils.fos"
 #include "local_population_h.fos"
 #include "npc_planes_h.fos"
+#include "radiation_h.fos"
+#include "poison_h.fos"
+#include "furniture_h.fos"
+#include "drugs_h.fos"
+#include "explode_h.fos"
+#include "gm_h.fos"
 
 import void Item_SetFrame( Item& item, uint8 frame ) from "item";
-
-import void GM_PANNEL_ITEM( Critter& player, int itemId, int param1, int param2, string@ param3, int[] @ param4 ) from "gm";
 
 import bool d_freeRide( Critter& player, Critter@ npc ) from "dialog";
 
@@ -13,16 +17,6 @@ import void GlobalCellGatherLo( Critter& player ) from "globalmap_group";
 import bool LocIsCity( uint locPid ) from "globalmap_group";
 
 import void lock( Critter& player, int itemId, int complexity, int lockId ) from "debug";
-
-import bool isFurniture( Item@ item ) from "furniture";
-
-import void AffectRadiation( Critter& cr, int value ) from "radiation";
-
-import void AffectPoison( Critter& cr, int value ) from "poison";
-
-import void ExplodeEx( Map& map, uint16 hexX, uint16 hexY, uint16 effectPid, uint effectRadius, uint damage, uint damageType, uint damageRadius, uint ownerId ) from "explode";
-
-import void DropDrugEffects( Critter& cr ) from "drugs";
 
 import void PlayMusic( Map& map, string& musicName, uint pos, uint repeat ) from "media";
 
@@ -1309,39 +1303,6 @@ void answer_SwitchTankerEnergy( Critter& cr, uint answerI, string& answerS )
 	DIALOG_MENU( cr, data);
 }
 
-
-#include "_ltp.fos"
-
-bool ltp_inited = false;
-void ltp_init()
-{
-    LTPREG( LTP_CLEANING, process_cleaning )
-    ltp_inited = true;
-}
-
-uint process_cleaning( Critter@ cr, int& param0, int& param1, int& param2 )
-{
-    LTPROCESSD( LTP_CLEANING )
-	cr.Say( SAY_EMOTE_ON_HEAD, "Моет" + ( param0 == 1 ? " руки" : "ся" ) );
-	cr.ParamBase[ CR_DIRTINESS ] -= 1 + Random( 0, cr.ParamBase[ CR_DIRTINESS ] * 0.2 );
-	
-	if( cr.ParamBase[ CR_DIRTINESS ] <= 0 )
-	{
-		cr.Say( SAY_NETMSG, "Вы помылись." );
-		return 0;
-	}
-    return 2000;
-}
-
-//import void start_cleaning( Critter& player, bool handsOnly ) from "test";
-void start_cleaning( Critter& player, bool handsOnly ) //exported
-{
-    if( !ltp_inited )
-        ltp_init();
-	StartProcess( player, LTP_CLEANING, handsOnly ? 1 : 0, 1000 );
-}
-
-
 void tired( Critter& cr, int hour, int mins, int secs )
 {
 	cr.TimeoutBase[ TO_TIREDNESS ] = __FullSecond + REAL_HOUR(hour) + REAL_MINUTE( mins ) + REAL_SECOND( secs );
@@ -1466,6 +1427,27 @@ void dublicateItem( Critter& cr, int itemId, int, int )
 	DublicateItem( cr.AddItem( item.GetProtoId(), item.GetCount() ), item );
 }
 
+void toggle_Armor( Critter& cr )
+{
+	Item@ armor = _CritGetItemArmor( cr );
+	if( valid( armor ) ) {
+		cr.MoveItem( armor.Id, 1, SLOT_INV );
+		cr.Say( SAY_EMOTE_ON_HEAD, "снимает броню" );
+		cr.ModeBase[ MODE_NO_FAVORITE_ITEM ] = 1;
+		return;
+	} 
+	
+	Item@[] armors;
+	uint count = cr.GetItemsByType( ITEM_TYPE_ARMOR, armors );
+	if( count > 0 ) {
+		@ armor = armors[0];
+		cr.MoveItem( armor.Id, 1, SLOT_ARMOR );
+		cr.SetFavoriteItem( SLOT_ARMOR, armor.GetProtoId() );
+		cr.ModeBase[ MODE_NO_FAVORITE_ITEM ] = 0;
+		cr.Say( SAY_EMOTE_ON_HEAD, "одевает броню" );
+	}
+}
+
 void updateFavoriteWeapon( Critter& cr )
 {
 	Item@[] wpn;
@@ -1473,11 +1455,9 @@ void updateFavoriteWeapon( Critter& cr )
 	if( count == 0 ) return;
 	
 	uint n = 0, max = 0, skill;
-	for( uint i = 0; i < count; i++ )
-	{
+	for( uint i = 0; i < count; i++ ) {
 		skill = cr.Skill[ wpn[i].Proto.Weapon_Skill_0 ];
-		if( skill > max )
-		{
+		if( skill > max ) {
 			n = i;
 			max = skill;
 		}
@@ -1489,13 +1469,12 @@ void updateFavoriteWeapon( Critter& cr )
 
 Item@ ArmFavoriteWeapon(Critter& critter)
 {
-    uint16 pid = critter.GetFavoriteItem(SLOT_HAND1);
+    uint16 pid = critter.GetFavoriteItem( SLOT_HAND1 );
 
     Item@  weapon = critter.GetItem(pid, -1);
 
-    if(valid(weapon))
-    {
-        critter.MoveItem(weapon.Id, 1, SLOT_HAND1);
+    if( valid( weapon ) ) {
+        critter.MoveItem( weapon.Id, 1, SLOT_HAND1 );
     }
 
 	critter.ModeBase[ MODE_NO_FAVORITE_ITEM ] = 0;
@@ -1515,6 +1494,18 @@ Item@ RemoveFavoriteWeapon(Critter& critter)
 	
 	critter.ModeBase[ MODE_NO_FAVORITE_ITEM ] = 1;
     return weapon;
+}
+
+void unsafe_armor_update( Critter& cr, int id, int, int, string@, int[]@ critters )
+{
+	if( !valid(critters) ) { return; }
+	
+	for( uint i = 0; i < critters.length(); i++ ) {
+		Critter@ crit = GetCritter( critters[i] );
+		if( valid( crit ) && !crit.IsPlayer() ) {
+			toggle_Armor( crit );
+		}
+	}
 }
 
 void unsafe_weapon_update( Critter& cr, int id, int, int, string@, int[]@ critters )

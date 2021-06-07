@@ -8,7 +8,7 @@
 _GlobalVars GlobalVars;
 
 // Slot/parameters allowing
-EXPORT bool allowSlot_Hand1( uint8, Item &, Critter &, Critter & toCr );
+//EXPORT bool allowSlot_Hand1( uint8, Item &, Critter &, Critter & toCr );
 
 // Parameters Get behavior
 EXPORT int getParam_Strength( CritterMutual & cr, uint );
@@ -270,10 +270,10 @@ FONLINE_DLL_ENTRY( isCompiler )
 /* Slot/parameters allowing                                             */
 /************************************************************************/
 
-EXPORT bool allowSlot_Hand1( uint8, Item&, Critter&, Critter& toCr )
+/*EXPORT bool allowSlot_Hand1( uint8, Item&, Critter&, Critter& toCr )
 {
     return toCr.Params[ PE_AWARENESS ] != 0;
-}
+}*/
 
 /************************************************************************/
 /* Parameters Get behaviors                                             */
@@ -282,9 +282,6 @@ EXPORT bool allowSlot_Hand1( uint8, Item&, Critter&, Critter& toCr )
 EXPORT int getParam_Strength( CritterMutual& cr, uint )
 {
     int val = cr.Params[ ST_STRENGTH ] + cr.Params[ ST_STRENGTH_EXT ];
-    if( cr.Params[ PE_ADRENALINE_RUSH ] && getParam_Timeout( cr, TO_BATTLE ) && // Adrenaline rush perk
-        cr.Params[ ST_CURRENT_HP ] <= ( cr.Params[ ST_MAX_LIFE ] + cr.Params[ ST_STRENGTH ] + cr.Params[ ST_ENDURANCE ] * 2 ) / 2 )
-        val++;
     return CLAMP( val, 1, 10 );
 }
 
@@ -423,7 +420,7 @@ EXPORT int getParam_Sequence( CritterMutual& cr, uint )
 EXPORT int getParam_MeleeDmg( CritterMutual& cr, uint )
 {
     int strength = getParam_Strength( cr, 0 );
-    int val = cr.Params[ ST_MELEE_DAMAGE ] + cr.Params[ ST_MELEE_DAMAGE_EXT ] + MELEE_DAMAGE_BASE + cr.Params[ ST_STRENGTH ] * MELEE_DAMAGE_PER_STR;// + cr.Params[TRAIT_HEAVY_HANDED] * HEAVY_HANDED_MELEE_DAMAGE_BONUS );
+    int val = cr.Params[ ST_MELEE_DAMAGE ] + cr.Params[ ST_MELEE_DAMAGE_EXT ] + MELEE_DAMAGE_BASE + cr.Params[ ST_STRENGTH ] * MELEE_DAMAGE_PER_STR;
     return CLAMP( val, 1, 9999 );
 }
 
@@ -448,12 +445,10 @@ EXPORT int getParam_MaxCritical( CritterMutual& cr, uint )
 
 EXPORT int getParam_Ac( CritterMutual& cr, uint )
 {
-    // int val = cr.Params[ST_ARMOR_CLASS] + cr.Params[ST_ARMOR_CLASS_EXT] + getParam_Agility(cr, 0) + cr.Params[ST_TURN_BASED_AC]; //TLA
-    int         val = cr.Params[ ST_ARMOR_CLASS ] + cr.Params[ ST_ARMOR_CLASS_EXT ] + ( getParam_Agility( cr, 0 ) * 5 ) + cr.Params[ ST_TURN_BASED_AC ]; // Roleplay
+    int         val = cr.Params[ ST_ARMOR_CLASS ] + cr.Params[ ST_ARMOR_CLASS_EXT ] + ( getParam_Agility( cr, 0 ) * 5 ) + cr.Params[ ST_TURN_BASED_AC ];
     const Item* armor = cr.ItemSlotArmor;
-    // if(armor->GetId() && armor->IsArmor()) val += armor->Proto->Armor_AC * (100 - armor->GetWearProc()) / 100; //TLA
     if( armor->GetId() && armor->IsArmor() )
-        val -= armor->Proto->Armor_AC;                                        // Roleplay
+        val -= armor->Proto->Armor_AC;
     return CLAMP( val, 0, 90 );
 }
 
@@ -698,29 +693,15 @@ uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode )
 {
     uint8 use = mode & 0xF;
     uint8 aim = mode >> 4;
-	
-	// #ifdef __CLIENT // We will need this if we ever get to autoaim feature.
-	// if(aim == 0 && item.Proto->Weapon_Aim[use])
-		// if(!cr.Params[TRAIT_FAST_SHOT])
-			// aim = *ClientGlobals.__CurrentAim;
-	// #endif
-    // int   apCost = 1; // Commended the line, because our AP is not default 1 anymoar.
 	uint apCost = 1;
 
 	if(use == USE_USE)
 	{
 		apCost = (item.Proto->Item_UseAp == 0 ? FOnline->RtApCostUseItem : item.Proto->Item_UseAp);
-		// Character perks for Use actions
-		//if(cr.Params[PE_QUICK_POCKETS]) apCost = apCost*QUICK_POCKETS_AP_MUL;
 	}
 	else if(use == USE_RELOAD)
 	{
 		apCost = (item.Proto->Weapon_ReloadAp == 0 ? FOnline->RtApCostReloadWeapon : item.Proto->Weapon_ReloadAp);
-		
-		// Character perks for Reload actions
-		//if(item.IsWeapon() && cr.Params[PE_QUICK_POCKETS]) apCost = apCost*QUICK_POCKETS_AP_MUL;
-		// Item perks for Reload actions
-		//if(item.IsWeapon() && item.Proto->Weapon_Perk == WEAPON_PERK_FAST_RELOAD) apCost = apCost*FAST_RELOAD_AP_MUL;
 	}
 	else if(use >= USE_PRIMARY && use <= USE_THIRD && item.IsWeapon())
 	{
@@ -736,34 +717,14 @@ uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode )
 			apCost += (apCost*GetAimApCost(aim))/100;
 		}
 
-		//if(hthAttack && cr.Params[PE_BONUS_HTH_ATTACKS]) apCost = apCost*BHTH_AP_MUL;
-
-		//if(cr.Params[PE_BONUS_RATE_OF_FIRE]) apCost = apCost*BROF_AP_MUL;
-
 		if(rangedAttack)
 		{
 
 			if(cr.Params[TRAIT_FAST_SHOT] && !hthAttack) 
 			{
-				//if(item.WeapIsCanAim(use))
-				//{
 					apCost = apCost * FAST_SHOT_AP_MUL / 100;
-				//	if(FLAG(item.Proto->Flags,ITEM_TWO_HANDS)) apCost -= apCost*0.15;
-				//}
 			}
-
-			// if(cr.Params[TRAIT_SNIPER])
-			// {
-
-				// if(isBurst) apCost = apCost*SNIPER_AP_MUL;
-				// else
-					// apCost += apCost*0.10;
-				// if(aim)
-					// apCost =+ apCost*0.10;
-			// }
 		}
-		// Handling -AP cost bonus for weapons
-		//if(checkBonus(item, BONUS_WEAPON_AP_COST)!=0) apCost--;
 	}
 
 	if(apCost < 1) apCost = 1;
@@ -776,12 +737,6 @@ uint GetWeaponProtoApCost(CritterMutual& cr, ProtoItem& prot, uint8 mode)
 	uint8 use = mode & 0xF;
 	uint8 aim = mode >> 4;
 
-// #ifdef __CLIENT
-	// if(aim == 0 && prot.Weapon_Aim[aim])
-		// if(!cr.Params[TRAIT_FAST_SHOT])
-			// aim = *ClientGlobals.__CurrentAim;
-// #endif
-	
    	uint apCost = 1;
 
 	if(use >= USE_PRIMARY && use <= USE_THIRD)
@@ -794,8 +749,6 @@ uint GetWeaponProtoApCost(CritterMutual& cr, ProtoItem& prot, uint8 mode)
 		{
 			apCost += (apCost*GetAimApCost(aim))/100;
 		}
-
-		//if(hthAttack && cr.Params[PE_BONUS_HTH_ATTACKS]) apCost = apCost*BHTH_AP_MUL;
 	}
     if(apCost < 1) apCost = 1;
     return apCost;
@@ -808,7 +761,7 @@ uint GetAttackDistantion( CritterMutual& cr, Item& item, uint8 mode )
     int   dist = item.Proto->Weapon_MaxDist[ use ];
     int   strength = getParam_Strength( cr, 0 );
     if( item.Proto->Weapon_Skill[ use ] == SKILL_OFFSET( SK_THROWING ) )
-        dist = min( dist, 3 * min( 10, strength + 2 * cr.Params[ PE_HEAVE_HO ] ) );
+        dist = min( dist, 3 * min( 10, strength ) );
     if( Item_Weapon_IsHtHAttack( item, mode ) && cr.Params[ MODE_RANGE_HTH ] )
         dist++;
     dist += GetMultihex( cr );
@@ -900,7 +853,6 @@ uint GetMultihex( CritterMutual& cr )
 EXPORT void Item_SetInvPic( Item& item, uint hash )
 {
     const_cast< uint& >( item.Data.PicInvHash ) = hash;
-    // item.Update();
     return;
 }
 
@@ -915,15 +867,6 @@ EXPORT void Item_SetMapPic( Item& item, uint hash )
 /************************************************************************/
 
 #ifdef __SERVER
-/*
-EXPORT bool Critter_SetAccess(Critter& cr, int access)
-   {
-        if(cr.CritterIsNpc) return false;
-        Client* cl = (Client*)&cr;
-
-        cl->Access = 1 << (access);
-        return true;
-   }*/
 
 uint GetTiles( Map& map, uint16 hexX, uint16 hexY, bool is_roof, vector< uint >& finded )
 {
@@ -966,11 +909,6 @@ EXPORT uint Map_GetTile( Map& map, uint16 tx, uint16 ty )
 
 EXPORT uint Map_GetRoof( Map& map, uint16 tx, uint16 ty )
 {
-    // if(map.IsNotValid) return 0;
-    // ProtoMap* pMap = map.Proto;
-    // if(pMap->(Header.MaxHexX/2)<tx || pMap->(Header.MaxHexY/2)<ty) return 0;
-    // return pMap->GetRoof(tx, ty);
-
     vector< uint > finded;
 
     if( GetTiles( map, tx * 2, ty * 2, true, finded ) != 1 )
@@ -999,11 +937,6 @@ EXPORT bool Map_SetRoof( Map& map, uint16 tx, uint16 ty, uint picHash )
     return false;
 }
 
-// EXPORT uint Critter_GetItemTransferCount( Critter& cr )
-// {
-    // return cr.ItemTransferCount;
-// }
-
 EXPORT void Critter_GetIp( Critter& cr, ScriptArray* array )
 {
     array->Resize( MAX_STORED_IP );
@@ -1018,17 +951,6 @@ EXPORT void Critter_SetWorldPos( CritterMutual& cr, uint16 x, uint16 y ) // pm a
     const_cast< uint16& >( cr.WorldX ) = x;
     const_cast< uint16& >( cr.WorldY ) = y;
 }
-
-/*EXPORT uint Item_GetDurability(Item& item)
-   {
-        return item.Durability;
-   }
-
-   EXPORT void Item_SetDurability(Item& item, uint8 value)
-   {
-        item.Durability = value;
-        return;
-   }*/
 
 EXPORT int Map_GetScenParam( Map& map, uint16 tx, uint16 ty, uint protoId, uint8 num )
 {
@@ -1046,25 +968,6 @@ EXPORT int Map_GetScenParam( Map& map, uint16 tx, uint16 ty, uint protoId, uint8
 
     return -1;
 }
-/*
-   EXPORT int Map_GetLightValue(Map& map, uint8[] light)
-   {
-        return 0;
-   }*/
-
-
-/*
-   EXPORT uint8 Item_GetDurability( Item& item )
-   {
-    return item.Data.Rate;
-   }
-
-   EXPORT uint8 Item_SetDurability( Item& item, uint8 val )
-   {
-    item.Data.Rate = val;
-    return 0;
-   }
- */
 
 #endif // __SERVER
 
@@ -1074,14 +977,6 @@ EXPORT int Map_GetScenParam( uint16 tx, uint16 ty, uint protoId, uint8 num )
 {
     if( num < 0 || num > 10 )
         return -1;
-    /*
-       MapObjectVec &obj = map.Proto->SceneriesVec;
-
-       for(MapObjectVecIt it=obj.begin(); it<obj.end(); ++it)
-       {
-            if((*it)->MapX!=tx || (*it)->MapY!=ty || (*it)->ProtoId!=protoId) continue;
-            return (*it)->MScenery.Param[num];
-       }*/
 
     uint    width = FOnline->ClientMapWidth;
     Field   field = FOnline->ClientMap[ ty * width + tx ];
@@ -1094,9 +989,7 @@ EXPORT int Map_GetScenParam( uint16 tx, uint16 ty, uint protoId, uint8 num )
         if( proto->ProtoId != protoId || ( *it )->Accessory != 2 )
             continue;                                                            // 2 == ACCESSORY_HEX
 
-        // Map @ map = GetMap((*it)->ACC_HEX.MapId);
         return proto->StartValue[ num ];
-        //		Data.ScriptValues[num];
     }
 
     return -1;
