@@ -144,7 +144,6 @@ namespace FOFMOD
 			void Set3DListenerVelocity( float x, float y, float z );
 			void Set3DListenerForward( float x, float y, float z );
 			void Set3DListenerUp( float x, float y, float z );
-			FOFMOD::Sound* GetSound( const std::string& filename, SOUND_TYPE type );
 			///////////////////////////////////
 	};
 

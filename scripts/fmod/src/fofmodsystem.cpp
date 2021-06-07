@@ -664,14 +664,6 @@ namespace FOFMOD
 		this->GetSound( filename, type, &snd, &cache );
 		return snd;
 	}
-	
-	FOFMOD::Sound* System::GetSound( const std::string& filename, SOUND_TYPE type )
-	{
-		FOFMOD::Sound* result = NULL;
-		FOFMOD::System::CacheSoundData* cache = NULL:
-		this->GetSound( filename, type, &result, &cache );
-		return result;
-	}
 
 	void System::AddCachedSound( const std::string& filename, void* data, unsigned int size, CacheSoundData** cache )
 	{

@@ -24,6 +24,10 @@
 @: Client
 if not exist ".\bin\" mkdir .\bin\
 @del ".\bin\fofmod_client.dll"
+
+SET COMPILE_OPTIONS = /nologo /MT /W3 /O2 /Gd /D "__CLIENT" /D "FOFMOD_DEBUG"
+SET LINK_OPTIONS = /nologo /dll /DEBUG /incremental:no /machine:I386
+
 cl.exe /nologo /MT /W3 /O2 /Gd /D "__CLIENT" /D "FOFMOD_DEBUG" /Fd"fofmod_client.obj" /FD /c .\src\cwalk\cwalk.c .\src\perfcounter.cpp .\src\zipfile.cpp .\src\archive.cpp .\src\util.cpp .\src\fofmod.cpp .\inc\miniz\miniz.c .\src\cachedata.cpp .\src\fofmodlistener.cpp .\src\fofmodsystem.cpp  .\src\fofmodsound.cpp .\src\fofmodchannel.cpp  .\src\refcount.cpp
 link.exe /nologo /dll /DEBUG /incremental:no /machine:I386 cwalk.obj perfcounter.obj archive.obj zipfile.obj util.obj cachedata.obj fofmod.obj miniz.obj fofmodlistener.obj fofmodsystem.obj fofmodsound.obj fofmodchannel.obj  refcount.obj fmod_vc.lib /out:".\bin\fofmod_client.dll"
 

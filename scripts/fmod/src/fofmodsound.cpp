@@ -46,9 +46,6 @@ namespace FOFMOD
 			delete this;
 		}
 	}
-<<<<<<< HEAD
-	
-=======
 
 	void  Sound::SetCache( FOFMOD::CacheSoundData* cdata )
 	{
@@ -110,8 +107,6 @@ namespace FOFMOD
 		}
 	}
 	
-
->>>>>>> master
 	unsigned int Sound::GetLength()
 	{
 		unsigned int result = 0;
