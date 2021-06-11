@@ -88,6 +88,7 @@ namespace FOFMOD
 			static const unsigned int CREATEFLAGS_STREAM = FMOD_OPENMEMORY_POINT | FMOD_CREATESTREAM | FMOD_3D | FMOD_3D_LINEARSQUAREROLLOFF;
 
 		protected:
+			
 			FMOD::System* FSystem;
 			FMOD::ChannelGroup*   soundChannelGroup;
 			FMOD::ChannelGroup*   musicChannelGroup;

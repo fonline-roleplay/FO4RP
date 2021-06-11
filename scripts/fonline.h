@@ -43,7 +43,7 @@
 #elif defined ( __MAPPER )
 # define TARGET_NAME                MAPPER
 #else
-//# error __SERVER / __CLIENT / __MAPPER any of this must be defined
+# error __SERVER / __CLIENT / __MAPPER any of this must be defined
 #endif
 
 // Platform specific options
@@ -747,15 +747,15 @@ struct ProtoItem
 	const uint16 Item_UseAp;		// -> 332"
 	const uint16 BurnTime;			// -> 334"
 	const uint8  HeadItem_Perk;     // -> 336"
-	const uint8  Partial_Item;      // -> 337 кусочки 
-	const uint8  Fuel_Efficiency;	// -> 338 эффективность энергоресурса
+	const uint8  Partial_Item;      // -> 337 РєСѓСЃРѕС‡РєРё 
+	const uint8  Fuel_Efficiency;	// -> 338 СЌС„С„РµРєС‚РёРІРЅРѕСЃС‚СЊ СЌРЅРµСЂРіРѕСЂРµСЃСѓСЂСЃР°
 	
 	
     const uint8  UnusedEnd[ 154 ];  // SUKA
 	const uint8  Item_Hitpoints;    // -> 493"
 	const uint8  Fire_Strength;     // -> 494"
 	const uint8  Blast_Radius;     	// -> 495"
-	const uint 	 EffectSpeed; 		// -> 496 скорость полета эффекта € ’Ћ‹њЉЋ ”‹Ђџ
+	const uint 	 EffectSpeed; 		// -> 496 СЃРєРѕСЂРѕСЃС‚СЊ РїРѕР»РµС‚Р° СЌС„С„РµРєС‚Р° Р РўРћР›Р¬РљРћ Р¤Р›РђРЇ
 
     // Type specific data
     const bool   Weapon_IsUnarmed;
@@ -1722,7 +1722,7 @@ struct Location
     bool IsVisible()   const { return Data.Visible || ( Data.GeckVisible && GeckCount > 0 ); }
 };
 
-struct Field // удалены все const, т.к. используются и изменяются почти все значения
+struct Field // СѓРґР°Р»РµРЅС‹ РІСЃРµ const, С‚.Рє. РёСЃРїРѕР»СЊР·СѓСЋС‚СЃВ¤ Рё РёР·РјРµРЅВ¤СЋС‚СЃВ¤ РїРѕС‡С‚Рё РІСЃРµ Р·РЅР°С‡РµРЅРёВ¤
 {
     struct Tile
     {
@@ -1783,7 +1783,7 @@ struct SpriteInfo
 
    }*/
 
-struct Sprite              // удалены все const, т.к. используются и изменяются почти все значения
+struct Sprite              // СѓРґР°Р»РµРЅС‹ РІСЃРµ const, С‚.Рє. РёСЃРїРѕР»СЊР·СѓСЋС‚СЃВ¤ Рё РёР·РјРµРЅВ¤СЋС‚СЃВ¤ РїРѕС‡С‚Рё РІСЃРµ Р·РЅР°С‡РµРЅРёВ¤
 {
     // Ordering
     int     DrawOrderType; // 0..4 - flat, 5..9 - normal

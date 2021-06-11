@@ -162,9 +162,14 @@ namespace FOFMOD
 			    }
 			    else
 			    {
+					#ifdef FOFMOD_PROFILING
+						#define INIT_FLAGS ( FMOD_INIT_PROFILE_ENABLE | FMOD_INIT_3D_RIGHTHANDED )
+					#else
+						#define INIT_FLAGS ( FMOD_INIT_NORMAL | FMOD_INIT_3D_RIGHTHANDED )
+					#endif
 			    	// continue initialize
 			    	FOFMOD_DEBUG_LOG("FMOD version %u \n", version);
-					result = this->FSystem->init( channelCount, FMOD_INIT_NORMAL | FMOD_INIT_3D_RIGHTHANDED, 0 );
+					result = this->FSystem->init( channelCount, INIT_FLAGS, 0 );
 					if (result != FMOD_OK)
 					{
 					    Log("FMOD error! (%d) %s\n", result, FMOD_ErrorString(result));
@@ -322,7 +327,7 @@ namespace FOFMOD
 		FOFMOD::Sound* snd   =  NULL;
 		CacheSoundData* cacheData = NULL;
 		this->GetSound( soundName, type, &snd, &cacheData );
-
+		
 		if( snd )
 		{
 			(*chn) = new FOFMOD::Channel();
@@ -334,7 +339,7 @@ namespace FOFMOD
 			else
 			{
 				delete *chn;
-				*chn = NULL;
+				*chn = NULL;	
 			}
 		}
 
@@ -554,8 +559,7 @@ namespace FOFMOD
 
 	void System::SoundFromFile( const std::string& filename, FOFMOD_SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache )
 	{
-
-		FMOD::Sound* fsnd = NULL;
+		
 		FILE* file = fopen( filename.c_str(), "rb" );
 		if( file )
 		{
@@ -594,7 +598,7 @@ namespace FOFMOD
 
 	void System::GetSound( const std::string& filename, FOFMOD_SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache  )
 	{	
-
+		
 		std::string pathName;
 		unsigned int flags = 0;
 		if( filename.find ( PathSeparator ) != std::string::npos ) // its a path based filename, override lookup
@@ -780,7 +784,7 @@ namespace FOFMOD
 		this->PauseAllSounds( state );
 		this->PauseAllMusic( state );
 	}
-
+	
 	void System::Set3DSettings( float dopplerScale, float distanceFactor, float rolloffScale )
 	{
 		this->FSystem->set3DSettings( dopplerScale, distanceFactor, rolloffScale );
