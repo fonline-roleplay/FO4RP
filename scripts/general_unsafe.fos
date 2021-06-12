@@ -477,7 +477,6 @@ void unsafe_hotkey_command( Critter& player, int param0, int param1, int param2,
 			player.ParamBase[ ST_CURRENT_AP ] -= weapon.Proto.Weapon_ReloadAp * 100; 
 			player.Action( ACTION_RELOAD_WEAPON, 0, weapon );
 			
-			testInfo( player, "Reloaded with " + itemDesc( ammo ) );//REMOVE IT AFTER A WEEK OF TESTS
 			critter_reload_weapon( player, weapon, ammo );
         }
 		
@@ -533,7 +532,6 @@ void unsafe_hotkey_command( Critter& player, int param0, int param1, int param2,
 			player.ParamBase[ ST_CURRENT_AP ] -= weapon.Proto.Weapon_ReloadAp * 100; 
 			player.Action( ACTION_RELOAD_WEAPON, 0, weapon );
 			
-			testInfo( player, "Switched to " + itemDesc( ammo ) );//REMOVE IT AFTER A WEEK OF TESTS
 			critter_reload_weapon( player, weapon, ammo );
 		}
 
@@ -555,7 +553,7 @@ void unsafe_hotkey_command( Critter& player, int param0, int param1, int param2,
 
 void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ command, int[] @ param4 )
 {
-	if( cr.IsBusy() || cr.ParamBase[ QST_GAMEMODE ] == GAME_START )
+	if( cr.IsBusy() )
 		return;
 	
     Map@ map = cr.GetMap();
@@ -567,26 +565,20 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
     uint8 mode = 0;
 	
 	ProtoItem@ weapon, ammo;
-	if( valid( hand ) )
-	{
+	if( valid( hand ) ) {
 		mode = hand.Mode;
 		@weapon = GetProtoItem( hand.GetProtoId() );
-	}		
-	else
-	{
-		// if( wpn_pid != 0 ) //Костыль, про запас.
-			// @weapon = GetProtoItem( wpn_pid );
+	} else {
 		@weapon = cr.GetSlotProto( SLOT_HAND1, mode );//unarmed
 	}
 
-	if( !valid( weapon ) )
-	{
+	if( !valid( weapon ) ) {
 		cr.Say( SAY_NETMSG, "Этим нельзя драться." );
 		return;
 	}
 
     uint16 toHx = hexX, toHy = hexY;
-    int    dist = GetDistantion( cr.HexX,  cr.HexY, hexX, hexY );
+    int dist = GetDistantion( cr.HexX,  cr.HexY, hexX, hexY );
 	
     map.GetHexCoord( cr.HexX,  cr.HexY, toHx, toHy,  0.0f, dist );
     if( ( hexX != toHx ) || ( hexY != toHy ) )
@@ -596,12 +588,11 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
     }
     
     int wpnMaxDist = _WeaponMaxDist( weapon, mode );
-    if( _WeaponSkill( weapon, mode ) == SK_THROWING )
-        wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), cr.Stat[ ST_STRENGTH ] ) );
-		//wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), cr.Stat[ ST_STRENGTH ] + 2 * cr.Perk[ PE_HEAVE_HO ] ) );
-		
-    if( dist > wpnMaxDist )
-    {
+    if( _WeaponSkill( weapon, mode ) == SK_THROWING ) {
+		wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), cr.Stat[ ST_STRENGTH ] ) );
+	}
+	
+    if( dist > wpnMaxDist ) {
         cr.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, 102 );
         return;
     }
@@ -611,15 +602,7 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 		bool isFlareGun = ( hand.AmmoPid == PID_FLARE_GUN_AMMO ) && ( mode == 1 );
 		uint[] rocket_pids = { PID_EXPLOSIVE_ROCKET, PID_ROCKET_AP, PID_ROBO_ROCKET_AMMO, PID_GRENADELAUNCHER_AMMO };
 		bool isRocket = rocket_pids.find( hand.AmmoPid ) != -1;
-
-		if( weapon.Weapon_MaxAmmoCount > 0 )
-		{
-			if( hand.AmmoCount == 0 )
-				return;
-			else
-				@ammo = GetProtoItem( hand.AmmoPid );
-		}
-		
+	
 		bool brokenArm = cr.Damage[ DAMAGE_LEFT_ARM ] + cr.Damage[ DAMAGE_RIGHT_ARM ] > 0;
 		bool brokenTwoArms = cr.Damage[ DAMAGE_LEFT_ARM ] * cr.Damage[ DAMAGE_RIGHT_ARM ] > 0;
 		
@@ -638,6 +621,28 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 
 	uint8 weaponMode = mode; //сохранил промежуточное значение
 	mode = weaponMode;
+	if( weapon.Weapon_MaxAmmoCount > 0 ) {
+		if( hand.AmmoCount == 0 ) {
+			cr.Action(ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, hand );
+			cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
+			int radius = 3;
+			Critter@[] players;
+			int hx = cr.HexX, hy = cr.HexY;
+			cr.GetMap().GetCrittersHex( hx, hy, radius, FIND_ALL | FIND_ONLY_PLAYERS, players );
+			int[] values = { weapon.ProtoId, 4, radius };
+			for( uint i = 0; i < players.length(); i++ ) {
+				Critter@ player = players[i];
+				if( valid( player ) ) {
+					player.RunClientScript( "fofmod@__PlayWeaponSound", cr.Id, hx, hy, "LAUGHTE1.mp3", values );
+				}
+			}
+			cr.ParamBase[ CR_IS_WINDUPED ] = 1;
+			return;
+		} else {
+				@ammo = GetProtoItem( hand.AmmoPid );
+		}
+	}
+	
 	
 	int needAP = 0;
 	
@@ -654,8 +659,9 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 	
 	needAP += int( _WeaponApCost( weapon, weaponMode ) );
 	
-	if( cr.Stat[ ST_CURRENT_AP ] < needAP )
+	if( cr.Stat[ ST_CURRENT_AP ] < needAP ) {
         return;
+	}
 	
     cr.StatBase[ ST_CURRENT_AP ] -= needAP * 100;
 
