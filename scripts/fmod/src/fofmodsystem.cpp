@@ -89,7 +89,9 @@ namespace FOFMOD
 			channel->getUserData( (void**)&cbdata );
 			if( cbdata )
 			{
+				
 				FOFMOD::Channel* chn = cbdata->channel;
+				cbdata->system->OnChannelEnd( chn );
 				chn->Invalidate();
 				chn->Release();
 				
@@ -330,7 +332,7 @@ namespace FOFMOD
 		
 		if( snd )
 		{
-			(*chn) = new FOFMOD::Channel();
+			(*chn) = new FOFMOD::Channel( this );
 			FMOD_RESULT result = this->PlaySound( snd, group, paused, *chn );
 			if( result == FMOD_OK )
 			{
@@ -339,7 +341,9 @@ namespace FOFMOD
 			else
 			{
 				delete *chn;
-				*chn = NULL;	
+				delete snd;
+				*chn = NULL;
+				snd = NULL;
 			}
 		}
 
@@ -359,7 +363,7 @@ namespace FOFMOD
 		{
 			FOFMOD::System::ChannelCallbackData* cbdata = new FOFMOD::System::ChannelCallbackData();
 			cbdata->system = this;
-			cbdata->channel = chn;
+			cbdata->channel = chn; 
 
 			chn->SetSound( snd );
 			chn->Addref(); // to invalidate and release in callback
@@ -486,7 +490,7 @@ namespace FOFMOD
 		FMOD_RESULT result = this->FSystem->createSound(  (const char*)(ptr), CREATEFLAGS_STREAM , &memLoadInfo, &fsnd );
 		if( result == FMOD_OK )
 		{
-			*sptr = new FOFMOD::Sound( );
+			*sptr = new FOFMOD::Sound( this );
 			(*sptr)->SetHandle( fsnd );
 		}
 	}
@@ -706,6 +710,12 @@ namespace FOFMOD
 			*cache = found->second;
 			(*cache)->Addref();
 		}
+	}
+	
+	
+	void System::OnChannelEnd( FOFMOD::Channel* channel )
+	{
+		
 	}
 
 	void System::SetMusicVolume( float volume )

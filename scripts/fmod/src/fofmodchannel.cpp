@@ -4,17 +4,24 @@
 // TODO
 #include "fofmodchannel.h"
 #include "stddef.h"
-
 #include "_defines.fos"
 #include "fonline.h"
+#include "macros.h"
 
 namespace FOFMOD
 {
+	// private, ban
 	Channel::Channel()
+	{
+		
+	}
+	
+	Channel::Channel( FOFMOD::System* system )
 	{
 		this->refcount = 0;
 		this->handle = NULL;
 		this->sound = NULL;
+		this->system = system;
 	}
 	
 	Channel::~Channel()
@@ -195,7 +202,31 @@ namespace FOFMOD
 			this->handle->isPlaying( value );
 		}
 	}
-
+	
+	void Channel::GetPriority( int* value )
+	{
+		if( this->handle )
+		{
+			this->handle->getPriority( value );
+		}
+	}
+	
+	void Channel::SetPriority( int value )
+	{
+		if( this->handle )
+		{
+			this->handle->setPriority( value );
+		}
+	}
+	
+	void Channel::SetEffect( int effectType, float* params, unsigned int paramsSize, bool condition )
+	{
+		if( condition )
+		{
+			
+		}
+	}
+	
 	void Channel::SetVolume( float volume )
 	{
 		if( this->handle )
@@ -294,7 +325,12 @@ namespace FOFMOD
 		}
 	}
 
-
+	
+	FOFMOD::System* Channel::GetSystem()
+	{
+		return this->system;
+	}
+	
 	void Channel::Invalidate()
 	{
 		this->handle = NULL;
@@ -309,220 +345,7 @@ namespace FOFMOD
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 	////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-	void Script_Channel_Addref( FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->Addref();
-		}
-	}
-
-	void Script_Channel_Release( FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->Release();
-		}
-	}
-
-
-	void Script_Channel_SetPlaybackPosition( unsigned int positionMs, FOFMOD::Channel* ptr)
-	{
-		if( ptr )
-		{
-			ptr->SetPlaybackPosition( positionMs );
-		}
-		
-	}
-
-	unsigned int Script_Channel_GetPlaybackPosition( FOFMOD::Channel* ptr )
-	{
-		unsigned int result = 0;
-		if( ptr )
-		{
-			ptr->GetPlaybackPosition( &result );
-		}
-		return result;
-	}
-
-	FOFMOD::Sound* Script_Channel_GetSound( FOFMOD::Channel* ptr )
-	{
-		FOFMOD::Sound* result = NULL;
-		if( ptr )
-		{
-			ptr->GetSound( &result );
-		}
-		return result;
-	}
-
-	float Script_Channel_GetPitch( FOFMOD::Channel* ptr )
-	{
-		float result = 0.0;
-		if( ptr )
-		{
-			ptr->GetPitch( &result );
-		}
-		return result;
-	}
-
-	void Script_Channel_SetPitch( float pitch, FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->SetPitch( pitch );
-		}
-	}
-
-	bool Script_Channel_IsValid( FOFMOD::Channel* ptr )
-	{
-		bool result = false;
-		if( ptr )
-		{
-			ptr->IsValid( &result );
-		}
-		return result;
-	}
-
-
-	void Script_Channel_SetPaused( bool paused, FOFMOD::Channel* ptr  )
-	{	
-		if( ptr )
-		{
-			ptr->SetPaused( paused );
-		}
-	}
-
-	bool Script_Channel_IsPaused( FOFMOD::Channel* ptr )
-	{
-		bool result = false;
-		if( ptr )
-		{
-			ptr->IsPaused( &result );
-		}
-		return result;
-	}
-
-	void Script_Channel_Stop(FOFMOD::Channel* ptr  )
-	{
-		if( ptr )
-		{
-			ptr->Stop();
-		}
-	}
-
-	bool Script_Channel_IsPlaying( FOFMOD::Channel* ptr )
-	{
-		bool result = false;
-		if( ptr )
-		{
-			ptr->IsPlaying( &result );
-		}
-		return result;
-	}
-
-	void Script_Channel_SetVolume( float volume, FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->SetVolume( volume );
-		}
-	}
-
-	float Script_Channel_GetVolume( FOFMOD::Channel* ptr )
-	{
-		float result = 0.0;
-		if( ptr )
-		{
-			ptr->GetVolume( &result );
-		}
-		return result;
-	}
-
-	void Script_Channel_Set3DPosition( float x, float y, float z, FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->Set3DPosition( x, y, z );
-		}
-	}
-
-	void Script_Channel_Set3DVelocity( float x, float y, float z, FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->Set3DVelocity( x, y, z );
-		}
-	}
-
-	int Script_Channel_GetLoopCount( FOFMOD::Channel* ptr )
-	{
-		int result = 0;
-		if( ptr )
-		{
-			ptr->GetLoopCount( &result );
-		}
-		return result;
-	}
-
-	void Script_Channel_SetLoopCount( int count, FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->SetLoopCount( count );
-		}
-	}
-
-	void Script_Channel_GetLoopPoints( unsigned int* loopStart, unsigned int loopStartType, unsigned int* loopEnd, unsigned int loopEndType, FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->GetLoopPoints( loopStart, loopStartType, loopEnd, loopEndType );
-		}
-	}
-
-	void Script_Channel_SetLoopPoints( unsigned int loopStart, unsigned int loopStartType, unsigned int loopEnd, unsigned int loopEndType, FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->SetLoopPoints( loopStart, loopStartType, loopEnd, loopEndType );
-		}
-	}
-
-	void Script_Channel_Set3DMinMaxDistance( float minDistance, float maxDistance, FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->Set3DMinMaxDistance( minDistance, maxDistance );
-		}
-	}
 	
-	void Script_Channel_Get3DMinMaxDistance( float* minDistance, float* maxDistance, FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->Get3DMinMaxDistance( minDistance, maxDistance );
-		}
-	}
-
-	void Script_Channel_Set3DLevel( float level, FOFMOD::Channel* ptr )
-	{
-		if( ptr )
-		{
-			ptr->Set3DLevel( level );
-		}
-	}
-
-	float Script_Channel_Get3DLevel( FOFMOD::Channel* ptr )
-	{
-		float result = 0.0f;
-
-		if( ptr )
-		{
-			ptr->Get3DLevel( &result );
-		}
-
-		return result;
-	}
 }
 
 #endif // __FOFMOD_CHANNEL__

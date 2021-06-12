@@ -2,6 +2,8 @@
 #include "fofmod.h"
 #include "_defines.fos"
 #include "fonline.h"
+#include "fofmodchannelAS.h"
+#include "fofmodsoundAS.h"
 
 
 FOFMOD::System* FMODSystem = NULL;
@@ -94,9 +96,7 @@ FOFMOD::Sound* FMOD_GetSound( ScriptString& soundName, int soundType )
 	FOFMOD::Sound* ret = NULL;
 	ret = FMODSystem->GetSound( soundName.c_std_str(), (FOFMOD_SOUND_TYPE)soundType );
 	if( ret )
-	{
 		ret->Addref();
-	}
 	return ret;
 }
 
@@ -289,7 +289,13 @@ void RegisterASInterface()
 			Log(STR_BIND_ERROR, "FMODChannel::SetPaused", r );
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "bool IsPaused()", 								asFUNCTION(FOFMOD::Script_Channel_IsPaused), asCALL_CDECL_OBJLAST);
 		if( !r )
-			Log(STR_BIND_ERROR, "FMODChannel::IsPaused", r );
+		Log(STR_BIND_ERROR, "FMODChannel::IsPaused", r );
+			r = ASEngine->RegisterObjectMethod("FMODChannel", "int GetPriority()", 							asFUNCTION(FOFMOD::Script_Channel_GetPriority), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::GetPriority", r );
+			r = ASEngine->RegisterObjectMethod("FMODChannel", "void SetPriority( int priority )", 			asFUNCTION(FOFMOD::Script_Channel_SetPriority), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::SetPriority", r );
 
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Stop()", 									asFUNCTION(FOFMOD::Script_Channel_Stop), asCALL_CDECL_OBJLAST);
 		if( !r )

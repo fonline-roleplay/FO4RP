@@ -122,9 +122,13 @@ namespace FOFMOD
 			// Caching and resource management
 			bool TouchArchive( const std::string& filename );
 			bool IsArchiveTouched( const std::string& filename );
-			void UntouchArchive( const std::string& filename );
+			void UntouchArchive( const std::string& filename ); // does nothing, yet.
 			void DeleteCachedSound( CachedDataMap::iterator iterator );
 			FOFMOD::Sound* GetSound( const std::string& filename, FOFMOD_SOUND_TYPE type );
+			///////////////////////////////////
+			
+			// Callbacks
+			void OnChannelEnd( FOFMOD::Channel* channel );
 			///////////////////////////////////
 
 			// Playback and controls
