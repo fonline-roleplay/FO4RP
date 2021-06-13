@@ -553,8 +553,9 @@ void unsafe_hotkey_command( Critter& player, int param0, int param1, int param2,
 
 void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ command, int[] @ param4 )
 {
-	if( cr.IsBusy() )
+	if( cr.IsBusy() ) {
 		return;
+	}
 	
     Map@ map = cr.GetMap();
 
@@ -606,44 +607,50 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 		bool brokenArm = cr.Damage[ DAMAGE_LEFT_ARM ] + cr.Damage[ DAMAGE_RIGHT_ARM ] > 0;
 		bool brokenTwoArms = cr.Damage[ DAMAGE_LEFT_ARM ] * cr.Damage[ DAMAGE_RIGHT_ARM ] > 0;
 		
-		if( brokenTwoArms )
-		{
+		if( brokenTwoArms )	{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_NEED_DMG_TWO_ARMS );
 			return;
 		}
 
-		if( FLAG( hand.Flags, ITEM_TWO_HANDS ) && brokenArm )
-		{
+		if( FLAG( hand.Flags, ITEM_TWO_HANDS ) && brokenArm ) {
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_NEED_DMG_ARM );
 			return;
 		}
 	}
-
-	uint8 weaponMode = mode; //сохранил промежуточное значение
+	
+	uint windupTime = GetProtoWindupTime( weapon, mode, cr );
+	if( windupTime == 0 ) {
+		windupTime == 300;
+	}
+	
+	uint8 weaponMode = mode;
 	mode = weaponMode;
+	int skillNum = ( valid( weapon ) ? _WeaponSkill( weapon, 0 ) : ( valid( hand ) ? SK_MELEE_WEAPONS : SK_UNARMED ) );
+	uint8 weaponSubtype = ( skillNum == SK_SMALL_GUNS || skillNum == SK_BIG_GUNS || skillNum == SK_ENERGY_WEAPONS ) ? WS_GUN : 
+					( ( skillNum == SK_THROWING ) ? WS_THROWING : ( skillNum == SK_MELEE_WEAPONS ) ? WS_MELEE : WS_UNARMED );
+	
 	if( weapon.Weapon_MaxAmmoCount > 0 ) {
 		if( hand.AmmoCount == 0 ) {
-			cr.Action(ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, hand );
-			cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
-			int radius = 3;
-			Critter@[] players;
-			int hx = cr.HexX, hy = cr.HexY;
-			cr.GetMap().GetCrittersHex( hx, hy, radius, FIND_ALL | FIND_ONLY_PLAYERS, players );
-			int[] values = { weapon.ProtoId, 4, radius };
-			for( uint i = 0; i < players.length(); i++ ) {
-				Critter@ player = players[i];
-				if( valid( player ) ) {
-					player.RunClientScript( "fofmod@__PlayWeaponSound", cr.Id, hx, hy, "LAUGHTE1.mp3", values );
-				}
+			
+			uint8 dir = GetDirection( cr.HexX, cr.HexY, toHx, toHy );
+			cr.SetDir( dir );
+			
+			if( weaponSubtype == WS_GUN ) {
+				cr.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid( hand ) ? hand : null );
+				cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
+			} else {
+				cr.Action( ACTION_USE_WEAPON, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid( hand ) ? hand : null );
 			}
+
+			uint[] values = { cr.Id, weapon.ProtoId };
+			CreateTimeEvent( AFTER( REAL_MS( windupTime ) ), "e_emptySFX", values, false );
 			cr.ParamBase[ CR_IS_WINDUPED ] = 1;
 			return;
 		} else {
-				@ammo = GetProtoItem( hand.AmmoPid );
+			@ammo = GetProtoItem( hand.AmmoPid );
 		}
 	}
-	
-	
+
 	int needAP = 0;
 	
 	if( _WeaponModeAim( mode ) == HIT_LOCATION_NONE && _WeaponAim( weapon, mode & 0x0F ) )
@@ -667,8 +674,6 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 
     Critter@ target = map.GetCritter( uint16( hexX ), uint16( hexY ) );
 
-	uint windupTime = GetProtoWindupTime(weapon, mode, cr);
-
 	uint targetId = valid( target ) ? target.Id : 0;
 	uint ammoPID = valid( ammo ) ? ammo.ProtoId : 0;
 	uint[] vals = { cr.Id, targetId, weapon.ProtoId, mode, ammoPID, hexX, hexY };
@@ -687,13 +692,30 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 	}
 	
 	if( weapon.Windup_Time != 0 && !_ItemIsBroken( hand ) && GetDeteriorationProcent( hand ) < 100 ) {
-		cr.Action(ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, hand );
+		cr.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, hand );
 		cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
 		CreateTimeEvent( AFTER( REAL_MS( windupTime ) ), "main@e_DelayedAttack", vals, false );
 	} else {
 		CombatAttack( cr, target, weapon, mode, ammo, hexX, hexY );
 		cr.Wait( GetProtoTime( weapon, mode, cr ) );
 	}
+}
+
+uint e_emptySFX( uint[]@ values )
+{
+	CritterCl@ cr = GetCritter( values[0] );
+	int radius = 5;
+	Critter@[] players;
+	int hx = cr.HexX, hy = cr.HexY;
+	cr.GetMap().GetCrittersHex( hx, hy, radius, FIND_ALL | FIND_ONLY_PLAYERS, players );
+	int[] vals = { values[1], 4, radius };
+	for( uint i = 0; i < players.length(); i++ ) {
+		Critter@ player = players[i];
+		if( valid( player ) ) {
+			player.RunClientScript( "fofmod@__PlayWeaponSound", cr.Id, hx, hy, "LAUGHTE1.mp3", vals );
+		}
+	}
+	return 0;
 }
 
 void unsafe_hex_useItem( Critter& cr, int hexX, int hexY, int itm_pid, string@ command, int[] @ param4 )
