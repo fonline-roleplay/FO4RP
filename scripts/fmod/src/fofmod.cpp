@@ -215,7 +215,7 @@ void FMOD_Set3DListenerVelocity( float x, float y, float z )
 	FMODSystem->Set3DListenerVelocity( x, y, z );
 }
 
-void FMOD_Set3DListenerForward( float x, float y, float z )
+void FMOD_Set3DListenerForward( float x, float y, float z )	
 {
 	FMODCHECK(NONE)
 	FMODSystem->Set3DListenerForward( x, y, z );
@@ -284,11 +284,9 @@ void RegisterASInterface()
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "bool IsValid()", 								asFUNCTION(FOFMOD::Script_Channel_IsValid), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::IsValid", r );
-
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "void SetPaused(bool paused)", 					asFUNCTION(FOFMOD::Script_Channel_SetPaused), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::SetPaused", r );
-
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "bool IsPaused()", 								asFUNCTION(FOFMOD::Script_Channel_IsPaused), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::IsPaused", r );
@@ -299,7 +297,6 @@ void RegisterASInterface()
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "bool IsPlaying()", 								asFUNCTION(FOFMOD::Script_Channel_IsPlaying), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::IsPlaying", r );
-
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "void SetVolume(float volume)", 					asFUNCTION(FOFMOD::Script_Channel_SetVolume), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::SetVolume", r );
@@ -331,7 +328,6 @@ void RegisterASInterface()
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Get3DMinMaxDistance(float& min, float& max)", 	asFUNCTION(FOFMOD::Script_Channel_Get3DMinMaxDistance), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::Get3DMinMaxDistance", r );
-
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Set3DLevel(float level)", 	asFUNCTION(FOFMOD::Script_Channel_Set3DLevel), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::Set3DLevel", r );

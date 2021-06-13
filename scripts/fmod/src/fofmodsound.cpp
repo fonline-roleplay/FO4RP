@@ -16,12 +16,12 @@ namespace FOFMOD
 		this->cacheData = NULL;
 	}
 	
-	
 	Sound::~Sound()
 	{
 		this->SetHandle( NULL );
 		this->SetCache( NULL );
 	}
+	
 
 	void Sound::Addref()
 	{
@@ -107,7 +107,6 @@ namespace FOFMOD
 		}
 	}
 	
-
 	unsigned int Sound::GetLength()
 	{
 		unsigned int result = 0;

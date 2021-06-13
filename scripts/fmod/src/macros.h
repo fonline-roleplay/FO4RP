@@ -7,5 +7,10 @@
 #define SETFLAG(x,flag)     ( x |= flag )
 #define UNSETFLAG(x, flag ) ( x &= (~flag) )
 
-
+#define MALLOC_NEW(type, name)  type* name = (type*)malloc(sizeof(type)); \
+							 if( name ) \
+							 { 				\
+								memset( name, 0, sizeof(type) ); \
+							 }
+							 
 #endif //__FOFMOD_MACROS_H__

@@ -22,6 +22,7 @@ namespace FOFMOD
 			FMOD::Sound*   handle;
 			FOFMOD::CacheSoundData* cacheData;
 			Sound();
+			Sound( FMOD::Sound* handle );
 			~Sound();
 			bool IsValid();
 			void Addref() override;
