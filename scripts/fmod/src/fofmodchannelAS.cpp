@@ -125,7 +125,7 @@ namespace FOFMOD
 			float* fparams = NULL;
 			if( params  ) // not null
 			{
-				
+				// type validation is probably handled in angelscript, have nothing to worry about with c-casting
 				paramsCount = params->GetSize();
 				if( paramsCount > 0 )
 				{
@@ -135,12 +135,47 @@ namespace FOFMOD
 						fparams[i] = *( ( float* )( params->At(i) ) );
 					}
 				}
-
 			}
 			
 			ptr->SetEffect( effectType, fparams, paramsCount, condition );
 		}
 	}
+	
+	void Script_Channel_SetFrequency( float hertz, FOFMOD::Channel* ptr )
+	{
+		if( ptr )
+		{
+			ptr->SetFrequency( hertz );
+		}
+	}
+	
+	float Script_Channel_GetFrequency( FOFMOD::Channel* ptr )
+	{
+		float result = 0.0;
+		if( ptr )
+		{
+			ptr->GetFrequency( &result );
+		}
+		return result;
+	}
+	
+	void Script_Channel_SetVolumeRamp( bool condition, FOFMOD::Channel* ptr )
+	{
+		if( ptr )
+		{
+			ptr->SetVolumeRamp( condition );
+		}
+	}
+	bool Script_Channel_GetVolumeRamp( FOFMOD::Channel* ptr )
+	{
+		bool result = false;
+		if( ptr )
+		{
+			ptr->GetVolumeRamp( &result );
+		}
+		return result;
+	}
+	
 
 	void Script_Channel_Stop(FOFMOD::Channel* ptr  )
 	{

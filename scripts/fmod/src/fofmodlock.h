@@ -28,6 +28,9 @@
 #endif
 
 
+#define ALOC_NOOWNER  ( -1 )
+#define ALOC_NOHANDLE ( NULL )
+
 namespace FOFMOD
 {
 	class AtomicLock

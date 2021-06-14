@@ -340,7 +340,18 @@ void RegisterASInterface()
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "float Get3DLevel()", 			asFUNCTION(FOFMOD::Script_Channel_Get3DLevel), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::Get3DLevel", r );
-
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "float GetFrequency()", 			asFUNCTION(FOFMOD::Script_Channel_GetFrequency), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::GetFrequency", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void SetFrequency(float hertz)", 			asFUNCTION(FOFMOD::Script_Channel_SetFrequency), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::SetFrequency", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "bool GetVolumeRamp()", 			asFUNCTION(FOFMOD::Script_Channel_GetVolumeRamp), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::GetVolumeRamp", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void SetVolumeRamp(bool condition)", 			asFUNCTION(FOFMOD::Script_Channel_SetVolumeRamp), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::SetVolumeRamp", r );
 
 
 

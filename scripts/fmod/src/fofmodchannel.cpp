@@ -227,6 +227,38 @@ namespace FOFMOD
 		}
 	}
 	
+	void Channel::SetFrequency( float hertz )
+	{
+		if( this->handle )
+		{
+			this->handle->setFrequency( hertz );
+		}
+	}
+	
+	void Channel::GetFrequency( float* value )
+	{
+		if( this->handle )
+		{
+			this->handle->getFrequency( value );
+		}
+	}
+	
+	void Channel::SetVolumeRamp( bool condition )
+	{
+		if( this->handle )
+		{
+			this->handle->setVolumeRamp( condition );
+		}
+	}
+	
+	void Channel::GetVolumeRamp( bool* value )
+	{
+		if( this->handle )
+		{
+			this->handle->getVolumeRamp( value );
+		}
+	}
+	
 	void Channel::SetVolume( float volume )
 	{
 		if( this->handle )

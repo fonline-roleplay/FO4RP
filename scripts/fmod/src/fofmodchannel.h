@@ -42,6 +42,10 @@ namespace FOFMOD
 			void GetPriority( int* value );
 			void SetPriority( int priority );
 			void SetEffect( int effectType, float* params, unsigned int paramsSize, bool condition );
+			void SetFrequency( float hertz );
+			void GetFrequency( float* value );
+			void SetVolumeRamp( bool condition );
+			void GetVolumeRamp( bool* value );
 			void SetVolume( float volume );
 			void GetVolume( float* value );
 			void Set3DPosition( float x, float y, float z );
