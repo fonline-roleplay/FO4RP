@@ -13,10 +13,6 @@
 #include "speed_h.fos"
 #include "flash_grenade_h.fos"
 
-import void HookAttack( Critter& cr, Critter@ target, uint8 force, uint8 pull )  from "handcuffs";
-import void HookMeleeAttack( Critter& cr, Critter@ target )  from "handcuffs";
-import void HookHoldAttack( Critter@ target, uint8 hardness )  from "handcuffs";
-
 class AttackStruct
 {
     Critter@   Attacker;
@@ -4112,4 +4108,218 @@ void attackSound( Critter& cr, ProtoItem& weapon, uint8 weaponMode )
 			}
 		}
 	}
+}
+
+//hook attacks
+// create Melee hook
+void HookMeleeAttack( Critter& cr, Critter@ target )
+{
+    if( !valid( target ) || target.IsDead() || target.Mode[MODE_NO_PUSH] != 0 )
+	{
+		InformWarning( cr, "|0xFFFF00 »з этого ничего не вышло." );
+		return;
+	}
+	
+	Map@ map = cr.GetMap();
+	uint crit = cr.Id;
+
+	Item @ Hook = map.GetItem( target.HexX, target.HexY, PID_MELEE_HOOK );
+	if( !valid( Hook ) )
+	{
+		@ Hook = map.AddItem( target.HexX, target.HexY, PID_MELEE_HOOK, 1 );
+		Hook.Val1 = int( crit );
+		Hook.Val2 = 0;
+		Hook.Val3 = 0;
+		SETFLAG( Hook.Flags, ITEM_TRAP );
+		Hook.SetScript( "_HookMeleeInit" );
+	}
+	else if( Hook.Val1 != int( crit ) )
+	{
+		Hook.Val1 = int( crit );
+		Hook.Val2 = 0;
+		Hook.Val3 = 0;
+		Hook.SetScript( "_HookMeleeInit" );
+	}
+
+	Item @ Hook2 = map.GetItem( cr.HexX, cr.HexY, PID_MELEE_HOOK );
+	if( !valid( Hook2 ) )
+	{
+		@ Hook2 = map.AddItem( cr.HexX, cr.HexY, PID_MELEE_HOOK, 1 );
+		Hook2.Val1 = target.Id;
+		Hook2.Val2 = 1;
+		SETFLAG( Hook2.Flags, ITEM_TRAP );
+		Hook2.SetScript( "_HookMeleeInit" );
+	}
+	else if( Hook2.Val1 != int( target.Id ) )
+	{
+		Hook2.Val1 = target.Id;
+		Hook2.Val2 = 1;
+		Hook2.SetScript( "_HookMeleeInit" );
+	}
+}
+
+void _HookMeleeInit( Item& item, bool firstTime )
+{
+    if( item.GetProtoId() == PID_MELEE_HOOK )
+        item.SetEvent( ITEM_EVENT_WALK, "_HookMelee" );
+}
+
+void _HookMelee( Item& Hook, Critter& cr, bool entered, uint8 dir )
+{
+    if( entered ) return;
+
+	Critter@ Hooker = GetCritter( Hook.Val1 );
+	if( !valid( Hooker ) ) { DeleteItem( Hook ); return; }
+	
+	Map@ map = cr.GetMap();
+	if( !valid( map ) ) return;
+	Item @ Hook1 = map.GetItem( Hooker.HexX, Hooker.HexY, PID_MELEE_HOOK );
+	if( !valid( Hook1 ) ) { DeleteItem( Hook ); return; }
+
+	uint crit = cr.Id;
+
+	if( cr.GetMapId() != Hooker.GetMapId() || Hooker.IsDead() || Hook1.Val1 != int( crit ) )
+	{
+		DeleteItem( Hook ); 
+		return;
+	}
+
+	if( Hook.Val2 != 0 )
+	{
+		if( Hooker.Stat[ ST_CURRENT_HP ] > 0 || cr.IsRuning )
+		{
+			DeleteItem( Hook );
+			DeleteItem( Hook1 );
+			return;
+		}
+		else 
+		{
+			uint16 HookHx = Hook.HexX;
+			uint16 HookHy = Hook.HexY;
+
+			MoveItem( Hook, Hook.GetCount(), map, cr.HexX, cr.HexY );
+			if( cr.Timeout[ TO_SK_LOCKPICK ] > 0 ) return;
+			cr.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND(1);
+			
+			uint8  revDir;
+			revDir = dir + 3;
+			if( revDir > 5 ) revDir = revDir - 6;
+			
+			map.MoveHexByDir( HookHx, HookHy, revDir, 1 );
+			Hooker.TransitToHex(HookHx, HookHy, dir);
+			MoveItem( Hook1, Hook1.GetCount(), map, Hooker.HexX, Hooker.HexY );
+			return;
+		}
+	}
+
+	int chance = Random( 0, 40 ) +
+		( cr.Stat[ ST_CURRENT_HP ] - Hooker.Stat[ ST_CURRENT_HP ]) * 0.5 + 
+		( cr.Stat[ ST_STRENGTH ] * 4 - Hooker.Stat[ ST_STRENGTH ] * 4) + 
+		( cr.Skill[ SK_UNARMED ] * 0.8 - Hooker.Skill[ SK_UNARMED ] * 0.8 ) * 0.5 + 
+		( cr.Stat[ ST_LUCK ] * 2 - Hooker.Stat[ ST_LUCK ] * 2 ) * 2;
+		
+	chance = CLAMP( chance, 1, 95 );
+
+	if( chance >= Random( 1, 100 ) )
+	{
+		InformWarning(cr, "|0xFFFF00 ¬ы вырвались из захвата");
+		Emote(cr, "вырываетс€", true);
+	}
+	else
+	{
+		uint16 HookHx = cr.HexX;
+		uint16 HookHy = cr.HexY;
+		
+		uint8  revDir;
+		Hook.Val3 +=10;
+		revDir = dir + 3;
+		if( revDir > 5 )
+		{
+			revDir = revDir - 6;
+		}
+		
+		map.MoveHexByDir( HookHx, HookHy, revDir, 1 );
+		cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 200, HookHx, HookHy );
+		InformWarning(cr, "|0xFFFF00 ¬ы не смогли вырватьс€ из захвата." );
+		Emote(cr,  "пытаетс€ вырватьс€", true);
+		Emote(Hooker,  "держит", true);
+
+		// cr.Say( SAY_EMOTE_ON_HEAD, "пытаетс€ вырватьс€" );
+		// Hooker.Say( SAY_EMOTE_ON_HEAD, "держит" );
+	}
+	DeleteItem( Hook );
+	DeleteItem( Hook1 );
+}
+
+// create Hold hook
+void HookHoldAttack( Critter@ target, uint8 hardness )
+{
+    if( valid( target ) && !target.IsDead() )
+    {
+        Map@ map = target.GetMap();
+        uint targ = target.Id;
+        Item @ Hook = map.GetItem( target.HexX, target.HexY, PID_HOLD_HOOK );
+        if( !valid( Hook ) )
+        {
+            Item @ Hook = map.AddItem( target.HexX, target.HexY, PID_HOLD_HOOK, 1 );
+            Hook.Val1 = targ;
+            Hook.Val5 = hardness;
+            SETFLAG( Hook.Flags, ITEM_TRAP );
+            Hook.SetScript( "_HookHoldInit" );
+        }
+        else if( ( Hook.Val1 != int( targ ) ) )
+        {
+            Hook.Val1 = targ;
+            Hook.Val5 = hardness;
+            Hook.SetScript( "_HookHoldInit" );
+        }
+    }
+}
+
+void _HookHoldInit( Item& item, bool firstTime )
+{
+    if( item.GetProtoId() == PID_HOLD_HOOK )
+        item.SetEvent( ITEM_EVENT_WALK, "_HookHold" );
+}
+
+void _HookHold( Item& Hook, Critter& cr, bool entered, uint8 dir )
+{
+    if( !entered )
+    {
+        uint crit = cr.Id;
+        Map@ map = cr.GetMap();
+        if( valid( Hook ) && Hook.Val1 == int( crit ) )
+        {
+            if( ( cr.Stat[ ST_STRENGTH ] + cr.Stat[ ST_AGILITY ] + cr.Stat[ ST_ENDURANCE ] + cr.Stat[ ST_LUCK ] < Random( 5, 35 ) + 10 * Hook.Val5 ) )
+            { 
+				Emote(cr, "не может вырватьс€", true);
+                if( cr.IsPlayer() )
+					InformWarning(cr, "|0xFFFF00¬ы не смогли вырватьс€.");
+                uint16 HookHx = cr.HexX;
+                uint16 HookHy = cr.HexY;
+                uint8  revDir;
+                revDir = dir + 3;
+                if( revDir > 5 )
+                    revDir = revDir - 6;
+                map.MoveHexByDir( HookHx, HookHy, revDir, 1 );
+                if( cr.IsPlayer() )
+					cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 25, HookHx, HookHy );
+				else
+					cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 50, HookHx, HookHy );
+				cr.Wait( 500 );
+                if( Hook.Val5 > 0 )
+                    Hook.Val5 -= Random( 0, cr.Stat[ ST_STRENGTH ] / 3 );
+            }
+            else
+            {
+                DeleteItem( Hook );
+				cr.Wait( 500 );
+				Emote(cr, "вырываетс€", true);
+				if( cr.IsPlayer() )
+					InformWarning(cr, "|0xFFFF00 ¬ы вырвались из пут.");
+            }
+        }
+        else
+            DeleteItem( Hook );
+    }
 }
