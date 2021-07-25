@@ -28,6 +28,7 @@ namespace FOFMOD
 			bool IsValid();
 			void Addref() override;
 			void Release() override;
+			unsigned int GetRefcount() override;
 			void SetCache( FOFMOD::CacheSoundData* cdata );
 			void SetHandle( FMOD::Sound* snd );
 			unsigned int GetLength();

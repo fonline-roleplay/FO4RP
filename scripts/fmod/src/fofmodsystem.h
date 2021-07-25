@@ -35,6 +35,7 @@ namespace FOFMOD
 	
 	class Sound;
 	class Channel;
+	class DSP;
 	
 	class CacheSoundData;
 	typedef std::map< std::string, CacheSoundData* > CachedDataMap;
@@ -98,6 +99,9 @@ namespace FOFMOD
 			
 			// streamed sounds cannot be reused between different plays, so each new sound be generating own stream, but the prototype data is same.
 			FOFMOD::CachedDataMap 	 cachedSoundsData;
+			
+			// effects
+			std::vector< FOFMOD::DSP* > cachedDSPEffects;
 
 			IndexedArchiveFilePtrVec indexedArchives;
 			FOFMOD::Listener3D listener;
@@ -110,6 +114,7 @@ namespace FOFMOD
 			void Play( const std::string& soundName, FOFMOD_SOUND_TYPE type,  FMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused );
 			FMOD_RESULT PlaySound( FOFMOD::Sound* snd, FMOD::ChannelGroup* group, bool paused, FOFMOD::Channel* chn );
 			void MapArchive( unsigned int index );
+			void AddCachedDSPEffect( FOFMOD::DSP* dspEffect );
 			
 
 		public:
@@ -149,6 +154,20 @@ namespace FOFMOD
 			void Set3DListenerVelocity( float x, float y, float z );
 			void Set3DListenerForward( float x, float y, float z );
 			void Set3DListenerUp( float x, float y, float z );
+			///////////////////////////////////
+			
+			///////////////////////////////////
+			// DSP and effects
+			void CreateDSPEffect( FMOD_DSP_TYPE effectType, float* params, unsigned int paramsCount, FOFMOD::DSP** dspEffect );
+			void ApplyMusicDSPEffect( FOFMOD::DSP* dspEffect );
+			void ApplySoundsDSPEffect( FOFMOD::DSP* dspEffect );
+			void ApplyDSPEffect( FOFMOD::DSP* dspEffect );
+			void DropMusicDSPEffect( FOFMOD::DSP* dspEffect );
+			void DropSoundsDSPEffect( FOFMOD::DSP* dspEffect );
+			void DropDSPEffect( FOFMOD::DSP* dspEffect );
+			void DropAllSoundsDSPEffect();
+			void DropAllMusicDSPEffect();
+			void DropAllDSPEffect();
 			///////////////////////////////////
 	};
 

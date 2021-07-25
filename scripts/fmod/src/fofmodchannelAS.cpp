@@ -6,6 +6,26 @@
 
 namespace FOFMOD
 {
+	
+	void ScriptChannelRefcounter::OnZero()
+	{
+		FOFMOD::Channel* subject = this->subject;
+		if( subject )
+		{
+			bool res = false;
+			subject->IsPlaying( &res );
+			if( res )
+			{
+				res = false;
+				subject->IsPaused( &res );
+				if( res )
+				{
+					subject->Stop();
+				}
+			}
+		}
+	}
+	
 	void Script_Channel_Addref( FOFMOD::Channel* ptr )
 	{
 		if( ptr )

@@ -19,30 +19,41 @@ namespace FOFMOD
 		
 	}
 	
+	void DSP::Addref()
+	{
+		#if defined ( FO_GCC )
+		INTERLOCKED_INCREMENT (&this->refcount, 1);
+		#else
+		INTERLOCKED_INCREMENT (&this->refcount );
+		#endif
+	}
+
+	void DSP::Release()
+	{
+		if(!
+		#if defined ( FO_GCC ) 
+		INTERLOCKED_DECREMENT ( &this->refcount, 1 )
+		#else
+		INTERLOCKED_DECREMENT ( &this->refcount )
+		#endif
+		)
+		{
+			FOFMOD_DEBUG_LOG("Deleting DSP %u at refcount %u \n ", this->handle, this->refcount );
+			delete this;
+		}
+	}
+	
+	unsigned int DSP::GetRefcount()
+	{
+		unsigned int result = INTERLOCKED_EXCHANGE( &(this->refcount), this->refcount );
+		return result;
+	}
+	
 	bool DSP::IsValid()
 	{
-		return  ( ( this->handle != NULL ) && ( ( this->channel != NULL ) || ( this->group != NULL ) ) );
+		return  ( ( this->handle != NULL ) );
 	}
 	
-	void DSP::SetGroup( FMOD::ChannelGroup* group )
-	{
-		this->group = group;
-	}
-	
-	void DSP::SetChannel( FOFMOD::Channel* channel )
-	{
-		this->channel = channel;
-	}
-	
-	FMOD::ChannelGroup* DSP::GetGroup()
-	{
-		return this->group;
-	}
-	
-	FOFMOD::Channel* DSP::GetChannel()
-	{
-		return this->channel;
-	}
 	
 	FMOD_DSP_TYPE DSP::GetType()
 	{
@@ -74,6 +85,11 @@ namespace FOFMOD
 		}
 	}
 	
+	void DSP::GetHandle( FMOD::DSP** handle )
+	{
+		*handle = this->handle;
+	}
+	
 	void DSP::Invalidate()
 	{
 		if( this->handle )
@@ -82,6 +98,56 @@ namespace FOFMOD
 			this->handle = NULL;
 		}
 	}
+	
+	void DSP::ParseParams( float* params, unsigned int paramsCount )
+	{
+		if( this->handle )
+		{
+			if( params )
+			{
+				if( paramsCount )
+				{
+					int numparams = 0;
+					this->handle->getNumParameters( &numparams );
+					if( numparams )
+					{
+						FMOD_DSP_PARAMETER_DESC* paramInfo = (FMOD_DSP_PARAMETER_DESC*)malloc(sizeof(FMOD_DSP_PARAMETER_DESC));
+						memset( paramInfo, 0, sizeof(FMOD_DSP_PARAMETER_DESC) );
+						int curParam = 0;
+						while ( curParam < numparams )
+						{
+							float val = params[curParam];
+							this->handle->getParameterInfo( curParam, &paramInfo );
+							FMOD_DSP_PARAMETER_TYPE ptype = paramInfo->type;
+							switch( ptype )
+							{
+								case ( FMOD_DSP_PARAMETER_TYPE_FLOAT ):
+								{
+									this->handle->setParameterFloat( curParam, val );
+									break;
+								}
+								case( FMOD_DSP_PARAMETER_TYPE_INT ):
+								{
+									this->handle->setParameterInt( curParam, (int)val );
+									break;
+								}
+								case( FMOD_DSP_PARAMETER_TYPE_BOOL ):
+								{
+									this->handle->setParameterBool( curParam, (bool)val );
+									break;
+								}
+								// no data, unneccessary for external
+								default:
+									break;
+							}
+						}
+						free( paramInfo );
+					}
+				}
+			}
+		}	
+	}
+	
 	
 };
 

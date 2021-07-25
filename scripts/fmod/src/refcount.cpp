@@ -41,6 +41,13 @@ void GenericRefcountable::Release()
 }
 
 
+unsigned int GenericRefcountable::GetRefcount()
+{
+	unsigned int result = INTERLOCKED_EXCHANGE( &(this->count), this->count );
+	return result;
+}
+
+
 template < typename T >
 AAuxiliaryRefcounter< T >::AAuxiliaryRefcounter( T* subject )
 {
@@ -80,5 +87,12 @@ void AAuxiliaryRefcounter< T >::Release()
 			this->OnZero();
 		}
 	}
+}
+
+template < typename T >
+unsigned int AAuxiliaryRefcounter< T >::GetRefcount()
+{
+	unsigned int result = INTERLOCKED_EXCHANGE( &(this->refcount), this->refcount );
+	return result;
 }
 

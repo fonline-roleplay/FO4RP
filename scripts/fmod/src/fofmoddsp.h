@@ -2,33 +2,36 @@
 #define __FOFMOD_DSP_H__
 
 #include "fofmoddef.h"
+#include "refcount.h"
 
 namespace FOFMOD
 {
 	class System;
 	class Channel;
 	
-	class DSP
+	class DSP : public IRefcountable
 	{
 		protected:
 			DSP();
-			FOFMOD::System* system;
-			FMOD::ChannelGroup* group; 
+			FOFMOD::System* system; 
 			FMOD::DSP* handle;
-			FOFMOD::Channel* channel;
+			unsigned int refcount;
 			
 		public:
 			DSP( FOFMOD::System* system );
 			~DSP();
+			void Addref() override;
+			void Release() override;
+			unsigned int GetRefcount() override;
 			bool IsValid();
-			void SetGroup( FMOD::ChannelGroup* group );
-			void SetChannel( FOFMOD::Channel* channel );
 			void SetHandle( FMOD::DSP* handle );
-			FMOD::ChannelGroup* GetGroup();
-			FOFMOD::Channel* GetChannel();
+			void GetHandle( FMOD::DSP** handle );
 			FMOD_DSP_TYPE GetType();
 			void Invalidate();
+			void ParseParams( float* params, unsigned int paramsCount );
+
 	};
+	
 };
 
 #endif // __FOFMOD_DSP_H__

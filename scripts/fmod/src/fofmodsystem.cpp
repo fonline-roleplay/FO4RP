@@ -13,6 +13,7 @@
 #include <cstring>
 #include "cwalk.h"
 #include "macros.h"
+#include "fofmoddsp.h"
 
 // stdbool.h fuckery
 #undef bool 
@@ -112,6 +113,7 @@ namespace FOFMOD
 		this->indexedArchives.clear();
 		this->soundNames.clear();
 		this->musicNames.clear();
+		this->cachedDSPEffects.clear();
 	}
 
 	System::~System()
@@ -158,9 +160,10 @@ namespace FOFMOD
 				unsigned int version;
 				result = this->FSystem->getVersion(&version);
 
-			    if (version < FMOD_VERSION)
+			    if ( version < FMOD_VERSION )
 			    {
 			        Log("FMOD lib version %08x doesn't match header version %08x", version, FMOD_VERSION);
+					return FMOD_ERR_VERSION;
 			    }
 			    else
 			    {
@@ -701,6 +704,12 @@ namespace FOFMOD
 			FOFMOD_DEBUG_LOG("Caching playing sound already cached <%s> \n", filename.c_str() );
 		}
 	}
+	
+	void System::AddCachedDSPEffect( FOFMOD::DSP* dspEffect )
+	{
+		dspEffect->Addref();
+		this->cachedDSPEffects.push_back( dspEffect );
+	}
 
 	void System::GetCachedSound( const std::string& filename, CacheSoundData** cache )
 	{
@@ -830,20 +839,73 @@ namespace FOFMOD
 		this->FSystem->set3DListenerAttributes( 0, NULL, NULL, NULL, &(this->listener.up) );
 	}
 
-
-	//////////////////////////////////////////////////
-	/////////////ANGELSCRIPT INTERFACING//////////////
-	/////////////ANGELSCRIPT INTERFACING//////////////
-	/////////////ANGELSCRIPT INTERFACING//////////////
-	/////////////ANGELSCRIPT INTERFACING//////////////
-	//////////////////////////////////////////////////
-
-
-	FOFMOD::System* Script_System_Factory()
+	
+	void System::CreateDSPEffect( FMOD_DSP_TYPE effectType, float* params, unsigned int paramsCount, FOFMOD::DSP** dspEffect )
 	{
-		return new FOFMOD::System();
+		effectType = CLAMPA( effectType, FMOD_DSP_TYPE_UNKNOWN, FMOD_DSP_TYPE_MAX );
+		FMOD::DSP* fdsp = NULL;
+		FMOD_RESULT fres = this->FSystem->createDSPByType( effectType, &fdsp );
+		if( fres == FMOD_OK )
+		{
+			*dspEffect = new FOFMOD::DSP( this );
+			(*dspEffect)->SetHandle( fdsp );
+			(*dspEffect)->ParseParams( params, paramsCount );
+			this->AddCachedDSPEffect( *dspEffect );
+		}
 	}
-
+	
+	void System::ApplyMusicDSPEffect( FOFMOD::DSP* dspEffect )
+	{
+		if( this->musicChannelGroup )
+		{
+			FMOD::DSP* handle = NULL;
+			dspEffect->GetHandle( &handle );
+			if( handle )
+			{
+				this->musicChannelGroup->addDSP( FMOD_CHANNELCONTROL_DSP_TAIL, handle );
+			}
+		}
+	}
+	
+	void System::ApplySoundsDSPEffect( FOFMOD::DSP* dspEffect )
+	{
+		
+	}
+	
+	void System::ApplyDSPEffect( FOFMOD::DSP* dspEffect )
+	{
+		
+	}
+	
+	void System::DropMusicDSPEffect( FOFMOD::DSP* dspEffect )
+	{
+		
+	}
+	
+	void System::DropSoundsDSPEffect( FOFMOD::DSP* dspEffect )
+	{
+		
+	}
+	
+	void System::DropDSPEffect( FOFMOD::DSP* dspEffect )
+	{
+		
+	}
+	
+	void System::DropAllSoundsDSPEffect()
+	{
+		
+	}
+	
+	void System::DropAllMusicDSPEffect()
+	{
+		
+	}
+	
+	void System::DropAllDSPEffect()
+	{
+		
+	}
 }
 
 

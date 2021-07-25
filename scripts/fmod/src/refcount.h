@@ -12,6 +12,7 @@ class IRefcountable
 	public:
 		virtual void Addref()  				= 0;
 		virtual void Release() 				= 0;
+		virtual unsigned int GetRefcount()  = 0;
 };
 
 class GenericRefcountable : public IRefcountable
@@ -23,6 +24,7 @@ class GenericRefcountable : public IRefcountable
 		GenericRefcountable();
 		void Addref() override;
 		void Release() override;
+		unsigned int GetRefcount() override;
 };
 
 template < typename T >
@@ -35,12 +37,13 @@ class AAuxiliaryRefcounter : IRefcountable
 
 	public:
 		AAuxiliaryRefcounter(T* subject);
-		~AAuxiliaryRefcounter();
+		virtual ~AAuxiliaryRefcounter();
 
 		void Addref() override;
 		void Release() override;
+		unsigned int GetRefcount() override;
 
-		void OnZero() = 0;
+		virtual void OnZero() = 0;
 };
 
 #endif // __REFCOUNT_H__

@@ -11,6 +11,8 @@ namespace FOFMOD
 	class Sound;
 	class System;
 	
+	class ScriptChannelRefcounter;
+	
 	class Channel : public IRefcountable
 	{
 		private:
@@ -27,6 +29,7 @@ namespace FOFMOD
 			~Channel();
 			void Addref() override;
 			void Release() override;
+			unsigned int GetRefcount() override;
 			void SetHandle( FMOD::Channel* chn );
 			void SetSound( FOFMOD::Sound* snd );
 			void SetPlaybackPosition( unsigned int positionMs );

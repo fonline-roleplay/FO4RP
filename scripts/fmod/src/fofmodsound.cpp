@@ -53,6 +53,12 @@ namespace FOFMOD
 			delete this;
 		}
 	}
+	
+	unsigned int Sound::GetRefcount()
+	{
+		unsigned int result = INTERLOCKED_EXCHANGE( &(this->refcount), this->refcount );
+		return result;
+	}
 
 	void  Sound::SetCache( FOFMOD::CacheSoundData* cdata )
 	{

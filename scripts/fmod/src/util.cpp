@@ -35,6 +35,18 @@ int  cstr_start_with( const char* src, const char* starts )
 	return ret;
 }
 
+int cstr_len( const char* src )
+{
+	int result = 0;
+	const char* tc = src;
+	while( *tc )
+	{
+		tc++;
+	}
+	result = tc - src;
+	return  result;
+}
+
 char* cstr_copy_heap( const char* src )
 {
 	char* result = NULL;

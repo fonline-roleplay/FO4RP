@@ -66,6 +66,12 @@ namespace FOFMOD
 		}
 	}
 	
+	unsigned int Channel::GetRefcount()
+	{
+		unsigned int result = INTERLOCKED_EXCHANGE( &(this->refcount), this->refcount );
+		return result;
+	}
+	
 	void Channel::SetHandle( FMOD::Channel* chn )
 	{
 		if( chn )

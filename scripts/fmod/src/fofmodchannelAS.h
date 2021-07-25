@@ -6,6 +6,11 @@
 
 namespace FOFMOD
 {
+	class ScriptChannelRefcounter : public  AAuxiliaryRefcounter< FOFMOD::Channel >
+	{
+		void OnZero() override;
+	};
+	
 	extern void Script_Channel_SetPlaybackPosition( unsigned int positionMs, FOFMOD::Channel* ptr);
 	extern unsigned int Script_Channel_GetPlaybackPosition( FOFMOD::Channel* ptr );
 	extern FOFMOD::Sound* Script_Channel_GetSound( FOFMOD::Channel* ptr );
