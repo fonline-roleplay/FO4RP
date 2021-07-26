@@ -8,7 +8,13 @@ namespace FOFMOD
 {
 	class ScriptChannelRefcounter : public  AAuxiliaryRefcounter< FOFMOD::Channel >
 	{
-		void OnZero() override;
+		private:
+			ScriptChannelRefcounter();
+		
+		public:
+			ScriptChannelRefcounter( FOFMOD::Channel* subject );
+			~ScriptChannelRefcounter();
+			void OnZero() override;
 	};
 	
 	extern void Script_Channel_SetPlaybackPosition( unsigned int positionMs, FOFMOD::Channel* ptr);

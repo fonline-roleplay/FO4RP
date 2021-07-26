@@ -7,11 +7,26 @@
 namespace FOFMOD
 {
 	
+	ScriptChannelRefcounter::ScriptChannelRefcounter(){}//
+	
+	ScriptChannelRefcounter::ScriptChannelRefcounter( FOFMOD::Channel* subject ) 
+	: AAuxiliaryRefcounter < FOFMOD::Channel > ( subject )
+	{
+		
+	}
+	
+	ScriptChannelRefcounter::~ScriptChannelRefcounter()
+	{
+		
+	}
+	
 	void ScriptChannelRefcounter::OnZero()
 	{
 		FOFMOD::Channel* subject = this->subject;
 		if( subject )
 		{
+			unsigned int refc = subject->GetRefcount();
+			
 			bool res = false;
 			subject->IsPlaying( &res );
 			if( res )
@@ -20,8 +35,15 @@ namespace FOFMOD
 				subject->IsPaused( &res );
 				if( res )
 				{
+					FOFMOD_DEBUG_LOG("script paused sound zero \n");
 					subject->Stop();
 				}
+			}
+			
+			if ( !refc )
+			{
+				delete subject;
+				FOFMOD_DEBUG_LOG( "script channel zero delete \n" );
 			}
 		}
 	}
@@ -30,7 +52,7 @@ namespace FOFMOD
 	{
 		if( ptr )
 		{
-			ptr->Addref();
+			ptr->scriptRefcounter->Addref();
 		}
 	}
 
@@ -38,7 +60,7 @@ namespace FOFMOD
 	{
 		if( ptr )
 		{
-			ptr->Release();
+			ptr->scriptRefcounter->Release();
 		}
 	}
 

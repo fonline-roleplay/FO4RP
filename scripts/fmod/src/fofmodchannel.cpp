@@ -3,6 +3,7 @@
 
 // TODO
 #include "fofmodchannel.h"
+#include "fofmodchannelAS.h"
 #include "stddef.h"
 #include "_defines.fos"
 #include "fonline.h"
@@ -10,11 +11,35 @@
 
 namespace FOFMOD
 {
-	// private, ban
-	Channel::Channel()
+	
+	CoreChannelRefcounter::CoreChannelRefcounter(){}//ban
+	
+	CoreChannelRefcounter::CoreChannelRefcounter( FOFMOD::Channel* subject ) 
+	: AAuxiliaryRefcounter < FOFMOD::Channel > ( subject )
+	{
+	
+	}
+	
+	CoreChannelRefcounter::~CoreChannelRefcounter()
 	{
 		
 	}
+	
+	void CoreChannelRefcounter::OnZero()
+	{
+		FOFMOD::Channel* subject = this->subject;
+		if( subject )
+		{
+			if ( !subject->GetRefcount() )
+			{
+				delete subject;
+				FOFMOD_DEBUG_LOG( "core channel release delete \n" );
+			}
+			
+		}
+	}
+	
+	Channel::Channel(){} // ban
 	
 	Channel::Channel( FOFMOD::System* system )
 	{
@@ -22,53 +47,30 @@ namespace FOFMOD
 		this->handle = NULL;
 		this->sound = NULL;
 		this->system = system;
+		this->coreRefcounter   = new CoreChannelRefcounter( this );
+		this->scriptRefcounter = new ScriptChannelRefcounter( this );
 	}
 	
 	Channel::~Channel()
 	{
-		bool result = false;
-		this->IsPlaying( &result );
-		if( result )
-		{
-			result = false;
-			// there is no way to get handle to this object anymore, thus it cannot become unpaused, thus we have to remove it.
-			this->IsPaused( &result );
-			if( result )
-				this->Stop();
-		}
-		
 		this->SetSound( NULL );
+		delete( this->coreRefcounter );
+		delete( this->scriptRefcounter );
 	}
-
-
 	
 	void Channel::Addref()
 	{
-		#if defined ( FO_GCC )
-		INTERLOCKED_INCREMENT (&this->refcount, 1);
-		#else
-		INTERLOCKED_INCREMENT (&this->refcount );
-		#endif
+		this->coreRefcounter->Addref();
 	}
 
 	void Channel::Release()
 	{
-		if(!
-		#if defined ( FO_GCC ) 
-		INTERLOCKED_DECREMENT ( &this->refcount, 1 )
-		#else
-		INTERLOCKED_DECREMENT ( &this->refcount )
-		#endif
-		)
-		{
-			FOFMOD_DEBUG_LOG("Deleting scriptChannel %u at refcount %u \n ", this->handle, this->refcount );
-			delete this;
-		}
+		this->coreRefcounter->Release();
 	}
 	
 	unsigned int Channel::GetRefcount()
 	{
-		unsigned int result = INTERLOCKED_EXCHANGE( &(this->refcount), this->refcount );
+		unsigned int result = ( this->coreRefcounter->GetRefcount() ) + ( this->scriptRefcounter->GetRefcount() ) ;
 		return result;
 	}
 	
@@ -93,6 +95,11 @@ namespace FOFMOD
 				this->Invalidate();
 			}
 		}
+	}
+	
+	void Channel::GetHandle( FMOD::Channel** chn )
+	{
+		*chn = this->handle;
 	}
 
 	void Channel::SetSound( FOFMOD::Sound* snd )
@@ -125,6 +132,7 @@ namespace FOFMOD
 			}
 		}
 	}
+	
 
 
 	void Channel::SetPlaybackPosition( unsigned int positionMs )

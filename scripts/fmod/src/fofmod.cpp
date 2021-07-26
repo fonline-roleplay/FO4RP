@@ -106,7 +106,7 @@ FOFMOD::Channel* FMOD_PlaySound( ScriptString& soundName, bool paused )
 	FOFMOD::Channel* ret = NULL;
 	ret = FMODSystem->PlaySound( soundName.c_std_str(), paused );
 	if( ret )
-		ret->Addref();
+		ret->scriptRefcounter->Addref();
 	return ret;
 }
 
@@ -116,7 +116,7 @@ FOFMOD::Channel* FMOD_PlayMusic( ScriptString& soundName, bool paused )
 	FOFMOD::Channel* ret = NULL;
 	ret = FMODSystem->PlayMusic( soundName.c_std_str(), paused );
 	if( ret )
-		ret->Addref();
+		ret->scriptRefcounter->Addref();
 	return ret;
 }
 

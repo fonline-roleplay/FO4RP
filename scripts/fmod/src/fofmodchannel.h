@@ -13,6 +13,20 @@ namespace FOFMOD
 	
 	class ScriptChannelRefcounter;
 	
+	
+	class Channel;
+	class CoreChannelRefcounter : public  AAuxiliaryRefcounter< FOFMOD::Channel >
+	{
+		private:
+			CoreChannelRefcounter();
+		
+		public:
+			CoreChannelRefcounter( FOFMOD::Channel* subject );
+			~CoreChannelRefcounter();
+			void OnZero() override;
+	};
+	
+	
 	class Channel : public IRefcountable
 	{
 		private:
@@ -23,6 +37,8 @@ namespace FOFMOD
 			unsigned int refcount;
 
 		public:
+			CoreChannelRefcounter* coreRefcounter;
+			ScriptChannelRefcounter* scriptRefcounter;
 			FMOD::Channel* handle;
 			FOFMOD::Sound* sound;
 			Channel( FOFMOD::System* system );
@@ -31,6 +47,7 @@ namespace FOFMOD
 			void Release() override;
 			unsigned int GetRefcount() override;
 			void SetHandle( FMOD::Channel* chn );
+			void GetHandle( FMOD::Channel** chn );
 			void SetSound( FOFMOD::Sound* snd );
 			void SetPlaybackPosition( unsigned int positionMs );
 			void GetPlaybackPosition( unsigned int* value );
