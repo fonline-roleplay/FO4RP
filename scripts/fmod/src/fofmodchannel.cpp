@@ -43,7 +43,6 @@ namespace FOFMOD
 	
 	Channel::Channel( FOFMOD::System* system )
 	{
-		this->refcount = 0;
 		this->handle = NULL;
 		this->sound = NULL;
 		this->system = system;

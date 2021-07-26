@@ -34,7 +34,6 @@ namespace FOFMOD
 		
 		protected:
 			FOFMOD::System* system;
-			unsigned int refcount;
 
 		public:
 			CoreChannelRefcounter* coreRefcounter;
