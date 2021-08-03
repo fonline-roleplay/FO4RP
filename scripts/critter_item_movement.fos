@@ -4,6 +4,8 @@
 #include "_utils.fos"
 #include "wait_time_h.fos"
 #include "critter_item_movement_h.fos"
+#include "sandbag_h.fos"
+#include "furniture_h.fos"
 
 #ifdef __CLIENT
 	# define Critter    CritterCl
@@ -64,12 +66,9 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 					uint16 groundPid = ground[i].GetProtoId();
 					
 					uint16[] list;
-					string thing = "контейнер";
-					
 					if( itmPid == PID_SINGLE_SANDBAG )
 					{
 						list = Sandbags;
-						thing = "мешок";
 					}
 					else
 					{
@@ -78,7 +77,7 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 					
 					if( list.find( groundPid ) != -1 )
 					{
-						cr.Say( SAY_NETMSG, "|0xFFFF00 Необходимо отойти, чтобы установить " + thing + "." );
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MOVE_TO_PLACE );
 						return false;
 					}
 				}
@@ -170,11 +169,25 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 	}
 	
     // Weapon animation
-    if( cr.IsPlayer() && toSlot == SLOT_HAND1 )
+    if( cr.IsPlayer() && ( toSlot == SLOT_HAND1 || toSlot == SLOT_HAND2 ) )
     {
         if( item.GetType() == ITEM_TYPE_WEAPON && !IsCritterAnim1( cr.CrType, item.Proto.Weapon_Anim1 ) )
 		{
-            return false;
+			#ifdef __CLIENT
+			Message( TEXTMSG_TEXT, STR_NO_REQUIRED_ANIM ); 
+            #endif // __CLIENT
+			return false;
+		}
+		Item@ offhand = _CritGetItemHandExt( cr );
+		if( valid( offhand ) )
+		{
+			if( offhand.GetType() == ITEM_TYPE_WEAPON && !IsCritterAnim1( cr.CrType, offhand.Proto.Weapon_Anim1 ) )
+			{
+				#ifdef __CLIENT
+				Message( TEXTMSG_TEXT, STR_NO_REQUIRED_ANIM );  
+				#endif // __CLIENT
+				return false;
+			}
 		}
     }
 
@@ -221,9 +234,9 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 #ifdef __SERVER
 
 #include "speed_h.fos"
+#include "windup_h.fos"
 
 // Call on critter item moved.
-import void ChangeWindup( Critter& cr, bool ignore_bussy ) from "main";
 
 void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 {
@@ -299,6 +312,7 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 		}
 		
 		uint crType = skin_base;
+		
 		uint16 pid = item.GetProtoId();
 
 		if( GetCritterAnimType( cr.CrType ) != ANIM_TYPE_3D )
@@ -481,6 +495,26 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 	{
 		cr.Wait( GetActionTime( ACTION_MOVE_ITEM, cr ) );
 	}
+	
+	Item@ hand = _CritGetItemHand( cr );
+	if( valid( hand ) )
+	{
+		if( hand.GetType() == ITEM_TYPE_WEAPON && !IsCritterAnim1( cr.CrType, hand.Proto.Weapon_Anim1 ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_ANIM_FOR_MAIN_HAND );
+			cr.MoveItem( hand.Id, hand.GetCount(), SLOT_INV );
+		}
+	}
+	
+	Item@ offhand = _CritGetItemHandExt( cr );
+	if( valid( offhand ) )
+	{
+		if( offhand.GetType() == ITEM_TYPE_WEAPON && !IsCritterAnim1( cr.CrType, offhand.Proto.Weapon_Anim1 ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_ANIM_FOR_OFF_HAND );
+			cr.MoveItem( offhand.Id, offhand.GetCount(), SLOT_INV );
+		}
+	}
 }
 
 // ####################################################################################################
@@ -488,24 +522,22 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 // ####################################################################################################
 void PAAuth( Critter& cr, Item& armor )
 {
-	if( armor.Val9 == 10 )
+	if( armor.ARMOR_BIOSCANNER == OWNER_CONFIRMED )
 	{
-		if( cr.Id == uint ( armor.Val8 ) )
+		if( cr.Id == uint ( armor.ARMOR_OWNER ) )
 		{
-			string[] gndrPA = { "Приятный женский", "Приятный мужской", "Тёплый ламповый", "Бездушный сухой", "Зловещий холодный" };
-			string gndr = cr.Stat[ ST_GENDER ] == 1 ? "хозяйка" : "хозяин";
-			cr.Say( SAY_NETMSG, "|0xFF00FF " +gndrPA[ armor.Id % 5 ]+ " электронный голос: |0xF8F993 Личность распознана. Приветствую, " +gndr+"." );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PA_AUTH );
 		}
 		else
 		{
 			cr.AddTimeEvent( "cte_PAAuthFail", REAL_SECOND( 10 ), CTE_PA_AUTH, 0 ); 
-			cr.Say( SAY_EMOTE_ON_HEAD, "Нарастающий гул реактора" ); 
+			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_PA_FAILSWITCH ); 
 		}
 	}
-	else if( armor.Val9 == 5 )
+	else if( armor.ARMOR_BIOSCANNER == OWNER_PENDING )
 	{ 
-		armor.Val9 = 10; 
-		armor.Val8 = cr.Id; 
+		armor.ARMOR_BIOSCANNER = OWNER_CONFIRMED; 
+		armor.ARMOR_BIOSCANNER = cr.Id; 
 	}
 }
 
@@ -516,16 +548,13 @@ uint cte_PAAuthFail( Critter& cr, int identifier, uint& rate )
 	{
 		cr.MoveItem( armor.Id, 1, SLOT_GROUND );
 		
-		//BOS aligment - need change to faction armours
-		if( cr.Karma[ KARMA_SEPARATED ] == 0 )
+		if( cr.Karma[ KARMA_SEPARATED ] == 0 ) //BOS aligment - need change for faction armours mechanics
 		{ 
 			cr.ToDead( ANIM2_DEAD_PULSE_DUST, null ); 
-			
 		}
 		else
 		{
 			cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 0 ) ), 1000, cr.HexX, cr.HexY );
-			cr.Say( SAY_EMOTE_ON_HEAD, "Получает разряд и выброс из брони" );
 		}
 	}
 	return 0;
@@ -545,7 +574,7 @@ void ArmorEffects( Critter& cr, int8 sign )
 	{
 		if( QST != 2 )
 		{
-			cr.Say( SAY_EMOTE, "Скрывает лицо" );
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_HIDE_FACE );
 			cr.ParamBase[ QST_MEDIUM ] = 2;
 			update = true;
 		}
@@ -554,7 +583,7 @@ void ArmorEffects( Critter& cr, int8 sign )
 	{
 		if( QST != 0 )
 		{
-			cr.Say( SAY_EMOTE, "Показывает лицо" );
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_SHOW_FACE );
 			cr.ParamBase[ QST_MEDIUM ] = 0;
 			update = true;
 		}
@@ -579,7 +608,10 @@ void ArmorEffects( Critter& cr, int8 sign )
 	{
 		Critter@[] crs;
 		GetAllPlayers( crs );
-		for( uint i = 0, l = crs.length(); i < l; i++ ) { crs[ i ].RunClientScript( "client_main@NamesUpdater", 0, 0, 0, null, null ); }
+		for( uint i = 0, l = crs.length(); i < l; i++ )
+		{
+			crs[ i ].RunClientScript( "client_main@NamesUpdater", 0, 0, 0, null, null );
+		}
 	}
 }
 
@@ -744,19 +776,25 @@ bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
 		{
 			if( !isGM( cr ) )
 			{
-				string action_text = "Снимает " + (isPack ? "рюкзак" : "что-то" );
-				cr.Say(SAY_EMOTE, action_text );
+				uint action_text = isPack ? STR_EMOTE_TAKE_BACKPACK : STR_EMOTE_TAKE_ITEM );
+				cr.SayMsg(SAY_EMOTE, TEXTMSG_TEXT, action_text );
+				
 				CrimeLog( cr, crInfo( cr ) + strlwr( action_text ) + " from " + crInfo( targetCr ) );
+				
 				MoveItem( RuckSacks[i], 1, cr.GetMap(), cr.HexX, cr.HexY );
-				targetCr.Say( SAY_NETMSG, "Вы не в силах сопротивляться, пока у вас отбирают " + (isPack ? "рюкзак" : "что-то" ) + "." );
+				
+				uint victim_text = isPack ? STR_CANT_RESIST_BACKPACK : STR_CANT_RESIST_ITEM;
+				targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, victim_text );
 				cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
 			}
 			else
 			{
 				MoveItem( RuckSacks[i], 1, cr );
-				string action_text = (isPack ? "рюкзак" : "что-то" ) + ( isCritter ? " у игрока" : " с тела" );
-				cr.Say( SAY_NETMSG, "Вы забрали " + action_text + "."  );
-				CrimeLog( cr, crInfo( cr ) + " takes with gm power " + action_text + " " + crInfo( targetCr ) );
+				
+				uint containerRemoval = isPack ? STR_YOU_TAKE_BACKPACK : STR_YOU_TAKE_ITEM;
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, containerRemoval );
+				
+				CrimeLog( cr, crInfo( cr ) + " takes item with gm power " + crInfo( targetCr ) );
 			}
 			LootedBackpack = true;
 			return true;
@@ -769,14 +807,14 @@ bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
 		uint count = targetCr.GetItems( SLOT_ARMOR, armors );
 		if( count == 0 || !valid( armors[0] ) )
 		{
-			cr.Say( SAY_NETMSG, "Из этого ничего не вышло." );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DID_NOTHING );
 			return true;
 		}
 		
 		CrimeLog( cr, crInfo( cr ) + " is trying to take armor off " + crInfo( targetCr ) );
-		cr.Say( SAY_EMOTE, "пытается снять броню" );
-		cr.Say( SAY_NETMSG, "Вы снимаете с цели всё что можете." );
-		targetCr.Say( SAY_NETMSG, "Вашу броню пытаются снять!" );
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_ATTEMPT_TAKE_ARMOR );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_TAKE_EVERYTHING );
+		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ARMOR_IS_BEING_REMOVED );
 		
 		if( uint( cr.Stat[ ST_LAST_STEAL_CR_ID ] ) == targetCr.Id )
 		{
@@ -788,7 +826,7 @@ bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
 		{
 			if( isGM( cr ) )
 			{
-				cr.Say( SAY_NETMSG, "Вы забрали у персонажа броню." );
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GM_TAKE_ARMOR );
 				CrimeLog( cr, crInfo( cr ) + " takes armour by GM powers from " + crInfo( targetCr ) );
 				cr.StatBase[ ST_STEAL_COUNT ] = 7;
 				TryToTakeArmor( cr, targetCr );
@@ -846,13 +884,13 @@ void TryToTakeArmor( Critter& cr, Critter& target )
 	if( success && delay >= i)
 	{
 		MoveItem( armors[0], 1, cr );
-		target.Say(SAY_NETMSG, "С вас сняли броню.");
-		cr.Say(SAY_NETMSG, "Вы сняли броню с жертвы.");
+		target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOUR_ARMOR_REMOVED );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_TAKE_ARMOR );
 		CrimeLog( cr, crInfo( cr ) + " takes armour from " + crInfo( target ) );
 	}
 	else
 	{
-		cr.Say( SAY_NETMSG, "Итерация №" + delay + " из " +( i == 5 ? 6 : i ) + "." );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_PARTIALLY_TAKE_ARMOR );
 	}
 }
 
@@ -867,7 +905,7 @@ void ChangeRunningAP( Critter& cr )
 	float weight_penalty = 5.0 * weight / max_weight;
 	
 	cr.ParamBase[ QST_AP_COST_RUN ] = 100 * ( 1 + weight_penalty );
-	Log( "Расход на бег: " + cr.ParamBase[ QST_AP_COST_RUN ] );
+	//Log( "AP cost for running: " + cr.ParamBase[ QST_AP_COST_RUN ] );
 }
 
 #endif // __SERVER
