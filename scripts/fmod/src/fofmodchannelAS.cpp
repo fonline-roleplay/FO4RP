@@ -159,27 +159,25 @@ namespace FOFMOD
 		}
 	}
 	
-	void Script_Channel_SetEffect( int effectType, ScriptArray* params, bool condition, FOFMOD::Channel* ptr )
+	void Script_Channel_SetEffect( FOFMOD::DSP* effect, FOFMOD::Channel* ptr )
 	{
 		if( ptr )
 		{
-			asUINT paramsCount = 0;
-			float* fparams = NULL;
-			if( params  ) // not null
+			if( effect )
 			{
-				// type validation is probably handled in angelscript, have nothing to worry about with c-casting
-				paramsCount = params->GetSize();
-				if( paramsCount > 0 )
-				{
-					fparams = new float[paramsCount];
-					for( unsigned int i = 0; i < paramsCount; i++ )
-					{
-						fparams[i] = *( ( float* )( params->At(i) ) );
-					}
-				}
+				ptr->SetEffect( effect );
 			}
-			
-			ptr->SetEffect( effectType, fparams, paramsCount, condition );
+		}
+	}
+	
+	void Script_Channel_DropEffect( FOFMOD::DSP* effect, FOFMOD::Channel* ptr )
+	{
+		if( ptr )
+		{
+			if( effect )
+			{
+				ptr->DropEffect( effect );
+			}
 		}
 	}
 	

@@ -4,5 +4,6 @@
 #include "fofmodsystem.h"
 #include "fofmodsound.h"
 #include "fofmodchannel.h"
+#include "fofmoddsp.h"
 
 #endif

@@ -19,9 +19,9 @@ namespace FOFMOD
 			Sound(); // ban
 			FOFMOD::System* system;
 			unsigned int refcount;
+			FMOD::Sound*   handle;
 
 		public:
-			FMOD::Sound*   handle;
 			FOFMOD::CacheSoundData* cacheData;
 			Sound( FOFMOD::System* system );
 			~Sound();
@@ -31,6 +31,7 @@ namespace FOFMOD
 			unsigned int GetRefcount() override;
 			void SetCache( FOFMOD::CacheSoundData* cdata );
 			void SetHandle( FMOD::Sound* snd );
+			void GetHandle( FMOD::Sound** ptr );
 			unsigned int GetLength();
 			void SetLoopCount( int loopCount );
 			int GetLoopCount();

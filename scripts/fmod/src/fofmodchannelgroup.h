@@ -3,12 +3,14 @@
 
 #include "fofmoddef.h"
 #include "fofmodchannel.h"
+#include "fofmodchannelcontrol.h"
 
 namespace FOFMOD
 {
+	class Channel;
+	
 	typedef std::vector< FOFMOD::Channel* > ChannelVec;
-
-	class ChannelGroup
+	class ChannelGroup : public ChannelControl
 	{
 
 		private:
@@ -17,13 +19,12 @@ namespace FOFMOD
 		protected:
 			FMOD::System* owner;
 			FMOD::ChannelGroup* handle;
-			FOFMOD::ChannelVec playingSounds;
 
 		public:
-			ChannelGroup( FMOD::System& ownerSystem );
+			ChannelGroup( FMOD::System* ownerSystem );
 			~ChannelGroup();
-			FMOD_RESULT Initialize( const char* name );
-			FOFMOD::Channel* PlaySound ( const std::string& soundName, bool paused );
+			void SetHandle( FMOD::ChannelGroup* hndl );
+			void GetHandle( FMOD::ChannelGroup** ptr );
 	};
 };
 

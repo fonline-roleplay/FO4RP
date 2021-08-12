@@ -33,6 +33,12 @@ namespace FOFMOD
 				// no owner
 				// set owner to current thread
 				INTERLOCKED_EXCHANGE( &(this->ownerId), threadId );
+				
+				if( this->sysThreadHandle != ALOC_NOHANDLE )
+				{
+					CloseHandle( this->sysThreadHandle );
+				}
+				
 				this->sysThreadHandle = h_curthread;
 				return;
 			}
@@ -55,6 +61,12 @@ namespace FOFMOD
 							// its free at last
 							// grab it as owner and come back to parent caller
 							INTERLOCKED_EXCHANGE( &(this->ownerId), threadId );
+							
+							if( this->sysThreadHandle != ALOC_NOHANDLE )
+							{
+								CloseHandle( this->sysThreadHandle );
+							}
+							
 							this->sysThreadHandle = h_curthread;
 							break;
 						}
@@ -78,6 +90,12 @@ namespace FOFMOD
 				// no owner
 				// set owner to current thread
 				INTERLOCKED_EXCHANGE( &(this->ownerId), threadId );
+				
+				if( this->sysThreadHandle != ALOC_NOHANDLE )
+				{
+					CloseHandle( this->sysThreadHandle );
+				}
+				
 				this->sysThreadHandle =  h_curthread;
 				return true;
 			}
@@ -126,12 +144,14 @@ namespace FOFMOD
 	
 	bool AtomicLock::IsLocked()
 	{
+		bool result = false;
 		#ifdef __WINDOWS__
 			DWORD  curOwnerId = INTERLOCKED_EXCHANGE( &(this->ownerId), this->ownerId );
-			return (curOwnerId != -1);
+			result = (curOwnerId != ALOC_NOOWNER);
 		#elif defined ( __LINUX__ ) 
-		
+			
 		#endif
+		return result;
 	}
 
 };

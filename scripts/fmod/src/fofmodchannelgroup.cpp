@@ -12,13 +12,11 @@ namespace FOFMOD
 	}
 
 
-	ChannelGroup::ChannelGroup( FMOD::System& ownerSystem )
+	ChannelGroup::ChannelGroup( FMOD::System* ownerSystem )
+	: ChannelControl()
 	{
 		this->handle = NULL;
-		if( &ownerSystem )
-		{
-			this->ownerSystem = &ownerSystem;
-		}
+		this->owner = ownerSystem;
 	}
 	
 	ChannelGroup::~ChannelGroup()
@@ -28,34 +26,30 @@ namespace FOFMOD
 			this->handle->release();
 		}
 	}
-
-	FMOD_RESULT ChannelGroup::Initialize( const char* name )
+		
+	void ChannelGroup::SetHandle( FMOD::ChannelGroup* hndl )
 	{
-		FMOD_RESULT result = FMOD_ERR_UNINITIALIZED;
-		if( this->ownerSystem )
+		if( this->handle )
 		{
-			result = this->ownerSystem->createChannelGroup( name, &this->handle );
+			this->handle->release();
 		}
-		return result;
+		
+		if( hndl )
+		{
+			this->handle = hndl;
+		}
+		else
+		{
+			this->handle = NULL;
+		}
+		
+		ChannelControl::SetHandle( hndl );
 	}
-
-	FOFMOD::Channel*  ChannelGroup::PlaySound ( const std::string& soundName, bool paused )
+	
+	void ChannelGroup::GetHandle( FMOD::ChannelGroup** ptr )
 	{
-		FOFMOD::Channel* chn = NULL;
-		if( this->ownerSystem )
-		{
-			FOFMOD::Sound* snd = this->ownerSystem->GetCachedSound( soundName );
-			if( snd )
-			{
-				chn = new FOFMOD::Channel();
-				chn->Addref();
-				this->FSystem->playSound( snd->handle, this->handle, paused, &chn->handle  );
-				chn = this->soundChannelGroup->PlaySound( snd );
-			}
-		}
-		return chn;
+		*ptr = this->handle;
 	}
-
 }
 
 #endif // __FOFMODCHANNELGROUP__

@@ -116,6 +116,11 @@ namespace FOFMOD
 		}
 	}
 	
+	void Sound::GetHandle( FMOD::Sound** ptr )
+	{
+		*ptr = this->handle;
+	}
+	
 	unsigned int Sound::GetLength()
 	{
 		unsigned int result = 0;
@@ -153,11 +158,8 @@ namespace FOFMOD
 	{
 		if( this->handle )
 		{
-			if( this->handle )
-			{
-				this->handle->release();
-				this->handle = NULL;
-			}
+			this->handle->release();
+			this->handle = NULL;
 		}
 	}
 

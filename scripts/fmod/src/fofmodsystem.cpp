@@ -113,18 +113,19 @@ namespace FOFMOD
 		this->indexedArchives.clear();
 		this->soundNames.clear();
 		this->musicNames.clear();
-		this->cachedDSPEffects.clear();
 	}
 
 	System::~System()
 	{
 		if( this->soundChannelGroup )
 		{
+			delete( this->soundChannelGroup );
 			this->soundChannelGroup = NULL;
 		}
 
 		if( this->musicChannelGroup )
 		{
+			delete( this->musicChannelGroup );
 			this->musicChannelGroup = NULL;
 		}
 
@@ -183,13 +184,18 @@ namespace FOFMOD
 					{
 						// continue initialize
 						// channel groups
-						result = this->FSystem->createChannelGroup( "sounds", &this->soundChannelGroup );
+						FMOD::ChannelGroup* cgptr = NULL;
+						this->soundChannelGroup = new FOFMOD::ChannelGroup( this->FSystem );
+						this->musicChannelGroup = new FOFMOD::ChannelGroup ( this->FSystem );
+						result = this->FSystem->createChannelGroup( "sounds", &cgptr );
 						if( result == FMOD_OK )
 						{
-							result = this->FSystem->createChannelGroup( "music", &this->musicChannelGroup );
-
+							this->soundChannelGroup->SetHandle( cgptr );
+							
+							result = this->FSystem->createChannelGroup( "music", &cgptr );
 							if( result == FMOD_OK )
 							{
+								this->musicChannelGroup->SetHandle( cgptr );
 								#ifdef FOFMOD_DEBUG
 								FOFMOD_DEBUG_LOG("Codec plugins listing... \n");
 								int pluginsCount = 0;
@@ -197,7 +203,7 @@ namespace FOFMOD
 
 								for( int i = 0; i < pluginsCount; i ++ )
 								{
-									unsigned int pluginHandle = 0;
+									unsigned int pluginHandle = 0;	
 									FMOD_RESULT plugResult = this->FSystem->getPluginHandle ( FMOD_PLUGINTYPE_CODEC, i, &pluginHandle );
 									if( plugResult = FMOD_OK )
 									{
@@ -360,21 +366,25 @@ namespace FOFMOD
 	FMOD_RESULT System::PlaySound( FOFMOD::Sound* snd, FMOD::ChannelGroup* group, bool paused, FOFMOD::Channel* chn )
 	{
 		FMOD_RESULT result = FMOD_OK;
-		
-		result = this->FSystem->playSound( snd->handle, group, paused, &( chn->handle ) );
+		FMOD::Channel* hndl = NULL;
+		FMOD::Sound* shndl = NULL;
+		snd->GetHandle( &shndl );
+		result = this->FSystem->playSound( shndl, group, paused, &hndl );
 		if( result == FMOD_OK )
 		{
+			chn->SetHandle( hndl );
+			chn->SetSound( snd );
+			chn->SetLoopCount( 0 );
+						
 			FOFMOD::System::ChannelCallbackData* cbdata = new FOFMOD::System::ChannelCallbackData();
 			cbdata->system = this;
 			cbdata->channel = chn; 
-
-			chn->SetSound( snd );
 			chn->Addref(); // to invalidate and release in callback
-			chn->handle->setCallback( FOFMOD::System::ChannelCallback );
-			chn->handle->setUserData( cbdata );
+			hndl->setCallback( FOFMOD::System::ChannelCallback );
+			hndl->setUserData( cbdata );
 
 			if( !paused )
-				chn->handle->setPaused( false );
+				chn->SetPaused( false );
 		}
 		return result;
 	}
@@ -472,15 +482,18 @@ namespace FOFMOD
 	FOFMOD::Channel* System::PlaySound( const std::string& soundName, bool paused )
 	{	
 		FOFMOD::Channel* chn = NULL;
-		this->Play( soundName, SOUND_TYPE::SOUND, this->soundChannelGroup, &chn, paused );
+		FMOD::ChannelGroup* hndl = NULL;
+		this->soundChannelGroup->GetHandle( &hndl );
+		this->Play( soundName, SOUND_TYPE::SOUND, hndl, &chn, paused );
 		return chn;
 	}
 
 	FOFMOD::Channel* System::PlayMusic( const std::string& soundName, bool paused )
 	{
-
 		FOFMOD::Channel* chn = NULL;
-		this->Play( soundName, FOFMOD_SOUND_TYPE::MUSIC, this->musicChannelGroup, &chn, paused );
+		FMOD::ChannelGroup* hndl = NULL;
+		this->soundChannelGroup->GetHandle( &hndl );
+		this->Play( soundName, FOFMOD_SOUND_TYPE::MUSIC, hndl, &chn, paused );
 		return chn;
 	}
 
@@ -490,7 +503,7 @@ namespace FOFMOD
 		FMOD_CREATESOUNDEXINFO memLoadInfo = { sizeof(FMOD_CREATESOUNDEXINFO), size };
 
 		FMOD::Sound* fsnd = NULL;
-		FMOD_RESULT result = this->FSystem->createSound(  (const char*)(ptr), CREATEFLAGS_STREAM , &memLoadInfo, &fsnd );
+		FMOD_RESULT result = this->FSystem->createSound(  (const char*)(ptr), SOUND_CREATEFLAGS_STREAM , &memLoadInfo, &fsnd );
 		if( result == FMOD_OK )
 		{
 			*sptr = new FOFMOD::Sound( this );
@@ -705,11 +718,6 @@ namespace FOFMOD
 		}
 	}
 	
-	void System::AddCachedDSPEffect( FOFMOD::DSP* dspEffect )
-	{
-		dspEffect->Addref();
-		this->cachedDSPEffects.push_back( dspEffect );
-	}
 
 	void System::GetCachedSound( const std::string& filename, CacheSoundData** cache )
 	{
@@ -731,7 +739,7 @@ namespace FOFMOD
 	{
 		if( this->musicChannelGroup )
 		{
-			this->musicChannelGroup->setVolume( volume );
+			this->musicChannelGroup->SetVolume( volume );
 		}
 	}
 
@@ -739,7 +747,7 @@ namespace FOFMOD
 	{
 		if( this->musicChannelGroup )
 		{
-			this->musicChannelGroup->getVolume( volume );
+			this->musicChannelGroup->GetVolume( volume );
 		}
 	}
 
@@ -747,7 +755,7 @@ namespace FOFMOD
 	{
 		if( this->soundChannelGroup )
 		{
-			this->soundChannelGroup->setVolume( volume );
+			this->soundChannelGroup->SetVolume( volume );
 		}
 	}
 
@@ -755,7 +763,7 @@ namespace FOFMOD
 	{
 		if( this->soundChannelGroup )
 		{
-			this->soundChannelGroup->getVolume( volume );
+			this->soundChannelGroup->GetVolume( volume );
 		}
 	}
 
@@ -763,7 +771,7 @@ namespace FOFMOD
 	{
 		if( this->soundChannelGroup )
 		{
-			this->soundChannelGroup->setPaused( state );
+			this->soundChannelGroup->SetPaused( state );
 		}
 	}
 
@@ -771,7 +779,7 @@ namespace FOFMOD
 	{
 		if( this->musicChannelGroup )
 		{
-			this->musicChannelGroup->setPaused( state );
+			this->musicChannelGroup->SetPaused( state );
 		}
 	}
 
@@ -780,7 +788,7 @@ namespace FOFMOD
 	{
 		if( this->soundChannelGroup )
 		{
-			this->soundChannelGroup->stop();
+			this->soundChannelGroup->Stop();
 		}
 	}
 	
@@ -788,7 +796,7 @@ namespace FOFMOD
 	{
 		if( this->musicChannelGroup )
 		{
-			this->musicChannelGroup->stop();
+			this->musicChannelGroup->Stop();
 		}
 	}
 
@@ -838,7 +846,12 @@ namespace FOFMOD
 		SETLISTENERDATA(up, x, y, z);
 		this->FSystem->set3DListenerAttributes( 0, NULL, NULL, NULL, &(this->listener.up) );
 	}
+	
+	
 
+	/////////////////////////////////////////////////////////////////////////////////////////////////////////
+	
+	
 	
 	void System::CreateDSPEffect( FMOD_DSP_TYPE effectType, float* params, unsigned int paramsCount, FOFMOD::DSP** dspEffect )
 	{
@@ -850,7 +863,6 @@ namespace FOFMOD
 			*dspEffect = new FOFMOD::DSP( this );
 			(*dspEffect)->SetHandle( fdsp );
 			(*dspEffect)->ParseParams( params, paramsCount );
-			this->AddCachedDSPEffect( *dspEffect );
 		}
 	}
 	
@@ -858,53 +870,66 @@ namespace FOFMOD
 	{
 		if( this->musicChannelGroup )
 		{
-			FMOD::DSP* handle = NULL;
-			dspEffect->GetHandle( &handle );
-			if( handle )
-			{
-				this->musicChannelGroup->addDSP( FMOD_CHANNELCONTROL_DSP_TAIL, handle );
-			}
+			this->musicChannelGroup->SetEffect( dspEffect );
 		}
 	}
 	
 	void System::ApplySoundsDSPEffect( FOFMOD::DSP* dspEffect )
 	{
-		
+		if( this->soundChannelGroup )
+		{
+			this->soundChannelGroup->SetEffect( dspEffect );
+		}
 	}
 	
 	void System::ApplyDSPEffect( FOFMOD::DSP* dspEffect )
 	{
-		
+		this->ApplyMusicDSPEffect( dspEffect );
+		this->ApplySoundsDSPEffect( dspEffect );
 	}
 	
 	void System::DropMusicDSPEffect( FOFMOD::DSP* dspEffect )
 	{
-		
+		if( this->musicChannelGroup )
+		{
+			this->musicChannelGroup->DropEffect( dspEffect );
+		}
 	}
 	
 	void System::DropSoundsDSPEffect( FOFMOD::DSP* dspEffect )
 	{
-		
+		if( this->soundChannelGroup )
+		{
+			this->soundChannelGroup->DropEffect( dspEffect );
+		}
 	}
 	
 	void System::DropDSPEffect( FOFMOD::DSP* dspEffect )
 	{
-		
+		this->DropMusicDSPEffect( dspEffect );
+		this->DropSoundsDSPEffect( dspEffect );
 	}
 	
-	void System::DropAllSoundsDSPEffect()
+	void System::DropAllSoundsDSPEffects()
 	{
-		
+		if( this->soundChannelGroup )
+		{
+			this->soundChannelGroup->DropAllEffects();
+		}
 	}
 	
-	void System::DropAllMusicDSPEffect()
+	void System::DropAllMusicDSPEffects()
 	{
-		
+		if( this->musicChannelGroup )
+		{
+			this->musicChannelGroup->DropAllEffects();
+		}
 	}
 	
-	void System::DropAllDSPEffect()
+	void System::DropAllDSPEffects()
 	{
-		
+		this->DropAllSoundsDSPEffects();
+		this->DropAllMusicDSPEffects();
 	}
 }
 

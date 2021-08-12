@@ -37,9 +37,12 @@ namespace FOFMOD
 	extern bool Script_Channel_IsPlaying( FOFMOD::Channel* ptr );
 	extern int  Script_Channel_GetPriority( FOFMOD::Channel* ptr );
 	extern void Script_Channel_SetPriority ( int priority, FOFMOD::Channel* ptr );
-	extern void Script_Channel_SetEffect( int effectType, ScriptArray* params, bool condition, FOFMOD::Channel* ptr );
 	extern void Script_Channel_SetFrequency( float hertz, FOFMOD::Channel* ptr );
 	extern float Script_Channel_GetFrequency( FOFMOD::Channel* ptr );
+	
+	// effects
+	extern void Script_Channel_SetEffect( FOFMOD::DSP* effect, FOFMOD::Channel* ptr  );
+	extern void Script_Channel_DropEffect( FOFMOD::DSP* effect, FOFMOD::Channel* ptr );
 
 	// volume
 	extern void  Script_Channel_SetVolume( float volume, FOFMOD::Channel* ptr );

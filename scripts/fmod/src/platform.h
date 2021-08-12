@@ -30,11 +30,18 @@
 	#undef NO_MANGLING
 	#undef DLLEXPORT
 	#undef DLLIMPORT
+	
 
 	#if defined ( __GCC__ )
-		#define NO_MANGLING extern "C"
-		#define DLLEXPORT __attribute__(visibility("default"))
-		#define DLLIMPORT
+		#if defined ( __WINDOWS__ )
+			#define NO_MANGLING extern "C"
+			#define DLLEXPORT __attribute__( ( dllexport ) )
+			#define DLLIMPORT __attribute__( ( dllimport ) )
+		#else
+			#define NO_MANGLING extern "C"
+			#define DLLEXPORT __attribute__(visibility("default"))
+			#define DLLIMPORT
+		#endif
 	#elif defined (__MSVC__ )
 		#define NO_MANGLING extern "C"
 		#define DLLEXPORT __declspec(dllexport)

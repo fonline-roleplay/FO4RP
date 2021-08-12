@@ -8,6 +8,7 @@
 #include "fofmodsound.h"
 #include "fofmodlistener.h"
 #include "fofmodchannel.h"
+#include "fofmodchannelgroup.h"
 #include "archive.h"
 #include "zipfile.h"
 #include "memory.h"
@@ -35,6 +36,7 @@ namespace FOFMOD
 	
 	class Sound;
 	class Channel;
+	class ChannelGroup;
 	class DSP;
 	
 	class CacheSoundData;
@@ -86,22 +88,20 @@ namespace FOFMOD
 															void* commanddata1, 
 															void* commanddata2 );
 
-			static const unsigned int CREATEFLAGS_STREAM = FMOD_OPENMEMORY_POINT | FMOD_CREATESTREAM | FMOD_3D | FMOD_3D_LINEARSQUAREROLLOFF;
+			static const unsigned int SOUND_CREATEFLAGS  = FMOD_3D | FMOD_3D_LINEARSQUAREROLLOFF | FMOD_LOOP_NORMAL;
+			static const unsigned int SOUND_CREATEFLAGS_STREAM = FMOD_OPENMEMORY_POINT | FMOD_CREATESTREAM | SOUND_CREATEFLAGS;
 
 		protected:
 			
 			FMOD::System* FSystem;
-			FMOD::ChannelGroup*   soundChannelGroup;
-			FMOD::ChannelGroup*   musicChannelGroup;
+			FOFMOD::ChannelGroup*   soundChannelGroup;
+			FOFMOD::ChannelGroup*   musicChannelGroup;
 			bool initialized;
 			std::map< std::string, SoundAlias > soundNames;
 			std::map< std::string, SoundAlias > musicNames;
 			
 			// streamed sounds cannot be reused between different plays, so each new sound be generating own stream, but the prototype data is same.
 			FOFMOD::CachedDataMap 	 cachedSoundsData;
-			
-			// effects
-			std::vector< FOFMOD::DSP* > cachedDSPEffects;
 
 			IndexedArchiveFilePtrVec indexedArchives;
 			FOFMOD::Listener3D listener;
@@ -114,7 +114,6 @@ namespace FOFMOD
 			void Play( const std::string& soundName, FOFMOD_SOUND_TYPE type,  FMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused );
 			FMOD_RESULT PlaySound( FOFMOD::Sound* snd, FMOD::ChannelGroup* group, bool paused, FOFMOD::Channel* chn );
 			void MapArchive( unsigned int index );
-			void AddCachedDSPEffect( FOFMOD::DSP* dspEffect );
 			
 
 		public:
@@ -165,9 +164,10 @@ namespace FOFMOD
 			void DropMusicDSPEffect( FOFMOD::DSP* dspEffect );
 			void DropSoundsDSPEffect( FOFMOD::DSP* dspEffect );
 			void DropDSPEffect( FOFMOD::DSP* dspEffect );
-			void DropAllSoundsDSPEffect();
-			void DropAllMusicDSPEffect();
-			void DropAllDSPEffect();
+			void DropAllSoundsDSPEffects();
+			void DropAllMusicDSPEffects();
+			void DropAllDSPEffects();
+			
 			///////////////////////////////////
 	};
 

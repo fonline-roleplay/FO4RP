@@ -8,6 +8,7 @@
 #include "_defines.fos"
 #include "fonline.h"
 #include "macros.h"
+#include "fofmoddsp.h"
 
 namespace FOFMOD
 {
@@ -42,6 +43,7 @@ namespace FOFMOD
 	Channel::Channel(){} // ban
 	
 	Channel::Channel( FOFMOD::System* system )
+	: ChannelControl()
 	{
 		this->handle = NULL;
 		this->sound = NULL;
@@ -85,7 +87,8 @@ namespace FOFMOD
 				}
 			}
 			
-			this->handle = chn;
+			this->handle   = chn;
+			ChannelControl::SetHandle( static_cast<FMOD::ChannelControl*> ( chn ) );
 		}
 		else
 		{
@@ -159,22 +162,6 @@ namespace FOFMOD
 		}
 	}
 
-	void Channel::GetPitch( float* value )
-	{
-		if( this->handle )
-		{
-			this->handle->getPitch( value );
-		}
-	}
-
-	void Channel::SetPitch(float pitch)
-	{
-		if( this->handle )
-		{
-			this->handle->setPitch( pitch );
-		}
-	}
-
 	void Channel::IsValid( bool* value )
 	{
 		// fmod docs say the handle will be invalidated by the system when its done, but it does not define what is "invalidation", assuming NULL;
@@ -182,64 +169,6 @@ namespace FOFMOD
 	}
 
 
-	void Channel::SetPaused( bool paused )
-	{
-		if( this->handle )
-		{
-			this->handle->setPaused( paused );
-		}
-	}
-
-	void Channel::IsPaused( bool* value )
-	{
-		if( this->handle )
-		{
-			this->handle->getPaused( value );
-		}
-	}
-
-	void Channel::Stop()
-	{
-		if( this->handle )
-		{
-			this->handle->stop();
-		//	this->handle = NULL;   // making sure ? 
-		}
-	}
-
-
-	void Channel::IsPlaying( bool* value )
-	{
-		if( this->handle )
-		{
-			this->handle->isPlaying( value );
-		}
-	}
-	
-	void Channel::GetPriority( int* value )
-	{
-		if( this->handle )
-		{
-			this->handle->getPriority( value );
-		}
-	}
-	
-	void Channel::SetPriority( int value )
-	{
-		if( this->handle )
-		{
-			this->handle->setPriority( value );
-		}
-	}
-	
-	void Channel::SetEffect( int effectType, float* params, unsigned int paramsSize, bool condition )
-	{
-		if( condition )
-		{
-			
-		}
-	}
-	
 	void Channel::SetFrequency( float hertz )
 	{
 		if( this->handle )
@@ -256,54 +185,20 @@ namespace FOFMOD
 		}
 	}
 	
-	void Channel::SetVolumeRamp( bool condition )
+	
+	void Channel::GetPriority( int* value )
 	{
 		if( this->handle )
 		{
-			this->handle->setVolumeRamp( condition );
+			this->handle->getPriority( value );
 		}
 	}
 	
-	void Channel::GetVolumeRamp( bool* value )
+	void Channel::SetPriority( int value )
 	{
 		if( this->handle )
 		{
-			this->handle->getVolumeRamp( value );
-		}
-	}
-	
-	void Channel::SetVolume( float volume )
-	{
-		if( this->handle )
-		{
-			this->handle->setVolume( volume );
-		}
-	}
-
-	void Channel::GetVolume( float* value )
-	{
-		if( this->handle )
-		{
-			this->handle->getVolume( value );
-		}
-	}
-
-
-	void Channel::Set3DPosition( float x, float y, float z )
-	{
-		if( this->handle )
-		{
-			FMOD_VECTOR vec = {x, y, z};
-			this->handle->set3DAttributes( &vec , NULL );
-		}
-	}
-
-	void Channel::Set3DVelocity( float x, float y, float z )
-	{
-		if( this->handle )
-		{
-			FMOD_VECTOR vec = {x, y, z};
-			this->handle->set3DAttributes( NULL, &vec );
+			this->handle->setPriority( value );
 		}
 	}
 
@@ -338,38 +233,6 @@ namespace FOFMOD
 		}
 	}
 
-	void Channel::Set3DMinMaxDistance( float minDistance, float maxDistance )
-	{
-		if( this->handle )
-		{
-			this->handle->set3DMinMaxDistance( minDistance, maxDistance );
-		}
-	}
-
-	void Channel::Get3DMinMaxDistance( float* minDistance, float* maxDistance )
-	{
-		if( this->handle )
-		{
-			this->handle->get3DMinMaxDistance( minDistance, maxDistance );
-		}
-	}
-
-	void Channel::Set3DLevel( float level )
-	{
-		if( this->handle )
-		{
-			this->handle->set3DLevel( level );
-		}
-	}
-
-	void Channel::Get3DLevel( float* value )
-	{
-		if( this->handle )
-		{
-			this->handle->get3DLevel( value );
-		}
-	}
-
 	
 	FOFMOD::System* Channel::GetSystem()
 	{
@@ -379,6 +242,7 @@ namespace FOFMOD
 	void Channel::Invalidate()
 	{
 		this->handle = NULL;
+		ChannelControl::SetHandle( NULL );
 	}
 
 

@@ -23,12 +23,14 @@ namespace FOFMOD
 			void Addref() override;
 			void Release() override;
 			unsigned int GetRefcount() override;
-			bool IsValid();
-			void SetHandle( FMOD::DSP* handle );
-			void GetHandle( FMOD::DSP** handle );
-			FMOD_DSP_TYPE GetType();
+			void IsValid( bool* value );
+			void SetHandle( FMOD::DSP* hndl );
+			void GetHandle( FMOD::DSP** hndl ) const ;
+			FMOD_DSP_TYPE GetType() const ;
 			void Invalidate();
 			void ParseParams( float* params, unsigned int paramsCount );
+			bool operator==(const FOFMOD::DSP& r);
+			bool operator==(const FMOD::DSP& r);
 
 	};
 	

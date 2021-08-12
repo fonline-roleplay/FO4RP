@@ -12,11 +12,12 @@ namespace FOFMOD
 	DSP::DSP( FOFMOD::System* system )
 	{
 		this->system = system;
+		this->refcount = 0;
 	}
 	
 	DSP::~DSP()
 	{
-		
+		this->SetHandle( NULL );
 	}
 	
 	void DSP::Addref()
@@ -49,13 +50,13 @@ namespace FOFMOD
 		return result;
 	}
 	
-	bool DSP::IsValid()
+	void DSP::IsValid(bool* value)
 	{
-		return  ( ( this->handle != NULL ) );
+		*value = ( ( this->handle != NULL ) );
 	}
 	
 	
-	FMOD_DSP_TYPE DSP::GetType()
+	FMOD_DSP_TYPE DSP::GetType() const
 	{
 		FMOD_DSP_TYPE result = FMOD_DSP_TYPE::FMOD_DSP_TYPE_MAX;
 		if( this->handle )
@@ -65,19 +66,22 @@ namespace FOFMOD
 		return result;
 	}
 	
-	void DSP::SetHandle( FMOD::DSP* handle )
+	void DSP::SetHandle( FMOD::DSP* hndl )
 	{
-		if( handle )
+		if( hndl )
 		{
-			if( this->IsValid() )
+			bool res = false;
+			this->IsValid( &res );
+			
+			if( res )
 			{
-				if( this->handle == handle )
+				if( this->handle == hndl )
 				{
 					return;
 				}
 			}
 			
-			this->handle = handle;
+			this->handle = hndl;
 		}
 		else
 		{
@@ -85,9 +89,9 @@ namespace FOFMOD
 		}
 	}
 	
-	void DSP::GetHandle( FMOD::DSP** handle )
+	void DSP::GetHandle( FMOD::DSP** hndl ) const 
 	{
-		*handle = this->handle;
+		*hndl = this->handle;
 	}
 	
 	void DSP::Invalidate()
@@ -111,11 +115,12 @@ namespace FOFMOD
 					this->handle->getNumParameters( &numparams );
 					if( numparams )
 					{
-						FMOD_DSP_PARAMETER_DESC* paramInfo = (FMOD_DSP_PARAMETER_DESC*)malloc(sizeof(FMOD_DSP_PARAMETER_DESC));
-						memset( paramInfo, 0, sizeof(FMOD_DSP_PARAMETER_DESC) );
+						FMOD_DSP_PARAMETER_DESC* paramInfo;// = (FMOD_DSP_PARAMETER_DESC*)malloc(sizeof(FMOD_DSP_PARAMETER_DESC));
 						int curParam = 0;
-						while ( curParam < numparams )
+						//Log("numparams %d paramC %d\n", numparams, paramsCount );
+						while ( ( curParam < numparams ) && ( curParam < paramsCount ) )
 						{
+						//	Log("Cur param %d\n", curParam);
 							float val = params[curParam];
 							this->handle->getParameterInfo( curParam, &paramInfo );
 							FMOD_DSP_PARAMETER_TYPE ptype = paramInfo->type;
@@ -133,21 +138,45 @@ namespace FOFMOD
 								}
 								case( FMOD_DSP_PARAMETER_TYPE_BOOL ):
 								{
-									this->handle->setParameterBool( curParam, (bool)val );
+									this->handle->setParameterBool( curParam, ( val > 0.0f ) ? true : false );
 									break;
 								}
 								// no data, unneccessary for external
 								default:
 									break;
 							}
+							curParam++;
 						}
-						free( paramInfo );
 					}
 				}
 			}
 		}	
 	}
 	
+	bool DSP::operator==(const FOFMOD::DSP& r)
+	{
+		bool result = false;
+		FMOD::DSP* dh = NULL;
+		r.GetHandle( &dh );
+		if( dh )
+		{
+			FMOD::DSP* th = NULL;
+			this->GetHandle( &th );
+			result = ( th == dh );
+		}
+		return result;
+	}
+	
+	bool DSP::operator==(const FMOD::DSP& r)
+	{
+		bool result = false;
+		
+		FMOD::DSP* th = NULL;
+		this->GetHandle( &th );
+		result = ( th == &r );
+		
+		return result;
+	}
 	
 };
 
