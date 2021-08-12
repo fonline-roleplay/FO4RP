@@ -120,7 +120,7 @@ namespace FOFMOD
 					if( effect == cur  )
 					{
 						this->cchandle->removeDSP( handle );
-						this->activeEffects.erase( it );
+						this->activeEffects.erase( it++ );
 						cur->Release();
 					}
 					else
