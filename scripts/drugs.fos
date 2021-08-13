@@ -3,8 +3,6 @@
 
 #include "_utils.fos"
 #include "drugs_h.fos"
-#include "timed_effects.fos"
-#include "timeEvents.fos"
 #include "radiation_h.fos"
 #include "paralysis_h.fos"
 #include "poison_h.fos"
@@ -15,18 +13,23 @@ void CheckPoison( Critter& target, Item& drug )
 	if( drug.Val0 >= 100 )
 	{
 		if( target.Param[ QST_GAMEMODE ] == GAME_TEST )
+		{
 			target.Say( SAY_NETMSG, "|0xFFFF00 Вы чувствуете нейротоксин в употребляемом продукте. Его сила ~" + drug.Val0 + "." );
-
-		target.ParamBase[CR_VAL9] = 1; //Быстрый режим паралича.
+		}
+		
+		target.ParamBase[CR_VAL9] = 1; //fast paralysis mode
 		AffectParalysis( target, drug.Val0 );
 	}
 	else
+	{
 		if( target.Param[ QST_GAMEMODE ] == GAME_TEST )
+		{
 			target.Say( SAY_NETMSG, "|0xFFFF00 Употребляемый продукт недостаточно вреден, что бы подействовать как нейротоксин. Его сила ~" + drug.Val0 + "." );
-		
+		}
+	}	
 }
 
-void UseDrug( Critter& cr, Item& drug ) // Export
+void UseDrug( Critter& cr, Item& drug )
 {
     SetDrug( cr, drug.GetProtoId() );
 	CheckPoison( cr, drug );
@@ -608,6 +611,187 @@ void DropDrug( Critter& cr, uint16 drugPid, uint stage )
 uint cte_Drug( Critter& cr, int identifier, uint& rate )
 {
     return ProcessDrug( cr, identifier, rate );
+}
+
+//TIME EVENT DEBUGGER
+class NamedString
+{
+	string _name;
+	int id;
+
+	NamedString( int id, string name )
+	{
+		this._name = name;
+		this.id = id;
+	}
+
+	string name() { return _name; }
+
+	bool match( int id ) { return this.id == id; }
+}
+
+class NamedStringList
+{
+	NamedString@[] list;
+	
+	NamedStringList@ add( int id, string name ) { return add( NamedString( id, name ) ); }
+	NamedStringList@ add( string name, int id ) { return add( NamedString( id, name ) ); }
+	NamedStringList@ add( NamedString@ item )
+	{
+		list.insertLast( item );
+		
+		return this;
+	}
+	
+	string name( int id )
+	{
+		if( !valid( list ) ) return "[null]";
+		
+		for( uint i = 0, l = list.length(); i < l; i++ )
+			if( list[i].match( id ) )
+				return list[i].name();
+			
+		return "";
+	}
+}
+
+NamedStringList@ TimeEvents;
+NamedStringList@ DrugEvents;
+
+void init_TimeEvents()
+{
+	@TimeEvents = NamedStringList()
+		.add( "POISON", CTE_POISON )
+		.add( "RADIATION", CTE_RADIATION )
+		.add( "TRADER", CTE_TRADER )
+		.add( "DRAGGING", CTE_DRAGGING )
+		.add( "BURNING", CTE_BURNING )
+		.add( "SLOWRELOAD", CTE_SLOWRELOAD )
+		.add( "DELETECORPSE", CTE_DELETECORPSE )
+		.add( "ROTTEN", CTE_ROTTEN )
+		.add( "SKINNING", CTE_SKINNING )
+		.add( "TIRED", CTE_TIRED )
+		.add( "HEAL", CTE_HEAL )
+		.add( "DOC", CTE_DOC )
+		.add( "BLEED", CTE_BLEED )
+		.add( "HUNGER", CTE_HUNGER )
+		.add( "DYSPNEA", CTE_DYSPNEA )
+		.add( "QUICKHEAL", CTE_QUICKHEAL )
+		.add( "AGGRESSION", CTE_AGGRESSION )
+		.add( "TYPING", CTE_TYPING )
+		.add( "DIRT", CTE_DIRT )
+		.add( "THIRST", CTE_THIRST )
+		.add( "PA_AUTH", CTE_PA_AUTH )
+		.add( "VOMIT", CTE_VOMIT )
+		.add( "VOMIT_WARN", CTE_VOMIT_WARN )
+		.add( "DRUNK", CTE_DRUNK )
+		.add( "AUTODOC", CTE_AUTODOC_PROCEDURE )
+		.add( "OVERDOSE", CTE_GLOBAL_OVERDOSE)
+		;
+}
+
+void init_DrugEvents()
+{
+	@DrugEvents = NamedStringList();
+	
+	for( uint i = 0, l = DrugsIdentifiers.length(); i < l; i++ )
+		DrugEvents.add( getPID_name( DrugsIdentifiers[i] * 100 ), DrugsIdentifiers[i] );
+}
+
+string TimeEvent( int id ) 
+{
+	if( !valid( TimeEvents ) )
+		init_TimeEvents();
+	
+	return TimeEvents.name( id );
+}
+
+string DrugEvent( int id ) 
+{
+	if( !valid( DrugEvents ) )
+		init_DrugEvents();
+	
+	return DrugEvents.name( id );
+}
+
+//~run drugs killTimeEvent crId index id
+void killTimeEvent( Critter& cr, int crId, int index, int id )
+{
+	Critter@ target = getTarget( cr, crId );
+	
+	if( !valid( target ) )
+	{
+		cr.Say( SAY_NETMSG, "Critter #" + crId + " not found!" );
+		return;
+	}
+	
+	if( id != 0 )
+	{
+		target.EraseTimeEvent( id );
+		cr.Say( SAY_NETMSG, "And event: " + id + " was deleted." );
+		return;
+	}
+	
+	if( index != 0 )
+	{
+		uint count = target.GetTimeEvents( index, null, null, null );
+		target.EraseTimeEvents( index );
+		cr.Say( SAY_NETMSG, "There were deleted " + count + " time-events." );
+		return;
+	}
+}
+
+void unsafe_enlistTimeEvents(Critter& cr, int targetId, int, int, string@, int[]@ )
+{
+	if( !isGM( cr ) ) return;
+	
+	enlistTimeEvents( cr, targetId, 0, 0 );
+}
+
+//~run drugs enlistTimeEvents crId 0 0
+void enlistTimeEvents( Critter& cr, int crId, int p1, int p2 )
+{
+	Critter@ target = getTarget( cr, crId );
+
+	if( !valid( target ) )
+	{
+		cr.Say( SAY_NETMSG, "Critter #" + crId + " not found!" );
+		return;
+	}
+	
+	uint list = 0;
+    cr.Say( SAY_NETMSG, "List for cr #" + crId + ":\n" );
+
+	for( int i = 0; i < 65000; i++ )
+	{
+		uint[] index;
+		uint[] duration;
+		uint[] rate;
+		uint count = target.GetTimeEvents( i, index, duration, rate );
+		if( count > 0 )
+		{
+			list++;
+			
+			string drugname = DrugEvent( i );
+			string timename = TimeEvent( i );
+			if( timename.length() > 1 && drugname.length() > 1 )
+				drugname = " and " + drugname;
+			
+			cr.Say( SAY_NETMSG, "Time event #" + i + " \'" + timename + drugname + "\':" );
+			for( uint j = 0; j < count; j++ )
+			{
+				string time = DeltaTime_HMS( duration[j] );
+				cr.Say( SAY_NETMSG,
+					StyledText( "|", "" + j, ") #", 30 ) +
+					StyledText( "|", "" + index[j], " after", 60 ) +
+					StyledText( "|", time, " at rate ", 120 ) +
+					StyledText( "|", "" + rate[j], ";", 0 ) +
+					"" );
+			}
+		}
+	}
+	
+	cr.Say( SAY_NETMSG, "There is " + list + " of time events." );
 }
 
 #endif // DRUGS

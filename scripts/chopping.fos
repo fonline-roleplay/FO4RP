@@ -1,5 +1,3 @@
-// Author: Anuri
-// Mentors: Terpsic Mims, qthree, Mio, Frank Kost, Jonathan Joestar, Vvish
 #ifndef CHOPPING
 #define CHOPPING
 
@@ -125,39 +123,39 @@ uint process_chopping( Critter@ cr, int& param0, int& param1, int& param2 )
 		int sequence_length = ceil( float( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
 		if( param0 > sequence_length )
 		{
-                uint8 Tree = FindTree( tree );
-                if( Tree == 0 )
-                {
-                    return 0;
-                }
-				if( Tree == 1 )
-                {
-                    if( tree.RESOURCE_CAPACITY <= OBJECT_HP_BASE )
-					{	
-						CutTree( cr, tree );
-					}
-					else
-					{
-						if( tree.RESOURCE_CAPACITY > ( OBJECT_HP_BASE * 2 ) )
-							ChangeFrame( tree, 1 );
-						if( tree.RESOURCE_CAPACITY <= ( OBJECT_HP_BASE * 2 ) )
-							ChangeFrame( tree, 2 );
-					}
-                }
-				if( Tree == 2 )
-                {
-                    if( tool.GetProtoId() != PID_SHOVEL )
-                    {
-                        cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_USE_SHOWEL );
-                        return 0;
-                    }
-					if( tree.RESOURCE_CAPACITY == 0 )
-					{
-						EraseTimeEvent( tree.EVENT );
-						tree.EVENT = 0;
-						DeleteItem( tree );
-					}
+			uint8 Tree = FindTree( tree );
+			if( Tree == 0 )
+			{
+				return 0;
+			}
+			else if( Tree == 1 )
+			{
+				if( tree.RESOURCE_CAPACITY <= OBJECT_HP_BASE )
+				{	
+					CutTree( cr, tree );
 				}
+				else
+				{
+					if( tree.RESOURCE_CAPACITY > ( OBJECT_HP_BASE * 2 ) )
+						ChangeFrame( tree, 1 );
+					if( tree.RESOURCE_CAPACITY <= ( OBJECT_HP_BASE * 2 ) )
+						ChangeFrame( tree, 2 );
+				}
+			}
+			else if( Tree == 2 )
+			{
+				if( tool.GetProtoId() != PID_SHOVEL )
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_USE_SHOWEL );
+					return 0;
+				}
+				if( tree.RESOURCE_CAPACITY == 0 )
+				{
+					EraseTimeEvent( tree.EVENT );
+					tree.EVENT = 0;
+					DeleteItem( tree );
+				}
+			}
 			Profit( cr, tool, tree );
 			int skillNum = SK_CHOPPING;
 			Accident( cr, skillNum );
@@ -263,13 +261,12 @@ bool Profit( Critter& cr, Item@ tool, Item@ tree )
 	}
 	else
 	{
-		
 		int skillNum = SK_CHOPPING;
 		raiseSkill( cr, skillNum );
 		
 		cr.AddItem( PID_FIREWOOD, amount );
 		
-		cr.RunClientScript( "client_main@__message_result", PID_FIREWOOD, amount, 0, null, null );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_GATHERED, "$proto@msg item " +  ( PID_FIREWOOD * 100 ) + "@$amount" + amount + "\n" );
 		
 		cr.StatBase[ST_EXPERIENCE] += 25;
 		
@@ -278,7 +275,7 @@ bool Profit( Critter& cr, Item@ tool, Item@ tree )
 	return true;
 }
 
-void CutTreeManager() //export to gameplay.fos
+void CutTreeManager()
 {    
     Map@[] maps;
     for( int i = 0, iend = GetAllMaps( 0, maps ); i < iend; i++)
@@ -327,8 +324,120 @@ void CheckCutTrees( Map& map )
 	}
 }
 
+bool TryChopItem( Critter& cr, Item@ tool, Item@ target )
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) ) 
+    {
+    	return false;
+    }
+	
+	if( !valid( tool ) || !valid( target ) )
+	{
+		return false;
+	}
+	
+   	uint toolPid = tool.GetProtoId();
+	if( ChoppingTools.find( toolPid ) == -1 )
+	{
+		return false;
+	}
+	
+	if( tool.CritSlot != SLOT_HAND1 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_EQUIP_TOOL );
+		return false;
+	}
+	
+	if( ( target.Proto.Type == ITEM_TYPE_CONTAINER || target.Proto.Type == ITEM_TYPE_DOOR ) && target.Proto.Item_Subtype != ITEM_SUBTYPE_FURNITURE )
+	{
+		return false;
+	}
+	
+	if( target.Proto.Item_Subtype == ITEM_SUBTYPE_FIREWOOD || ( target.Proto.Material == MATERIAL_WOOD && ( target.Proto.Item_Subtype == ITEM_SUBTYPE_FURNITURE || ( target.Proto.Type == ITEM_TYPE_WEAPON && target.Proto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_CLUB ) ) ) )
+	{
+		start_chop_item( cr, tool, target );
+		return true;
+	}
+
+	return false;
+}
+
+//LTP_CHOP_ITEM
+bool ltp_chop_item_inited = false;
+void ltp_chop_item_init()
+{
+	LTPREG( LTP_CHOP_ITEM, process_chop_item )
+	ltp_chop_item_inited = true;
+}
+
+bool start_chop_item( Critter& cr, Item& tool, Item& target )
+{
+	if( !ltp_chop_item_inited )
+	{
+		ltp_chop_item_init();
+	}
+	
+	if( valid( tool ) && valid( target ) )
+	{	
+		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
+		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint[] values = { cr.Id };
+		
+		_CritAnimateSwing( cr );
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ChoppingSound", values, false);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
+
+		StartProcess( cr, LTP_CHOP_ITEM, 0, target.Id, 0, action_pause );
+		return true;
+	}
+	return false;
+}
+
+uint process_chop_item( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_CHOP_ITEM )
+	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+    Item@ target = GetItem( param1 );
+  	if( valid( target ) )
+    {
+		param0++;
+		
+		uint smithing_rate = ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE ) + OBJECT_DPA_BASE; 
+		int sequence_length = ceil( float( 3000.0f / ( CLAMP( smithing_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
+		
+		if( param0 > sequence_length )
+		{
+			ChopItem( target );
+			return 0;
+		}
+		
+		uint[] values = { cr.Id };
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ChoppingSound", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
+
+		_CritAnimateSwing( cr );
+		
+		return action_pause;
+	}
+	return 0;
+}
+
+void ChopItem( Item& target )
+{
+	Map@ map = GetMap( target.MapId );
+	if( target.Proto.Type == ITEM_TYPE_CONTAINER )
+	{
+		DropContainerItems( map, target );
+	}
+	
+	map.AddItem( target.HexX, target.HexY, PID_CHOPPED_FIREWOOD, 1 );
+	_SubItem( target, 1 );
+}
+
 //ONE-TIME LIVE SERVER TREE UPGRADE
-void _TreeUpgrade (Critter& player, int param0, int param1, int param2)
+void _TreeUpgrade( Critter& player, int param0, int param1, int param2 )
 {
 	for( int ii = 0, jj = TreeList[1].length() ; ii < jj; ii++)
 	{
