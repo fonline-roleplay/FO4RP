@@ -1,891 +1,318 @@
+#ifndef HANDCUFFS_MODULE
+#define HANDCUFFS_MODULE
+
 #include "_utils.fos"
-#include "_ltp.fos"
-#include "gathering_h.fos"
-#include "critter_skills_h.fos"
-#include "speed_h.fos"
+#include "handcuffs_h.fos"
 
-#define EVENT_ID    ( 9 )
-
-import bool CanResist( Critter@ targetCr ) from "main";
-
-uint papik;
-uint brass;
-
-uint8 GetDir( Critter@ cr, Critter@ crit )
+class BondageItem
 {
-    return GetDirection( cr.HexX, cr.HexY, crit.HexX, crit.HexY );
-}
-
-bool IsNotHuman( Critter& cr )
-{
-	return !IsHuman( cr );
-}
-
-bool IsHuman( Critter& cr )
-{
-    if( cr.StatBase[ ST_BODY_TYPE ] < BT_BRAHMIN || cr.IsPlayer() )
+	uint16 pid;
+	uint8 slot;
+	uint8 blocker_type;
+	uint16 key_pid;
+	string sound_on;
+	string sound_off;
+	uint msg;
+	
+	BondageItem( uint16 pid, uint8 slot, uint8 blocker_type, uint16 key_pid, string sound_on, string sound_off, uint msg )
 	{
-        return true;
-    }
-	else
-	{
-        return false;
+        this.pid = pid;
+		this.slot = slot;
+		this.blocker_type = blocker_type;
+		this.key_pid = key_pid;
+		this.sound_on = sound_on;
+		this.sound_off = sound_off;
+		this.msg = msg;
 	}
 }
 
-void _ItemInit( Item& item, bool FirstTime )
+class BondageItemCollection
 {
-	if( item.Accessory == ACCESSORY_NONE )
+	BondageItem@[] bondageItems;
+	BondageItemCollection()
 	{
-		return;
 	}
 	
-	if( item.Val1 == 0 )
+	BondageItemCollection@ bondageItem( uint16 pid, uint8 slot, uint8 blocker_type, uint16 key_pid, string sound_on, string sound_off, uint msg )
 	{
-		item.Val1 = Random( 1, 8191 );    
-	}
-    item.SetLexems( "$number" + item.Val1 );
-	item.SetEvent( ITEM_EVENT_USE, "_tie" );
-}
-
-void _HandcuffsRefresh( Item& item, bool FirstTime )
-{
-	item.SetEvent( ITEM_EVENT_USE, "_tie" );	
-}
-
-void _InitRope( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_USE, "_tie" );
-}
-
-void _InitUsedHandcuffs( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_SKILL, "_unlock" );
-    item.SetEvent( ITEM_EVENT_MOVE, "_hellno1" );
-    item.SetEvent( ITEM_EVENT_DROP, "_hellno3" );
-}
-
-void _InitHandcuffsKey( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_USE, "_release" );
-}
-
-bool _tie( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-	if( valid( onCritter ) && onCritter.IsDead() )
-	{
-		crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_DEAD );
-		return true;
+		this.bondageItems.insertLast( BondageItem( pid, slot, blocker_type, key_pid, sound_on, sound_off, msg ) );
+		return this;
 	}
 	
-    bool onSelf = ( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) );
-    bool isRope = ( item.GetProtoId() == PID_ROPE );
-    if( IsNotHuman( crit ) && !isRope )
-    {
-		crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_ARE_ANIMAL );
-        return true;
-    }
-
-    if( ( valid( onCritter ) ) && ( IsNotHuman( onCritter ) ) && !isRope )
-    {
-		crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WRONG_CREATURE );
-        return true;
-    }
-
-    if( onSelf && crit.ParamBase[ HANDCUFFS ] == 0 && ( IsHuman( crit ) ) )
-    {
-		uint MSG_line = !isRope ? STR_YOU_CUFFED_SELF : STR_YOU_TIED_SELF;
-		crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, MSG_line );
-        TieUp( item, crit, crit );
-        return true;
-    }
-	
-	if( onSelf && crit.ParamBase[ HANDCUFFS ] != 0 && ( IsHuman( crit ) ) )
-    {
-		Item@ hand = crit.GetItem( 0, SLOT_HAND1 );	
-		isRope = valid( hand ) && hand.GetProtoId() == PID_ROPE_USED;
-		uint MSG_line = !isRope ? STR_YOU_ALREADY_CUFFED : STR_YOU_ALREADY_TIED;
-		crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, MSG_line );
-		return true;
-    }
-	
-    if( ( valid( onCritter ) ) && ( onCritter.ParamBase[ HANDCUFFS ] != 0) && ( IsHuman( onCritter ) ) )
-    {		
-		Item@ hand = onCritter.GetItem( 0, SLOT_HAND1 );	
-		isRope = valid( hand ) && hand.GetProtoId() == PID_ROPE_USED;
-		uint MSG_line = !isRope ? STR_TARGET_ALREADY_CUFFED : STR_TARGET_ALREADY_TIED;
-		crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, MSG_line );
-		return true;
-    }
-	
-    if( ( valid( onCritter ) ) && ( onCritter.ParamBase[ HANDCUFFS ] == 0 ) )
-    {
-        bool human_handcuffs = item.GetProtoId() == PID_HANDCUFFS && onCritter.Stat[ ST_BODY_TYPE ] < BT_BRAHMIN;
-		
-		if( human_handcuffs || onCritter.StatBase[ ST_CURRENT_HP ] < 0 || onCritter.IsKnockout() )
-        {
-			onCritter.SetScript( null );
-			TieUp( item, crit, onCritter );
-            return true;
-        }
-
-		ToAsk( item, crit, onCritter );
-		return true;
-    }
-	return true;
-}
-
-void _hellno1( Item& item, Critter& crit, uint8 fromSlot )
-{
-    if( item.CritSlot != SLOT_HAND1 )
-    {
-		crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_THIS_NOT_EASY );
-        crit.MoveItem( item.Id, 1, item.Val1 == 0 ? SLOT_HAND1 : SLOT_HAND2 );
-        item.Update();
-    }
-}
-
-void _hellno2( Item& item, Critter& crit, uint8 fromSlot )
-{
-    if( item.CritSlot != SLOT_HAND2 )
-    {
-		crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_THIS_NOT_EASY );
-        crit.MoveItem( item.Id, 1, SLOT_HAND2 );
-        item.Update();
-    }
-}
-
-void _hellno3( Item& item, Critter& crit )
-{
-	crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_THIS_NOT_EASY );
-    MoveItem( item, 1, crit );
-    crit.MoveItem( item.Id, 1, item.Val1 == 0 ? SLOT_HAND1 : SLOT_HAND2 );
-    item.Update();
-}
-
-void _hellno4( Item& item, Critter& crit )
-{
-	crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_THIS_NOT_EASY );
-    MoveItem( item, 1, crit );
-    crit.MoveItem( item.Id, 1, SLOT_HAND2 );
-    item.Update();
-}
-
-void SayGag( Item& item, Critter& crit )
-{
-	switch ( _CritGetItemHand(crit).GetProtoId() ) 
+	BondageItem@ get_by_pid( uint16 pid ) 
 	{
-		case( PID_HANDCUFFS_USED ):
-			crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_CANT_UNGAG_CUFFED );
-			break; 
-		case( PID_ROPE_USED ):
-			crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_CANT_UNGAG_TIED );
-			break;
-		default:
-			break;
-	}
-	return;
-}
-
-void _hellno5( Item& item, Critter& crit, uint8 fromSlot )
-{	
-	if( CanResist( crit ) )
-	{
-		item.Val0 = 0;
-	}
-	
-	if( item.Val0 == 0 )
-	{
-		return;
-	}
-	
-	if( item.CritSlot != SLOT_HEAD )
-	{
-		process_SayGag( item, crit );
-	}
-}
-
-void _hellno6( Item& item, Critter& crit )
-{	
-	if( CanResist( crit ) )
-	{
-		item.Val0 = 0;
-	}
-	if( item.Val0 == 0 )
-	{
-		return;
-	}
-	process_SayGag( item, crit, true );
-}
-
-void process_SayGag( Item& item, Critter& crit, bool force = false )
-{
-	if( !CanResist( crit ) )
-	{
-		crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_CANT_UNGAG );
-		
-		if( force )
+		for( uint i = 0, len = this.bondageItems.length(); i < len; i++ )
 		{
-			MoveItem( item, 1, crit );
-		}
-		
-		crit.MoveItem( item.Id, 1, SLOT_HEAD );
-		item.Update();
-	}
-	return;
-}
-
-bool _kickme( Critter& cr, Critter& attacker )
-{
-    uint  cuffs = cr.ParamBase[ HANDCUFFS ];
-    uint8 escape = ( cuffs >> 29 ) & 0x1;
-    if( cr.ParamBase[ HANDCUFFS ] != 0 && escape == 0 )
-    {
-        cr.ClearEnemyStack();
-        return true;
-    }
-    else
-        return false;
-}
-
-bool _release( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-    bool onSelf = ( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) );
-	int  cuffs_state;
-    int  keynum;
-    int  nohome;
-
-    if( valid( onCritter ) && onCritter.Param[ HANDCUFFS ] != 0 )
-    {
-        cuffs_state = onCritter.Param[ HANDCUFFS ];
-        keynum = ( cuffs_state >> 16 ) & 0x1FFF;
-        nohome = ( cuffs_state >> 30 ) & 0x1;
-        Item@[] items;
-
-		testInfo( crit, cuffs_state + ":" + keynum + " vs " + item.Val1 + " " + item.LockerId );
-
-        if( item.Val1 == keynum || int( item.LockerId ) == keynum )
-        {
-			crit.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_CUFFS_RELEASED );
-			onCritter.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_RELEASED );
-			
-			onCritter.ParamBase[ HANDCUFFS ] = 0;
-			
-            onCritter.GetItems( SLOT_HAND1, items );
-            DeleteItems( items );
-            Item@ cuffs = crit.AddItem( PID_HANDCUFFS, 1 );
-            cuffs.Val1 = keynum;
-			cuffs.Val2 = 0;
-            cuffs.SetLexems( "$number" + cuffs.Val1 );
-            DeleteItem( item );
-        }
-		else
-		{
-			crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEY_NOT_FIT );
-		}
-        return true;
-    }
-
-    if( onSelf && crit.Param[ HANDCUFFS ] != 0 )
-    {
-		
-        cuffs_state = crit.Param[ HANDCUFFS ];
-        keynum = ( cuffs_state >> 16 ) & 0x1FFF;
-
-		testInfo( crit, cuffs_state + ":" + keynum + " vs " + item.Val1 + " " + item.LockerId );
-
-        if( item.Val1 == keynum || int( item.LockerId ) == keynum )
-        {
-            DeleteItem( item );
-			crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_BREAK_FREE );
-            crit.ParamBase[ HANDCUFFS ] = 0;
-            crit.DeleteItem( PID_HANDCUFFS_USED, 1 );
-            Item@ cuffs = crit.AddItem( PID_HANDCUFFS, 1 );
-            cuffs.Val1 = keynum;
-			cuffs.Val2 = 0;
-            cuffs.SetLexems( "$number" + cuffs.Val1 );
-			cuffs.SetScript( "_HandcuffsRefresh" );          
-			return true;
-        }
-		else
-		{
-			crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEY_NOT_FIT );
-		}
-		return true;
-    }
-	
-   crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BOTH_NOT_CUFFED );
-	return true;
-}
-
-void _HandcuffsUsed( Item& item, bool FirstTime )
-{
-	item.SetEvent( ITEM_EVENT_SKILL, "_unlock" );
-	item.SetEvent( ITEM_EVENT_MOVE, "_hellno1" );
-	item.SetEvent( ITEM_EVENT_DROP, "_hellno3" );
-}
-
-void _HandcuffsKeyUsed( Item& item, bool FirstTime )
-{
-	item.SetEvent( ITEM_EVENT_USE, "_release" );
-}
-
-void _HandcuffsDrop( Item& item, bool FirstTime )
-{
-	item.SetEvent( ITEM_EVENT_USE, "_dropHandcuffs" );
-}
-
-void _dropHandcuffs( Critter& cr, Critter@ killer )
-{
-    if( cr.ParamBase[ HANDCUFFS ] != 0 )
-    {
-        cr.ParamBase[ HANDCUFFS ] = 0;
-        cr.DeleteItem( PID_HANDCUFFS_USED, 2 );
-    }
-}
-
-void TieUp( Item& item, Critter& crit, Critter@ onCritter )
-{
-    uint8 follow = 1;
-    uint8 escape = 0;
-	if( crit.Id != onCritter.Id )
-	{
-        onCritter.ParamBase[ HANDCUFFS ] = crit.Id | ( item.Val1 << 16 ) | ( escape << 29 ) | ( onCritter.ModeBase[ MODE_NO_HOME ] << 30 ) | ( follow << 31 );
-	}
-	else
-	{
-        onCritter.ParamBase[ HANDCUFFS ] = onCritter.ParamBase[ HANDCUFFS ] | ( item.Val1 << 16 ) | ( escape << 29 ) | ( onCritter.ModeBase[ MODE_NO_HOME ] << 30 ) | ( follow << 31 );
-	}
-	
-	bool  handCuffs = ( item.GetProtoId() == PID_HANDCUFFS );
-
-	onCritter.ParamBase[ CR_VAL0 ] = onCritter.ParamBase[ ST_FACTION ];
-	onCritter.ParamBase[ ST_FACTION ] = crit.ParamBase[ ST_FACTION ];
-	onCritter.ParamBase[ MERC_MASTER_ID ] = int( crit.Id );
-
-    int lockerId = item.Val1;
-	uint keyId = 0;
-	Item@ key;
-    if( handCuffs )
-    {
-        if( item.Val2 == 0 )
-		{
-			@key = crit.AddItem( PID_CUFFS_KEY, 1 );
-			keyId = key.Id;
-			key.Val1 = lockerId;
-			key.LockerId = lockerId;
-			key.SetLexems( "$keynum" + key.Val1 );
-			key.SetScript( "_HandcuffsKeyUsed" );
-		}
-		else
-		{
-			keyId = item.Val2;
-		}
-	}
-
-    _SubItem( item, 1 );
-
-    Item@ hands = onCritter.GetItem( 0, SLOT_HAND1 );
-    if( valid( hands ) )
-	{
-		onCritter.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
-	}
-    @hands = onCritter.AddItem( handCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
-    onCritter.MoveItem( hands.Id, 1, SLOT_HAND1 );
-    
-	hands.Val1 = lockerId;
-	hands.LockerId = lockerId;
-	hands.SetScript( "_HandcuffsUsed" );
-
-	if( handCuffs )
-	{
-		hands.Val2 = keyId;
-	}
-	
-    hands.Update();
-	
-	if( crit.Id != onCritter.Id )
-    {
-		CrimeLog( crit, crInfo( crit ) + ( handCuffs ? "|0xFFFF00 cuffs " : "|0xFFFF00 ties " ) + crInfo( onCritter ) );
-		
-		uint MSG_line = !handCuffs ? STR_EMOTE_CUFFED_VICTIM : STR_EMOTE_TIED_VICTIM;
-		crit.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, MSG_line );
-		
-        if( onCritter.IsPlayer() )
-		{
-			uint MSG_line = !handCuffs ? STR_CUFFED_YOU : STR_TIED_YOU;
-			crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, MSG_line );
-		}
-	}
-}
-
-bool CutRopes( Critter& cr, Critter@ targetCr )
-{
-    cr.AddItem( PID_ROPE, 1 );
-	
-    targetCr.DeleteItem( PID_ROPE_USED, 2 );
-
-	targetCr.ParamBase[ HANDCUFFS ] = 0;
-	
-    if( targetCr.IsPlayer() )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REMOVED_ROPES );
-	}
-    CrimeLog( cr, crInfo( cr ) + " cuts ropes on " + crInfo( targetCr ) );
-	return true;
-}
-
-bool _unlock( Item& item, Critter& crit, int skill )
-{
-    if( item.GetProtoId() == PID_ROPE_USED )
-    {
-		if( skill == SK_LOCKPICK )
-		{
-			if( crit.Timeout[ TO_SK_LOCKPICK ] > 0 )
+			if( this.bondageItems[i].pid == pid )
 			{
-				crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_TIRED );
-				return true;
-			}
-			else
-			{
-				crit.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( crit );
-				crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FAIL_FREE_SELF );
-				return true;
+				return this.bondageItems[i];
 			}
 		}
+		return null;
+	}
+	
+	BondageItem@ get_by_key_pid( uint16 key_pid ) 
+	{
+		for( uint i = 0, len = this.bondageItems.length(); i < len; i++ )
+		{
+			if( this.bondageItems[i].key_pid == key_pid )
+			{
+				return this.bondageItems[i];
+			}
+		}
+		return null;
+	}
+}
+
+BondageItemCollection@ bondageItems = BondageItemCollection()
+//					pid						slot			blocker_type				  key_pid						sound_on 			sound_off				msg
+	.bondageItem( PID_ROPE			,	SLOT_HAND1	,	BONDAGE_TYPE_ROPE		,			0				,	"rope_on.mp3"		,	"rope_off.mp3"		,	STR_ROPE		)
+	.bondageItem( PID_HANDCUFFS		,	SLOT_HAND1	,	BONDAGE_TYPE_LOCK		,	PID_HANDCUFFS_KEY		,	"cuffs_on.mp3"		,	"cuffs_off.mp3"		,	STR_HANDCUFFS	)
+	.bondageItem( PID_SHACKLES		,   SLOT_MISC	,	BONDAGE_TYPE_LOCK		,	PID_SHACKLES_KEY		,	"shackles_on.mp3"	,	"shackles_off.mp3"	,	STR_SHACKLES	)
+	.bondageItem( PID_SLAVE_COLLAR	, 	SLOT_HEAD	,	BONDAGE_TYPE_ELECTRONIC	,	PID_SLAVE_COLLAR_SWITCH	,	"collar_on.mp3"		,	"collar_off.mp3"	,	STR_COLLAR		)
+	.bondageItem( PID_BALL_GAG		,	SLOT_HEAD	,	BONDAGE_TYPE_SKILL		,			0				,	"ballgag_on.mp3"	,	"ballgag_off.mp3"	,	STR_GAGED		)
+	.bondageItem( PID_PART_OF_ROPE	,	SLOT_HEAD	,	BONDAGE_TYPE_SKILL		,			0				,	"rope_on.mp3"		,	"rope_off.mp3"		,	STR_ROPE_GAG	);
+
+BondageItem@ GetBondageItem( Item@ item ) 
+{
+    uint16 pid = item.GetProtoId();
+    return bondageItems.get_by_pid( pid );
+}
+
+BondageItem@ GetKeyBondageItem( Item@ item ) 
+{
+    uint16 key_pid = item.GetProtoId();
+    return bondageItems.get_by_key_pid( key_pid );
+}
+
+bool BondageTarget( Critter& cr, Critter& targetCr, Item& item )
+{
+	bool IsSelf = targetCr.Id == cr.Id;
+	if( !valid( targetCr ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
 		return false;
 	}
+	
+	if( targetCr.IsDead() )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_DEAD );
+		return false;
+	}
+	
+	if( !valid( item ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
+	}
+	
+	if( item.BONDAGE_STATE == BONDAGE_STATE_BROKEN )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BONDAGE_BROKEN );
+		return false;
+	}
+	
+	if( !IsSelf )
+	{
+		if( !targetCr.IsKnockout() )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_RESIST );
+			return false;
+		}
+	}
+	
+	BondageItem@ bondage = GetBondageItem( item );
+	if( !valid( bondage ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
+	}
+	
+	Item@ moved = targetCr.GetItem( 0, bondage.slot );
+	if( valid( moved ) )
+	{
+		BondageItem@ bondage2 = GetBondageItem( moved );
+		if( valid( bondage2 ) && moved.BONDAGE_STATE == BONDAGE_STATE_ON )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BOUND_BY_SIMILAR );
+			return false;
+		}
+		targetCr.MoveItem( moved.Id, moved.GetCount(), SLOT_INV );
+	}
+	
+	if( !IsSelf )
+	{
+		MoveItem( item, 1, targetCr );
+	}
+	
+	targetCr.MoveItem( item.Id, item.GetCount(), bondage.slot );
+	item.BONDAGE_STATE = BONDAGE_STATE_ON;
+	
+	if( bondage.key_pid != 0 )
+	{
+		Item@ key = cr.AddItem( bondage.key_pid, 1 );
+		if( valid( key ) )
+		{
+			key.KEY_BONDAGE_ID = item.Id;
+			key.BOND_SLAVE_ID = targetCr.Id;
+			key.Update();
+		}
+	}
+	
+	if( bondage.pid == PID_SLAVE_COLLAR )
+	{
+		item.PicInv = GetStrHash( "art\\inven\\misc\\shockcollar_inv.png" );
+	}
+	
+	Map@ map = targetCr.GetMap();
+	PlayGenericSound( map, targetCr.HexX, targetCr.HexY, bondage.sound_on, 10 );
+	
+	uint msgMod = IsSelf ? 0 : 1;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, bondage.msg + msgMod );
+	if( targetCr.IsPlayer() )
+	{
+		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, bondage.msg + msgMod + 2 );
+	}
+	item.Update();
 	return true;
 }
 
-void ToAsk( Item& item, Critter& crit, Critter@ onCritter )
+bool ReleaseTarget( Critter& cr, Critter& targetCr, Item& item )
 {
-	
-    if( ( crit.Stat[ ST_STRENGTH ] + crit.Stat[ ST_LUCK ] + crit.Stat[ ST_AGILITY ] + Random( 0, 10 ) ) > ( onCritter.Stat[ ST_STRENGTH ] + onCritter.Stat[ ST_LUCK ] + onCritter.Stat[ ST_AGILITY ] + Random( 1, 15 ) ) )
-    {
-        TieUp( item, crit, onCritter );
-    }
-    else
-    {
-        onCritter.ParamBase[CR_VAL0] = crit.Id;
-        onCritter.ParamBase[CR_VAL1] = item.Id;
-        onCritter.ShowScreen( SCREEN_DIALOGBOX, 1, "AnswerMe" );
-        onCritter.Say( SAY_DIALOGBOX_TEXT, "Вас пытаются связать" );
-        onCritter.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Подчиниться" );
-        onCritter.Say( SAY_DIALOGBOX_BUTTON( 1 ), "Сопротивляться" );
-    }
-
-}
-
-
-void AnswerMe( Critter& cr, uint answerI, string& answerS )
-{
-    if( answerI == 0 )
-    {
-        TieUp( GetItem( cr.ParamBase[CR_VAL1] ), GetCritter( cr.ParamBase[CR_VAL0] ), cr );
-    }
-}
-
-void SelfRelease( Critter& cr )
-{
-    uint cuffs_state = cr.ParamBase[ HANDCUFFS ];
-	
-	if( cuffs_state == 0 )
+	if( !valid( targetCr ) )
 	{
-		return;
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
 	}
 	
-    uint16   master = ( cuffs_state ) & 0xFFFF;
-    uint16   keynum = 0;
-    uint8    escape = 1;
-    uint8    nohome = ( cuffs_state >> 30 ) & 0x1;
-    uint8    follow = ( cuffs_state >> 31 ) & 0x1;
-    Critter@ bastard = GetCritter( master );
-    Item@[] items;
-    cr.GetItems( SLOT_HAND1, items );
-    cr.GetItems( SLOT_HAND2, items );
-    DeleteItems( items );
-    cr.AddItem( PID_BROKEN_CUFFS, 1 );
-    if( valid( bastard ) )
+	if( !valid( item ) )
 	{
-		bastard.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PRISONER_FREE );
-	}
-    cr.AddEnemyInStack( master );
-    cr.ParamBase[ HANDCUFFS ] = master | ( keynum << 16 ) | ( escape << 29 ) | ( nohome << 30 ) | ( follow << 31 );
-}
-
-//=========================================GAG============================================//
-
-void _InitEnslaveItemGAG( Item& item, bool firstTime)
-{
-    item.SetEvent( ITEM_EVENT_USE, "e_EnslaveUseGAG" );
-	item.SetEvent( ITEM_EVENT_MOVE, "_hellno5" );
-	item.SetEvent( ITEM_EVENT_DROP, "_hellno6" );
-}
-
-bool e_EnslaveUseGAG( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-	if( CanResist( cr ) )
-		item.Val0 = 0;
-
-	if( item.Val0 != 0 )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TAKE_THE_GAG_OUT );
-		return true;
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
 	}
 	
-    bool onSelf = ( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) );
-    if( onSelf && IsHuman( cr ) )
-    {
-		brass = item.Id;
-        papik = cr.Id;
-        Enslave_GAG( cr, cr );
-        return true;
-    }
+	BondageItem@ bondage = GetKeyBondageItem( item );
+	if( !valid( bondage ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
+	}
 	
-    if( cr.IsPlayer() && onCritter.IsPlayer() && ( IsHuman( cr ) ) && ( IsHuman( onCritter ) ) )
-    {
-		if( !CanResist( onCritter ) )
+	if( !hasItem( targetCr, bondage.pid, bondage.slot ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_THIS_WONT_HELP );
+		return false;
+	}
+	
+	Item@ moved = targetCr.GetItem( 0, bondage.slot );
+	if( !valid( moved ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
+	}
+	
+	if( moved.BONDAGE_STATE != BONDAGE_STATE_ON )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
+	}
+	
+	if( item.KEY_BONDAGE_ID == 0 || uint( item.KEY_BONDAGE_ID ) != moved.Id )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEY_NOT_FIT );
+		return false;
+	}
+	
+	moved.BONDAGE_STATE = BONDAGE_STATE_OFF;
+	targetCr.MoveItem( moved.Id, moved.GetCount(), SLOT_INV );
+	
+	if( bondage.pid == PID_SLAVE_COLLAR )
+	{
+		moved.PicInv = GetStrHash( "art\\inven\\misc\\shockcollar_off_inv.png" );
+	}
+	
+	if( targetCr.Id != cr.Id )
+	{
+		MoveItem( moved, 1, cr );
+	}
+	
+	if( item.GetProtoId() == bondage.key_pid )
+	{
+		_SubItem( item, 1 );
+	}
+	Map@ map = targetCr.GetMap();
+	PlayGenericSound( map, targetCr.HexX, targetCr.HexY, bondage.sound_off, 10 );
+	
+	uint msgMod = cr.Id == targetCr.Id ? 5 : 6;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, bondage.msg + msgMod );
+	if( targetCr.IsPlayer() )
+	{
+		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, bondage.msg + 4 );
+	}
+	moved.Update();
+	return true;
+}
+
+bool TryRemoveGag( Critter& cr, Critter& targetCr, Item& gagItm )
+{
+	if( !valid( gagItm ) )
+	{
+		return false;
+	}
+	
+	BondageItem@ bondage = GetBondageItem( gagItm );
+	if( !valid( bondage ) )
+	{
+		return false;
+	}
+	
+	if( HandsTied( cr ) )
+	{
+		cr.Say( SAY_NETMSG, "Hands are tied" );
+		return false;
+	}
+	
+	if( gagItm.BONDAGE_STATE != BONDAGE_STATE_ON )
+	{
+		return false;
+	}
+	
+	gagItm.BONDAGE_STATE = BONDAGE_STATE_OFF;
+	targetCr.MoveItem( gagItm.Id, gagItm.GetCount(), SLOT_INV );
+	
+	if( targetCr.Id != cr.Id )
+	{
+		MoveItem( gagItm, 1, cr );
+	}
+	
+	Map@ map = targetCr.GetMap();
+	PlayGenericSound( map, targetCr.HexX, targetCr.HexY, bondage.sound_off, 10 );
+	
+	uint msgMod = cr.Id == targetCr.Id ? 5 : 6;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, bondage.msg + msgMod );
+	if( targetCr.IsPlayer() )
+	{
+		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, bondage.msg + 4 );
+	}
+	gagItm.Update();
+	return true;
+}
+
+bool HandsTied( Critter& cr )
+{
+	Item@ hands = _CritGetItemHand( cr );
+	if( valid( hands ) )
+	{
+		BondageItem@ bondage = GetBondageItem( hands );
+		if( valid( bondage ) && hands.BONDAGE_STATE == BONDAGE_STATE_ON )
 		{
-			brass = item.Id;
-			papik = onCritter.Id;
-			Enslave_GAG( cr, onCritter );
+			return true;
 		}
-		else
-		{
-			ToAskEnslaveGAG( item, cr, onCritter );
-		}
-		return true;
-    }
-    else
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_IMPOSSIBLE );
-	}	
-    return true;
-}
-
-void ToAskEnslaveGAG( Item& item, Critter& crit, Critter@ onCritter )
-{
-	papik = crit.Id;
-	brass = item.Id;
-	
-    onCritter.ShowScreen( SCREEN_DIALOGBOX, 1, "AnswerEnslaveGAG" );
-	onCritter.Say( SAY_DIALOGBOX_TEXT, "На вас пытаются одеть кляп!");
-    onCritter.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Подчиниться" );
-    onCritter.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Сопротивляться" );
-}
-
-void AnswerEnslaveGAG( Critter& cr, uint answerI, string& answerS )
-{
-    if( answerI == 0 )
-    {
-        Enslave_GAG( GetCritter( papik ), cr );
-    }
-}
-
-void Enslave_GAG( Critter& who, Critter@ targetCr ){
-	
-	Item@ equipedGag = _CritGetItemHead(targetCr);
-	
-	if( valid( equipedGag ) && (equipedGag.GetProtoId() == PID_COLLAR ) ) 
-	{
-		who.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_ALREADY_ENSLAVED );
-		return;
 	}
-			
-	if( valid( equipedGag ) && (equipedGag.GetProtoId() == PID_BALL_GAG ) ) 
-	{
-		who.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_ALREADY_GAGED );
-		return;
-	}
-
-	Item@[] items;
-	uint itemscount = targetCr.GetItems( SLOT_HEAD, items );
-	if( itemscount > 0 )
-	{
-        targetCr.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
-	}
-	Item@ PreGag = GetItem( brass );
-	PreGag.Val0 = 1;
-	MoveItem( PreGag, 1, targetCr );
-	targetCr.MoveItem( PreGag.Id, 1, SLOT_HEAD );
-	
-	who.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_GAG );
-	
-	if( who.Id == targetCr.Id )
-	{
-		who.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SELF_GAGED );
-	}
-	else
-	{
-		who.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_GAGED );
-		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GAGED );
-	}
+	return false;
 }
 
-//=========================================SLAVE_COIL============================================//
-
-void _InitEnslaveItem( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_USE, "e_EnslaveUse" );
-}
-
-bool e_EnslaveUse( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-    bool onSelf = ( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) );
-    if( onSelf && ( IsHuman( cr ) ) )
-    {
-        brass = item.Id;
-        papik = cr.Id;
-        Enslave( cr, cr );
-        return true;
-    }
-    if( cr.IsPlayer() && onCritter.IsPlayer() && ( IsHuman( cr ) ) && ( IsHuman( onCritter ) ) )
-    {
-		if( onCritter.Stat[ ST_CURRENT_HP ] < 0 || onCritter.IsKnockout() )
-		{
-			brass = item.Id;
-			papik = onCritter.Id;
-			Enslave( cr, onCritter );
-		}
-		else
-		{
-			ToAskEnslave( item, cr, onCritter );
-		}
-		return true;
-    }
-    else
-	{
-        cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_IMPOSSIBLE );
-	}
-    return true;
-}
-
-void ToAskEnslave( Item& item, Critter& crit, Critter@ onCritter )
-{
-    papik = crit.Id;
-    brass = item.Id;
-	
-    onCritter.ShowScreen( SCREEN_DIALOGBOX, 1, "AnswerEnslave" );
-	
-	onCritter.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_ON_YOU );
-    onCritter.SayMsg( SAY_DIALOGBOX_BUTTON( 0 ), TEXTMSG_GAME, STR_MENU_AGREE );
-}
-
-void AnswerEnslave( Critter& cr, uint answerI, string& answerS )
-{
-    if( answerI == 0 )
-    {
-        Enslave( GetCritter( papik ), cr );
-    }
-}
-
-
-void Enslave( Critter& cr, Critter@ onCritter )
-{
-	Item@ activeCollarSelf = _CritGetItemHead(cr);
-	if( valid( activeCollarSelf ) && activeCollarSelf.GetProtoId() == PID_COLLAR )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_HAS_COLLAR );
-		return;
-	}
-	
-	Item@ Precollar = GetItem( brass );
-	Item@[] items;
-	uint itemscount = onCritter.GetItems( SLOT_HEAD, items );
-    if( itemscount > 0 )
-    {
-        onCritter.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
-    }
-	Item @ collar = onCritter.AddItem( PID_COLLAR, 1 );
-    Item @ collarswitch = cr.AddItem( PID_COLLARSWITCH, 1 );
-    onCritter.MoveItem( collar.Id, 1, SLOT_HEAD );
-	
-    cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_COLLAR_SLAVE );
-	if (cr.Id == onCritter.Id)
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUT_COLLAR_SELF );
-	}
-	else
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUT_COLLAR_SLAVE );
-		onCritter.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_GOT_COLLAR );
-	}
-    collarswitch.Val1 = collar.Id;
-    collarswitch.Val2 = onCritter.Id;
-    DeleteItem( Precollar );
-}
-
-void _InitUsedCollar( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_MOVE, "_hellno2" );
-    item.SetEvent( ITEM_EVENT_DROP, "_hellno4" );
-    item.SetEvent( ITEM_EVENT_SKILL, "e_used_collar_delete" );
-}
-
-bool e_used_collar_delete( Item& item, Critter& cr, int skill )
-{
-    if( ( skill == SKILL_PICK_ON_GROUND ) && ( item.Accessory == ACCESSORY_HEX ) )
-        DeleteItem( item );
-    return true;
-}
-
-void _InitCollarSwitch( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_USE, "StartMenuSCollar" );
-}
-
-bool StartMenuSCollar( Item& remote, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-    iMenuHandler@ handler = MenuSCollar(remote);
-    iDialogBox@ menu = OpenMenu( cr, "Рабский Ошейник", handler);
-
-    return true;
-}
-
-class MenuSCollar: CenteredMenuHandler {
-    uint m_remote_id;
-    uint m_collar_id;
-    
-    MenuSCollar(Item& remote) {
-        m_remote_id = remote.Id;
-        m_collar_id = 0;
-    }
-
-    bool BadSignal(iDialogBox& menu) {
-        m_collar_id = 0;
-        menu.Button( "Обновить" );
-        return true;
-    }
-
-    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
-        Item@ remote = GetItem( m_remote_id );
-        if( remote is null ) {
-            return false;
-        }
-
-        Critter@ Slave = GetCritter( remote.Val2 );
-        if( Slave is null ) {
-            return BadSignal(menu);
-        }
-        Map@ map = Slave.GetMap();
-        if( map is null ) {
-            return BadSignal(menu);
-        }
-        Item@ collar = GetItem( remote.Val1 );
-        if( collar is null ) {
-            return BadSignal(menu);
-        }
-
-        m_collar_id = collar.Id;
-
-        if( menu.Button( "Наказать" ) ) 
-        {
-            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
-            Slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_PAIN );
-            Slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
-            Slave.StatBase[ ST_CURRENT_HP ] -= ( Slave.Stat[ ST_CURRENT_HP ] * 10 / 100 );
-            map.PlaySound( "MASRATBH.ACM", Slave.HexX, Slave.HexY, 3 );
-            Slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 115, Slave.HexX, Slave.HexY );
-            return true;
-        }
-        if( menu.Button( "Ранить" ) ) 
-        {
-            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
-            Slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_HARM );
-            Slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
-            Slave.StatBase[ ST_CURRENT_HP ] -= ( Slave.Stat[ ST_CURRENT_HP ] * 50 / 100 );
-            map.PlaySound( "MASRATBH.ACM", Slave.HexX, Slave.HexY, 3 );
-            Slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 130, Slave.HexX, Slave.HexY );
-            return true;
-        }
-        if( menu.Button( "Покалечить" ) ) 
-        {
-            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
-            Slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_INJURE );
-            Slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
-            Slave.StatBase[ ST_CURRENT_HP ] -= ( Slave.Stat[ ST_CURRENT_HP ] ) + 1;
-            map.PlaySound( "MASRATBH.ACM", Slave.HexX, Slave.HexY, 3 );
-            Slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 160, Slave.HexX, Slave.HexY );
-            return true;
-        }
-        if( menu.Button( "Убить" ) ) 
-        {
-            DeleteItem( remote );
-            DeleteItem( collar );
-            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_EXECUTE_SLAVE );
-			Slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_DEATH );
-			map.PlaySound( "MASRATBH.ACM", Slave.HexX, Slave.HexY, 3 );
-            Slave.ToDead( ANIM2_DEAD_PULSE, cr );
-            return true;
-        }
-        if( menu.Button( "Отпустить" ) ) 
-        {
-            DeleteItem( remote );
-            DeleteItem( collar );
-            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SLAVE_FREED );
-            Slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SLAVE_RELEASED );
-            Slave.AddItem( PID_INACTIVECOLLAR, 1 );
-            return true;
-        }
-        return true;
-    }
-
-    // Описание
-    string@ Description(Critter& cr) {
-        string info;
-        if( m_collar_id != 0 ) {
-            info = "Пульт активен.";
-            info += "\n" + "\nСигнал от ошейника №" + m_collar_id + " принят.";
-            info += "\n" + "\nОжидание команды...";
-        } else {
-            info = "Пульт активен.";
-            info += "\n" + "\nСигнал от ошейника слишком слабый.";
-            info += "\n" + "\nОжидание команды...";
-        }        
-
-        return info;
-    }
-}
-
-bool e_shock( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-    Critter@ Slave = GetCritter( item.Val2 );
-    Item @ collar = GetItem( item.Val1 );
-    if( valid( Slave ) )
-    {
-        if( !valid( collar ) )
-        {
-            Item @ collar_new = Slave.AddItem( PID_COLLAR, 1 );
-            item.Val1 = collar_new.Id;
-            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TRY_TAKE_OFF );
-        }
-        cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
-        Slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_INJURE );
-        Slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
-        Slave.StatBase[ ST_CURRENT_HP ] -= ( Slave.Stat[ ST_CURRENT_HP ] / 100 ) + 1;
-        Slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 100, Slave.HexX, Slave.HexY );
-        return true;
-    }
-    return false;
-}
-
-void CollarNameScreen( Critter& player, uint answerI, string& answerS )
-{
-    if( answerS.length() != 0 )
-    {
-        Item @ item = GetItem( player.StatBase[ ST_VAR0 ] );
-        item.SetLexems( "" + answerS );
-        item.Update();
-    }
-}
-
+//Old use Knife to escape code
 bool CutCheck( Critter& cr, Item@ item, Critter@ target )
 { 
 	if( !valid( target ) )
@@ -898,14 +325,19 @@ bool CutCheck( Critter& cr, Item@ item, Critter@ target )
 	{
 		return false;
 	}
-	
-	bool isKnife = item.Proto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_KNIFE || item.Proto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_LONG_KNIFE || item.Proto.Item_Subtype == ITEM_SUBTYPE_WEAPON_GRENADE_KIFE;
 
 	Item@ hand = _CritGetItemHand( target );
 	if( valid( hand ) )
 	{
-		if( hand.GetProtoId() == PID_ROPE_USED )
+		BondageItem@ handBound = GetBondageItem( hand );
+		if( valid( handBound) && handBound.blocker_type == BONDAGE_TYPE_ROPE && hand.BONDAGE_STATE == BONDAGE_STATE_ON )
 		{
+			if( !isBlade( item ) )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_THIS_WONT_HELP );
+				return false;
+			}
+			
 			CutRopes( cr, target );
 			return true;
 		}
@@ -921,7 +353,7 @@ bool CutCheck( Critter& cr, Item@ item, Critter@ target )
 	
 	if( hook.Val5 <= 10 )
 	{
-		if( !isKnife )
+		if( !isBlade( item ) )
 		{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_THIS_WONT_HELP );
 			return false;
@@ -947,6 +379,7 @@ bool CutCheck( Critter& cr, Item@ item, Critter@ target )
 		{
 			@trap = map.GetItem( target.HexX, target.HexY, PID_TRAP_DEACTIVATED );
 		}
+		
 		if( valid(trap) )
 		{
 			if( item.GetProtoId() != PID_CROWBAR )
@@ -964,3 +397,214 @@ bool CutCheck( Critter& cr, Item@ item, Critter@ target )
 	target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_FREE_FROM_SNARE );
 	return true;
 }
+
+bool CutRopes( Critter& cr, Critter@ targetCr )
+{
+	Item@ moved = _CritGetItemHand( targetCr );
+	moved.BONDAGE_STATE = BONDAGE_STATE_OFF;
+	
+	targetCr.MoveItem( moved.Id, moved.GetCount(), SLOT_INV );
+
+	if( targetCr.Id != cr.Id )
+	{
+		MoveItem( moved, 1, cr );
+	}
+
+	uint msgStr = cr.Id == targetCr.Id ? STR_EMOTE_TIES_RELEASED_SELF : STR_EMOTE_TIES_RELEASED;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, msgStr );
+	if( targetCr.IsPlayer() )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_RELEASED_FROM_TIES );
+	}
+    CrimeLog( cr, crInfo( cr ) + " cuts ropes on " + crInfo( targetCr ) );
+	return true;
+}
+
+bool StartMenuSCollar( Critter& cr, Item& remote )
+{
+    iMenuHandler@ handler = MenuSCollar( remote );
+    iDialogBox@ menu = OpenMenu( cr, "Slave collar", handler );
+    return true;
+}
+
+class MenuSCollar: CenteredMenuHandler
+{
+    uint m_remote_id;
+    uint m_collar_id;
+    
+    MenuSCollar( Item& remote )
+	{
+        m_remote_id = remote.Id;
+        m_collar_id = remote.KEY_BONDAGE_ID;
+    }
+
+    bool BadSignal( iDialogBox& menu )
+	{
+        m_collar_id = 0;
+        menu.Button( "Обновить" );
+        return true;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Item@ remote = GetItem( m_remote_id );
+        if( remote is null )
+		{
+            return false;
+        }
+
+        Critter@ slave = GetCritter( remote.BOND_SLAVE_ID );
+        if( !valid( slave ) )
+		{
+            return BadSignal(menu);
+        }
+		
+        Map@ map = slave.GetMap();
+        if( map is null )
+		{
+            return BadSignal(menu);
+        }
+		
+        Item@ collar = GetItem( remote.KEY_BONDAGE_ID );
+        if( collar is null )
+		{
+            return BadSignal(menu);
+        }
+
+        if( menu.Button( "Наказать" ) ) 
+        {
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
+            slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_PAIN );
+            slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
+            slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] * 10 / 100 );
+			PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+            slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 115, slave.HexX, slave.HexY );
+            return true;
+        }
+		
+        if( menu.Button( "Ранить" ) ) 
+        {
+            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
+            slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_HARM );
+            slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
+            slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] * 50 / 100 );
+			PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+            slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 130, slave.HexX, slave.HexY );
+            return true;
+        }
+		
+        if( menu.Button( "Покалечить" ) ) 
+        {
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
+            slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_INJURE );
+            slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
+            slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] ) + 1;
+			PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+            slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 160, slave.HexX, slave.HexY );
+            return true;
+        }
+		
+        if( menu.Button( "Убить" ) ) 
+        {
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_EXECUTE_SLAVE );
+			slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_DEATH );
+			PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+            slave.ToDead( ANIM2_DEAD_PULSE, cr );
+			DeleteItem( remote );
+            DeleteItem( collar );
+            return false;
+        }
+		
+        if( menu.Button( "Отпустить" ) ) 
+        {
+            PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+			//cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SLAVE_FREED );
+           // slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_RELEASED_FROM_COLLAR );
+			ReleaseTarget( cr, slave, remote );
+            return false;
+        }
+        return true;
+    }
+
+    string@ Description( Critter& cr )
+	{
+        string info;
+        if( m_collar_id != 0 )
+		{
+            info = "Пульт активен.";
+            info += "\n" + "\nСигнал от ошейника №" + m_collar_id + " принят.";
+            info += "\n" + "\nОжидание команды...";
+        }
+		else
+		{
+            info = "Пульт активен.";
+            info += "\n" + "\nСигнал от ошейника слишком слабый.";
+            info += "\n" + "\nОжидание команды...";
+        }        
+        return info;
+    }
+}
+
+bool TryBreakBonds( Critter& cr, Critter& targetCr )
+{
+	if( HandsTied( cr ) )
+	{
+		cr.Say( SAY_NETMSG, "Hands are tied" );
+		return false;
+	}
+	
+	Item@ hands = _CritGetItemHand( targetCr );
+	Item@ misc = _CritGetItemMisc( targetCr );
+	if( valid( hands ) )
+	{
+		BondageItem@ handBound = GetBondageItem( hands );
+		if( valid( handBound ) && handBound.blocker_type == BONDAGE_TYPE_LOCK && hands.BONDAGE_STATE == BONDAGE_STATE_ON )
+		{
+			hands.PicInv = GetStrHash( "art\\inven\\brokencuffs.png" );
+			hands.Update();
+			
+			hands.BONDAGE_STATE = BONDAGE_STATE_BROKEN;
+			targetCr.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
+			
+			if( targetCr.Id != cr.Id )
+			{
+				MoveItem( hands, 1, cr );
+			}
+			
+			Map@ map = targetCr.GetMap();
+			PlayGenericSound( map, targetCr.HexX, targetCr.HexY, handBound.sound_off, 10 );
+		}
+	}
+	else if( valid( misc ) )
+	{
+		BondageItem@ miscBound = GetBondageItem( misc );
+		if( valid( miscBound ) && miscBound.blocker_type == BONDAGE_TYPE_LOCK && misc.BONDAGE_STATE == BONDAGE_STATE_ON )
+		{
+			misc.BONDAGE_STATE = BONDAGE_STATE_BROKEN;
+			targetCr.MoveItem( misc.Id, misc.GetCount(), SLOT_INV );
+			
+			if( targetCr.Id != cr.Id )
+			{
+				MoveItem( misc, 1, cr );
+			}
+			
+			Map@ map = targetCr.GetMap();
+			PlayGenericSound( map, targetCr.HexX, targetCr.HexY, miscBound.sound_off, 10 );
+		}
+	}
+	else
+	{
+		return false;
+	}
+	return true;
+}
+
+#endif // HANDCUFFS_MODULE

@@ -6,12 +6,13 @@
 #include "_ltp.fos"
 #include "gathering_h.fos"
 #include "critter_skills_h.fos"
+#include "handcuffs_h.fos"
 
 dictionary decraftItems; //Global variable for decraft ingredients
 
 bool TryRepairItem( Critter& cr, Item& item )
 {
-    if( !item.IsDeteriorable() )
+    if( !item.IsDeteriorable() && item.Proto.Item_Subtype != ITEM_SUBTYPE_BONDAGE )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ITEM_UNBREAKABLE );
         return true;
@@ -38,6 +39,11 @@ bool TryRepairItem( Critter& cr, Item& item )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_TO_REPAIR );
 		return false; 
+	}
+	
+	if( HandsTied( cr ) )
+	{
+		return false;
 	}
 	
     // Repair
@@ -417,6 +423,13 @@ bool TryRepairItem( Critter& cr, Item& item )
 			parts.insertLast( PID_CRAFT_M_JUNK ); parts.insertLast( 2 );		
 			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );
 			parts.insertLast( PID_DETAL_MEH ); parts.insertLast( 1 );
+			break;
+		case( PID_HANDCUFFS ):
+		case( PID_SHACKLES ):
+			tools.insertLast( PID_WELDING );
+			tools.insertLast( PID_MULTI_TOOL );
+			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );
+			parts.insertLast( PID_CHAIN ); parts.insertLast( 1 );
 			break;
 	}
 	//BY_ITEM_SUBTYPE
@@ -1052,7 +1065,23 @@ uint process_repair( Critter@ cr, int& param0, int& param1, int& param2 )
 
 void RepairResult( Critter& cr, Item& item, int repair )
 {
-	if( FLAG( item.BrokenFlags, BI_BROKEN ) )
+	if( item.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE && item.BONDAGE_STATE == BONDAGE_STATE_BROKEN )
+	{
+		item.BONDAGE_STATE = BONDAGE_STATE_OFF;
+		uint16 pid = item.GetProtoId();
+		switch( pid )
+		{
+			case( PID_HANDCUFFS ):
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HANDCUFFS_REPAIRED );
+				item.PicInv = GetStrHash( null );
+				break;
+			case( PID_SHACKLES ):
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SHACKLES_REPAIRED );
+				item.PicInv = GetStrHash( null );
+				break;
+		}
+	}
+	else if( FLAG( item.BrokenFlags, BI_BROKEN ) )
 	{
         if( FLAG( item.BrokenFlags, BI_HIGHBROKEN ) )
 		{
@@ -1174,46 +1203,99 @@ int GetDeteriorationProcent( Item& item )
     return CLAMP( value, 0, 100 );
 }
 
-bool AskAction( Critter& cr, Item& item )
-{
-	uint type = item.GetType();
-	
-	cr.ParamBase[CR_VAL0] = item.Id;
-	
-	uint[] inspectable = { ITEM_TYPE_ARMOR, ITEM_TYPE_WEAPON, ITEM_TYPE_AMMO };
-	
-	string[] data = { "repair@answer_Action", "Выберите действие:", "Починить", "Разобрать" };
 
-	DIALOG_MENU( cr, data );
-	return true;
+class MenuAskAction: CenteredMenuHandler
+{
+    uint item_id;
+    uint map_id;
+	
+    MenuAskAction( Item& item, Map& map )
+	{
+        item_id = item.Id;
+        map_id = map.Id;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+        Item@ item = GetItem( item_id );
+	
+        if( map is null || item is null )
+		{
+            return false;
+        }
+		
+		if( item.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE && item.BONDAGE_STATE == BONDAGE_STATE_BROKEN && menu.Button( "Починить" ) )
+		{
+			TryRepairItem( cr, item );
+			return false;
+		}
+		else if( item.IsDeteriorable() && menu.Button( "Починить" ) )
+		{
+			TryRepairItem( cr, item );
+			return false;
+		}
+		
+		if( menu.Button( "Разобрать" ) )
+		{
+			TryDisassembleItem( cr, item );
+			return false;
+		}
+			
+		if(	item.GetType() == ITEM_TYPE_ARMOR )
+		{
+			if( ( item.Proto.Item_Subtype >= ITEM_SUBTYPE_ARMOR_AC20 && item.Proto.Item_Subtype <= ITEM_SUBTYPE_ARMOR_AC50 ) && menu.Button( "Установить рацию" ) )
+			{
+				InstallRadio( cr, item );
+				return false;
+			}
+			
+			if( hasItem( cr, PID_COLORS ) )
+			{
+				if( menu.Button( "Покрасить броню" ) )
+				{
+					Item@ paint = getItem( cr, PID_COLORS );
+					TryPaintArmor( cr, paint, item );
+					return false;
+				}
+			}
+		}
+		return true;
+    }
+	
+    string@ Description( Critter& cr )
+	{
+		string info = "Action menu";
+		return info;
+    }
+	
+    string@ ButtonCancel()
+	{
+        return ButtonDecorator( "Hide menu", null );
+    }
 }
 
-void answer_Action( Critter& cr, uint answerI, string& answerS )
+void StartMenuAskAction( Critter& cr, Item& item )
 {
-	Item@ item = GetItem( cr.Param[CR_VAL0] );
-	if( !valid( item ) )
+    Map@ map = cr.GetMap();
+    if( map is null )
 	{
-		return;
-	}
-	
-	switch( answerI )
-	{
-		case( 0 ):
-			TryRepairItem( cr, item );
-			break;
-		case( 1 ):
-			TryDisassembleItem( cr, item );
-			break;
-		default:
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DID_NOTHING );
-			break;
-	}
+        return;
+    }
+
+    iMenuHandler@ handler = MenuAskAction( item, map );
+    iDialogBox@ menu = OpenMenu( cr, "Action menu", handler );
 }
 
 //DECRAFT//
 bool TryDisassembleItem( Critter& cr, Item& item )
 {
 	if( IsTired( cr ) )
+	{
+		return false;
+	}
+	
+	if( HandsTied( cr ) )
 	{
 		return false;
 	}
@@ -2281,7 +2363,7 @@ bool DecraftResult( Critter& cr, Item& item )
 	if ( item.GetCount() > 1 )
 	{
 		item.SetCount(item.GetCount() - 1);
-		AskAction( cr, item );
+		StartMenuAskAction( cr, item );
 	}
 	else
 	{
@@ -2291,7 +2373,7 @@ bool DecraftResult( Critter& cr, Item& item )
 }
 
 //Armor radio installation	
-bool InstallRadio( Critter& cr, Item& radio, Item& armor )
+bool InstallRadio( Critter& cr, Item& armor )
 {
 	if( FLAG( armor.Flags, ITEM_RADIO ) )
 	{ 
@@ -2304,7 +2386,7 @@ bool InstallRadio( Critter& cr, Item& radio, Item& armor )
 		return false;
 	}
 	
-	if( IsTired( cr ) )
+	if( HandsTied( cr ) )
 	{
 		return false;
 	}
@@ -2315,53 +2397,30 @@ bool InstallRadio( Critter& cr, Item& radio, Item& armor )
 		return false; 
 	}
 	
-	string fail = "|0xFFFF00 Вы не смогли произвести установку рации!\n";
-	
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FAILED_INSTALL_RADIO );
 	if( !checkSkill( cr ) )
 	{
-		string skill = "|0x3CF800 Необходимо иметь навыки: \n";
-		skill += " - ";
-		skill += "|0xFFFF00 Наука";
-		skill += "|0x3CF800  - ";
-		skill += "|0xFFFF00 150";
-		skill += "|0x3CF800 ,\n - ";
-		skill += "|0xFFFF00 Ремонт";
-		skill += "|0x3CF800  - ";
-		skill += "|0xFFFF00 200";
-		skill += "|0x3CF800 .";
-		cr.Say( SAY_NETMSG, fail + skill ); 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SKILLS_TO_INSTALL_RADIO );
 		return false;
 	}
 	
 	if( !checkTools( cr ) )
 	{ 
-		string tool = "|0x3CF800 Необходимые инструменты:\n";
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_HOLD_TOOL );
 		for( uint i = 0; i < RadioInstallTools.length; i++ )
 		{
-			tool += " - ";
-			tool += "|0xFFFF00 " + _GetProtoName( RadioInstallTools[i] );
-			tool += "|0x3CF800 ,\n";
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_HOLD_TOOL_PID, "$proto@msg item " + ( RadioInstallTools[i] * 100 ) + "@" );
 		}	
-		tool[ tool.length() - 2 ] = '.';
-		tool[ tool.length() - 1 ] = ' ';
-		cr.Say( SAY_NETMSG, fail + tool );
 		return false;
 	}
 	
 	if( !checkComponents( cr ) )
 	{
-		string component = "|0x3CF800 Необходимые материалы:\n";
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_PARTS );
 		for( uint i = 0; i < RadioInstallComponents.length; i++ )
 		{
-			component += " - ";
-			component += "|0xFFFF00 " + _GetProtoName( RadioInstallComponents[i] );
-			component += "|0x3CF800  - ";
-			component += "|0xFFFF00 " + RIComponentsAmount[ i ];
-			component += "|0x3CF800  шт.,\n";
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_PARTS_PID, "$proto@msg item " + ( RadioInstallComponents[i] * 100 ) + "@" );
 		}			
-		component[ component.length() - 2 ] = ' ';
-		component[ component.length() - 1 ] = ' ';
-		cr.Say( SAY_NETMSG, fail + component );
 		return false;
 	}
 	
@@ -2448,7 +2507,7 @@ uint process_install_radio( Critter@ cr, int& param0, int& param1, int& param2 )
 		if( param0 > sequence_length )
 		{
 			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_FINISH_INSTALL_RADIO );
-			InstallRadio( cr, armor );
+			InstallRadioResult( cr, armor );
 			return 0;
 		}
 		
@@ -2472,7 +2531,7 @@ uint e_RepairSound( uint[]@ values )
 	return 0;
 }
 
-bool InstallRadio( Critter& cr, Item& armor )
+bool InstallRadioResult( Critter& cr, Item& armor )
 {
 	for( uint i = 0; i < RadioInstallComponents.length; i++ )
 	{
@@ -2530,7 +2589,7 @@ bool TryPaintArmor( Critter& cr, Item& paint, Item& armor )
 		return false;
 	}
 	
-	if( IsTired( cr ) )
+	if( HandsTied( cr ) )
 	{
 		return false;
 	}
@@ -2611,8 +2670,6 @@ class MenuPaintArmor: CenteredMenuHandler
     string@ Description( Critter& cr )
 	{
 		string info = "Покраска брони";
-		Item@ armor = GetItem( armor_id );
-		
 		return info;
     }
 	

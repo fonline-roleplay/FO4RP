@@ -24,6 +24,7 @@
 #include "gathering_h.fos"
 #include "geiger_h.fos"
 #include "globalmap_group_h.fos"
+#include "handcuffs_h.fos"
 #include "heal_h.fos"
 #include "homebrew_h.fos"
 #include "item_h.fos"
@@ -67,8 +68,6 @@ import void qmap_save_all() from "qmap";
 import void qmap_load_all() from "qmap";
 
 import bool UseShovel( Critter& cr, Item& item ) from "farm";
-
-import bool CutCheck( Critter& cr, Item@ item, Critter@ target ) from "handcuffs";
 
 import void registerTraps() from "traps";
 
@@ -379,7 +378,8 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 		return true;
 	}
 	
-	if( cr.Param[ HANDCUFFS ] != 0 )
+	Item@ hand = _CritGetItemHand( cr );
+	if( HandsTied( cr ) )
 	{
         return true;
 	}
@@ -415,7 +415,7 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 		
         if( itemscount > 0 )
         {
-            if( items[ 0 ].GetProtoId() != PID_HANDCUFFS && items[ 0 ].GetProtoId() != PID_ROPE_USED )
+            if( !HandsTied( cr ) )
 			{
                 cr.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
 			}
@@ -423,15 +423,12 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 		
         if( itemscount0 > 0 )
         {
-            if( items0[ 0 ].GetProtoId() != PID_HANDCUFFS && items[ 0 ].GetProtoId() != PID_ROPE_USED )
-			{
-                cr.MoveItem( items0[ 0 ].Id, itemscount0, SLOT_INV );
-			}
+			cr.MoveItem( items0[ 0 ].Id, itemscount0, SLOT_INV );
         }
 		
 		if( itemscount1 > 0 )
         {
-            if( items1[ 0 ].GetProtoId() != PID_COLLAR )
+            if( items1[ 0 ].GetProtoId() != PID_SLAVE_COLLAR )
 			{
                 cr.MoveItem( items1[ 0 ].Id, itemscount1, SLOT_INV );
 			}
@@ -723,6 +720,9 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		case( PID_SPADE ):
 			CheckRemainsRemoval( cr, targetItem );
 			return true;
+		case( PID_SLAVE_COLLAR_SWITCH ):
+			StartMenuSCollar( cr, item );
+			return true;
 	}
 	//Show single Card
 	if( Cards.find( pid ) != -1 )
@@ -746,77 +746,11 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			return true;
 		}
 	}
-	// SHACKLES - TO REVISE
-	if( pid == PID_WELDING || pid == PID_ENERGY_WELDIN )
-	{
-		if( valid( targetItem ) && targetItem.GetProtoId() == PID_SHACKLES )
-		{
-			if( targetItem.Val3 == 0 )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SHACKLES_DONT_REPAIR );
-				return true;
-			}
-
-			if( cr.CountItem( PID_CRAFT_M_BARS ) == 0 )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SHACKLES_NEED_DETAIL );
-				return true;
-			}
-			
-			cr.DeleteItem( PID_CRAFT_M_BARS, 1 );
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SHACKLES_REPAIRED );
-
-			targetItem.Val2 = 0;
-			targetItem.Val3 = 0;
-			return true;
-		}
-		
-		Critter@ target = useOnSelf ? @cr : @targetCr;
-		if( valid( target ) )
-		{
-			Item@ shackles = target.GetItem( 0, SLOT_MISC );
-			if( valid( shackles ) && shackles.GetProtoId() == PID_SHACKLES )
-			{
-				if( shackles.Val3 != 0 || shackles.Val2 == 0 )
-				{
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SHACKLES_TAKE_OFF );
-					return true;
-				}
-				
-				if( !useOnSelf )
-				{
-					cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_REMOVE_SHACKLES );
-					target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SHACKLES_YOU_FREE );
-				}
-				else
-				{
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SHACKLES_FREE_YOURSELF );
-				}
-				
-				LogItemMovement( cr, shackles, "removes shackles from " + crInfo( target ) + ", using wielding" + itemDesc( item ) );
-				
-				shackles.Val3 = 1;
-				shackles.SetScript( "_InitDefaultShackles" );
-				
-				MoveItem( shackles, 1, cr );
-				cr.MoveItem( shackles.Id, shackles.GetCount(), SLOT_INV );				
-				
-				ChangeCritterSpeed( target );
-				return true;
-			}
-		}
-	}
-	
-	if( pid == PID_SHACKLES && UsedShackles( cr, item, targetCr, useOnSelf ) )
-	{
-		return true;
-	}
-	
 	// Knife use
 	if( CutCheck( cr, item, useOnSelf ? @cr : @targetCr ) )
 	{ 
 		return true;
-	}		
+	}
 	//Blood wrapping
 	if( pid == PID_CRAFT_L_RAGS && valid( targetItem ) && targetItem.GetProtoId() >= PID_BLOOD_SMALL_1 && targetItem.GetProtoId() <= PID_BLOOD_BIG_3 )
 	{
@@ -960,7 +894,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 	{
 		if( valid( targetItem ) && targetItem.GetType() == ITEM_TYPE_ARMOR && ( targetItem.Proto.Item_Subtype >= ITEM_SUBTYPE_ARMOR_AC20 && targetItem.Proto.Item_Subtype <= ITEM_SUBTYPE_ARMOR_AC50 ) )
 		{ 
-			InstallRadio( cr, item, targetItem );
+			InstallRadio( cr, targetItem );
 		}
 		return true;
 	}
@@ -1030,6 +964,12 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			
 			openedBottle.Update();
 			
+			string@ lexems = Item_GetLexems( item );
+			if( valid( lexems ) )
+			{
+				openedBottle.SetLexems( lexems );
+			}
+			
 			_SubItem( item, 1 );
 			
 			Item@ hands = cr.GetItem( 0, SLOT_HAND1 );
@@ -1073,7 +1013,41 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		}
         return true;
     }
-	
+	// Bondage
+	if( item.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE )
+	{
+		if( item.BONDAGE_STATE != BONDAGE_STATE_OFF )
+		{
+			return false;
+		}
+		
+		if( useOnSelf )
+		{
+			@targetCr = cr;
+		}
+		BondageTarget( cr, targetCr, item );
+		return true;
+	}
+	// Bondage key
+	if( pid == PID_HANDCUFFS_KEY || pid == PID_SHACKLES_KEY )
+	{
+		if( useOnSelf )
+		{
+			@targetCr = cr;
+		}
+		ReleaseTarget( cr, targetCr, item );
+		return true;
+	}
+	// Remove shackles and cuffs
+	if( pid == PID_WELDING || pid == PID_ENERGY_WELDIN )
+	{
+		if( useOnSelf )
+		{
+			@targetCr = cr;
+		}
+		TryBreakBonds( cr, targetCr );
+		return true;
+	}
     // Drugs
     if( item.GetType() == ITEM_TYPE_DRUG || item.GetType() == ITEM_TYPE_FOOD )
 	{
@@ -1207,6 +1181,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
     if( ( pid == PID_CROWBAR || pid == PID_MULTI_TOOL ) && @targetItem != null )
 	{
         LockerRemoval( cr, item, targetItem );
+		return true;
     }
     // Geiger counter
     if( pid == PID_GEIGER_COUNTER && useOnSelf && UseGeiger( cr, item ) )
@@ -1219,8 +1194,9 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
         return true;
 	}
 	//Showel on self to make a bed in GM mode
-    if( pid == PID_SHOVEL && useOnSelf && UseShovel( cr, item ) )
+    if( pid == PID_SHOVEL && useOnSelf )
 	{
+		UseShovel( cr, item );
         return true;
 	}
 	// Item use on locker
@@ -1378,7 +1354,8 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				return true;
 			}
 			// Jukebox Interface
-			if( Pid == PID_JUKEBOX1 || Pid == PID_JUKEBOX2 || Pid == PID_JUKEBOX3 || Pid == PID_JUKEBOX4 ) {
+			if( Pid == PID_JUKEBOX1 || Pid == PID_JUKEBOX2 || Pid == PID_JUKEBOX3 || Pid == PID_JUKEBOX4 )
+			{
 				StartMenuJukebox( cr, targetItem );
 				return true;
 			}
@@ -1505,6 +1482,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			{
 				return false;
 			}
+			
 			Item@ cont = GetItem( cr.ParamBase[ ST_LAST_CONT_ID ] );
 			if( !valid( cont ) )
 			{
@@ -1744,7 +1722,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		{
 			if( valid( targetItem ) && targetItem.Accessory == ACCESSORY_CRITTER )
 			{
-				AskAction( cr, targetItem );
+				StartMenuAskAction( cr, targetItem );
 				return true;
 			}
 			break; 
@@ -1803,31 +1781,21 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 					uint itemscount2 = targetCr.GetItems( SLOT_BACK, items2 );
 					uint itemscount3 = targetCr.GetItems( SLOT_MISC, items3 );
 					
-					if( targetCr.IsKnockout() || targetCr.IsDead() || targetCr.Stat[ HANDCUFFS ] != 0 || !CanResist( targetCr ) || isGM( cr ) )
+					if( targetCr.IsKnockout() || targetCr.IsDead() || CantResist( targetCr ) || isGM( cr ) )
 					{
 						if( itemscount > 0 )
 						{
-							Item@ hand = items[0];
-							if( valid( hand ) )
+							if( !HandsTied( cr ) )
 							{
-								int pid = hand.GetProtoId();
-								if( pid != PID_HANDCUFFS && pid != PID_ROPE_USED )
-								{
-									targetCr.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
-								}
+								targetCr.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
 							}
 						}
 						
 						if( itemscount0 > 0 )
 						{
-							Item@ hand = items0[0];
-							if( valid( hand ) )
+							if( !HandsTied( cr ) )
 							{
-								int pid = hand.GetProtoId();
-								if( pid != PID_HANDCUFFS && pid != PID_ROPE_USED )
-								{
-									targetCr.MoveItem( items0[ 0 ].Id, itemscount, SLOT_INV );
-								}
+								targetCr.MoveItem( items0[ 0 ].Id, itemscount, SLOT_INV );
 							}
 						}
 
@@ -1837,7 +1805,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 							if( valid( head ) )
 							{
 								int pid = head.GetProtoId();
-								if( pid != PID_COLLAR )
+								if( pid != PID_ACTIVE_SLAVE_COLLAR )
 								{
 									targetCr.MoveItem( items1[ 0 ].Id, itemscount, SLOT_INV );
 								}
@@ -1909,12 +1877,18 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				StartMenuCard( cr, targetItem );
 				return true;
 			}
+			//General attempt at repair
+			if( targetItem.IsDeteriorable() || targetItem.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE )
+			{
+				TryRepairItem( cr, targetItem );
+				return true;
+			}
 			break; 
 		}
 		
 		case( SK_SNEAK ): 
 		{
-			cr.Say( SAY_NETMSG, "|0xFF0000 Данный скил отключен." );
+			cr.Say( SAY_NETMSG, "|0xFF0000 Skill disabled." );
 			return true; 
 		}
 		
@@ -1929,7 +1903,8 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			{
 				CrimeLog( cr, crInfo( cr ) + " attempted to look into inventory of: " + crInfo( targetCr ) );
 				
-				if( targetCr.Param[ HANDCUFFS ] != 0 )
+				Item@ hands = _CritGetItemHand ( targetCr );
+				if( HandsTied( targetCr ) )
 				{
 					CrimeLog( cr, crInfo( cr ) + " looks at inventory of: " + crInfo( targetCr ) + " who is tied up." );
 					ShowContainer( cr, targetCr, TRANSFER_CRIT_STEAL );
@@ -1947,7 +1922,8 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 					// Steal
 					else
 					{
-						if( isPlayer && cr.Timeout[ TO_SK_STEAL ] > 0 ) {
+						if( isPlayer && cr.Timeout[ TO_SK_STEAL ] > 0 )
+						{
 							cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SK_COOLDOWN );
 							return true;
 						}
@@ -1968,104 +1944,21 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		
 		case( SK_LOCKPICK ): 
 		{
-			if( valid( targetCr ) || onSelf )
+			Item@ gagItm = _CritGetItemHead( cr );
+			if( valid( gagItm ) )
 			{
-				Critter@ target = onSelf ? @cr : @targetCr;
-				Item@ ball_gag = target.GetItem( 0, SLOT_HEAD );
-				if( valid( ball_gag ) && ball_gag.GetProtoId() == PID_BALL_GAG )
+				if( gagItm.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE )
 				{
-					if( onSelf && ball_gag.Val0 != 0 )
-					{
-						InformWarning( cr, "|0xFFFF00 Вы не можете вынуть кляп в данный момент." );
-						return true;
-					}
-					
-					ball_gag.Val0 = 0;
-					MoveItem( ball_gag, 1, cr );
-					cr.MoveItem( ball_gag.Id, ball_gag.GetCount(), SLOT_INV );				
-
-					if( !onSelf )
-					{
-						cr.Say( SAY_NETMSG, "|0xFFFF00 Вы вынули кляп." );
-						targetCr.Say( SAY_NETMSG, "|0xFFFF00 Вам вынули кляп изо рта, теперь вы снова можете говорить." );
-					}
-					else
-					{
-						cr.Say( SAY_NETMSG, "|0xFFFF00 Вы самостоятельно избавились от кляпа во рту." );
-					}
-					return true;
-				}
-			}
-		
-			if( ( ( valid( targetCr ) ) && ( targetCr.Param[ HANDCUFFS ] != 0 ) ) || ( ( onSelf ) && ( cr.Param[ HANDCUFFS ] != 0 ) ) )
-			{
-				if( cr.Timeout[ TO_SK_LOCKPICK ] > 0 )
-				{
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 3401 );
-					return true;
-				}
-				else
-				{
-					if( valid( targetCr ) && ( ( targetCr.Param[ HANDCUFFS ] >> 29 ) & 0x1 ) == 0 )
-					{
-						CrimeLog( cr, crInfo( cr ) + " пытается освободить цель от наручников/верёвки " + crInfo( targetCr ) );
-						
-						cr.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( cr );
-						if( ( cr.Param[ SK_LOCKPICK ] + Random( 0, 150 ) + (cr.Stat[ST_LUCK] - 5)*5) > 300 - Random( 0, 50 ) )
-						{
-							Item@[] items;
-							uint8 nohome = ( targetCr.Param[ HANDCUFFS ] >> 30 ) & 0x1;
-
-							if( targetCr.IsNpc() )
-							{
-								targetCr.ParamBase[ MODE_NO_HOME ] = nohome;
-							}
-
-							bool isCuffs = targetCr.CountItem( PID_HANDCUFFS_USED ) > 0;
-							bool isRope =  targetCr.CountItem( PID_ROPE_USED ) > 0;
-							if( isCuffs || isRope )
-							{
-								targetCr.DeleteItem( isCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
-								cr.AddItem( isCuffs ? PID_BROKEN_CUFFS : PID_ROPE, 1 );
-								cr.Say( SAY_NETMSG, "|0xFFFF00 Вы освободили цель." );
-								
-								CrimeLog( cr, crInfo( cr ) + " вскрывает " + ( isCuffs ? "наручники" : "узел верёвки" ) + " у цели " + crInfo( targetCr ) );
-							}
-							targetCr.StatBase[ HANDCUFFS ] = 0;
-						}
-						else
-						{
-							InformWarning( cr, "|0xFFFF00 Вам не удалось освободиться." );
-						}
-					}
-
 					if( onSelf )
 					{
-						cr.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( cr );
-						if( ( cr.Param[ SK_LOCKPICK ] + Random( 0, 150 ) + (cr.Stat [ST_LUCK] - 5)*5) > 300 - Random( 0, 50 ) )
-						{
-							bool isCuffs = cr.CountItem( PID_HANDCUFFS_USED ) > 0;
-							bool isRope =  cr.CountItem( PID_ROPE_USED ) > 0;
-							if( isCuffs || isRope )
-							{
-								cr.DeleteItem( isCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
-								cr.AddItem( isCuffs ? PID_BROKEN_CUFFS : PID_ROPE, 1 );
-								cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, isCuffs ? 12947 : 12988 );
-
-								CrimeLog( cr, crInfo( cr ) + " вскрывает " + ( isCuffs ? "наручники" : "узел верёвки" ) + " у себя" );
-							}
-							cr.StatBase[ HANDCUFFS ] = 0;
-						}
-						else
-						{
-							InformWarning( cr, "|0xFFFF00 Вам не удалось освободиться." );
-						}
+						@targetCr = cr;
 					}
+					TryRemoveGag( cr, targetCr, gagItm );
 					return true;
 				}
 			}
-			break; 
 		}
+		
 		case( SK_TRAPS ): 
 		{
 			if( valid( targetItem ) )
@@ -2086,8 +1979,10 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			break; 
 		}
 		default:
+		{
 			break;
-    }
+		}
+	}
 	return false;
 }
 
@@ -2239,6 +2134,7 @@ void critter_init( Critter& cr, bool firstTime )
 			{
                 crType = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
             }
+			
 			cr.StatBase[ ST_BASE_CRTYPE ] = crType;
             if( cr.CrType != crType )
 			{
@@ -2760,7 +2656,7 @@ void items_crafted( Item@[]& items, uint[]& itemsCount, Item@[]& resources, Crit
 			if( ammoCount > 0 )
 			{
 				Item@ ammo = crafter.AddItem( item.AmmoPid, ammoCount );
-				crafter.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_AMMO_EJECTED, "$proto@msg ITEM " + ( ammo.Proto.ProtoId * 100 + 2 ) + "@$count" + ammoCount );
+				crafter.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_AMMO_EJECTED, "$proto@msg item " + ( ammo.Proto.ProtoId * 100 + 2 ) + "@$count" + ammoCount );
 				item.AmmoCount = 0;
 				item.Update();
 			}
@@ -3535,234 +3431,6 @@ uint e_DelayedRemoval( uint[]@ values )
 		cr.ShowScreen( SCREEN_CLOSE, 0, "" );
 	}
 	return 0;
-}
-
-bool CanResist( Critter@ targetCr )
-{
-	if( !valid( targetCr ) )
-	{
-		return true;
-	}
-	
-	if( targetCr.IsKnockout() || targetCr.Param[ST_CURRENT_HP] <= 0 )
-	{
-		return false;
-	}
-	
-	uint pid = 0;
-	Item@ item;
-
-	@item = targetCr.GetItem( 0, SLOT_HAND1 );
-	pid = valid( item ) ? item.GetProtoId() : 0;
-	if( pid == PID_ROPE_USED || pid == PID_HANDCUFFS_USED )
-	{
-		return false;
-	}
-	
-	@item = targetCr.GetItem( 0, SLOT_HAND2 );
-	pid = valid( item ) ? item.GetProtoId() : 0;
-	if( pid == PID_ROPE_USED || pid == PID_HANDCUFFS_USED )
-	{
-		return false;
-	}
-	
-	@item = targetCr.GetItem( 0, SLOT_HEAD );
-	pid = valid( item ) ? item.GetProtoId() : 0;
-	if( pid == PID_COLLAR || pid == PID_BALL_GAG )
-	{
-		return false;
-	}
-	
-	@item = targetCr.GetItem( 0, SLOT_MISC );
-	pid = valid( item ) ? item.GetProtoId() : 0;
-	if( pid == PID_SHACKLES )
-	{
-		return false;
-	}
-	
-	return true;
-}
-
-void _HandcuffsKeyUsed( Item& item, bool FirstTime )
-{
-	item.SetEvent( ITEM_EVENT_USE, "_release" );
-}
-
-void _InitUsedShackles( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_MOVE, "_hellno1" );
-    item.SetEvent( ITEM_EVENT_DROP, "_hellno3" );
-}
-
-void _hellno1( Item& item, Critter& crit, uint8 fromSlot )
-{
-    if( item.CritSlot != SLOT_MISC )
-    {
-		InformWarning(crit, "Это просто не могло быть так просто." );
-        crit.MoveItem( item.Id, 1, SLOT_MISC );
-        item.Update();
-    }
-}
-
-void _hellno3( Item& item, Critter& crit )
-{
-	InformWarning(crit, "Это просто не могло быть так просто. " );
-    MoveItem( item, 1, crit );
-    crit.MoveItem( item.Id, 1, SLOT_MISC );
-    item.Update();
-}
-
-void _InitDefaultShackles( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_MOVE, null );
-    item.SetEvent( ITEM_EVENT_DROP, null );
-}
-
-bool _release( Item& key, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-    bool onSelf = ( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) );
-	int  cuffs_state;
-    int  keynum;
-    int  nohome;
-
-    Critter@ target = onSelf ? @cr : @onCritter;
-
-	Item@ shackles = target.GetItem( 0, SLOT_MISC );
-	if( !valid( shackles ) || shackles.GetProtoId() != PID_SHACKLES )
-	{
-		cr.Say( SAY_NETMSG, "На цели не одеты кандалы." );
-		return true;
-	}
-	
-	if( shackles.Val3 != 0 )
-	{
-		cr.Say( SAY_NETMSG, "Кандалы сломаны." );
-		return true;
-	}
-	
-	if( shackles.Val1 != key.Val1 && shackles.Val1 != int( key.LockerId ) )
-	{
-		cr.Say( SAY_NETMSG, "Ключ не подошёл." );
-		return true;
-	}
-		
-	if( !onSelf )
-	{
-		cr.Say( SAY_NETMSG, "Вы сняли кандалы с цели." );
-		target.Say( SAY_NETMSG, "Вас освободили от кандалов." );
-	}
-	else
-		cr.Say( SAY_NETMSG, "Вы сняли с себя кандалы." );
-
-	LogItemMovement( cr, shackles, "снимает кандалы с " + crInfo( target ) + ", используя ключ " + itemDesc( key ) );
-	
-	DeleteItem( key );
-	
-	shackles.Val2 = 0;
-	shackles.SetScript( "_InitDefaultShackles" );
-
-	MoveItem( shackles, 1, cr );
-	cr.MoveItem( shackles.Id, 1, SLOT_INV );
-	
-	ChangeCritterSpeed( target );
-	return true;
-}
-
-bool UsedShackles( Critter& cr, Item& item, Critter@ targetCr, bool useOnSelf )
-{
-	if( item.Val1 == 0 )
-		item.Val1 = Random( 1, 8191 );
-	
-	if( item.Val3 != 0 )
-	{
-		cr.Say( SAY_NETMSG, "Эти кандалы сломаны." );
-		return true;
-	}
-	
-	if( item.Val2 != 0 )
-	{
-		if( useOnSelf )
-		{
-			InformWarning( cr, "Кандалы так просто не снять." );
-			return true;
-		}
-		
-		return false;
-	}
-
-	if( useOnSelf )
-		return PutOnShackles( cr, item, targetCr, useOnSelf );
-	
-	if( !valid( targetCr ) ) return false;
-	
-	if( CanResist( targetCr ) )
-	{
-		targetCr.ParamBase[CR_VAL0] = cr.Id;
-		targetCr.ParamBase[CR_VAL1] = item.Id;
-		targetCr.ParamBase[CR_VAL2] = useOnSelf ? 1 : 0;
-		targetCr.ShowScreen( SCREEN_DIALOGBOX, 1, "AnswerPutOnShackles" );
-		targetCr.Say( SAY_DIALOGBOX_TEXT, "На вас пытаются надеть кандалы!" );
-		targetCr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Подчиниться" );
-		targetCr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "Сопротивляться" );		
-		
-		return true;
-	}
-	
-	return PutOnShackles( cr, item, targetCr, useOnSelf );
-}
-
-void AnswerPutOnShackles( Critter& targetCr, uint answerI, string& answerS )
-{
-	PutOnShackles( GetCritter( targetCr.ParamBase[CR_VAL0] ), GetItem( targetCr.ParamBase[CR_VAL1] ), targetCr, targetCr.ParamBase[CR_VAL2] == 1 );
-}
-
-bool PutOnShackles( Critter@ cr, Item@ item, Critter@ targetCr, bool useOnSelf )
-{
-	if( !valid( cr ) || !valid( item ) ) return false;
-	
-	Critter@ target = useOnSelf ? @cr : @targetCr;
-
-	if( !valid( target ) ) return false;
-
-	Item@ slot = target.GetItem( 0, SLOT_MISC );
-	if( valid( slot ) )
-	{
-		if( slot.GetProtoId() == PID_SHACKLES && slot.Val2 != 0 && slot.Val3 == 0 )
-		{
-			cr.Say( SAY_NETMSG, "На цели уже одеты кандалы." );
-			return true;
-		}
-		
-		target.MoveItem( slot.Id, slot.GetCount(), SLOT_INV );
-	}
-
-	Item @key = cr.AddItem( PID_SHACKLES_KEY, 1 );
-	key.Val1 = item.Val1;
-	key.LockerId = item.Val1;
-	key.SetLexems( "$keynum" + key.Val1 );
-	key.SetScript( "_HandcuffsKeyUsed" );
-	key.Update();
-	
-	item.Val2 = key.Id;
-	item.SetScript( "_InitUsedShackles" );		
-	
-	if( !useOnSelf )
-	{
-		cr.Say( SAY_NETMSG, "Вы одели кандалы на цель." );
-		target.Say( SAY_NETMSG, "Вас заковали в кандалы." );
-	}
-	else
-	{
-		cr.Say( SAY_NETMSG, "Вы одели кандалы на себя." );
-	}
-
-	MoveItem( item, 1, target );
-	target.MoveItem( item.Id, item.GetCount(), SLOT_MISC );
-	
-	LogItemMovement( cr, item, "одевает кандалы на " + crInfo( target ) + ", запирая их ключом " + itemDesc( key ) );
-	
-	ChangeCritterSpeed( target );	
-	return true;
 }
 
 void unsafe_ItemsWeight( Critter& player, int itemId, int param1, int param2, string@ param3, int[]@ param4 )
