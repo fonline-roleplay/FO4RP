@@ -368,85 +368,67 @@ void critter_attacked( Critter& cr, Critter& attacker )
 // Call on something critter steal another.
 bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 {
-	if( cr.IsKnockout() || cr.Param[ST_CURRENT_HP] <= 0 )
-	{
-		return true;
-	}
+	bool success = false;
 	
-    if( cr.StatBase[ST_FOLLOW_CRIT] == int( thief.Id ) )
-	{
-		return true;
-	}
-	
-	Item@ hand = _CritGetItemHand( cr );
-	if( HandsTied( cr ) )
-	{
-        return true;
-	}
-	
-    thief.TimeoutBase[ TO_AGGRESSOR ] = __FullSecond + REAL_MINUTE( 1 );
-
-    if( cr.IsDead() || cr.Timeout[ TO_BATTLE ] > 0 || thief.Timeout[ TO_BATTLE ] > 0 )
+	/* Battle & death check */
+    if( cr.IsDead() )
     {
-        thief.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
-        thief.StatBase[ ST_STEAL_COUNT ] = 0;
+        thief.StatBase[ST_LAST_STEAL_CR_ID] = 0;
+        thief.StatBase[ST_STEAL_COUNT] = 0;
         return false;
     }
-
-    if( cr.Mode[ MODE_NO_PVP ] != 0 || thief.Mode[ MODE_NO_PVP ] != 0 )
+	else if( cr.StatBase[ST_FOLLOW_CRIT] == int( thief.Id ) )
+	{
+		return true;
+	}
+    else if( cr.Mode[ MODE_NO_PVP ] != 0 || thief.Mode[ MODE_NO_PVP ] != 0 )
     {
         thief.Say( SAY_NETMSG, "No PvP." );
         return false;
     }
 
-    if( cr.IsKnockout() )
-    {
-        Item@[] items;
-        Item@[] items0;
-		Item@[] items1;
-		Item@[] items2;
-		Item@[] items3;
-		
-        uint itemscount = cr.GetItems( SLOT_HAND1, items );
-        uint itemscount0 = cr.GetItems( SLOT_HAND2, items0 );
-		uint itemscount1 = cr.GetItems( SLOT_HEAD, items1 );
-		uint itemscount2 = cr.GetItems( SLOT_BACK, items2 );
-		uint itemscount3 = cr.GetItems( SLOT_MISC, items3 );
-		
-        if( itemscount > 0 )
-        {
-            if( !HandsTied( cr ) )
-			{
-                cr.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
-			}
-        }
-		
-        if( itemscount0 > 0 )
-        {
-			cr.MoveItem( items0[ 0 ].Id, itemscount0, SLOT_INV );
-        }
-		
-		if( itemscount1 > 0 )
-        {
-            if( items1[ 0 ].GetProtoId() != PID_SLAVE_COLLAR )
-			{
-                cr.MoveItem( items1[ 0 ].Id, itemscount1, SLOT_INV );
-			}
-        }
-		
-		if( itemscount2 > 0 )
-		{	 
-			cr.MoveItem( items2[ 0 ].Id, itemscount2, SLOT_INV );
-		}
-		
-		if( itemscount3 > 0 )
-		{	 
-			cr.MoveItem( items3[ 0 ].Id, itemscount3, SLOT_INV );
-		}
+    thief.TimeoutBase[ TO_AGGRESSOR ] = __FullSecond + REAL_MINUTE( 1 );
 
-        return true;
+	/* Target perception & steal skill modifiers */
+    int targetPeModifier = cr.Stat[ ST_PERCEPTION ];
+    int targetStealModifier = cr.Skill[ SK_STEAL ];
+
+    if( targetPeModifier <= 0 )
+    {
+        targetPeModifier = 1;
     }
 
+    if( targetStealModifier <= 0 )
+    {
+        targetStealModifier = 1;
+    }
+
+    int basePeModifier = thief.Stat[ ST_PERCEPTION ];
+    int baseAgModifier = thief.Stat[ ST_AGILITY ];
+    int baseLkModifier = thief.Stat[ ST_LUCK ];
+    int baseStealmodifier = thief.Skill[ SK_STEAL ];
+
+    if( basePeModifier <= 0 )
+    {
+        basePeModifier = 1;
+    }
+
+    if( baseAgModifier <= 0 )
+    {
+        baseAgModifier = 1;
+    }
+
+    if( baseLkModifier <= 0 )
+    {
+        baseLkModifier = 1;
+    }
+
+    if( baseStealmodifier <= 0 )
+    {
+        baseStealmodifier = 1;
+    }
+
+    /* Look modifier */
     int dir1 = cr.Dir;
     int dir2 = thief.Dir;
     int kDir = MAX( dir1, dir2 ) - MIN( dir1, dir2 );
@@ -455,47 +437,102 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
         kDir = 6 - kDir;
 	}
 	
+     /* Steal skill of thief */
     int steal = thief.Skill[ SK_STEAL ];
     if( steal <= 0 )
 	{
         steal = 1;
     }
 	
-	int size = item.Proto.Volume;
-    if( size <= 0 )
+    /* Volume of an item */
+	int volume = item.Proto.Volume;
+    int volumeModifier = 0;
+    if( volume <= 0 )
 	{
-        size = 1;
+        volume = 1;
+        volumeModifier = 10;
 	}
+    else if(volume <= 20 && volume > 0 )
+    {
+        volumeModifier = 10;
+    }
+
+    /* Weight of an item */
+    int weight = item.Proto.Weight;
+    int weightModifier = 0;
+    if ( weight <= 0 )
+    {
+        weight = 1;
+        weightModifier = 10;
+    }
+    else if( weight <= 500 && weight > 0 )
+    {
+        weightModifier = 10;
+    }
 	
-    // Count modifier
+    /* Count modifier */
     int kCount = count / steal;
     if( kCount <= 0 )
 	{
         kCount = 1;
 	}
-	
-    // Check time of stealing
+
+    /* Steal timer */
     uint lastStealCrId = thief.Stat[ ST_LAST_STEAL_CR_ID ];
     uint stealCount = thief.Stat[ ST_STEAL_COUNT ];
     if( lastStealCrId == cr.Id && thief.Timeout[ TO_STEALING ] > 0 )
 	{
         steal -= steal * stealCount * 9 / 100;
 	}
-    // Calc
-    int  k = ( steal - kDir * 10 ) / ( size * kCount );
-    k = CLAMP( k, 5, 95 );
-    bool success = !( Random( 1, 100 ) - (cr.Stat [ST_LUCK]-5)*5 > k );
 
-    if( isGM( thief ) )
-	{
-        success = true;
-	}
-	
-    if( success )
+    /* Final steal chance calculation 
+       
+       It's a sum of Steal % / 6 + PE + AG + LK 
+       lowered by target's PE and Steal % / 6.
+       If item that's being stolen has volume lower 
+       than 20 then chance's being raised by 10%.
+       Same if weight's lower than 500g then 
+       additional 10% is being summed up. 
+       
+       Can't steal items bigger than 100 volume or 
+       heavier than 2500g                           */
+
+    if( !isGM( thief ) && ( volume > 100 || weight > 2500 ) )
     {
-        const int[] stealExp = { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120 };
+        string action_text = item.CritId == thief.Id ? "insert" : "steal";		
+        CrimeLog( thief, crInfo( thief ) + " failed to " + action_text + " " + itemDesc( item ) + " ,victim: " + crInfo( cr ) );
+		
+		thief.Action( ACTION_PICK_CRITTER, 3, null );
+        thief.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
+        thief.StatBase[ ST_STEAL_COUNT ] = 0;
 
-        if( lastStealCrId == cr.Id && thief.Timeout[ TO_STEALING ] > 0 )
+        if( cr.IsNpc() )
+        {
+            int thiefHp = thief.Stat[ ST_CURRENT_HP ];
+			AddAttackPlane( cr, 0, thief, thiefHp < 10 || Random( 1, 10 ) > cr.Stat[ ST_LUCK ] + 4 || cr.Stat[ ST_CHARISMA ] < 3 ? __DeadHitPoints : Random( thiefHp / 4, thiefHp / 2 ) );
+        }
+		return false;
+    }
+
+    else if( !isGM( thief ) ) 
+    {
+        int StealCalculation = CLAMP( ( ( steal - kDir * 10 ) + basePeModifier + baseAgModifier + baseLkModifier + volumeModifier + weightModifier - targetPeModifier - targetStealModifier ) / kCount, 5, 95 );
+		Log( "StealCalculation: " + StealCalculation + "%" );
+		int chance = Random( 1, 100 );
+		Log( "Roll: " + chance );
+        success = ( chance < StealCalculation );
+		Log( "Success? " + success );
+    }
+
+    else if( isGM( thief ) )
+    {
+        success = true;
+    }
+
+	if( success )
+    {
+        Log( "I am in success " );
+		if( lastStealCrId == cr.Id && thief.Timeout[ TO_STEALING ] > 0 )
         {
             stealCount++;
             if( stealCount > 11 )
@@ -514,19 +551,11 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 		{
             thief.TimeoutBase[ TO_STEALING ] = STEAL_TIMEOUT( thief );
         }
-		
-		if( cr.IsNpc() )
-        {
-            GameVar@ stealExpCount = ::GetUnicumVar( UVAR_steal_exp_count, cr.Id, thief.Id );
-            if( stealExpCount < 12 )
-            {
-                thief.AddScore( SCORE_THIEF, 1 );
-            }
-            stealExpCount = stealExpCount + 1;
-        }
+		thief.Action( ACTION_PICK_CRITTER, 1, null );
     }
     else
     {
+		Log( "I am in fail " );
 		string action_text = item.CritId == thief.Id ? "insert" : "steal";		
         CrimeLog( thief, crInfo( thief ) + " failed to " + action_text + " " + itemDesc( item ) + " ,victim: " + crInfo( cr ) );
 		
@@ -537,10 +566,9 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
         if( cr.IsNpc() )
         {
             int thiefHp = thief.Stat[ ST_CURRENT_HP ];
-			AddAttackPlane( cr, 0, thief, thiefHp< 10 || Random( 1, 10 ) > cr.Stat[ ST_LUCK ] + 4 || cr.Stat[ ST_CHARISMA ] < 3 ? __DeadHitPoints : Random( thiefHp / 4, thiefHp / 2 ) );
+			AddAttackPlane( cr, 0, thief, thiefHp < 10 || Random( 1, 10 ) > cr.Stat[ ST_LUCK ] + 4 || cr.Stat[ ST_CHARISMA ] < 3 ? __DeadHitPoints : Random( thiefHp / 4, thiefHp / 2 ) );
         }
     }
-
     return success;
 }
 
@@ -1623,7 +1651,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		
 		case( SKILL_LOOT_CRITTER ): 
 		{
-			cr.Say( SAY_EMOTE, "Осматривает" );
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_INSPECTS );
 			cr.Action( ACTION_PICK_CRITTER, 0, null );
 			
 			ShowContainer( cr, targetCr, TRANSFER_CRIT_LOOT );
@@ -1934,6 +1962,9 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 							cr.TimeoutBase[ TO_SK_STEAL ] = STEAL_TIMEOUT( cr );
 							cr.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
 							cr.StatBase[ ST_STEAL_COUNT ] = 0;
+							
+							//TEST
+							targetCr.Say( SAY_NETMSG, "Your inventory is being checked" );
 							return true;
 						}
 					}
@@ -1944,19 +1975,24 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		
 		case( SK_LOCKPICK ): 
 		{
-			Item@ gagItm = _CritGetItemHead( cr );
-			if( valid( gagItm ) )
+			if( !valid( targetItem ) && !valid( targetScen ) && valid( targetCr ) )
 			{
-				if( gagItm.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE )
+				if( onSelf )
 				{
-					if( onSelf )
+					@targetCr = cr;
+				}
+				
+				Item@ gagItm = _CritGetItemHead( targetCr );
+				if( valid( gagItm ) )
+				{
+					if( gagItm.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE )
 					{
-						@targetCr = cr;
+						TryRemoveGag( cr, targetCr, gagItm );
+						return true;
 					}
-					TryRemoveGag( cr, targetCr, gagItm );
-					return true;
 				}
 			}
+			break;
 		}
 		
 		case( SK_TRAPS ): 
