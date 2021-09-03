@@ -111,8 +111,8 @@ namespace FOFMOD
 			void GetSound( const std::string& filename, FOFMOD_SOUND_TYPE type, FOFMOD::Sound** sptr, CacheSoundData** cache );
 			void AddCachedSound( const std::string& filename, void* data, unsigned int size, CacheSoundData** cache );	
 			void GetCachedSound( const std::string& filename, CacheSoundData** cache );
-			void Play( const std::string& soundName, FOFMOD_SOUND_TYPE type,  FMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused );
-			FMOD_RESULT PlaySound( FOFMOD::Sound* snd, FMOD::ChannelGroup* group, bool paused, FOFMOD::Channel* chn );
+			void Play( const std::string& soundName, FOFMOD_SOUND_TYPE type,  FOFMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused );
+			FMOD_RESULT PlaySound( FOFMOD::Sound* snd, FOFMOD::ChannelGroup* group, bool paused, FOFMOD::Channel* chn );
 			void MapArchive( unsigned int index );
 			
 

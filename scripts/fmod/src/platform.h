@@ -8,9 +8,9 @@
 	// Detect operating system
 	#if defined ( _WIN32 ) || defined ( _WIN64 )
 		# define __WINDOWS__
-		#elif defined ( __linux__ )
+	#elif defined ( __linux__ )
 		# define __LINUX__
-		#else
+	#else
 		# error "Unknown operating system."
 	#endif
 
@@ -20,9 +20,9 @@
 	// Detect compiler
 	#if defined ( __GNUC__ )
 		# define __GCC__
-		#elif defined ( _MSC_VER ) && !defined ( __MWERKS__ )
+	#elif defined ( _MSC_VER ) && !defined ( __MWERKS__ )
 		# define __MSVC__
-		#else
+	#else
 		# error "Unknown compiler."
 	#endif
 

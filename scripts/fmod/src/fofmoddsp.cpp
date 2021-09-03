@@ -115,7 +115,7 @@ namespace FOFMOD
 					this->handle->getNumParameters( &numparams );
 					if( numparams )
 					{
-						FMOD_DSP_PARAMETER_DESC* paramInfo;// = (FMOD_DSP_PARAMETER_DESC*)malloc(sizeof(FMOD_DSP_PARAMETER_DESC));
+						FMOD_DSP_PARAMETER_DESC* paramInfo;
 						int curParam = 0;
 						//Log("numparams %d paramC %d\n", numparams, paramsCount );
 						while ( ( curParam < numparams ) && ( curParam < paramsCount ) )

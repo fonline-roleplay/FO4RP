@@ -326,7 +326,7 @@ namespace FOFMOD
 	}
 
 
-	void System::Play( const std::string& soundName, FOFMOD_SOUND_TYPE type, FMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused )
+	void System::Play( const std::string& soundName, FOFMOD_SOUND_TYPE type, FOFMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused )
 	{
 		#ifdef FOFMOD_DEBUG
 			#ifdef __PERFCOUNT__
@@ -363,19 +363,21 @@ namespace FOFMOD
 		#endif // FOFMOD_DEBUG
 	}
 	
-	FMOD_RESULT System::PlaySound( FOFMOD::Sound* snd, FMOD::ChannelGroup* group, bool paused, FOFMOD::Channel* chn )
+	FMOD_RESULT System::PlaySound( FOFMOD::Sound* snd, FOFMOD::ChannelGroup* group, bool paused, FOFMOD::Channel* chn )
 	{
 		FMOD_RESULT result = FMOD_OK;
 		FMOD::Channel* hndl = NULL;
 		FMOD::Sound* shndl = NULL;
+		FMOD::ChannelGroup* cgrph = NULL;
+		group->GetHandle( &cgrph );
 		snd->GetHandle( &shndl );
-		result = this->FSystem->playSound( shndl, group, paused, &hndl );
+		result = this->FSystem->playSound( shndl, cgrph, paused, &hndl );
 		if( result == FMOD_OK )
 		{
 			chn->SetHandle( hndl );
 			chn->SetSound( snd );
 			chn->SetLoopCount( 0 );
-						
+			
 			FOFMOD::System::ChannelCallbackData* cbdata = new FOFMOD::System::ChannelCallbackData();
 			cbdata->system = this;
 			cbdata->channel = chn; 
@@ -482,18 +484,14 @@ namespace FOFMOD
 	FOFMOD::Channel* System::PlaySound( const std::string& soundName, bool paused )
 	{	
 		FOFMOD::Channel* chn = NULL;
-		FMOD::ChannelGroup* hndl = NULL;
-		this->soundChannelGroup->GetHandle( &hndl );
-		this->Play( soundName, SOUND_TYPE::SOUND, hndl, &chn, paused );
+		this->Play( soundName, SOUND_TYPE::SOUND, this->soundChannelGroup, &chn, paused );
 		return chn;
 	}
 
 	FOFMOD::Channel* System::PlayMusic( const std::string& soundName, bool paused )
 	{
 		FOFMOD::Channel* chn = NULL;
-		FMOD::ChannelGroup* hndl = NULL;
-		this->soundChannelGroup->GetHandle( &hndl );
-		this->Play( soundName, FOFMOD_SOUND_TYPE::MUSIC, hndl, &chn, paused );
+		this->Play( soundName, FOFMOD_SOUND_TYPE::MUSIC, this->musicChannelGroup, &chn, paused );
 		return chn;
 	}
 
