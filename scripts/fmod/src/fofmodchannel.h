@@ -65,6 +65,8 @@ namespace FOFMOD
 			void GetPriority( int* value );
 			void SetPriority( int priority );
 			
+			void Stop() override;
+			
 			FOFMOD::System* GetSystem();
 			void Invalidate(); // for external signal processing, fmod doesnt invalidate my handle
 	};

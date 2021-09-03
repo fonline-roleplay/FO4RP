@@ -87,7 +87,7 @@ namespace FOFMOD
 				}
 			}
 			
-			this->handle   = chn;
+			this->handle = chn;
 			ChannelControl::SetHandle( static_cast<FMOD::ChannelControl*> ( chn ) );
 		}
 		else
@@ -200,6 +200,12 @@ namespace FOFMOD
 		{
 			this->handle->setPriority( value );
 		}
+	}
+	
+	void Channel::Stop() // override
+	{
+		ChannelControl::Stop();
+		this->SetHandle( NULL );
 	}
 
 	void Channel::GetLoopCount( int* value )

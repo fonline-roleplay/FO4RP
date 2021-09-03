@@ -25,6 +25,8 @@ namespace FOFMOD
 			~ChannelGroup();
 			void SetHandle( FMOD::ChannelGroup* hndl );
 			void GetHandle( FMOD::ChannelGroup** ptr );
+			
+			void Stop() override;
 	};
 };
 

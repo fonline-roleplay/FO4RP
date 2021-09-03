@@ -67,7 +67,6 @@ namespace FOFMOD
 		if( this->cchandle )
 		{
 			this->cchandle->stop();
-			this->cchandle = NULL;
 		}
 	}
 

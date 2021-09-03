@@ -28,7 +28,6 @@ namespace FOFMOD
 			void IsValid( bool* value );
 			void SetPaused( bool paused );
 			void IsPaused( bool* value );
-			void Stop();
 			void IsPlaying( bool* value );
 			void SetEffect( FOFMOD::DSP* effect );
 			void DropEffect( FOFMOD::DSP* effect );
@@ -43,6 +42,8 @@ namespace FOFMOD
 			void Get3DMinMaxDistance( float* minDistance, float* maxDistance );
 			void Set3DLevel( float level );
 			void Get3DLevel( float* value );
+			
+			virtual void Stop();
 	};
 }
 

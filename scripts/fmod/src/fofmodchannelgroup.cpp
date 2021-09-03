@@ -50,6 +50,11 @@ namespace FOFMOD
 	{
 		*ptr = this->handle;
 	}
+	
+	void ChannelGroup::Stop() // override
+	{
+		ChannelControl::Stop();
+	}
 }
 
 #endif // __FOFMODCHANNELGROUP__
