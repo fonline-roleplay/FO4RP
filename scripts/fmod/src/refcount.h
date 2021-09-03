@@ -12,6 +12,7 @@ class IRefcountable
 	public:
 		virtual void Addref()  				= 0;
 		virtual void Release() 				= 0;
+		virtual unsigned int GetRefcount()  = 0;
 };
 
 class GenericRefcountable : public IRefcountable
@@ -23,24 +24,62 @@ class GenericRefcountable : public IRefcountable
 		GenericRefcountable();
 		void Addref() override;
 		void Release() override;
+		unsigned int GetRefcount() override;
 };
 
 template < typename T >
 class AAuxiliaryRefcounter : IRefcountable
 {
 	protected:
-		AAuxiliaryRefcounter();
+		AAuxiliaryRefcounter(){} // ban
 		unsigned int refcount;
 		T* subject;
 
 	public:
-		AAuxiliaryRefcounter(T* subject);
-		~AAuxiliaryRefcounter();
+		AAuxiliaryRefcounter( T* subject )
+		{
+			this->refcount = 0;
+			this->subject  = subject;
+		}
+		
+		virtual ~AAuxiliaryRefcounter()
+		{
 
-		void Addref() override;
-		void Release() override;
+		}
 
-		void OnZero() = 0;
+		void Addref() override
+		{
+			#if defined ( FO_GCC )
+			INTERLOCKED_INCREMENT (&this->refcount, 1);
+			#else
+			INTERLOCKED_INCREMENT (&this->refcount );
+			#endif
+		};
+
+		void Release() override
+		{
+			if(!
+			#if defined ( FO_GCC ) 
+			INTERLOCKED_DECREMENT ( &this->refcount, 1 )
+			#else
+			INTERLOCKED_DECREMENT ( &this->refcount )
+			#endif
+			)
+			{
+				if( this->subject )
+				{
+					this->OnZero();
+				}
+			}
+		};
+		
+		unsigned int GetRefcount() override
+		{
+			unsigned int result = INTERLOCKED_EXCHANGE( &(this->refcount), this->refcount );
+			return result;
+		};
+
+		virtual void OnZero() = 0;
 };
 
 #endif // __REFCOUNT_H__

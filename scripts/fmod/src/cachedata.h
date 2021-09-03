@@ -32,6 +32,7 @@ namespace FOFMOD
 
 			void Addref() override;
 			void Release() override;
+			unsigned int GetRefcount() override;
 	};
 	
 }

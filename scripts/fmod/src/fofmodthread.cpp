@@ -8,6 +8,61 @@
 namespace FOFMOD
 {
 
+	InternalThreadData::InternalThreadData()
+	{
+		this->func = NULL;
+		this->flags = 0;
+	}
+	
+	InternalThreadData::~InternalThreadData()
+	{
+		
+	}
+	
+	ExecutionThreadData::ExecutionThreadData()
+	{
+		this->internalThreadData = NULL;
+		this->userData = NULL;
+	}
+	
+	ExecutionThreadData::~ExecutionThreadData()
+	{
+		
+	}
+	
+	InternalThreadData* ExecutionThreadData::GetInternalData()
+	{
+		InternalThreadData* result = NULL;
+		this->locker.Lock();
+		result = this->internalThreadData;
+		this->locker.Unlock();
+		return result;
+	}
+
+	void* ExecutionThreadData::GetUserData()
+	{
+		void* result = NULL;
+		this->locker.Lock();
+		result = this->userData;
+		this->locker.Unlock();
+		return result;
+	}
+	
+	void ExecutionThreadData::SetInternalData( InternalThreadData* ptr )
+	{
+		this->locker.Lock();
+		this->internalThreadData = ptr;
+		this->locker.Unlock();
+	}
+	
+	void ExecutionThreadData::SetUserData( void* ptr )
+	{
+		this->locker.Lock();
+		this->userData = ptr;
+		this->locker.Unlock();
+	}
+
+	
 	ExecutionThread::ExecutionThread()
 	{
 		#ifdef __WINDOWS__
@@ -19,8 +74,7 @@ namespace FOFMOD
 		
 		this->isRunning = false;
 		
-		ExecutionThreadData_Init( &(this->tdata) );
-		this->tdata.internalThreadData = InternalThreadData_New();
+		this->tdata.SetInternalData( new InternalThreadData () );
 	}
 	
 	ExecutionThread::~ExecutionThread()
@@ -41,9 +95,15 @@ namespace FOFMOD
 		this->Stop();
 		if( func )
 		{
-			this->tdata.internalThreadData->func = func;
-			this->tdata.userData = data;
-			SETFLAG ( this->tdata.internalThreadData->flags, FOFMOD_EXECTHREAD_FLAG::SUSPEND );
+			InternalThreadData* itd = this->tdata.GetInternalData();
+			
+			itd->locker.Lock();
+			itd->func = func;
+			SETFLAG ( itd->flags,  FOFMOD_EXECTHREAD_FLAG::SUSPEND );
+			itd->host = this;
+			itd->locker.Unlock();
+			
+			this->tdata.SetUserData( data );
 			
 			#ifdef __WINDOWS__
 
@@ -74,7 +134,9 @@ namespace FOFMOD
 				
 			#endif
 			
-			UNSETFLAG(  this->tdata.internalThreadData->flags, FOFMOD_EXECTHREAD_FLAG::SUSPEND );
+			itd->locker.Lock();
+			UNSETFLAG(  itd->flags, FOFMOD_EXECTHREAD_FLAG::SUSPEND );
+			itd->locker.Unlock();
 		}
 		this->isRunning = result;
 		return result;
@@ -82,6 +144,7 @@ namespace FOFMOD
 	
 	void ExecutionThread::Stop()
 	{
+		this->locker.Lock();
 		if( this->isRunning )
 		{
 			#ifdef __WINDOWS__
@@ -100,18 +163,31 @@ namespace FOFMOD
 			
 				if( this->pthreadId )
 				{
-					pthread_cancel(pthreadId);
 					this->pthreadId = -1;
 				}
 				
 			#endif
 			
+			InternalThreadData* itd = this->tdata.GetInternalData();
+			if( itd )
+			{
+				delete itd;
+			}
+			this->tdata.SetInternalData( NULL );
+			this->tdata.SetUserData( NULL );
 			this->isRunning = false;
-			
-		//	free( this->tdata.internalThreadData );
-		//	memset( &(this->tdata), 0, sizeof( ExecutionThreadData_t ) );
-			ExecutionThreadData_Clear( &(this->tdata) );
-		}	
+		}
+		this->locker.Unlock();
+	}
+	
+	
+	bool ExecutionThread::IsRunning()
+	{
+		bool result = true;
+		this->locker.Lock();
+		result = this->isRunning;
+		this->locker.Unlock();
+		return result;
 	}
 	
 	void ExecutionThread::SetName( std::string& newName )
@@ -137,72 +213,105 @@ namespace FOFMOD
 		void* result = NULL;
 		#endif // __WINDOWS__ || __LINUX__
 		
+		int fresult = 0; // 
+		
 		if( data )
 		{
 			ExecutionThreadData* tdata = (ExecutionThreadData*)data;
-			bool work = true;
-			while( work )
+			void* userData = tdata->GetUserData();
+			
+			
+			InternalThreadData* itd = tdata->GetInternalData();
+			
+			itd->locker.Lock();
+			generic_thread_handler func = itd->func;
+			ExecutionThread* host = itd->host;
+			itd->locker.Unlock();
+			
+			unsigned int flags = 0;
+			bool suspend = true;
+			while( suspend )
 			{
-				// do work
-				if( tdata->internalThreadData->func )
-				{
-					generic_thread_handler func = tdata->internalThreadData->func;
-					func(tdata->userData);
-				}
-				
-				// get data lock, lock it, get values, unlock it
-				work = !ISFLAG( tdata->internalThreadData->flags, FOFMOD_EXECTHREAD_FLAG::TERMINATE );
+				itd->locker.Lock();
+				flags = itd->flags;
+				itd->locker.Unlock();
+				suspend = ISFLAG( flags, FOFMOD_EXECTHREAD_FLAG::SUSPEND );
 			}
+			
+			bool work = true;
+			if ( func )
+			{
+				while( work )
+				{
+					
+					itd->locker.Lock();
+					flags = itd->flags;
+					itd->locker.Unlock();
+					
+					work = !ISFLAG( flags, FOFMOD_EXECTHREAD_FLAG::TERMINATE );
+					
+					fresult = func( userData );
+					switch( fresult )
+					{
+						case( EXECTHREAD_RESULT::RES_FINISH ):
+						{
+							ThreadEventData* ted = ThreadEventData_New();
+							ted->result = FOFMOD_EXECTHREAD_EVENT::FINISHED;
+							host->OnThreadEvent( fresult, ted );
+							ThreadEventData_Delete( ted );
+							work = false;
+							break;
+						}
+						default:
+							break;
+					}
+				}
+			}
+			
+			ThreadEventData* ted = ThreadEventData_New();
+			ted->result = FOFMOD_EXECTHREAD_EVENT::TERMINATED;
+			host->OnThreadEvent( fresult, ted );
+			ThreadEventData_Delete( ted );
 		}
-		
-		return result;
-	} 
-	
-	
-	InternalThreadData_t* InternalThreadData_New()
-	{
-		MALLOC_NEW( InternalThreadData_t, result )
 		return result;
 	}
 	
-	void InternalThreadData_Delete( InternalThreadData_t* ptr )
+	void ExecutionThread::OnThreadEvent( int eventType, void* eventData )
 	{
-
+		switch ( eventType )
+		{
+			case ( FOFMOD_EXECTHREAD_EVENT::FINISHED ):
+			{
+				this->Stop();
+				break;
+			}
+			case ( FOFMOD_EXECTHREAD_EVENT::TERMINATED ):
+			{
+				this->Stop();
+				break;
+			}
+			default:
+				break;
+		}
 	}
 	
-	void InternalThreadData_Init ( InternalThreadData_t* ptr )
+	
+	ThreadEventData_t* ThreadEventData_New()
 	{
-		InternalThreadData_Clear( ptr );
+		ThreadEventData* ted = (ThreadEventData*)malloc(sizeof(ThreadEventData));
+		ThreadEventData_Init( ted );
+		return ted;
 	}
 	
-	void InternalThreadData_Clear( InternalThreadData_t* ptr )
+	void ThreadEventData_Init( ThreadEventData_t* ptr )
 	{
-
+		memset( ptr, 0, sizeof( ThreadEventData ) );
 	}
 	
-	ExecutionThreadData_t* ExecutionThreadData_New()
+	void ThreadEventData_Delete( ThreadEventData_t* ptr )
 	{
-		MALLOC_NEW( ExecutionThreadData_t, result )
-		return result;
+		free(ptr);
 	}
 	
-	void ExecutionThreadData_Delete( ExecutionThreadData_t* ptr )
-	{
-
-	}
-	
-	void ExecutionThreadData_Init( ExecutionThreadData_t* ptr )
-	{
-
-		ExecutionThreadData_Clear( ptr );
-	}
-	
-	void ExecutionThreadData_Clear( ExecutionThreadData_t* ptr )
-	{
-
-	}
-	
-
-
 };
 #endif // __FOFMOD_THREAD__

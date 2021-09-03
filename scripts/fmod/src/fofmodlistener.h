@@ -16,7 +16,6 @@ namespace FOFMOD
 			FMOD_VECTOR velocity;
 			FMOD_VECTOR forward;
 			FMOD_VECTOR up;
-			
 	};
 };
 
