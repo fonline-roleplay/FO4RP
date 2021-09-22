@@ -71,6 +71,7 @@ EXPORT uint Map_GetTile( Map& map, uint16 tx, uint16 ty );
 EXPORT uint Map_GetRoof( Map& map, uint16 tx, uint16 ty );
 EXPORT bool Map_SetTile( Map& map, uint16 tx, uint16 ty, uint picHash );
 EXPORT bool Map_SetRoof( Map& map, uint16 tx, uint16 ty, uint picHash );
+EXPORT bool Map_HasRoof( Map& map, uint16 hexX, uint16 hexY );
 
 // EXPORT uint Critter_GetItemTransferCount( Critter& cr );
 EXPORT void Critter_GetIp( Critter& cr, ScriptArray* array );
@@ -924,6 +925,22 @@ EXPORT uint Map_GetRoof( Map& map, uint16 tx, uint16 ty )
     return finded[ 0 ];
 }
 
+// Returns true if map cell {hexX,hexY} is under roof
+EXPORT bool Map_HasRoof( Map& map, uint16 hexX, uint16 hexY )
+{
+	ProtoMap::TileVec & tiles = const_cast < ProtoMap::TileVec & > ( map.Proto -> Tiles );
+	for( uint i = 0, length = tiles.size(); i < length; i++ )
+	{
+    	if( ( ( tiles[ i ].HexX == hexX) || ( tiles[ i ].HexX == hexX + 1 ) ) // Roof tile may have size 2x2
+    		&& ( ( tiles[ i ].HexY == hexY) || ( tiles[ i ].HexY == hexY + 1 ) )
+    		&& tiles[ i ].IsRoof )
+		{
+			return true;
+		}
+    }
+    return false;
+}
+
 EXPORT bool Map_SetTile( Map& map, uint16 tx, uint16 ty, uint picHash )
 {
     // if(map.IsNotValid) return 0;
@@ -950,8 +967,6 @@ EXPORT void Critter_GetIp( Critter& cr, ScriptArray* array )
     const uint* p = cr.DataExt->PlayIp;
     memcpy( array->GetBuffer(), p, MAX_STORED_IP * 4 );
 }
-
-// pm added
 
 EXPORT void Critter_SetWorldPos( CritterMutual& cr, uint16 x, uint16 y ) // pm added
 {
