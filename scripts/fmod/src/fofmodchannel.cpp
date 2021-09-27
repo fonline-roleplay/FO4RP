@@ -247,8 +247,11 @@ namespace FOFMOD
 	
 	void Channel::Invalidate()
 	{
-		this->handle = NULL;
-		ChannelControl::SetHandle( NULL );
+		if( this->handle )
+		{
+			this->handle = NULL;
+			ChannelControl::SetHandle( NULL );
+		}
 	}
 
 
