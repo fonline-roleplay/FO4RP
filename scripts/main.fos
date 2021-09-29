@@ -368,8 +368,7 @@ void critter_attacked( Critter& cr, Critter& attacker )
 // Call on something critter steal another.
 bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 {
-	bool success = false;
-	
+
 	/* Battle & death check */
     if( cr.IsDead() )
     {
@@ -497,8 +496,14 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
        Can't steal items bigger than 100 volume or 
        heavier than 2500g                           */
 
-    if( !isGM( thief ) && ( volume > 100 || weight > 2500 ) )
+		int StealCalculation = CLAMP( ( ( steal - kDir * 10 ) + basePeModifier + baseAgModifier + baseLkModifier + volumeModifier + weightModifier - targetPeModifier - targetStealModifier ) / kCount, 5, 95 );
+		int chance = Random( 1, 100 );
+		bool success = ( chance < StealCalculation );
+
+	/* Failed steal attempt because the item's too heavy */
+    if( volume > 100 || weight > 2500 )
     {
+		thief.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_STEAL_VOLUME );
         string action_text = item.CritId == thief.Id ? "insert" : "steal";		
         CrimeLog( thief, crInfo( thief ) + " failed to " + action_text + " " + itemDesc( item ) + " ,victim: " + crInfo( cr ) );
 		
@@ -513,25 +518,10 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
         }
 		return false;
     }
-
-    else if( !isGM( thief ) ) 
+	/* Succesful steal attempt */
+	else if( success )
     {
-        int StealCalculation = CLAMP( ( ( steal - kDir * 10 ) + basePeModifier + baseAgModifier + baseLkModifier + volumeModifier + weightModifier - targetPeModifier - targetStealModifier ) / kCount, 5, 95 );
-		Log( "StealCalculation: " + StealCalculation + "%" );
-		int chance = Random( 1, 100 );
-		Log( "Roll: " + chance );
-        success = ( chance < StealCalculation );
-		Log( "Success? " + success );
-    }
-
-    else if( isGM( thief ) )
-    {
-        success = true;
-    }
-
-	if( success )
-    {
-        Log( "I am in success " );
+        thief.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_STEAL_SUCCESS );
 		if( lastStealCrId == cr.Id && thief.Timeout[ TO_STEALING ] > 0 )
         {
             stealCount++;
@@ -546,20 +536,17 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
             thief.StatBase[ ST_LAST_STEAL_CR_ID ] = cr.Id;
             thief.StatBase[ ST_STEAL_COUNT ] = 0;
         }
-
-        if( !isGM( thief ) )
-		{
-            thief.TimeoutBase[ TO_STEALING ] = STEAL_TIMEOUT( thief );
-        }
+		thief.TimeoutBase[ TO_STEALING ] = STEAL_TIMEOUT( thief );
 		thief.Action( ACTION_PICK_CRITTER, 1, null );
+		return true;
     }
+	/* Failed steal attempt */
     else
     {
-		Log( "I am in fail " );
+		thief.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_STEAL_FAIL );
 		string action_text = item.CritId == thief.Id ? "insert" : "steal";		
         CrimeLog( thief, crInfo( thief ) + " failed to " + action_text + " " + itemDesc( item ) + " ,victim: " + crInfo( cr ) );
 		
-		thief.Action( ACTION_PICK_CRITTER, 3, null );
         thief.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
         thief.StatBase[ ST_STEAL_COUNT ] = 0;
 
@@ -568,8 +555,8 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
             int thiefHp = thief.Stat[ ST_CURRENT_HP ];
 			AddAttackPlane( cr, 0, thief, thiefHp < 10 || Random( 1, 10 ) > cr.Stat[ ST_LUCK ] + 4 || cr.Stat[ ST_CHARISMA ] < 3 ? __DeadHitPoints : Random( thiefHp / 4, thiefHp / 2 ) );
         }
+		return false;
     }
-    return success;
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1931,15 +1918,23 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		
 		case( SK_STEAL ): 
 		{
+			/* Skill used on item */
 			if( valid( targetItem ) )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
 				return true;
 			}
+			/* Skill used on proper critter that can be robbed */
 			else if( valid( targetCr ) )
 			{
+				/* Inventory check formula */
+				int InvCheckCalculation = ( cr.SkillBase[ SK_STEAL ] / 3 ) - ( ( targetCr.SkillBase[ SK_STEAL ] / 24 ) + targetCr.StatBase[ ST_LUCK ] + targetCr.StatBase[ ST_PERCEPTION ] );
+				int roll = Random( 1, 100 );
+				bool InvCheckSuccess = ( roll < InvCheckCalculation );
+
 				CrimeLog( cr, crInfo( cr ) + " attempted to look into inventory of: " + crInfo( targetCr ) );
 				
+				/* Target's tied up */
 				Item@ hands = _CritGetItemHand ( targetCr );
 				if( HandsTied( targetCr ) )
 				{
@@ -1947,36 +1942,37 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 					ShowContainer( cr, targetCr, TRANSFER_CRIT_STEAL );
 					return true;
 				}
-				else
+				/* Looting dead target */
+				else if( targetCr.IsDead() )
 				{
-					// Loot
-					if( targetCr.IsDead() )
+					cr.Action( ACTION_PICK_CRITTER, 0, null );
+					ShowContainer( cr, targetCr, TRANSFER_CRIT_LOOT );
+					return true;
+				}
+				/* Inventory check's succesful roll and target's valid */
+				else if( InvCheckSuccess )
+				{
+					if( isPlayer && cr.Timeout[ TO_SK_STEAL ] > 0 )
 					{
-						cr.Action( ACTION_PICK_CRITTER, 0, null );
-						ShowContainer( cr, targetCr, TRANSFER_CRIT_LOOT );
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SK_COOLDOWN );
 						return true;
 					}
-					// Steal
 					else
 					{
-						if( isPlayer && cr.Timeout[ TO_SK_STEAL ] > 0 )
-						{
-							cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SK_COOLDOWN );
-							return true;
-						}
-						else
-						{
-							CrimeLog( cr, crInfo( cr ) + " checks inventory of: " + crInfo( targetCr ) );
-							ShowContainer( cr, targetCr, TRANSFER_CRIT_STEAL );
-							cr.TimeoutBase[ TO_SK_STEAL ] = STEAL_TIMEOUT( cr );
-							cr.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
-							cr.StatBase[ ST_STEAL_COUNT ] = 0;
-							
-							//TEST
-							targetCr.Say( SAY_NETMSG, "Your inventory is being checked" );
-							return true;
-						}
+						CrimeLog( cr, crInfo( cr ) + " checks inventory of: " + crInfo( targetCr ) );
+						ShowContainer( cr, targetCr, TRANSFER_CRIT_STEAL );
+						cr.TimeoutBase[ TO_SK_STEAL ] = STEAL_TIMEOUT( cr );
+						cr.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
+						cr.StatBase[ ST_STEAL_COUNT ] = 0;
+						targetCr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_STEAL_NOTIFICATION );
+						return true;
 					}
+				}
+				/* Fail attempt to look into inventory */
+				else
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_STEAL_CHECK_FAIL );
+					return true;
 				}
 			}
 			break; 
