@@ -6,7 +6,6 @@
 #include "_ltp.fos"
 
 #include "autodoc_h.fos"
-#include "behaviours.fos"
 #include "bootlegging_h.fos"
 #include "casino_h.fos"
 #include "combat_h.fos"
@@ -35,6 +34,7 @@
 #include "paralysis_h.fos"
 #include "parameters_h.fos"
 #include "perks_h.fos"
+#include "plants_h.fos"
 #include "poison_h.fos"
 #include "radiation_h.fos"
 #include "recorder_h.fos"
@@ -71,7 +71,7 @@ import void qmap_critter_out( uint mapId, Critter& cr ) from "qmap";
 import void qmap_save_all() from "qmap";
 import void qmap_load_all() from "qmap";
 
-import bool UseShovel( Critter& cr, Item& item ) from "farm";
+import bool UseShovel( Critter& cr, Item& item ) from "qmap_farm";
 
 import void registerTraps() from "traps";
 
@@ -372,7 +372,6 @@ void critter_attacked( Critter& cr, Critter& attacker )
 // Call on something critter steal another.
 bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 {
-
 	/* Battle & death check */
     if( cr.IsDead() )
     {
@@ -619,6 +618,24 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 	
 	if( !valid( targetScen ) )
 	{
+		//Planting hydroponics
+		if( hydro_seeds.find( item.GetProtoId() ) != -1 )
+		{
+			if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_HYDRO_NS_EMPTY || targetItem.GetProtoId() == PID_HYDRO_EW_EMPTY ) )
+			{
+				TryPlantSeed( cr, item, 0, 0, targetItem );
+				return true;
+			}
+		}
+		//Planting mushrooms
+		if( mushbed_seeds.find( item.GetProtoId() ) != -1 )
+		{
+			if( valid( targetItem ) && targetItem.GetProtoId() == PID_MUSHBED_EMPTY )
+			{
+				TryPlantSeed( cr, item, 0, 0, targetItem );
+				return true;
+			}
+		}
 		//Scavenging
 		if( PrepareScavenging( cr, item, targetItem ) )
 		{
@@ -1248,15 +1265,6 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
         return true;
 	}
 	
-	if( item.GetScriptId() != 0 )
-	{
-		if( UpdateBehaviour( item ) )
-		{
-			cr.Say( SAY_NETMSG, "Вы подготовили предмет к использованию, используйте его снова." );
-		}
-		return true;
-	}
-
     // Take process to engine
     return false;
 }
@@ -2333,13 +2341,12 @@ void critter_init( Critter& cr, bool firstTime )
 					if( cr.StatBase[ ST_PERCEPTION_EXT ] >= 2 )
 					{
 						cr.StatBase[ ST_PERCEPTION_EXT ] -= 2;
-						cr.StatBase[ ST_CHARISMA_EXT ] -= 1;
 					}
 					else if( cr.StatBase[ ST_PERCEPTION_EXT ] == 1 )
 					{
 						cr.StatBase[ ST_PERCEPTION_EXT ] -= 1;
-						cr.StatBase[ ST_CHARISMA_EXT ] -= 1;
 					}
+					cr.StatBase[ ST_CHARISMA_EXT ] -= 1;
 					break;
 				}
 			}
@@ -3535,6 +3542,93 @@ uint e_UpdateContainer( uint[]@ val )
 	container.Update();
 	
 	return 0;
+}
+
+bool critter_grid_transfer( Critter& cr, Scenery& scen )
+{
+	ProtoItem@ gridProto = GetProtoItem( scen.ProtoId );
+	if( cr.Stat[ ST_BODY_TYPE ] == BT_DOG && gridProto.Grid_Type == GRID_LADDERTOP )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOGS_CANT_DO_THAT );
+		return false;
+	}
+	
+	Map@ map = cr.GetMap();
+	if( BlockerCheck( cr, map, scen ) )
+	{
+		return false;
+	}
+	
+	Location@ loc = map.GetLocation();
+	Map@ toMap = loc.GetMap( scen.ToMapPid );
+	int entireId = scen.ToEntire;
+	if( BlockerCheck( cr, toMap, entireId ) )
+	{
+		return false;
+	}
+	
+	return true;
+}
+
+bool BlockerCheck( Critter& cr, Map& map, Scenery& scen )
+{
+	Item@[] items;
+	map.GetItems( scen.HexX, scen.HexY, items );
+	if( items.length() > 0 )
+	{
+		for( uint i = 0; i < items.length(); i ++ )
+		{
+			Item@ item = items[i];
+			if( !FLAG( item.Flags, ITEM_NO_BLOCK ) )
+			{
+				cr.Say( SAY_NETMSG, "The way is blocked" );
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+bool BlockerCheck( Critter& cr, Map& map, int& entireId )
+{
+	uint count = map.CountEntire( entireId );
+
+	if( count == 0 )
+	{
+		Log( "Map entire Id error, check mapper for absent entires!" );
+	}
+	else if( count > 1 )
+	{
+		Log( "Map entire Id error, check mapper for duplicates entires!" );
+	}
+	else
+	{
+		uint16 hx = 0, hy = 0;
+		map.GetEntireCoords( entireId, 0, hx, hy );
+		Item@ hatch = map.GetItem( hx, hy, PID_SEWERS_HATCH );
+		if( valid( hatch ) )
+		{
+			if( !FLAG( hatch.LockerCondition, LOCKER_ISOPEN ) && hatch.LockerId != 0 &&
+                !FLAG( hatch.LockerCondition, LOCKER_BROKEN ) && FLAG( hatch.LockerCondition, LOCKER_LOCKED ) )
+			{
+				if( IsKeyAviable( cr, hatch.LockerId ) )
+				{
+					UNSETFLAG( hatch.LockerCondition, LOCKER_LOCKED );
+					hatch.LockerOpen();
+				}
+				else
+				{
+					cr.Say( SAY_NETMSG, "The way is blocked" );
+					return true;
+				}
+			}
+			else
+			{
+				hatch.LockerOpen();
+			}
+		}
+	}
+	return false;
 }
 
 #endif //__MAIN_MODULE__
