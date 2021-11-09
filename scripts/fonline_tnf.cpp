@@ -4,6 +4,8 @@
 #include "fonline_tnf.h"
 #include "AngelScript/scriptfilesystem.cpp"
 
+#include <time.h>
+
 // Extern data definition
 _GlobalVars GlobalVars;
 
@@ -81,8 +83,49 @@ EXPORT void Critter_GetIp( Critter& cr, ScriptArray* array );
 /*                          TNF - includes                              */
 /************************************************************************/
 
-#ifdef __CLIENT
 
+#ifdef __SERVER
+time_t GetTime( )
+{
+    return time( nullptr );
+}
+#endif
+
+#ifdef __CLIENT
+time_t ServerTime;
+time_t TimeSetTime;
+
+void trySetServerTime( time_t _time )
+{
+    ServerTime = _time;
+    TimeSetTime = time( nullptr );
+}
+
+time_t GetTime( )
+{
+    return ServerTime + TimeSetTime - time( nullptr );
+}
+
+EXPORT void SetServerTime( int timepart0, int timepart1, int, ScriptString*, ScriptArray* )
+{
+	trySetServerTime( timepart0 | timepart1 );
+}
+#endif
+
+EXPORT int64 Script_GetServerTime( )
+{
+    return GetTime( );
+}
+
+int GetServerHour( )
+{
+    tm timeinfo;
+    time_t rawtime = GetTime( );
+    localtime_s( &timeinfo, &rawtime );
+    return timeinfo.tm_hour;
+}
+
+#ifdef __CLIENT
 
 #include <Windows.h>
 
@@ -257,6 +300,7 @@ FONLINE_DLL_ENTRY( isCompiler )
         REGISTER_GLOBAL_VAR( uint, HitAimTorso );
         REGISTER_GLOBAL_VAR( uint, HitAimArms );
         REGISTER_GLOBAL_VAR( uint, HitAimLegs );
+        REGISTER_GLOBAL_VAR( uint, __AllowRealDayTime  );
     }
 	
 	// #ifdef __CLIENT
@@ -782,14 +826,39 @@ uint GetAttackDistantion( CritterMutual& cr, Item& item, uint8 mode )
 /* Generic stuff                                                        */
 /************************************************************************/
 
-int GetNightPersonBonus()
+int GetNightPersonBonus( )
 {
-    if( FOnline->Hour < 6 || FOnline->Hour > 18 )
-        return 1;
-    if( FOnline->Hour == 6 && FOnline->Minute == 0 )
-        return 1;
-    if( FOnline->Hour == 18 && FOnline->Minute > 0 )
-        return 1;
+    if( *GlobalVars.__AllowRealDayTime != 1 )
+    {
+        if( FOnline->Hour < 6 || FOnline->Hour > 18 )
+        {
+            return 1;
+        }
+        if( FOnline->Hour == 6 && FOnline->Minute == 0 )
+        {
+            return 1;
+        }
+        if( FOnline->Hour == 18 && FOnline->Minute > 0 )
+        {
+            return 1;
+        }
+    }
+    else
+    {
+        const int hour = GetServerHour( );
+        if( hour < 6 || hour > 18 )
+        {
+            return 1;
+        }
+        if( hour == 6 && hour == 0 )
+        {
+            return 1;
+        }
+        if( hour == 18 && hour > 0 )
+        {
+            return 1;
+        }
+    }
     return -1;
 }
 
