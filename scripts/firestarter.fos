@@ -1,40 +1,49 @@
-// Author: Anuri
 #ifndef FIRESTARTER
 #define FIRESTARTER
 
 #include "_utils.fos"
 #include "firestarter_h.fos"
+#include "explode_h.fos"
+#include "combat_h.fos"
+#include "cooking_h.fos"
+#include "npc_planes_h.fos"
+#include "speed_h.fos"
+#include "furnace_h.fos"
 
-import void AskCooking( Critter& cr ) from "cooking";
-import void ExplodeEx( Map& map, uint16 hexX, uint16 hexY, uint16 effectPid, uint effectRadius, uint damage, uint damageType, uint damageRadius, uint ownerId )  from "explode";
-import void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attackerId ) from "combat"; // Export
-import bool LockInPlace( Critter& cr, Item& targetItem ) from "main";
-
-bool FireCheck( Critter& cr, Item@ item, Item@ target ) //exported - проверки на разное перед началом работы
+bool FireCheck( Critter& cr, Item@ item, Item@ target )
 {
     Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false;
-    }
+    if( !valid( map ) )
+	{
+		return false;
+	}
 	
-	if( !valid( item ) || !valid(target) ) { return false;
-    }
+	if( !valid( item ) || !valid(target) )
+	{
+		return false;
+	}
 	
 	uint16 firePid = target.GetProtoId();
-    if(	FireSource.find(firePid) == -1 && FireLightSource.find(firePid) == -1 ) { return false;
-    }
+    if(	FireSource.find(firePid) == -1 && FireLightSource.find(firePid) == -1 )
+	{
+		return false;
+	}
 
 	uint16 itemPid = item.GetProtoId();
-    if( FireFuel.find( itemPid ) == -1 && Igniters.find( itemPid ) == -1 && WaterSource.find( itemPid ) == -1 && Flasks.find( itemPid ) == -1 ) {
+    if( FireFuel.find( itemPid ) == -1 && Igniters.find( itemPid ) == -1 && WaterSource.find( itemPid ) == -1 && item.Proto.Type != ITEM_TYPE_FLASK )
+	{
 		BurnIt( cr, item, target );
 		return true;
 	}
 	
-	if( Igniters.find( itemPid )!= -1 ) {
+	if( Igniters.find( itemPid )!= -1 )
+	{
 		Ignite( cr, item, target );
 		return true;
 	}
 	
-	if( WaterSource.find( itemPid ) != -1 || Flasks.find( itemPid ) != -1 )  {
+	if( WaterSource.find( itemPid ) != -1 || item.Proto.Type == ITEM_TYPE_FLASK )
+	{
 		Extinguish( cr, item, target );
 		return true;
 	}
@@ -42,40 +51,58 @@ bool FireCheck( Critter& cr, Item@ item, Item@ target ) //exported - проверки на
 	FeedTheFire( cr, item, target );
 	return true;
 }
-//=============ПОДЖИГАНИЕ РУКОТВОРНОГО ОГНЯ===============//
+
 bool Ignite( Critter& cr, Item& item, Item& target )
 {
 	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false;
-    }
-	
-	if( target.STATE == 1 ) {
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Огонь уже вовсю полыхает." );
+    if( !valid( map ) )
+	{
 		return false;
 	}
 	
-	if( target.CURRENT_FUEL == 0 ) {
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Тут нечего разжигать, найдите подходящее топливо." );
+	if( target.STATE == STATE_BURNING )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FIRE_ALREADY_BURNING );
 		return false;
 	}
 	
-	if( target.STATE == 0 && target.CURRENT_FUEL > 0 ) {
-		if( item.GetProtoId() == PID_FLINT && Random( 1, 300 ) > cr.Skill[SK_OUTDOORSMAN] ) {
+	if( target.CURRENT_FUEL == 0 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_FIREFUEL );
+		return false;
+	}
+	
+	if( target.STATE == STATE_EXTINGUISHED && target.CURRENT_FUEL > 0 )
+	{
+		if( item.GetProtoId() == PID_FLINT && Random( 1, 300 ) > cr.Skill[SK_OUTDOORSMAN] )
+		{
 			_SubItem( item, 1 );
-			cr.Say( SAY_NETMSG, "|0xFFFF00 Вы сточили поджиг." );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FLINT_ENDED );
 		}
 		
-		target.STATE++;
+		target.STATE = STATE_BURNING;
+		
 		_CritAnimateUse(cr);
-		cr.Say( SAY_EMOTE, "Разжигает огонь" );
-		if( target.GetProtoId() == PID_FIREBARREL ) {
-			target.PicMap = PIC_BARREL_ANIM_ON;
-		} else if( target.GetProtoId() == PID_BRAZIER ) {
-			target.PicMap = PIC_CHANDELIER_ANIM_ON;
-		} else {
-			target.ChangeProto( PID_FIREPLACE2 );
-			ProtoItem@ proto = GetProtoItem( PID_FIREPLACE2 );
-			target.PicMap = proto.PicMap;			
+		
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_IGNITE_FIRE );
+		switch( target.GetProtoId() )
+		{
+			case( PID_FIREBARREL ):
+				target.PicMap = PIC_BARREL_ANIM_ON;
+				break;
+			case( PID_BRAZIER ):
+				target.PicMap = PIC_CHANDELIER_ANIM_ON;
+				break;
+			case( PID_FURNACE_SMALL ):
+				target.PicMap = PIC_FURNACE_ANIM_ON;
+				break;
+			default:
+			{
+				target.ChangeProto( PID_FIREPLACE2 );
+				ProtoItem@ proto = GetProtoItem( PID_FIREPLACE2 );
+				target.PicMap = proto.PicMap;
+				break;
+			}
 		}
 		
 		target.SetEvent( ITEM_EVENT_WALK, "e_Hot" );
@@ -93,87 +120,108 @@ bool Ignite( Critter& cr, Item& item, Item& target )
 	}
 	return true;
 }
-//=============ТУШЕНИЕ ОГНЯ===============//
+
 bool Extinguish( Critter& cr, Item& item, Item& target )
 {
 	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false;
+    if( !valid( map ) )
+	{
+		return false;
     }
 	
 	uint16 itemPid = item.GetProtoId();
-	if( WaterSource.find( itemPid ) != -1 ) {
-		
-		if( item.REMAINING_USES == 1 ) {
-			
+	if( WaterSource.find( itemPid ) != -1 )
+	{
+		if( item.REMAINING_USES == 1 )
+		{
 			_SubItem( item, 1 );
 			cr.AddItem( PID_BOTTLE_GLASS, 1 );
-		
-		} else {
+		}
+		else
+		{
 			item.REMAINING_USES --;
 			item.EXTRA_WEIGHT = item.REMAINING_USES * 100;
 		}
 	}
 	
-	if( Flasks.find( itemPid ) != -1 && item.REMAINING_USES > 0 ) {	
-		
+	if( item.Proto.Type == ITEM_TYPE_FLASK && item.REMAINING_USES > 0 )
+	{	
 		item.REMAINING_USES --;
 		item.EXTRA_WEIGHT = item.REMAINING_USES * 100;
 		
-		if( item.REMAINING_USES == 0 ) { 
-		
+		if( item.REMAINING_USES == 0 )
+		{ 
 			item.DNA = 0;
 			item.EXTRA_WEIGHT = 0;
 			
-			if( itemPid == PID_FLASK_FULL ) {
-				
+			if( itemPid == PID_FLASK_FULL )
+			{
 				item.ChangeProto( PID_FLASKB );
 			}
 		}
-	} else if( item.REMAINING_USES == 0 ){ cr.Say( SAY_NETMSG, "|0xFFFF00 Фляга пуста." ); return false;
+	}
+	else if( item.REMAINING_USES == 0 )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FLASK_EMPTY ); 
+		return false; 
 	}
 	
 	item.Update();
 		
-	if( target.STATE == 0 && target.CURRENT_FUEL >= 0 ) {
-		
-		cr.Say( SAY_EMOTE, "Выливает воду" );
-		map.PlaySound( "splash.ogg", target.HexX, target.HexY, 5 );
-		
-		if( target.CURRENT_FUEL == 0 ) {
-			cr.Say( SAY_NETMSG, "|0xFF0000 Вы попусту вылили воду, разве так стоит обращаться со столь ценной жидкостью?" );
-		} else {
-			cr.Say( SAY_NETMSG, "|0xFF0000 Вы залили водой топливо! Теперь часть непригодна для розжига..." );
+	if( target.STATE == STATE_EXTINGUISHED && target.CURRENT_FUEL >= 0 )
+	{
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_POUR_WATER );
+		PlayGenericSound( map, target.HexX, target.HexY, "splash.ogg", 10 );
+		if( target.CURRENT_FUEL == 0 )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WASTED_WATER );
+		}
+		else
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WASTED_FIREFUEL );
 			target.CURRENT_FUEL = MAX( target.CURRENT_FUEL - Random( 1800, 5400 ), 0 );
 		}
 		
 		return false;
 	}
 	
-	if( target.STATE >= 1 )
+	if( target.STATE >= STATE_BURNING )
 	{
-		target.STATE--;
+		target.STATE = STATE_EXTINGUISHED;
 		target.CURRENT_FUEL = MAX( target.CURRENT_FUEL - Random( 1800, 5400 ), 0 );
-		cr.Say( SAY_EMOTE, "Тушит пламя" );
-		map.PlaySound( "STEAM1.ACM", target.HexX, target.HexY, 5 );
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_EXTINQUISH );
+		PlayGenericSound( map, target.HexX, target.HexY, "STEAM1.mp3", 10 );
 		
-		if( target.GetProtoId() == PID_FIREBARREL ) {
-
-			if( target.CURRENT_FUEL > 0 ) {
+		if( target.GetProtoId() == PID_FIREBARREL )
+		{
+			if( target.CURRENT_FUEL > 0 )
+			{
 				target.PicMap = PIC_BARREL_FULL;
-				
-			} else {
+			}
+			else
+			{
 				ProtoItem@ proto = GetProtoItem( PID_FIREBARREL );
 				target.PicMap = proto.PicMap;
 			}
-			
-		} else if( target.GetProtoId() == PID_BRAZIER ) {
+		}
+		else if( target.GetProtoId() == PID_BRAZIER )
+		{
 			ProtoItem@ proto = GetProtoItem( PID_BRAZIER );
 			target.PicMap = proto.PicMap;
-		
-		} else if( WildFires.find( target.GetProtoId() ) != -1 ) {
+		}
+		else if( target.GetProtoId() == PID_FURNACE_SMALL )
+		{
+			ProtoItem@ proto = GetProtoItem( PID_FURNACE_SMALL );
+			target.PicMap = proto.PicMap;
+			FurnaceStage( target );
+		}
+		else if( WildFires.find( target.GetProtoId() ) != -1 )
+		{
 			target.ChangeProto( Ashes[ Random( 0, Ashes.length() - 1 ) ] );
-		
-		} else {
+			SETFLAG( target.Flags, ITEM_FLAT );
+		}
+		else
+		{
 			target.ChangeProto( PID_FIREPLACE_OFF );
 			ProtoItem@ proto = GetProtoItem( PID_FIREPLACE_OFF );
 			target.PicMap = proto.PicMap;
@@ -190,140 +238,167 @@ bool Extinguish( Critter& cr, Item& item, Item& target )
 	}
 	return true;
 }
-//=============ТАЙМ ИВЕНТ ДЛЯ ГОРЕНИЯ РУКОТВОРНОГО ОГНЯ===============//
+
 uint e_Burn( uint[]@ values )
 {
 	uint itemId = values[0];
 	Item@ target = GetItem( itemId );
-	if( valid( target ) )    
+	if( valid( target ) )
 	{
+		uint16 hexX = 0, hexY = 0;
+		Map@ map = target.GetMapPosition( hexX, hexY );
+		
 		target.CURRENT_FUEL = ( target.CURRENT_FUEL - 45 );
+		
 		if( target.CURRENT_FUEL > 0 )
 		{
-			uint16 hexX=0, hexY=0;
-			Map @map = target.GetMapPosition( hexX, hexY );
-			map.PlaySound( "campfire.ogg", target.HexX, target.HexY, 3 );
-			if( map.GetRain() == 0 || Random( 1, 3 ) != 3 ) {
+			PlayGenericSound( map, target.HexX, target.HexY, "campfire.ogg", 10 );
+			
+			if( target.GetProtoId() == PID_FURNACE_SMALL )
+			{
+				FurnaceStage( target );
+			}
+			
+			if( map.GetRain() == 0 || Random( 1, 3 ) != 3 || map.HasRoof( target.HexX, target.HexY ) )
+			{
 				return FIRE_BURNING_TIME;
 			}
 		}
-	
-		target.STATE--;
-
-		if( target.GetProtoId() == PID_FIREBARREL )
-		{
-			ProtoItem@ proto = GetProtoItem( PID_FIREBARREL );
-			target.PicMap = proto.PicMap;
-		} else if( target.GetProtoId() == PID_BRAZIER ) {
-			ProtoItem@ proto = GetProtoItem( PID_BRAZIER );
-			target.PicMap = proto.PicMap;
-		} else {	
-			uint ashPid = Ashes[ Random( 0, Ashes.length() - 1 ) ];
-			target.ChangeProto( ashPid );
-			ProtoItem@ proto = GetProtoItem( ashPid );
-			target.PicMap = proto.PicMap;
-		}
-
-		setAnimState( target );
-		target.Update();
-		uint16 hexX=0, hexY=0;
-		Map @map = target.GetMapPosition( hexX, hexY );
-		map.PlaySound( "STEAM1.ACM", target.HexX, target.HexY, 5 );
+		
+		target.STATE = STATE_EXTINGUISHED;
+		PlayGenericSound( map, target.HexX, target.HexY, "STEAM1.mp3", 10 );
 		EraseTimeEvent( target.EVENT );
 		target.EVENT = 0;
+		ProtoItem@ proto = null;
+		switch( target.GetProtoId() )
+		{
+			case( PID_FIREBARREL ):
+				@ proto = GetProtoItem( PID_FIREBARREL );
+				break;
+			case( PID_BRAZIER ):
+				@ proto = GetProtoItem( PID_BRAZIER );
+				break;
+			case( PID_FURNACE_SMALL ):
+				@ proto = GetProtoItem( PID_FURNACE_SMALL );
+				FurnaceStage( target );
+				break;
+			default:
+			{	
+				uint ashPid = Ashes[ Random( 0, Ashes.length() - 1 ) ];
+				target.ChangeProto( ashPid );
+				@ proto = GetProtoItem( ashPid );
+				SETFLAG( target.Flags, ITEM_FLAT );
+				break;
+			}
+		}
+		target.PicMap = proto.PicMap;
+		setAnimState( target );
+		target.Update();
 	}
 	return 0;
 }
-//=======================ТАЙМ ИВЕНТ ДЛЯ УДАЛЕНИЯ СПЕЦЭФФЕКТОВ========================//
+
 uint e_fireFX( uint[]@ values )
 {
 	uint itemId = values[0];
 	Item@ e_fireFX = GetItem( itemId );
-	if( valid( e_fireFX ) )  
+	if( valid( e_fireFX ) )
 	{
 		DeleteItem( e_fireFX );
 	}
-return 0;
+	return 0;
 }
-//=============ТЕХ ФУНКЦИЯ ДЛЯ ВКЛ\ВЫКЛ АНИМАЦИИ ОГНЯ===============//
+
 void setAnimState( Item& target )
 {
-	if( target.STATE == 1 ) {	
+	if( target.STATE == STATE_BURNING )
+	{	
 		UNSETFLAG( target.Flags, ITEM_SHOW_ANIM_EXT );
 		SETFLAG( target.Flags, ITEM_LIGHT );
 		SETFLAG( target.Flags, ITEM_CAN_USE );
 		UNSETFLAG( target.Flags, ITEM_CAN_PICKUP );
-	} else {
+	}
+	else
+	{
 		SETFLAG( target.Flags, ITEM_SHOW_ANIM_EXT );
 		UNSETFLAG( target.Flags, ITEM_LIGHT );
 	}
 	target.Update();
 }
-//===============ПОДБРАСЫВАНИЕ ТОПЛИВА В ОГОНЬ=====================//
+
 bool FeedTheFire( Critter& cr, Item& item, Item& target )
 {
 	Map@ map = cr.GetMap();
-	if( target.CURRENT_FUEL == target.MAX_FUEL)
+	if( target.CURRENT_FUEL == target.MAX_FUEL )
 	{	
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Горючее уже некуда подкладывать, дайте ему прогореть!" );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_MUCH_FUEL );
 		return false;
 	}
 	
-	_SubItem( item, 1 );
 	_CritAnimateUse(cr);
-	if( item.GetProtoId() == PID_COAL ) {
+	if( item.GetProtoId() == PID_COAL )
+	{
 		target.CURRENT_FUEL = MIN(target.CURRENT_FUEL + 5400, target.MAX_FUEL);
-		cr.Say( SAY_EMOTE, "Подкладывает уголь" );
-		map.PlaySound( "ROCK.ACM", target.HexX, target.HexY, 3 );
-	} else {	
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_ADD_COAL );
+		PlayGenericSound( map, target.HexX, target.HexY, "ROCK.mp3", 10 );
+	}
+	else
+	{	
 		target.CURRENT_FUEL = MIN(target.CURRENT_FUEL + 1800, target.MAX_FUEL);
-		cr.Say( SAY_EMOTE, "Подкладывает топливо" );
-		map.PlaySound( "BRDSWELL.ACM", target.HexX, target.HexY, 3 );
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_ADD_WOOD );
+		PlayGenericSound( map, target.HexX, target.HexY, "BRDSWELL.mp3", 10 );
 	}
 	
-	if( target.GetProtoId() == PID_FIREBARREL && target.CURRENT_FUEL > 0 && target.STATE == 0 )
+	if( target.GetProtoId() == PID_FIREBARREL && target.CURRENT_FUEL > 0 && target.STATE == STATE_EXTINGUISHED )
 	{
 		target.PicMap = PIC_BARREL_FULL;
 		target.Update();
 	}
+	
 	int occupancy_rate = ( target.CURRENT_FUEL * 100 / target.MAX_FUEL );
-	cr.Say( SAY_NETMSG, "|0xFFFF00 Кострище заполнено горючими материалами на " +occupancy_rate+ " %" );
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FIREPLACE_FILLED, "$rate" + occupancy_rate);
+	_SubItem( item, 1 );
 	return true;
 }
-//===============СЖИГАНИЕ ВЕЩЕЙ В ОГНЕ=====================//
+
 void BurnIt( Critter& cr, Item& item, Item& target )
 {
 	_CritAnimateUse(cr);
 	Map@ map = cr.GetMap();
 	uint destructablePid = item.GetProtoId();
-	if( Destructables.find(destructablePid) == -1 && Explosives.find(destructablePid) == -1 || target.STATE == 0 ) {	
-		cr.Say( SAY_NETMSG, "|0xFF0000 Сжечь предмет не удалось." );
+	if( Destructables.find(destructablePid) == -1 && Explosives.find(destructablePid) == -1 || target.STATE == STATE_EXTINGUISHED )
+	{	
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_BURN_THIS );
 		return;
-	} else if( Explosives.find(destructablePid) != -1 ) {
+	}
+	else if( Explosives.find(destructablePid) != -1 )
+	{
 		_SubItem( item, 1 );
-		cr.Say( SAY_EMOTE, "Кидает странный предмет в огонь" );
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PUTS_EXPLOSIVES_FIRE );
 		uint[] values = {target.Id};
 		target.EXPLOSION_TIMEOUT = CreateTimeEvent( AFTER( REAL_SECOND( Random( 0, 10 ) ) ),"e_Explosives", values, true );
 		return;
-	} else {
-		cr.Say( SAY_EMOTE, "Кидает предмет в огонь" );
+	}
+	else
+	{
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PUTS_ITEM_FIRE );
 		if( item.GetProtoId() == PID_SHIT_SMALL || item.GetProtoId() == PID_SHIT_BIG || item.GetProtoId() == PID_SHIT_HUGE )
 		{
 			uint16 hexX=0, hexY=0;
 			Map @map = target.GetMapPosition( hexX, hexY );
-			map.SetText( target.HexX, target.HexY, COLOR_LGRAY, ":тошнотворный запах:" );
+			map.SetTextMsg( target.HexX, target.HexY, COLOR_LGRAY, TEXTMSG_TEXT, STR_MAPMSG_BAD_SMELL );
 		}
-		map.PlaySound( "HMXXXXBN.ACM", target.HexX, target.HexY, 3 );
+		PlayGenericSound( map, target.HexX, target.HexY, "HMXXXXBN.mp3", 10 );
 		_SubItem( item, 1 );
 		return;
 	}
 }
-//============ТАЙМ-АУТ ДЛЯ ВЗРЫВА БРОШЕНОЙ В ОГОНЬ ВЗРЫВЧАТКИ==================//
+
 uint e_Explosives( uint[]@ values )
 {
 	uint itemId = values[0];
 	Item@ target = GetItem( itemId );
-	if( valid( target ) )    
+	if( valid( target ) )
 	{
 		uint16 hexX=0, hexY=0;
 		Map @map = target.GetMapPosition( hexX, hexY );
@@ -339,7 +414,7 @@ uint e_Explosives( uint[]@ values )
 			{
 				uint16 hx=0, hy=0;
 				hx = target.HexX; hy = target.HexY;
-				map.MoveHexByDir( hx, hy, Random( 1, 6 ), Random( 1, 3) );
+				map.MoveHexByDir( hx, hy, Random( 0, 5 ), Random( 1, 3) );
 				if( map.IsHexPassed( hx, hy ) )
 				{
 					map.AddItem( hx, hy, Wreckage[ Random( 0, Wreckage.length() -1 ) ] , 1 );
@@ -353,41 +428,47 @@ uint e_Explosives( uint[]@ values )
 	return 0;
 }
 
-//===============СОЗДАНИЕ ОГНЯ==================//
-/*class Fire - черновик на будущее
+void GenerateFire( Map@ map, int x, int y, int radius, uint8 strength, int attackerId )
 {
-	uint16 pid;
-	uint8 strength;
-	uint8 charge;
-	int attackerId;
-	bool burnOut;
-	
-	Fire( uint16 pid, uint8 size, uint8 charge, int attackerId )
+	if( !valid( map ) )
 	{
-        this.pid = pid;
-        this.strength = strength;
-        this.charge = charge;
-        this.attackerId = attackerId;
-		burnOut = false;
+		return;
 	}
-}*/
-
-
-void GenerateFire( Map@ map, int x, int y, int radius, uint8 strength, int attackerId ) //exported
-{
-	if( !valid( map ) ) { return; }
 	Item@ initialFire = null;
 	Item@ fire = null;
 	
 	Critter@ victim = map.GetCritter( x, y ); 
-	if( !map.IsHexPassed( x, y ) && !valid( victim ) ) { return; }
+	if( !map.IsHexPassed( x, y ) && !valid( victim ) )
+	{
+		return;
+	}
 	
-	@initialFire = map.AddItem( x, y, WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
+	if( !CheckFire( map, x, y ) )
+	{
+		@initialFire = map.AddItem( x, y, WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
+	}
+	else
+	{
+		for( uint j = 0; j < WildFires.length(); j++ )
+		{
+			Item@ check = map.GetItem( x, y, WildFires[j] );
+			if( valid( check ) )
+			{
+				@initialFire = check;
+				EraseTimeEvent( initialFire.EVENT );
+				initialFire.EVENT = 0;
+			}
+		}
+	}
 	
-	if( !valid( initialFire ) ) { return; }
-	SayLog( map, "[ Очаг Возгорания ]", x, y );
+	if( !valid( initialFire ) )
+	{
+		return;
+	}
+	SayLog( map, "[ Spot on fire: ]", x, y );
 		
-	if( attackerId > 0 ) {
+	if( attackerId > 0 )
+	{
 		initialFire.ATTACKER_ID = attackerId;
 	}
 	
@@ -397,12 +478,15 @@ void GenerateFire( Map@ map, int x, int y, int radius, uint8 strength, int attac
 	
 	uint[] active_fires = { initialFire.Id };
 	
-	if( radius > 0 ) {
+	if( radius > 0 )
+	{
 		FireCircle( map, x, y, strength, active_fires );
-		for( int i = 1; i < initialFire.LIQUID_AMOUNT ; i++ ) {
+		for( int i = 1; i < initialFire.LIQUID_AMOUNT ; i++ )
+		{
 			uint16 zx = 0, zy = 0;
 			@fire = GetItem( active_fires[ Random( 1, active_fires.length() - 1 ) ] );
-			if( valid( fire ) ) {
+			if( valid( fire ) )
+			{
 				fire.GetMapPosition( zx, zy );
 				FireCircle( map, zx, zy, strength, active_fires );
 			}
@@ -413,7 +497,8 @@ void GenerateFire( Map@ map, int x, int y, int radius, uint8 strength, int attac
 uint CalcualteCharges( uint radius )
 {
 	uint charge = 0;
-	for ( uint i = 1; i <= radius; i++ ) {
+	for ( uint i = 1; i <= radius; i++ )
+	{
 		charge += 6 * i;
 	}
 	return charge;
@@ -428,9 +513,15 @@ void SetFireEvent( Item& fire, uint8 strength )
 
 uint FireCircle( Map@ map, int x, int y, uint8 strength, uint[]@ active_fires )
 {
-	if( !valid( map ) ) { return 0; }
+	if( !valid( map ) )
+	{
+		return 0;
+	}
 	
-	if( active_fires.length() == 0 ) { return 0; }
+	if( active_fires.length() == 0 )
+	{
+		return 0;
+	}
 	
 	uint initialFireId = active_fires[0];
 	Item@ initialFire = GetItem( initialFireId );
@@ -440,23 +531,44 @@ uint FireCircle( Map@ map, int x, int y, uint8 strength, uint[]@ active_fires )
 	
 	uint16 tx = 0, ty = 0;
 	
-	for( uint i = 0; i < 6; i++ ) {
+	for( uint i = 0; i < 6; i++ )
+	{
 		tx = x; ty = y;
 		map.MoveHexByDir( tx, ty, i, 1 );
 		Critter@ victim = map.GetCritter( tx, ty );
 		
-		if( !map.IsHexPassed( tx, ty ) && !valid( victim ) ) 
+		if( !map.IsHexPassed( tx, ty ) && !valid( victim ) )
+		{
 			continue;
-		if( CheckFire( map, tx, ty ) == false ) {
-			@fire = map.AddItem( tx, ty, WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
-			if( !valid( fire ) )
-				continue;
-			fire.ATTACKER_ID = initialFire.ATTACKER_ID;
-			SetFireEvent( fire, strength );
-			initialFire.LIQUID_AMOUNT--;
-			active_fires.insertLast( fire.Id );
 		}
-		if( initialFire.LIQUID_AMOUNT <= 0 ) { return 0; }
+	
+		if( !CheckFire( map, tx, ty ) )
+		{ 
+			@fire = map.AddItem( tx, ty, WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
+			initialFire.LIQUID_AMOUNT--;
+		}
+		else
+		{
+			for( uint j = 0; j < WildFires.length(); j++ )
+			{
+				Item@ check = map.GetItem( tx, ty, WildFires[j] );
+				if( valid( check ) )
+				{
+					@fire = check;
+					EraseTimeEvent( fire.EVENT );
+					fire.EVENT = 0;
+				}
+			}
+		}
+		
+		fire.ATTACKER_ID = initialFire.ATTACKER_ID;
+		SetFireEvent( fire, strength );
+		active_fires.insertLast( fire.Id );
+
+		if( initialFire.LIQUID_AMOUNT <= 0 )
+		{
+			return 0;
+		}
 	}
 	return charge;
 }
@@ -466,27 +578,40 @@ bool CheckFire( Map& map, int x, int y )
 	uint pid = 0;
 	Item@[] fire;
 	uint count = map.GetItems( x, y, fire );
-	for( uint i = 0; i < count; i++ ) {
-		if( WildFires.find( fire[i].GetProtoId() ) != -1 ) {
+	for( uint i = 0; i < count; i++ )
+	{
+		if( WildFires.find( fire[i].GetProtoId() ) != -1 )
+		{
 			return true;
 		}
 	}
 	return false;
 }
 
-//================ВОЗГОРАНИЕ ПРЕДМЕТОВ РЯДОМ С ОГНЕМ===========================//
-void FireUp( Item& burningItem, uint pid, int strength ) //exported
+
+void FireUp( Item& burningItem, uint pid, int strength )
 {
-	if( FireSource.find( pid ) == -1 ) { return; }
+	if( FireSource.find( pid ) == -1 )
+	{
+		return;
+	}
 	
 	uint firablePid = burningItem.GetProtoId();	
-	if( FireFuel.find( firablePid ) == -1 && Collaterals.find( firablePid ) == -1 && Explosives.find( firablePid ) == -1 && Destructables.find( firablePid ) == -1 ) { return; }
+	bool isWoodFurniture = ( burningItem.Proto.Material == MATERIAL_WOOD && burningItem.Proto.Item_Subtype == ITEM_SUBTYPE_FURNITURE );
+	if( FireFuel.find( firablePid ) == -1 && Collaterals.find( firablePid ) == -1 && Explosives.find( firablePid ) == -1 && Destructables.find( firablePid ) == -1 && !isWoodFurniture )
+	{
+		return;
+	}
 	
     Map@ map = GetMap( burningItem.MapId );
-    if(!valid(map)) { return; }
+    if( !valid( map ) )
+	{
+		return;
+	}
 	
 	uint16 hx = burningItem.HexX, hy = burningItem.HexY;
-	if( Explosives.find( burningItem.GetProtoId() ) != -1 )	{
+	if( Explosives.find( burningItem.GetProtoId() ) != -1 )
+	{
 		ExplodeEx( map, hx, hy, PID_EXPLODE_MISSILE2, 0, Random( 50, 100 ), DAMAGE_EXPLODE, 3, 0 );
 		Item@[] destroyedItems;
 		map.GetItems( hx, hy, destroyedItems );
@@ -495,41 +620,101 @@ void FireUp( Item& burningItem, uint pid, int strength ) //exported
 	}		
 	
 	Item@ fire = map.AddItem( hx, hy, WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
-	map.PlaySound( "WAI1XXX2.ACM", hx, hy, 3 );
-	
-	if( !valid( fire ) ) { return; } {
-		fire.SetEvent( ITEM_EVENT_WALK, "e_Hot" );	
-		SetFireEvent( fire, strength );
-
-		SayLog( map, "[ Возгорание предмета в ]", hx, hy );
-		
-		DeleteItem( burningItem );
+	PlayGenericSound( map, hx, hy, "WAI1XXX2.mp3", 10 );
+	if( !valid( fire ) )
+	{
+		return;
 	}
+	
+	if( burningItem.Proto.Type == ITEM_TYPE_CONTAINER )
+	{
+		DropContainerItems( map, burningItem );
+	}
+	
+	fire.SetEvent( ITEM_EVENT_WALK, "e_Hot" );	
+	SetFireEvent( fire, strength );
+
+	SayLog( map, "[ Object burning in: ]", hx, hy );
+	
+	DeleteItem( burningItem );
 }
 
-void e_Hot(Item& item, Critter& crit, bool entered, uint8 dir) 
+void e_Hot( Item& item, Critter& cr, bool entered, uint8 dir ) 
 {
 	if( entered )
 	{
-		if( crit.GetTimeEvents( CTE_DYSPNEA, null, null, null ) == 0 ) {
-			crit.AddTimeEvent( "cte_Hot", 0, CTE_DYSPNEA, 0 );
+		if( cr.GetTimeEvents( CTE_BURNING, null, null, null ) == 0 )
+		{
+			cr.AddTimeEvent( "cte_Hot", 0, CTE_BURNING, 0 );
 		}
+		
 		Critter@ attacker = null;
-		if( item.ATTACKER_ID > 0 ) {
+		if( item.ATTACKER_ID > 0 )
+		{
 			@attacker = GetCritter( item.ATTACKER_ID );
-			crit.EventAttacked( attacker );
+			if( valid( attacker ) && !cr.IsPlayer() && cr.IsSee( attacker ) )
+			{
+				cr.AddEnemyInStack( attacker.Id );
+			}
+		}
+		
+		Map@ map = GetMap( item.MapId );
+		if( valid( map ) && !cr.IsPlayer() )
+		{
+			uint16 hexX = 0, hexY = 0;
+			bool fireSpot = true;
+			hexX = cr.HexX;
+			hexY = cr.HexY;
+			uint dir = cr.Dir;
+			for( uint j = 1; j < 10; j++ )
+			{  
+				map.MoveHexByDir( hexX, hexY, dir, j );
+				
+				if( !map.IsHexPassed( hexX, hexY ) )
+				{
+					continue;
+				}
+				
+				Item@[] fires;
+				map.GetItems( hexX, hexY, fires );
+				for( uint k = 0; k < fires.length(); k ++ )
+				{
+					if( WildFires.find( fires[k].GetProtoId() ) == -1 )
+					{ 
+						fireSpot = false;
+						break; 
+					}
+				}
+				
+				if( !fireSpot )
+				{ 
+					break;
+				}
+			}
+			map.GetHexCoordWall( cr.HexX, cr.HexY, hexX, hexY, 0, Random( 1, 6 ) );
+			cr.ErasePlane( AI_PLANE_WALK, true );
+			AddWalkPlane( cr, AI_PLANE_ATTACK_PRIORITY - 1, hexX, hexY, dir, true, 1 );
+			cr.SetHomePos( hexX, hexY, dir );
 		}
 	}
-	else crit.EraseTimeEvents( CTE_DYSPNEA );
+	else
+	{
+		cr.EraseTimeEvents( CTE_BURNING );
+	}
 }
 
-//=============ПОДНИМАЕМ ТЕМПЕРАТУРУ КРИТЕРА==================//
 uint cte_Hot( Critter& cr, int identifier, uint& rate )
 {
-	if( cr.IsDead() ) return 0;
+	if( cr.IsDead() )
+	{
+		return 0;
+	}
 	
 	Map@ map = cr.GetMap();
-	if( !valid( map ) ) return 0;
+	if( !valid( map ) )
+	{
+		return 0;
+	}
 	
 	bool isBurning = false;
 
@@ -537,52 +722,68 @@ uint cte_Hot( Critter& cr, int identifier, uint& rate )
 	Item@[] fire;
 	uint count = map.GetItems( cr.HexX, cr.HexY, fire );
 	for( uint i = 0; i < count; i++ )
-		if( FireSource.find( fire[i].GetProtoId() ) != -1 && fire[i].STATE == 1 )
+	{
+		if( FireSource.find( fire[i].GetProtoId() ) != -1 && fire[i].STATE == STATE_BURNING )
 		{
 			pid = fire[i].GetProtoId();
 			isBurning = true;
 			break;
 		}
-		
-	if( !isBurning ) return 0;
+	}
+	
+	if( !isBurning )
+	{
+		return 0;
+	}
 	
 	if( cr.Stat[ ST_BODY_TYPE ] != BT_ROBOT )
 	{
-		//cr.ParamBase[CR_TEMP]+= 3;
-		//InjureCritter( cr, cr.ParamBase[CR_TEMP], DAMAGE_FIRE, 0, -pid );
 		InjureCritter( cr, Random( 5, 15 ), DAMAGE_FIRE, cr.Dir, cr.Id );
 	}
 	rate++;
 	return REAL_SECOND( 1 );
 }
-//==========WILDFIRE TIME EVENT ===============//
+
 uint e_FireBurn( uint[]@ values )
 {
-	if( !valid( values ) ) { return 0; }
+	if( !valid( values ) )
+	{
+		return 0;
+	}
 	
     Item@ fire = GetItem( values[ 0 ] );
-	if( !valid( fire ) ) { return 0; }
+	if( !valid( fire ) )
+	{
+		return 0;
+	}
 	
 	uint8 strength = values[ 1 ];
 	
-	if( fire.FIRE_MARKER == 0 ) {
+	if( fire.FIRE_MARKER == 0 )
+	{
 		fire.FIRE_STRENGTH = strength;
 	}
 	
-	if( fire.FIRE_STRENGTH > 0 ) {
+	if( fire.FIRE_STRENGTH > 0 )
+	{
 		fire.FIRE_TIMER++;
 		
-		if( fire.FIRE_TIMER >= 20 ) { 
+		if( fire.FIRE_TIMER >= 20 )
+		{ 
 			fire.FIRE_TIMER = 0; 
 			fire.FIRE_STRENGTH -= Random( 0, 1 );
 			
-			if( fire.FIRE_MARKER == 0 ) {
+			if( fire.FIRE_MARKER == 0 )
+			{
 				fire.FIRE_MARKER = 1;
 			}
 		}
 		
 		Map@ map = GetMap( fire.MapId );
-		if( !valid( map ) ) { return 0; }
+		if( !valid( map ) )
+		{
+			return 0;
+		}
 
 		if( Random( 0, 1 ) == 0 ) 
 		{
@@ -590,168 +791,203 @@ uint e_FireBurn( uint[]@ values )
 			Item@[] heated;
 			map.GetItems( fire.HexX, fire.HexY, heated );
 			
-			for( uint i = 0; i < 6; i++ ) {
+			for( uint i = 0; i < 6; i++ )
+			{
 				hx = fire.HexX; hy = fire.HexY;
 				map.MoveHexByDir( hx, hy, i, 1 );
 				map.GetItems( hx, hy, heated );
 			}
-			for( uint i = 0; i < heated.length(); i++ ) {
+			for( uint i = 0; i < heated.length(); i++ )
+			{
 				FireUp( heated[i], WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
 			}
 		}
 		
 		uint16 hx = fire.HexX, hy = fire.HexY;
 		Item@ fireFX = map.AddItem( hx, hy, PID_SMOKE, 1 );
-		map.PlaySound( "forest_fire2.ogg", hx, hy, 3 );
+		PlayGenericSound( map, hx, hy, "forest_fire2.ogg", 10 );
 		
 		uint[] values = {fireFX.Id};
 		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", values, true );
 
 		Critter@[] targetCR;
 		uint count = map.GetCrittersHex( fire.HexX, fire.HexY, 0, FIND_LIFE_AND_KO, targetCR );
-		for( uint i = 0; i < count; i++ ) {
-			if( targetCR[i].GetTimeEvents( CTE_DYSPNEA, null, null, null ) == 0 ) {
-				targetCR[i].AddTimeEvent( "cte_Hot", 0, CTE_DYSPNEA, 0 );
+		for( uint i = 0; i < count; i++ )
+		{
+			if( targetCR[i].GetTimeEvents( CTE_BURNING, null, null, null ) == 0 )
+			{
+				targetCR[i].AddTimeEvent( "cte_Hot", 0, CTE_BURNING, 0 );
 			}
 		}
-		if( map.GetRain() == 0 || Random( 1, 10 ) != 10 ) {
+		
+		if( map.GetRain() == 0 || Random( 1, 10 ) != 10 || map.HasRoof( fire.HexX, fire.HexY ) )
+		{
 			return WILD_FIRE_BURNING_TIME;
 		}
     }
 	
-	if( WildFires.find( fire.GetProtoId() ) != -1 )   
+	if( WildFires.find( fire.GetProtoId() ) != -1 )
 	{
 		fire.ChangeProto( Ashes[ Random( 0, Ashes.length() - 1 ) ] );
+		SETFLAG( fire.Flags, ITEM_FLAT );
 		return 0;
 	}
 	
-	fire.STATE = 0;
+	fire.STATE = STATE_EXTINGUISHED;
 	EraseTimeEvent( fire.EVENT );
 	fire.EVENT = 0;
     return 0;
 }
-//========== ACTION MENU FOR UNIGNITED BARREL ===============//
-bool ShowMenuFireBarrel( Critter& cr, Item& target ) //exported
-{
-	Map@ map = cr.GetMap();
-    if( !valid( map ) ) 
-    {
-        return false;
-	}
-	cr.ShowScreen( SCREEN_DIALOGBOX, 3, "answer_fire_barrel" );
-	cr.Say( SAY_DIALOGBOX_TEXT, MenuInfoFireBarrel( cr, target ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), Centering( "Разжечь огонь" ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), Centering( "Подкинуть горючее" ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), Centering( "Открепить" ) );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), Centering( "Ничего не делать" ) );
 
-	cr.StatBase[ST_VAR7] = target.Id;
-	return true;	
-}
-
-void answer_fire_barrel( Critter& cr, uint answerI, string& answerS )
+void StartMenuFireBarrel( Critter& cr, Item& firebarrel )
 {
-	if( !FireBarrelActions( cr, answerI ) )
+    Map@ map = cr.GetMap();
+    if( map is null )
 	{
-		cr.Say( SAY_NETMSG, "|0xFF0000 Из этого ничего не вышло." );
-	}
+        return;
+    }
+
+    iMenuHandler@ handler = MenuFireBarrel( firebarrel, map );
+    iDialogBox@ menu = OpenMenu( cr, "", handler );
 }
 
-bool FireBarrelActions( Critter& cr, uint answer )
+class MenuFireBarrel: CenteredMenuHandler
 {
-	switch( answer )
+    uint firebarrel_id;
+    uint map_id;
+	
+    MenuFireBarrel( Item& firebarrel, Map& map )
 	{
-		case( 0 ): return TryIgnite( cr );
-		case( 1 ): return TryFeedTheFire( cr );
-		case( 2 ): return TryLockInPlace( cr );
-		case( 3 ): return false;
-	}
-	return false;
-}
+		firebarrel_id = firebarrel.Id;
+		map_id = map.Id;
+    }
 
-bool TryLockInPlace( Critter& cr )
-{
-	Map@ map = cr.GetMap();
-    if( !valid( map ) ) 
-    {
-        return false;
-	}	
-	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
-	if( !valid( targetItem ) ) 
-    {
-        return false;
-	}
-	LockInPlace( cr, targetItem );
-	return true;
-}
-
-bool TryIgnite( Critter& cr )
-{
-	Map@ map = cr.GetMap();
-    if( !valid( map ) ) 
-    {
-        return false;
-	}		
-	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
-	if( !valid( targetItem ) ) 
-    {
-        return false;
-	}
-	Item@ itemLighter = cr.GetItem( PID_LIGHTER, -1 );
-	Item@ itemFlint = cr.GetItem( PID_FLINT, -1 );
-	if( valid(itemLighter) )
-	{ 
-		Item@ item = itemLighter;
-		Ignite( cr, item, targetItem );
-	}
-	else if( valid(itemFlint) )
-	{ 
-		Item@ item = itemFlint;
-		Ignite( cr, item, targetItem );
-	}
-	else
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Вам нечем разжечь огонь." );
-		ShowMenuFireBarrel( cr, targetItem );
-	}
-	return true;
-}
+        Map@ map = GetMap( map_id );
+        Item@ firebarrel = GetItem( firebarrel_id );
+	
+		bool locked_in_place = !FLAG( firebarrel.Flags, ITEM_CAN_PICKUP );
+	
+        if( map is null || firebarrel is null )
+		{
+            return false;
+        }
 
-bool TryFeedTheFire( Critter& cr )
-{
-	Map@ map = cr.GetMap();
-    if( !valid( map ) ) 
-    {
-        return false;
-	}		
-	Item@ targetItem = map.GetItem(cr.StatBase[ST_VAR7]);
-	if( !valid( targetItem ) ) 
-    {
-        return false;
-	}
-	Item@ item = null;
-	for( uint i = 0, j = 9; i < j; i++)
-	{
-		@item = @cr.GetItem( FireFuel[i], -1 );
-		if( valid ( item ) )
-        {
-			break;
+		if( firebarrel.STATE > STATE_EXTINGUISHED )
+		{
+			if( firebarrel.GetProtoId() != PID_BRAZIER )
+			{
+				if( menu.Button( "Cook" ) )
+				{
+					CookingMenu( cr );
+					return false;
+				}
+				
+				if( menu.Button( "Fry" ) )
+				{
+					FastFrying( cr );
+					return false;
+				}
+				
+				if( menu.Button( "Craft" ) )
+				{
+					GetCraftToken( cr );
+					return false;
+				}
+			}
+			
+			if( menu.Button( "Extinguish" ) )
+			{
+				if( hasItems( cr, WaterSource ) )
+				{
+					Item@[] watersource = getItems( cr, WaterSource );
+					Item@ water = watersource[0];
+					Extinguish( cr, water, firebarrel );
+					return false;
+				}
+				else
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_WATER_FOR_FIRE );
+					return true;
+				}
+			}
 		}
-	}
-	if( valid( item ) )
+		else
+		{
+			if( locked_in_place )
+			{
+				if( menu.Button( "Ignite" ) )
+				{
+					if( hasItems( cr, Igniters ) )
+					{
+						Item@[] igniters = getItems( cr, Igniters );
+						Item@ igniter = igniters[0];
+						Ignite( cr, igniter, firebarrel );
+						return true;
+					}
+					else
+					{
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_LIGHTER );
+						return false;
+					}
+				}
+				
+				if( menu.Button( "Add fuel" ) )
+				{
+					if( hasItems( cr, FireFuel ) )
+					{
+						Item@[] fireFuel = getItems( cr, FireFuel );
+						Item@ fuel = fireFuel[0];
+						FeedTheFire( cr, fuel, firebarrel );
+						return true;
+					}
+					else
+					{
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_FIREFUEL_2 );
+						return false;
+					}
+				}
+				
+				if( menu.Button( "Detach" ) )
+				{
+					LockInPlace( cr, firebarrel );
+					return true;
+				}
+			}
+			else
+			{
+				if( menu.Button( "Anchor" ) )
+				{
+					LockInPlace( cr, firebarrel );
+					return true;
+				}
+
+				if( menu.Button( "Pick up" ) )
+				{
+					PickItem( cr, firebarrel );
+					ChangeCritterSpeed( cr );
+					return false;
+				}			
+			}
+		}
+		return true;
+    }
+	
+    string@ Description( Critter& cr )
 	{
-		FeedTheFire(cr, item, targetItem);
-	}
-	ShowMenuFireBarrel( cr, targetItem );
-	return true;
+		Item@ firebarrel = GetItem( firebarrel_id );
+		string TXT = "There is no fire burning, you may require fire fuel, a flint or a lighter.";
+		string occupancy_level = ( firebarrel.CURRENT_FUEL * 100 / firebarrel.MAX_FUEL );
+		TXT += "\n";
+		TXT += "\n" "The object is filled with fuel to " + occupancy_level + " % of it's capacity.";
+		return TXT;
+    }
+	
+    string@ ButtonCancel()
+	{
+        return ButtonDecorator( "Hide menu", null );
+    }
 }
 
-string MenuInfoFireBarrel( Critter& cr, Item& target )
-{
-	string TXT = "Объект не горит, для розжига понадобится топливо, а так же зажигалка или кремень.";
-	string occupancy_level = (target.CURRENT_FUEL * 100 / target.MAX_FUEL);
-	TXT += "\n";
-	TXT += "\n" "Объект заполнен горючими материалами на " + occupancy_level + " %";
-	return TXT;
-}
 #endif // FIRESTARTER

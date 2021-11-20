@@ -1,184 +1,202 @@
-// Author: Anuri
+#ifndef VENDING
+#define VENDING
 
 #include "_utils.fos"
+#include "vending_h.fos"
+#include "speed_h.fos"
 
-import bool LockInPlace( Critter& cr, Item& stillItem ) from "main";
-import bool PickItem( Critter& cr, Item& stillItem ) from "main";
-
-//								Val0 // Used in locks DO NOT USE HERE - conflict
-//								Val1 // not yet
-//								Val2 // not yet
-//								Val4 // Used in locks DO NOT USE HERE - possible conflict
-//								Val5 // Used in locks DO NOT USE HERE - possible conflict
-#define PRICE					Val6 // Product Price - цена товара
-#define BALANCE					Val7 // Outstanding balance - Денежный баланс на который можно купить товар.
-#define PRODUCT					Val8 // Sale Item Pid - Пид товара для продажи
-
-const string[] SoundNames = { "CLANG.ACM", "CLANG1.ACM", "CLANK.ACM", "CLANK1.ACM" };
-
-uint16[] cash_pids =   { PID_DOLLAR_100, PID_DOLLAR_20, PID_DOLLAR_5, PID_BOTTLE_CAPS };
-uint16[] cash_values = {	  100, 			 20, 			5, 		   	   1		  };
-
-void TransferItemToContainer( Item& item, Item& vendMach ) {
+void TransferItemToContainer( Item& item, Item& vendMach )
+{
     uint16 pid = item.GetProtoId();
     _SubItem( item, 1 );
     vendMach.AddItem( pid, 1, 0 );
 }
 
-void PlayVendSound( Map& map, Item & vendMach ) {
-	map.PlaySound( SoundNames[ Random( 0, SoundNames.length() -1 ) ], vendMach.HexX, vendMach.HexY, 5 );
-}
-
-// Интерактивное меню ку3, точка входа main.fos
-class MenuVendingMachine: CenteredMenuHandler {
+class MenuVendingMachine: CenteredMenuHandler
+{
     uint vendMach_id;
     uint map_id;
 	uint level;
 	
-    MenuVendingMachine(Item& vendMach, Map& map) {
+    MenuVendingMachine( Item& vendMach, Map& map )
+	{
         vendMach_id = vendMach.Id;
         map_id = map.Id;
 		level = 0;
     }
 
-    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
         Map@ map = GetMap(map_id);
         Item@ vendMach = GetItem(vendMach_id);
 	
-	bool locked_in_place = !FLAG( vendMach.Flags, ITEM_CAN_PICKUP );
+		bool locked_in_place = !FLAG( vendMach.Flags, ITEM_CAN_PICKUP );
 	
-        if( map is null || vendMach is null ) {
+        if( map is null || vendMach is null )
+		{
             return false;
         }
 
-		for( uint i = 0, len = cash_pids.length(); i < len; i++ ) {
+		for( uint i = 0, len = cash_pids.length(); i < len; i++ )
+		{
 			uint16 pid = cash_pids[i];
 			int balance_change = int( cash_values[i] );
 			Item@ cash = cr.GetItem( pid, -1 );
 
-			if( valid( cash ) && menu.Button( "Вставить "+balance_change+" $" ) ) {
+			if( valid( cash ) && menu.Button( "Insert "+balance_change+" $" ) )
+			{
 				TransferItemToContainer(cash, vendMach);
-				PlayVendSound( map, vendMach );
+				string sound = _GetOneRandom( VendingSoundNames );
+				PlayGenericSound( map, cr.HexX, cr.HexY, sound, 15 );
 				vendMach.BALANCE += balance_change;
-				cr.Say( SAY_EMOTE_ON_HEAD, "вставляет деньги в аппарат" );
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_INSERT_MONEY );
 				return true;
 			}
 		}
 		
-		if( menu.Button( "Купить" ) ) {
-			if( vendMach.BALANCE >= vendMach.PRICE ) {
+		if( menu.Button( "Buy" ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			if( vendMach.BALANCE >= vendMach.PRICE )
+			{
 				Item@[] productItm;
 				if( vendMach.GetItems( uint( -1 ), productItm ) == 0 )
 				{
-					map.PlaySound( "LOSER.ACM", vendMach.HexX, vendMach.HexY, 5 );
+					PlayGenericSound( map, cr.HexX, cr.HexY, "LOOSER.mp3", 15 );
 					return true;
 				}
 				
 				Item@ bought = vendMach.GetItem( vendMach.PRODUCT, 0 );
-				if( valid( bought ) ) {
-					if( bought.IsStackable() ) { 
+				if( valid( bought ) )
+				{
+					if( bought.IsStackable() )
+					{ 
 						_SubItem( bought, 1 );
 						cr.AddItem( vendMach.PRODUCT, 1 );
-					} else {
+					}
+					else
+					{
 						MoveItem( bought, 1, cr );
 					}
-					PlayVendSound( map, vendMach );
+					string sound = _GetOneRandom( VendingSoundNames );
+					PlayGenericSound( map, cr.HexX, cr.HexY, sound, 15 );
 					vendMach.BALANCE -= vendMach.PRICE;
-					cr.Say( SAY_EMOTE, "забирает товар" );
+					cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_COLLECT_GOODS );
 					return true;
 				}
-			} else {
-				map.PlaySound( "LOSER.ACM", vendMach.HexX, vendMach.HexY, 5 );
+			}
+			else
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "LOOSER.mp3", 15 );
 				return true;
 			}
 			
 		}
 		
-		if( menu.Button( "Возврат денег" ) ) {
+		if( menu.Button( "Change" ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			Item@ change = vendMach.GetItem( PID_BOTTLE_CAPS, 0 );
-			if( valid( change ) && vendMach.BALANCE > 0) {
+			if( valid( change ) && vendMach.BALANCE > 0 )
+			{
 				int changeCount = MIN( int( change.GetCount() ), vendMach.BALANCE );
 				_SubItem( change, uint( changeCount ) );
 				cr.AddItem( PID_BOTTLE_CAPS, changeCount );
 				vendMach.BALANCE -= changeCount;
-				map.SetText( vendMach.HexX, vendMach.HexY, COLOR_LGRAY, ":звон монет:" );
-				cr.Say( SAY_EMOTE, "забирает сдачу" );
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_COLLECTS_CHANGE );
 				return false;
-			} else {
-				map.PlaySound( "LOSER.ACM", vendMach.HexX, vendMach.HexY, 5 );
+			}
+			else
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "LOOSER.mp3", 15 );
 				return true;
 			}
 		}
 		
-		if( !FLAG( vendMach.LockerCondition, LOCKER_LOCKED ) ) {
-			
-		Item@[] productItm;
-		vendMach.GetItems( uint( -1 ), productItm );
-			if ( productItm.length() > 0 && menu.Button( "Установить товар" ) ) {
+		if( !FLAG( vendMach.LockerCondition, LOCKER_LOCKED ) )
+		{
+			Item@[] productItm;
+			vendMach.GetItems( uint( -1 ), productItm );
+			if ( productItm.length() > 0 && menu.Button( "Choose merchendise" ) )
+			{
 				MenuSelectProduct@ select_product = MenuSelectProduct( vendMach, map );
 				select_product.level = level + 1;
-				return menu.OpenChild( "Уровень " + select_product.level, select_product );
+				return menu.OpenChild( "Level " + select_product.level, select_product );
 			}
 			
-			if( menu.Button( "Выставить цену" ) ) {
-				cr.RunClientScript( "client_screen_numberpad@ShowScreen", vendMach.Id, 0, 0, "Введите новую цену", null );
+			if( menu.Button( "Set price" ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				cr.RunClientScript( "client_screen_numberpad@ShowScreen", vendMach.Id, 0, 0, "Input new price", null );
 				return false;
 			}
 
-			if( locked_in_place ) {
-				if( menu.Button( "Демонтировать" ) ) {
+			if( locked_in_place )
+			{
+				if( menu.Button( "Detach" ) )
+				{
 					LockInPlace( cr, vendMach );
 					return true;
 				}
-			} else {
-				if( menu.Button( "Установить" ) ) {
+			}
+			else
+			{
+				if( menu.Button( "Anchor" ) )
+				{
 					LockInPlace( cr, vendMach );
 					return true;
 				}
 
-				if( menu.Button( "Поднять" ) ) {
+				if( menu.Button( "Pick up" ) )
+				{
 					PickItem( cr, vendMach );
+					ChangeCritterSpeed( cr );
 					return false;
 				}			
 			}
 		}
 
-		if( menu.Button( "Открыть сейф" ) ) {
-			if( FLAG( vendMach.LockerCondition, LOCKER_LOCKED ) ) {
-				cr.Say( SAY_NETMSG, "|0xFFFF00 Аппарат заперт." );
-				map.PlaySound( "ILCNTNRB.ACM", vendMach.HexX, vendMach.HexY, 5 );
+		if( menu.Button( "Open safe" ) )
+		{
+			if( FLAG( vendMach.LockerCondition, LOCKER_LOCKED ) )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MACHINE_LOCKED );
+				PlayGenericSound( map, cr.HexX, cr.HexY, "ILCNTNRB.mp3", 15 );
 				return true;
-			} else {
+			}
+			else
+			{
 				ShowContainer( cr, vendMach, TRANSFER_HEX_CONT_UP );
-				map.PlaySound( "IOCNTNRB.ACM", vendMach.HexX, vendMach.HexY, 5 );
-				cr.Say( SAY_EMOTE, "открывает вендомат" );
+				PlayGenericSound( map, cr.HexX, cr.HexY, "IOCNTNRB.mp3", 15 );
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_OPENS_MACHINE );
 				return false;
 			}
         }
 		return true;
     }
 	
-	// UI менюхи
-    string@ Description( Critter& cr ) {
-	
+    string@ Description( Critter& cr )
+	{
 		Item@ vendMach = GetItem( vendMach_id );
 		string status;
 		Item@ change = vendMach.GetItem( PID_BOTTLE_CAPS, 0 );
-		if( !valid( change ) ) {
-			status = "|0xFF0000 Аппарат сдачу не дает!"; 			
+		if( !valid( change ) )
+		{
+			status = "|0xFF0000 No change!"; 			
 		}		
 		string balance = vendMach.BALANCE;
 		string price = vendMach.PRICE;
 
-		string info = "Вендинговая машина № ";
+		string info = "Vending machine № ";
 		info += "|0xFFFF00 " + vendMach.Id + "\n";
 		
 		Item@[] productItm;
 		vendMach.GetItems( uint( -1 ), productItm );
-		string amount = "\n |0xFFFF00 Товар закончился!";
-		if( productItm.length() > 0 && vendMach.PRODUCT != 0 ) {
-			string product = GetMsgStr( 0, TEXTMSG_ITEM, vendMach.PRODUCT * 100 );
-			info += "|0x3CF800 Товар: ";
+		string amount = "\n |0xFFFF00 sold out!";
+		if( productItm.length() > 0 && vendMach.PRODUCT != 0 )
+		{
+			string product = GetMsgStr( 1, TEXTMSG_ITEM, vendMach.PRODUCT * 100 );
+			info += "|0x3CF800 Merchendise: ";
 			info += "|0xFFFF00 " + product;
 			uint len = productItm.length();
 			for( uint i = 0; i < len; i++ )
@@ -186,64 +204,70 @@ class MenuVendingMachine: CenteredMenuHandler {
 				Item@ product = productItm[i];
 				if( product.GetProtoId() == vendMach.PRODUCT )
 				{
-					amount = "\nОсталось: ";
-					if( product.IsStackable() ) {
+					amount = "\nRemaining: ";
+					if( product.IsStackable() )
+					{
 						amount += "|0xFFFF00 " + productItm[i].GetCount();
-					} else {
+					}
+					else
+					{
 						uint count = 1;
 						Item@ countItems = null;
-						for( uint j = i + 1; j < len; j ++ ) {
+						for( uint j = i + 1; j < len; j ++ )
+						{
 							@countItems = productItm[j];
-							if( countItems.GetProtoId() == vendMach.PRODUCT ) {
+							if( countItems.GetProtoId() == vendMach.PRODUCT )
+							{
 								count ++;
 							}
 						}
 						amount += "|0xFFFF00 " + count;
 					}
-					amount += "|0x3CF800  шт.";
+					amount += "|0x3CF800  pcs.";
 					break;
 				}
 			}
-			
 			info += "|0x3CF800 ." + amount;
-			info += "|0x3CF800  Цена: ";
+			info += "|0x3CF800  Price: ";
 			info += "|0xFFFF00 " + price;
 			info += "|0x3CF800  $";
 		}
-		
-		info += "|0x3CF800 \nВставьте деньги в приемник.";
+		info += "|0x3CF800 \nInsert money into slot.";
 		info += "\n" + status ;
-		info += "|0x3CF800 \nБаланс: ";
+		info += "|0x3CF800 \nBalance: ";
 		info += "|0xFFFF00 " + balance;
 		info += "|0x3CF800  $";
         return info;
     }
 	
-    string@ ButtonCancel() {
-        return ButtonDecorator( "Скрыть меню", null );
+    string@ ButtonCancel()
+	{
+        return ButtonDecorator( "Hide menu", null );
     }
 }
 
-// точка входа из main.fos при юзе рукой
 void StartMenuVendingMachine( Critter& cr, Item& vendMach ) // exported
 {
     Map@ map = cr.GetMap();
-    if( map is null ) {
+    if( map is null )
+	{
         return;
     }
 
     iMenuHandler@ handler = MenuVendingMachine( vendMach, map );
-    iDialogBox@ menu = OpenMenu( cr, "Вендинговый Аппарат", handler );
+    iDialogBox@ menu = OpenMenu( cr, "Vending Machine", handler );
 }
 
-class MenuSelectProduct: CenteredMenuHandler {
+class MenuSelectProduct: CenteredMenuHandler
+{
     uint vendMach_id;
     uint map_id;
 	uint level;
 	int selectorPos;
 	uint arrayPos;
 	
-    MenuSelectProduct( Item& vendMach, Map& map ) {
+    MenuSelectProduct( Item& vendMach, Map& map )
+	{
         vendMach_id = vendMach.Id;
         map_id = map.Id;
 		level = 1;
@@ -251,24 +275,32 @@ class MenuSelectProduct: CenteredMenuHandler {
 		arrayPos = 0;
     }
 
-    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
         Map@ map = GetMap( map_id );
         Item@ vendMach = GetItem( vendMach_id );
 		
-        if( map is null || vendMach is null ) {
+        if( map is null || vendMach is null )
+		{
             return false;
         }
 			
 		Item@[] productItm;
 		vendMach.GetItems( uint( -1 ), productItm );
 		
-		if( productItm.length() > 0 ) {
-			if ( menu.Button( "Предыдущий" ) ) {
+		if( productItm.length() > 0 )
+		{
+			if ( menu.Button( "Previous" ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				selectorPos--;
-				if( arrayPos == 0 ) {
+				if( arrayPos == 0 )
+				{
 					arrayPos = productItm.length() - 1;
 					selectorPos = arrayPos;
-				} else {
+				}
+				else
+				{
 					arrayPos = selectorPos;
 				}
 				Item@ selectedProduct = productItm[arrayPos];
@@ -276,12 +308,17 @@ class MenuSelectProduct: CenteredMenuHandler {
 				return true;
 			}
 			
-			if ( menu.Button( "Следующий" ) ) {
+			if ( menu.Button( "Next" ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				selectorPos++;
-				if( arrayPos == productItm.length() -1 ) {
+				if( arrayPos == productItm.length() -1 )
+				{
 					arrayPos = 0;
 					selectorPos = arrayPos;
-				} else {
+				}
+				else
+				{
 					arrayPos = selectorPos;
 				}
 				Item@ selectedProduct = productItm[arrayPos];
@@ -289,8 +326,10 @@ class MenuSelectProduct: CenteredMenuHandler {
 				return true;
 			}
 			
-			if ( menu.Button( "Подтвердить" ) ) {
-				cr.Say( SAY_EMOTE, "устанавливает новый товар" );
+			if ( menu.Button( "Confirm" ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_SELECTS_ITEM );
 				return false;
 			}
 		}
@@ -299,13 +338,14 @@ class MenuSelectProduct: CenteredMenuHandler {
 
     string@ Description( Critter& cr ) {	
 		Item@ vendMach = GetItem( vendMach_id );
-		string info = "Вендинговая машина № ";
+		string info = "Vending Machine № ";
 		info += "|0xFFFF00 " + vendMach.Id + "\n";
 		
 		Item@[] productItm;
 		vendMach.GetItems( uint( -1 ), productItm );
-		if( productItm.length() > 0 && vendMach.PRODUCT != 0 ) {
-			string product = GetMsgStr( 0, TEXTMSG_ITEM, vendMach.PRODUCT * 100 );
+		if( productItm.length() > 0 && vendMach.PRODUCT != 0 )
+		{
+			string product = GetMsgStr( 1, TEXTMSG_ITEM, vendMach.PRODUCT * 100 );
 			uint len = productItm.length();
 			string amount = 0;
 			for( uint i = 0; i < len; i++ )
@@ -313,14 +353,19 @@ class MenuSelectProduct: CenteredMenuHandler {
 				Item@ product = productItm[i];
 				if( product.GetProtoId() == vendMach.PRODUCT )
 				{
-					if( product.IsStackable() ) {
+					if( product.IsStackable() )
+					{
 						amount = "|0xFFFF00 " + productItm[i].GetCount();
-					} else {
+					}
+					else
+					{
 						uint count = 1;
 						Item@ countItems = null;
-						for( uint j = i + 1; j < len; j ++ ) {
+						for( uint j = i + 1; j < len; j ++ )
+						{
 							@countItems = productItm[j];
-							if( countItems.GetProtoId() == vendMach.PRODUCT ) {
+							if( countItems.GetProtoId() == vendMach.PRODUCT )
+							{
 								count ++;
 							}
 						}
@@ -329,31 +374,33 @@ class MenuSelectProduct: CenteredMenuHandler {
 					break;
 				}
 			}
-			info += "|0x3CF800 Выбранный товар для продажи: \n[ ";
+			info += "|0x3CF800 Selected merchendise: \n[ ";
 			info += "|0xFFFF00 " + product;
-			info += "|0x3CF800  ]\nВ наличии: ";
+			info += "|0x3CF800  ]\nAvailable: ";
 			info += "|0xFFFF00 " + amount;
-			info += "|0x3CF800  шт.";
+			info += "|0x3CF800  pcs.";
 		}
-		info += "|0x3CF800  \nВыберите нужную позицию и нажмите";
-		info += "|0xFFFF00  Подтвердить";
-		info += "|0x3CF800  для завершения настройки.";
-		
+	info += "|0x3CF800  \nChoose desired merchendise and press |0xFFFF00 Confirm|0x3CF800  to complete setup.";
+	
 		return info;
 	}	
 		
-	string@ ButtonCancel() {
-        return ButtonDecorator( "Скрыть меню", null );
+	string@ ButtonCancel()
+	{
+        return ButtonDecorator( "Close menu", null );
     }
 }
 
 void StartMenuSelectProduct( Critter& cr, Item& vendMach )
 {
     Map@ map = cr.GetMap();
-    if( map is null ) {
+    if( map is null )
+	{
         return;
     }
 
     iMenuHandler@ handler = MenuSelectProduct( vendMach, map );
-    iDialogBox@ menu = OpenMenu( cr, "Вендинговый Аппарат", handler );
+    iDialogBox@ menu = OpenMenu( cr, "Vending machine", handler );
 }
+
+#endif // VENDING

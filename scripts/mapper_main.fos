@@ -191,9 +191,13 @@
 // void    SetDayColor(uint dayPart, uint8 r, uint8 g, uint8 b)
 // void    Resize(uint16 width, uint16 height)
 
+#include "_client_defines.fos"
 #include "_mapper_defines.fos"
 #include "_defines.fos"
 #include "_itempid.fos"
+
+#define GRID_COLOR_INNER (0x33000000)
+#define GRID_COLOR_OUTER (0x66000000)
 
 import void InitializeGame() from "config";
 
@@ -229,6 +233,7 @@ void InitializeTabs()
 	// FAST TAB
     // Special hexes
     pids.resize( 0 );
+	pids.insertLast( 6531 );   // Map region hex
     pids.insertLast( 2049 );   // Exit hex
     pids.insertLast( 2067 );   // Secret Blocking Hex
     pids.insertLast( 2141 );   // Light source
@@ -1204,11 +1209,11 @@ void InitializeTabs()
 		ProtoItem@ protoItem = ProtoItems[i];
 		if( protoItem is null ) { continue; }
 			uint8 item_Cal = protoItem.Ammo_Caliber;
-		if( item_Cal == CALIBER_700_NITRO_EXPRESS ) {
+		if( item_Cal == CALIBER_DART ) {
 			pids.insertLast( ProtoItems[i].ProtoId );
 		}
 	}
-    TabSetItemPids( TAB_CUSTOM3, "019 - CALIBER_700_NITRO_EXPRESS", pids );
+    TabSetItemPids( TAB_CUSTOM3, "019 - CALIBER_DART", pids );
 	
 	pids.resize( 0 );
     for( uint i = 0; i < ProtoItems.length(); i++ ) {
@@ -2354,6 +2359,14 @@ void InitializeTabs()
     TabSetItemPids( TAB_CUSTOM9, "045 - Subway ", pids );
     TabSetName( TAB_CUSTOM9, "Wall" );
 	
+	pids.resize( 0 );
+    for( uint i = 7276; i <= 7886; i++ )
+        pids.insertLast( i );
+	for( uint i = 9026; i <= 9503; i++ )
+        pids.insertLast( i );
+    TabSetItemPids( TAB_CUSTOM9, "046 - MutantsRising ", pids );
+    TabSetName( TAB_CUSTOM9, "Wall" );
+	
     // Tactics tiles, tiles_0.bos
     if( __GeometryType == GEOMETRY_TACTICS )
     {
@@ -2408,13 +2421,158 @@ bool console_message( string& message )
 // Cursor
 //    5
 void render_iface( uint layer )
-{}
+{
+	if (0 == layer) {
+		renderMapGrid();
+		return;
+	}
+	if (1 == layer) {
+		renderRegionBoundaries();
+		return;
+	}
+}
+
+void renderRegionBoundaries() 
+{
+	MapperMap@ map = GetActiveMap();
+	if (null is map) return;
+
+	//  Gather all PID_REGION_BOUNDARY_CORNER around mouse position
+	array<MapperObject@> boundaryMarkers = {};
+	uint16 screenHexX = 0, screenHexY = 0;
+	GetMonitorHex(__MouseX, __MouseY, screenHexX, screenHexY);
+	uint boundaryMarkerCount = map.GetObjects(screenHexX, screenHexY, 100, 2, PID_REGION_BOUNDARY_CORNER, boundaryMarkers);
+	// Draw an outline for each one
+	for (uint pos = 0; pos < boundaryMarkerCount; pos++) {
+		MapperObject@ boundary = boundaryMarkers[pos];
+		uint16 width = uint16(boundary.Scenery_Param0) * 2;
+		uint16 height = uint16(boundary.Scenery_Param1) * 2;
+		// If width is not set, = 2
+		if (width == 0) {
+			width  = 2;
+		}
+		// If height is not set, = width
+		if (height == 0) {
+			height = width;
+		}
+		// Should snap to grid and be within map boundaries
+		bool isValid = (boundary.MapX % 2 == 0 && boundary.MapY % 2 == 1);
+		if (boundary.MapX < width + 1) {
+			width = boundary.MapX;
+			isValid = false;
+		}
+		if (boundary.MapY < height + 1) {
+			height = boundary.MapY;
+			isValid = false;
+		}
+		// Draw in green spectre if valid, otherwise red
+		int toneOffset = isValid ? 8 : 16;
+		drawRegionOutline(boundary.MapX, boundary.MapY, boundary.MapX - width, boundary.MapY - height, 0xFF000000 | ( getBlinkingColorTone() / 2 + 127) << toneOffset);
+	}
+}
+
+int getBlinkingColorTone(int speedDiv = 5) {
+	// Should gradually blink between 0 and 255 depending on current tick
+	int result = ((GetTick() / speedDiv) % 511);
+	if (result > 255) {
+		return 255 -  (result - 255);
+	}
+	return result;
+}
+
+void drawRegionOutline(uint16 mapX1, uint16 mapY1, uint16 mapX2, uint16 mapY2, int color) 
+{
+	uint16 regionWidth = uint16(abs(int(mapX1) - int(mapX2)) / 2);
+	uint16 regionHeight = uint16(abs(int(mapY1) - int(mapY2)) / 2);
+	int x1 = 0, x2 = 0, x3 = 0, x4 = 0, y1 = 0, y2 = 9, y3 = 0, y4 = 0, // vertices
+		yOffset = int(100.0f / __SpritesZoom); // "second floor" rectangle offset
+	float // tile sprite offsets
+		offX = 16 / __SpritesZoom,
+		offY = -11 / __SpritesZoom;
+	GetHexPos(mapX1, mapY1, x1, y1);
+	GetHexPos(mapX1, mapY2, x2, y2);
+	GetHexPos(mapX2, mapY2, x3, y3);
+	GetHexPos(mapX2, mapY1, x4, y4);
+	array<int> vertices = {
+		x1, y1, color,
+		x2, y2, color,
+		x3, y3, color,
+		x3, y3 - yOffset, color,
+		x3, y3, color,
+		x4, y4, color,
+		x1, y1, color,
+		x1, y1 - yOffset, color,
+		x2, y2 - yOffset, color,
+		x3, y3 - yOffset, color,
+		x4, y4 - yOffset, color,
+		x1, y1 - yOffset, color,
+	};
+	DrawPrimitive(DRAW_PRIMITIVE_LINESTRIP, vertices);
+	DrawText(regionWidth + "x" + regionHeight, int(x1 + x3) / 2, int(y1 + y3) / 2, 150, 20, color, FONT_FALLOUT, FT_BORDERED);
+}
+
+void renderMapGrid() {
+	MapperMap@ map = GetActiveMap();
+	if (null is map) return;
+	int color = GRID_COLOR_INNER, outerColor = GRID_COLOR_OUTER, ox = 0, oy = 0;
+	// Get origin
+	GetHexPos(1, 0, ox, oy); // Hex{1;0} Corresponds to tile{0;0}
+	// Get zoomed sprite per row/column offsets for hexagonal geometry
+	float  
+		wdx = 24 / __SpritesZoom,
+		wdy = -6 / __SpritesZoom,
+		hdx = -16 / __SpritesZoom,
+		hdy = -12 / __SpritesZoom,
+		offX = 16 / __SpritesZoom,
+		offY = -11 / __SpritesZoom;
+	uint16 width = uint16(ceil(map.Width / 2));
+	uint16 height = uint16(ceil(map.Height / 2));
+	// Draw grid
+	array<int> gridLines = {};
+	for (uint16 x = 0; x < width; x++) {
+		int lineColor = x % 10 == 0 ? GRID_COLOR_OUTER : GRID_COLOR_INNER;
+		gridLines.insertLast(ox - 2 * (x * wdx + 0 * hdx) + offX);
+		gridLines.insertLast(oy - 2 * (x * wdy + 0 * hdy) + offY);
+		gridLines.insertLast(lineColor);
+		gridLines.insertLast(ox - 2 * (x * wdx + height * hdx) + offX);
+		gridLines.insertLast(oy - 2 * (x * wdy + height * hdy) + offY);
+		gridLines.insertLast(lineColor);
+	}
+	for (uint16 y = 0; y < height; y++) {
+		int lineColor = y % 10 == 0 ? GRID_COLOR_OUTER : GRID_COLOR_INNER;
+		gridLines.insertLast(ox -  2 * (0 * wdx + y * hdx) + offX);
+		gridLines.insertLast(oy -  2 * (0 * wdy + y * hdy) + offY);
+		gridLines.insertLast(lineColor);
+		gridLines.insertLast(ox - 2 * (width * wdx + y * hdx) + offX);
+		gridLines.insertLast(oy - 2 * (width * wdy + y * hdy) + offY);
+		gridLines.insertLast(lineColor);
+	}
+	DrawPrimitive(DRAW_PRIMITIVE_LINELIST, gridLines);
+	// Draw perimeter border
+	array<int> borderLines = {};
+	borderLines.insertLast(ox - 2 * (0 * wdx + 0 * hdx) + offX);
+	borderLines.insertLast(oy - 2 * (0 * wdy + 0 * hdy) + offY);
+	borderLines.insertLast(GRID_COLOR_OUTER);
+	borderLines.insertLast(ox - 2 * (0 * wdx + height * hdx) + offX);
+	borderLines.insertLast(oy - 2 * (0 * wdy + height * hdy) + offY);
+	borderLines.insertLast(GRID_COLOR_OUTER);
+	borderLines.insertLast(ox - 2 * (width * wdx + height * hdx) + offX);
+	borderLines.insertLast(oy - 2 * (width * wdy + height * hdy) + offY);
+	borderLines.insertLast(GRID_COLOR_OUTER);
+	borderLines.insertLast(ox - 2 * (width * wdx + 0 * hdx) + offX);
+	borderLines.insertLast(oy - 2 * (width * wdy + 0 * hdy) + offY);
+	borderLines.insertLast(GRID_COLOR_OUTER);
+	borderLines.insertLast(ox - 2 * (0 * wdx + 0 * hdx) + offX);
+	borderLines.insertLast(oy - 2 * (0 * wdy + 0 * hdy) + offY);
+	borderLines.insertLast(GRID_COLOR_OUTER);
+	DrawPrimitive(DRAW_PRIMITIVE_LINESTRIP, borderLines);
+}
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Render map function. You can use DrawMap* functions only there. This drawing before 1 iface layer.
 void render_map()
-{}
-
+{
+}
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Mouse behaviours. Click states look in _client_defines.fos, Mouse click states.
 // Return true to disable engine events.

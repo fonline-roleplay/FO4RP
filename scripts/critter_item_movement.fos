@@ -1,41 +1,17 @@
-// Author: cvet
+#ifndef CRITTER_ITEM_MOVEMENT
+#define CRITTER_ITEM_MOVEMENT
+
 #include "_utils.fos"
 #include "wait_time_h.fos"
+#include "critter_item_movement_h.fos"
+#include "sandbag_h.fos"
+#include "furniture_h.fos"
+#include "handcuffs_h.fos"
 
 #ifdef __CLIENT
-# define Critter    CritterCl
-# define Item       ItemCl
-#endif
-
-const uint[] skin_supermute = 
-{ //Супермутанты:
-	CRTYPE_SUPERMUTE_NORMAL,
-	CRTYPE_SUPERMUTE_JACKET,
-	CRTYPE_SUPERMUTE_METAL,
-	CRTYPE_SUPERMUTE_METAL_MK2,
-	CRTYPE_SUPERMUTE_METAL_BLACK,
-};
-
-const uint[] armor_supermute_pids = 
-{	//Пиды муто-броней:
-	PID_MUTARMOR_LEATHER,
-	PID_MUTARMOR_METAL,
-	PID_MUTARMOR_METAL_MK2,
-};
-
-const uint[] skin_robot = 
-{ //Роботы:
-	CRTYPE_ROBOT,
-	CRTYPE_ROBOBRAIN,
-	CRTYPE_ROBOEYE,
-	CRTYPE_TURRET_LASER,
-	CRTYPE_TURRET_MINIGUN,
-	CRTYPE_ROBOT_HANDY,
-};
-
-#ifndef __CLIENT
-import void ChangeMaskAction( Critter& player, bool toHide ) from "mio_social";
-#endif
+	# define Critter    CritterCl
+	# define Item       ItemCl
+#endif // __CLIENT
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on something critter want move item from one slot to another.
@@ -45,29 +21,37 @@ import void ChangeMaskAction( Critter& player, bool toHide ) from "mio_social";
 bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemSwap )
 {
 #ifndef __CLIENT
-	if(cr.Anim2Life == ANIM2_WINDUP)
-		cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
-#endif
+	if( cr.Anim2Life == ANIM2_WINDUP )
+	{
+		cr.ParamBase[ CR_IS_WINDUPED ] = 0;
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	}
+#endif // __CLIENT
 	
-	//if (item.Proto.Type == 15) return true;
     int fromSlot = item.CritSlot;
 	const uint16 pid = item.GetProtoId( );
-	// Фикс снятия ошейников и наручников на глобале:
-	if( ( pid >= PID_HANDCUFFS_USED && pid <= PID_ROPE_USED && toSlot != SLOT_HAND1 && fromSlot == SLOT_HAND1 ) || 
-		 ( pid == PID_COLLAR && ( toSlot != SLOT_HEAD && fromSlot == SLOT_HEAD ) ) )
+
+	if( item.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE && item.BONDAGE_STATE == BONDAGE_STATE_ON )
     {
-	
 #ifdef __CLIENT
-        Message( TEXTMSG_GAME, 12945 );
-#endif
+        Message( TEXTMSG_TEXT, STR_CANT_FREE_YOURSELF);
+#endif //__CLIENT
 		return false;
     }
-	
+#ifdef __SERVER	
+	if( ( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR ) && HandsTied( cr ) )
+	{
+#ifdef __CLIENT
+        Message( TEXTMSG_TEXT, STR_FREE_HANDS );
+#endif //__CLIENT
+		return false;
+	}
+#endif // __SERVER	
 	if( pid == PID_WORKBENCH_TOKEN || pid == PID_FIREPLACE_TOKEN )
 	{
 #ifndef __CLIENT
         DeleteItem( item );
-#endif
+#endif // __CLIENT
 		return true;
 	}
 	
@@ -75,111 +59,182 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
           dropFreeze = false;
 
 #ifndef __CLIENT
-	if( toSlot == SLOT_GROUND ) {
-		if( item.GetProtoId() == PID_SINGLE_SANDBAG ) {
-			Item@[] sandbags;
+	if( toSlot == SLOT_GROUND )
+	{
+		uint16 itmPid = item.GetProtoId();
+		if( itmPid == PID_SINGLE_SANDBAG || ContainersX1.find( itmPid ) != -1 )
+		{
+			Item@[] ground;
 			Map@ map = cr.GetMap();
-			if( map.GetItems( cr.HexX, cr.HexY, sandbags ) > 0 ) {
-				for( uint i = 0; i < sandbags.length(); i++ ) {
-					uint16 sandbagPid = sandbags[i].GetProtoId();
-					if( Sandbags.find( sandbagPid ) != -1 ) {
-						cr.Say( SAY_NETMSG, "|0xFFFF00 Необходимо отойти чтобы установить мешок." );
+			if( map.GetItems( cr.HexX, cr.HexY, ground ) > 0 )
+			{
+				for( uint i = 0; i < ground.length(); i++ )
+				{
+					uint16 groundPid = ground[i].GetProtoId();
+					
+					uint16[] list;
+					if( itmPid == PID_SINGLE_SANDBAG )
+					{
+						list = Sandbags;
+					}
+					else
+					{
+						list = ContainersX1;
+					}
+					
+					if( list.find( groundPid ) != -1 )
+					{
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MOVE_TO_PLACE );
 						return false;
 					}
 				}
 			}
 		}
-		LogItemMovement( cr, item, "кладёт на землю" );
-		if( item.IsStackable() ) {
+
+		LogItemMovement( cr, item, "puts on ground" );
+		if( item.IsStackable() )
+		{
 			uint[] values = { item.Id };
 			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_stack_items", values, true );
 		}
-	} else {
-		if( toSlot == SLOT_ARMOR )
-			LogItemMovement( cr, item, "одевает" ); 
-		if( fromSlot == SLOT_ARMOR )
-			LogItemMovement( cr, item, "снимает" );
-
-		if( toSlot == SLOT_HAND1 )
-			LogItemMovement( cr, item, "берет в руку" ); 
-		if( fromSlot == SLOT_HAND1 )
-			LogItemMovement( cr, item, "убирает" );
-		
-		if( toSlot == SLOT_MISC )
-			LogItemMovement( cr, item, "экипирует" ); 
-		if( fromSlot == SLOT_MISC )
-			LogItemMovement( cr, item, "убирает" );
-		
-		if( toSlot == SLOT_HEAD )
-			LogItemMovement( cr, item, "одевает" ); 
-		if( fromSlot == SLOT_HEAD )
-			LogItemMovement( cr, item, "снимает" );
-		
-		if( toSlot == SLOT_BACK )
-			LogItemMovement( cr, item, "одевает на спину" ); 
-		if( fromSlot == SLOT_BACK )
-			LogItemMovement( cr, item, "снимает со спины" );
 	}
-#endif
+	else
+	{
+		string actionStr = "";
+		switch( toSlot )
+		{
+			case( SLOT_ARMOR ):
+				actionStr = "puts on";
+				break;
+			case( SLOT_HAND1 ):
+				actionStr = "takes in hand";
+				break;
+			case( SLOT_HAND2 ):
+				actionStr = "takes in offhand";
+				break;
+			case( SLOT_MISC ):
+				actionStr = "equips in misc";
+				break;
+			case( SLOT_HEAD ):
+				actionStr = "puts on head";
+				break;
+			case( SLOT_BACK ):
+				actionStr = "puts on back";
+				break;
+		}
+		
+		switch( fromSlot )
+		{
+			case( SLOT_ARMOR ):
+				actionStr = "takes off";
+				break;
+			case( SLOT_HAND1 ):
+				actionStr = "removes from hand";
+				break;
+			case( SLOT_HAND2 ):
+				actionStr = "removes from offhand";
+				break;
+			case( SLOT_MISC ):
+				actionStr = "removes from misc";
+				break;
+			case( SLOT_HEAD ):
+				actionStr = "removes from head";
+				break;
+			case( SLOT_BACK ):
+				actionStr = "removes from back";
+				break;
+		}
+		LogItemMovement( cr, item, actionStr );
+	}
+#endif // __CLIENT
 	
     // Drop
     if( toSlot == SLOT_GROUND )
-        return !dropFreeze;             // q3
-		
+	{
+        return !dropFreeze;
+	}	
+	
 	if( @itemSwap !is null )
-	{	
-		const uint16 swapPid = itemSwap.GetProtoId( );
-		if( ( swapPid == PID_COLLAR && toSlot == SLOT_HEAD ) || ( swapPid >= PID_HANDCUFFS_USED && swapPid <= PID_ROPE_USED && toSlot == SLOT_HAND1 ) )
+	{
+		if( itemSwap.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE && itemSwap.BONDAGE_STATE == BONDAGE_STATE_ON )
+		{
+			#ifdef __CLIENT
+			 Message( TEXTMSG_TEXT, STR_CANT_FREE_YOURSELF);
+			#endif //__CLIENT
 			return false;
+		}
 	}
+
     // If busy, then allow only hands item swapping
     bool handsSwap = ( ( fromSlot == SLOT_HAND1 && toSlot == SLOT_HAND2 ) || ( fromSlot == SLOT_HAND2 && toSlot == SLOT_HAND1 ) );
     if( cr.IsPlayer() && valid( itemSwap ) && !handsSwap )
+	{
         return false;
-
+	}
+	
     if( cr.IsPlayer() && moveFreeze && !handsSwap )
-        return false;                          // q3
-
+	{
+        return false;
+	}
+	
     // Weapon animation
-    if( cr.IsPlayer() && toSlot == SLOT_HAND1 )
+    if( cr.IsPlayer() && ( toSlot == SLOT_HAND1 || toSlot == SLOT_HAND2 ) )
     {
         if( item.GetType() == ITEM_TYPE_WEAPON && !IsCritterAnim1( cr.CrType, item.Proto.Weapon_Anim1 ) )
-            return false;
+		{
+			#ifdef __CLIENT
+			Message( TEXTMSG_TEXT, STR_NO_REQUIRED_ANIM ); 
+            #endif // __CLIENT
+			return false;
+		}
+		Item@ offhand = _CritGetItemHandExt( cr );
+		if( valid( offhand ) )
+		{
+			if( offhand.GetType() == ITEM_TYPE_WEAPON && !IsCritterAnim1( cr.CrType, offhand.Proto.Weapon_Anim1 ) )
+			{
+				#ifdef __CLIENT
+				Message( TEXTMSG_TEXT, STR_NO_REQUIRED_ANIM );  
+				#endif // __CLIENT
+				return false;
+			}
+		}
     }
 
     // Armor animation
     if( toSlot == SLOT_ARMOR )
     {
         if( item.GetType() != ITEM_TYPE_ARMOR )
+		{
             return false;
-        if( item.Proto.Slot != SLOT_INV )
+        }
+		if( item.Proto.Slot != SLOT_INV )
+		{
             return false;
-		/* //Ниебу, где эта ф-я определена, и что она делает!
-		if( !IsCritterCanArmor( cr.CrType ) )
-            return false;
-		*/
+		}
 		uint16 pid = item.GetProtoId();
 		uint16 skin = cr.Stat[ ST_BASE_CRTYPE ];
-		if( skin == 0 ) //Стандартный скин М/Ж
+		if( skin == 0 )
+		{
 			skin = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
-			
-		//bool isMale = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ); //пол персонажа
-		//uint armor_skin = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? item.Proto.Armor_CrTypeMale : item.Proto.Armor_CrTypeFemale );
-		
+		}			
 		bool isMutePlayer = skin_supermute.find( skin ) != -1,
 			 isRoboPlayer = skin_robot.find( skin ) != -1,
 			 isMuteArmor = armor_supermute_pids.find( pid ) != -1;
 		
 		if( isRoboPlayer || isMutePlayer != isMuteArmor )
+		{
 			return false;
-    }
+		}
+	}
 
     // Custom slot checks
-    if( toSlot > SLOT_ARMOR ) // Для миск, головы и спины требуется индикатор в прототипе
+    if( toSlot > SLOT_ARMOR )
     {
         if( toSlot != item.Proto.Slot )
+		{
             return false;
-    }
+		}
+	}
 
     // Allow moving
     return true;
@@ -187,655 +242,15 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 
 #ifdef __SERVER
 
-import void ChangeCritterSpeed( Critter& cr ) from "speed";                        // q3: pm speed
-////////////////////////////////////////////////////////////////////////////////////////////////////
-const uint[] skin_small = //Скин не меняется, если не одета ББшка или халат, но халат делается МАЛЕНЬКИМ (привет, Горис):
-{
-	CRTYPE_BOY,
-	CRTYPE_GIRL,
-	CRTYPE_DWARF,
-};
-const uint[] skin_male = 
-{ //Мужские персонажи:
-	CRTYPE_BOMM,
-	CRTYPE_YELLOW_M,
-	CRTYPE_NIGGER_RED,
-	CRTYPE_BALD_GREEN,
-	CRTYPE_THIN,
-	CRTYPE_DREDMAN,
-	CRTYPE_CAPMAN,
-	CRTYPE_BUTCHER,
-	CRTYPE_RICH_M,
-	CRTYPE_BRUISER_BLUE,
-	CRTYPE_BRUISER_GRAY,
-	CRTYPE_ASIAT_M,
-	CRTYPE_POLICE,
-	CRTYPE_TEENAGER,
-	CRTYPE_SCIENTIST,
-	CRTYPE_ASIAT_RED,
-	CRTYPE_ASIAT_BLUE,
-	CRTYPE_MACHO,
-	CRTYPE_WRESTLER,
-	CRTYPE_OLD_MAN,
-	CRTYPE_PANTS_YELLOW_BOLD,
-	CRTYPE_PANTS_YELLOW_HAIRY,
-	CRTYPE_PANTS_BLACK,
-	CRTYPE_PANTS_ALL_BLACK,
-	CRTYPE_DREDMAN_ARMORED,
-	CRTYPE_TWO_ARMS_JACKET_REGULAR,
-	CRTYPE_TWO_ARMS_JACKET_HAIRY,
-	CRTYPE_TWO_ARMS_JACKET_HAIRY_BLOND,
-	CRTYPE_COAT_GUY,
-	CRTYPE_BLACK_COAT_GUY,
-	CRTYPE_BLUE_SUIT,
-	CRTYPE_DREDMAN_YELLOW,
-	CRTYPE_DREDMAN_DARK_YELLOW,
-};
-const uint[] skin_female = 
-{ //Женские персонажи:
-	CRTYPE_YELLOW_F,
-	CRTYPE_METAL_YELLOW_F,
-	CRTYPE_METAL_PINK_F,
-	CRTYPE_TANDI,
-	CRTYPE_WHORE,
-	CRTYPE_REDHEADED_F,
-	CRTYPE_TRIBAL_F,
-	CRTYPE_RICH_F,
-	CRTYPE_VAULT_F,
-	CRTYPE_BLACK_F,
-	CRTYPE_ASIAT_F,
-	CRTYPE_TANDI_BLACK,
-	CRTYPE_DW_BLACK_AND_RED_LEATHER_ARMOR_F,
-	CRTYPE_DW_TWO_HAND_LEATHER_JACKET_F,
-	CRTYPE_DW_METAL_TESLA_ORANGE_F,
-};
-const uint[] skin_ghoul = 
-{ //Гули:
-	CRTYPE_GHOUL_GREEN,
-	CRTYPE_GHOUL_WHITE,
-	CRTYPE_GHOUL_AVERAGE,
-	CRTYPE_GHOUL_GRAY,
-	CRTYPE_GHOUL_RUNNING,
-	CRTYPE_GHOUL_RUNNING_GREEN,
-	CRTYPE_GHOUL_RUNNING_GRAY,
-};
-const uint[] skin_robe = 
-{ //Робы:
-	CRTYPE_ROBE_PURPLE,
-	CRTYPE_ROBE_BLACK,
-	CRTYPE_ROBE_SAND,
-	CRTYPE_ROBE_BLUE,
-	CRTYPE_ROBE_BROWN,
-	CRTYPE_ROBE_DARK_GREEN,
-	CRTYPE_ROBE_RED_RITUAL,
-	CRTYPE_ROBE_BLACK_RITUAL,
-	CRTYPE_ROBE_DARK_BLACK,
-	CRTYPE_ROBE_DARK_RED,
-	CRTYPE_ROBE_RED,
-	CRTYPE_ROBE_DARK_BROWN,
-	CRTYPE_ROBE_DARK_BLUE,
-	CRTYPE_ROBE_ATOM_CHILD,
-	CRTYPE_FAT_GIZMO,
-};
-const uint[] skin_armor =  //Скин "брони", не меняется при одевании любой брони
-{
-	CRTYPE_CA_BALD,
-	CRTYPE_CA_BALD_BLACK,
-	CRTYPE_CA_F,
-	CRTYPE_CA_M,
-	CRTYPE_CA_FOR_NIGGERS,
-	CRTYPE_CA_BLUE_M,
-	CRTYPE_CA_BLUE_F,
-	CRTYPE_CA_DARK_M,
-	CRTYPE_CA_DARK_F,
-	CRTYPE_CA_CLAW_M,
-	CRTYPE_CA_CLAW_F,
-	CRTYPE_CA_SAND_1_M,
-	CRTYPE_CA_SAND_1_F,
-	CRTYPE_CA_SAND_2_M,
-	CRTYPE_CA_SAND_2_F,
-	CRTYPE_CA_GREYHUNTER_M,
-	CRTYPE_CA_GREYHUNTER_F,
-	CRTYPE_CA_SAND_3_M,
-	CRTYPE_CA_SAND_3_F,
-	CRTYPE_CA_NIGHT_M,
-	CRTYPE_CA_NIGHT_F,
-	CRTYPE_CA_ENCLAVE_M,
-	CRTYPE_CA_ENCLAVE_F,
-	CRTYPE_CA_BASALT_M,
-	CRTYPE_CA_BASALT_F,
-	CRTYPE_CA_BASALT_MK2_M,
-	CRTYPE_CA_BASALT_MK2_F,
-	CRTYPE_CA_REBERA_M,
-	CRTYPE_CA_REBERA_F,
-	CRTYPE_CA_REBERA_MK2_M,
-	CRTYPE_CA_REBERA_MK2_F,
-	CRTYPE_CA_MKII_M,
-	CRTYPE_CA_MKII_F,
-	CRTYPE_CA_REN_MKI_M,
-	CRTYPE_CA_REN_MKI_F,
-	CRTYPE_CA_REN_MKII_M,
-	CRTYPE_CA_REN_MKII_F,
-	CRTYPE_PA_HEADLESS,
-	CRTYPE_PA_HARDY_HEADLESS,
-	CRTYPE_PA,
-	CRTYPE_APA,
-	CRTYPE_PA_HARDY,
-	CRTYPE_PA_OXIDE,
-	CRTYPE_EXO_BROWN,
-	CRTYPE_EXO_GRAY,
-	CRTYPE_EXO_GOLD,
-	CRTYPE_PA_CLAW_M,
-	CRTYPE_PA_CLAW_F,
-	CRTYPE_RESEARCH_ARMOR_M,
-	CRTYPE_RESEARCH_ARMOR_F,
-	CRTYPE_PA_RAIDER,
-	CRTYPE_ENVIRONMENTAL_ARMOR_M,
-	CRTYPE_ENVIRONMENTAL_ARMOR_F,
-	CRTYPE_PA_HYDROID_MK2_M,
-	CRTYPE_PA_HYDROID_MK2_F,
-	CRTYPE_PA_HYDROID_M,
-	CRTYPE_PA_HYDROID_F,
-};
-const uint[] skin_armor_levels_male = //Уровни градации броней, список нужен для сравнения с уровнем защищённости скина
-{
-	CRTYPE_DW_BUSINESS_SUIT_M,
-	CRTYPE_DW_JUMPSUIT_M,
-	CRTYPE_DW_JUMPSUIT_BLACK_M,
-	CRTYPE_DW_JUMPSUIT_LIGHT_GREEN_M,
-	CRTYPE_DW_JUMPSUIT_RED_M,
-	CRTYPE_DW_JUMPSUIT_SAND_M,
-	CRTYPE_DW_JUMPSUIT_GRAY_M,
-	CRTYPE_DW_LEATHER_JACKET_M,
-	CRTYPE_DW_LEATHER_COAT_M,
-	CRTYPE_DW_CLJ_M,
-	CRTYPE_DW_LEATHER_ARMOR_MK1_M,
-	CRTYPE_DW_LEATHER_ARMOR_MK2_M,
-	CRTYPE_DW_LEATHER_ARMOR_BLUE_M,
-	CRTYPE_DW_LEATHER_ARMOR_CAMMO_M,
-	CRTYPE_DW_LEATHER_ARMOR_RED_M,
-	CRTYPE_DW_LEATHER_ARMOR_YELLOW_M,
-	CRTYPE_DW_LEATHER_ARMOR_GREY_M,
-	CRTYPE_DW_LEATHER_ARMOR_BLACK_M,
-	CRTYPE_DW_LEATHER_ARMOR_SWAMP_M,
-	CRTYPE_DW_METAL_ARMOR_M,
-	CRTYPE_DW_METAL_ARMOR_MK2_M,
-	CRTYPE_DW_METAL_TESLA_M,
-	CRTYPE_CA_M,
-	CRTYPE_CA_BLUE_M,
-	CRTYPE_CA_DARK_M,
-	CRTYPE_CA_CLAW_M,
-	CRTYPE_CA_SAND_1_M,
-	CRTYPE_CA_SAND_2_M,
-	CRTYPE_CA_GREYHUNTER_M,
-	CRTYPE_CA_SAND_3_M,
-	CRTYPE_CA_NIGHT_M,
-	CRTYPE_CA_ENCLAVE_M,
-	CRTYPE_CA_BASALT_M,
-	CRTYPE_CA_BASALT_MK2_M,
-	CRTYPE_CA_REBERA_M,
-	CRTYPE_CA_REBERA_MK2_M,
-	CRTYPE_CA_MKII_M,
-	CRTYPE_CA_REN_MKI_M,
-	CRTYPE_CA_REN_MKII_M,
-	CRTYPE_PA,
-};
-const uint[] skin_armor_levels_female = //Уровни градации броней, список нужен для сравнения с уровнем защищённости скина
-{
-	CRTYPE_DW_BLACK_DRESS_F,
-	CRTYPE_DW_GEKKO_DRESS_F,
-	CRTYPE_DW_JUMPSUIT_F,
-	CRTYPE_DW_JUMPSUIT_BLACK_F,
-	CRTYPE_DW_JUMPSUIT_LIGHT_GREEN_F,
-	CRTYPE_DW_JUMPSUIT_RED_F,
-	CRTYPE_DW_JUMPSUIT_SAND_F,
-	CRTYPE_DW_JUMPSUIT_GRAY_F,
-	CRTYPE_DW_LEATHER_JACKET_F,
-	CRTYPE_DW_TWO_HAND_LEATHER_JACKET_F,
-	CRTYPE_DW_LEATHER_COAT_F,
-	CRTYPE_DW_CLJ_F,
-	CRTYPE_DW_LEATHER_ARMOR_MK1_F,
-	CRTYPE_DW_LEATHER_ARMOR_MK2_F,
-	CRTYPE_DW_LEATHER_ARMOR_BLUE_F,
-	CRTYPE_DW_LEATHER_ARMOR_CAMMO_F,
-	CRTYPE_DW_LEATHER_ARMOR_RED_F,
-	CRTYPE_DW_LEATHER_ARMOR_YELLOW_F,
-	CRTYPE_DW_LEATHER_ARMOR_GREY_F,
-	CRTYPE_DW_LEATHER_ARMOR_BLACK_F,
-	CRTYPE_DW_LEATHER_ARMOR_SWAMP_F,
-	CRTYPE_DW_METAL_ARMOR_F,
-	CRTYPE_DW_METAL_ARMOR_MK2_F,
-	CRTYPE_DW_METAL_TESLA_F,
-	CRTYPE_CA_F,
-	CRTYPE_CA_BLUE_F,
-	CRTYPE_CA_DARK_F,
-	CRTYPE_CA_CLAW_F,
-	CRTYPE_CA_SAND_1_F,
-	CRTYPE_CA_SAND_2_F,
-	CRTYPE_CA_GREYHUNTER_F,
-	CRTYPE_CA_SAND_3_F,
-	CRTYPE_CA_NIGHT_F,
-	CRTYPE_CA_ENCLAVE_F,
-	CRTYPE_CA_BASALT_F,
-	CRTYPE_CA_BASALT_MK2_F,
-	CRTYPE_CA_REBERA_F,
-	CRTYPE_CA_REBERA_MK2_F,
-	CRTYPE_CA_MKII_F,
-	CRTYPE_CA_REN_MKI_F,
-	CRTYPE_CA_REN_MKII_F,
-	CRTYPE_PA,
-};
-const uint[][] skin_packs = //стандартные наборы скинов
-{
-	{ //SKIN_TYPE_WOMAN
-		CRTYPE_DW_TRIBAL_F,
-		CRTYPE_DW_BLACK_DRESS_F,
-		CRTYPE_DW_GEKKO_DRESS_F,
-		CRTYPE_DW_JUMPSUIT_F,
-		CRTYPE_DW_JUMPSUIT_BLACK_F,
-		CRTYPE_DW_JUMPSUIT_LIGHT_GREEN_F,
-		CRTYPE_DW_JUMPSUIT_RED_F,
-		CRTYPE_DW_JUMPSUIT_SAND_F,
-		CRTYPE_DW_JUMPSUIT_GRAY_F,
-		CRTYPE_DW_LEATHER_JACKET_F,
-		CRTYPE_DW_TWO_HAND_LEATHER_JACKET_F,
-		CRTYPE_DW_LEATHER_COAT_F,
-		CRTYPE_DW_CLJ_F,
-		CRTYPE_DW_LEATHER_ARMOR_MK1_F,
-		CRTYPE_DW_LEATHER_ARMOR_MK2_F,
-		CRTYPE_DW_LEATHER_ARMOR_BLUE_F,
-		CRTYPE_DW_LEATHER_ARMOR_CAMMO_F,
-		CRTYPE_DW_LEATHER_ARMOR_RED_F,
-		CRTYPE_DW_LEATHER_ARMOR_YELLOW_F,
-		CRTYPE_DW_LEATHER_ARMOR_GREY_F,
-		CRTYPE_DW_LEATHER_ARMOR_BLACK_F,
-		CRTYPE_DW_LEATHER_ARMOR_SWAMP_F,
-		CRTYPE_DW_METAL_ARMOR_F,
-		CRTYPE_DW_METAL_ARMOR_MK2_F,
-		CRTYPE_DW_METAL_TESLA_F,
-	},{ //SKIN_TYPE_PUNKESS
-		CRTYPE_PUNKESS_TRIBAL,
-		CRTYPE_PUNKESS_BLACK_DRESS_F,
-		CRTYPE_PUNKESS_GEKKO_DRESS_F,
-		CRTYPE_PUNKESS_JUMPSUIT,
-		CRTYPE_PUNKESS_JUMPSUIT_BLACK,
-		CRTYPE_PUNKESS_JUMPSUIT_LIGHT_GREEN,
-		CRTYPE_PUNKESS_JUMPSUIT_RED,
-		CRTYPE_PUNKESS_JUMPSUIT_SAND,
-		CRTYPE_PUNKESS_JUMPSUIT_GRAY,
-		CRTYPE_PUNKESS_LEATHER_JACKET,
-		CRTYPE_PUNKESS_LEATHER_COAT,
-		CRTYPE_PUNKESS_CLJ,
-		CRTYPE_PUNKESS_LEATHER_ARMOR_MK1,
-		CRTYPE_PUNKESS_LEATHER_ARMOR_MK2,
-		CRTYPE_PUNKESS_LEATHER_ARMOR_BLUE,
-		CRTYPE_PUNKESS_LEATHER_ARMOR_CAMMO,
-		CRTYPE_PUNKESS_LEATHER_ARMOR_RED,
-		CRTYPE_PUNKESS_LEATHER_ARMOR_YELLOW,
-		CRTYPE_PUNKESS_LEATHER_ARMOR_GREY,
-		CRTYPE_PUNKESS_LEATHER_ARMOR_BLACK,
-		CRTYPE_PUNKESS_LEATHER_ARMOR_SWAMP,
-		CRTYPE_PUNKESS_METAL_ARMOR,
-		CRTYPE_PUNKESS_METAL_ARMOR_MK2,
-		CRTYPE_PUNKESS_METAL_TESLA,
-	},{ //SKIN_TYPE_MAN
-		CRTYPE_DW_TRIBAL_M,
-		CRTYPE_DW_BUSINESS_SUIT_M,
-		CRTYPE_DW_JUMPSUIT_M,
-		CRTYPE_DW_JUMPSUIT_BLACK_M,
-		CRTYPE_DW_JUMPSUIT_LIGHT_GREEN_M,
-		CRTYPE_DW_JUMPSUIT_RED_M,
-		CRTYPE_DW_JUMPSUIT_SAND_M,
-		CRTYPE_DW_JUMPSUIT_GRAY_M,
-		CRTYPE_DW_LEATHER_JACKET_M,
-		CRTYPE_DW_LEATHER_COAT_M,
-		CRTYPE_DW_CLJ_M,
-		CRTYPE_DW_LEATHER_ARMOR_MK1_M,
-		CRTYPE_DW_LEATHER_ARMOR_MK2_M,
-		CRTYPE_DW_LEATHER_ARMOR_BLUE_M,
-		CRTYPE_DW_LEATHER_ARMOR_CAMMO_M,
-		CRTYPE_DW_LEATHER_ARMOR_RED_M,
-		CRTYPE_DW_LEATHER_ARMOR_YELLOW_M,
-		CRTYPE_DW_LEATHER_ARMOR_GREY_M,
-		CRTYPE_DW_LEATHER_ARMOR_BLACK_M,
-		CRTYPE_DW_LEATHER_ARMOR_SWAMP_M,
-		CRTYPE_DW_METAL_ARMOR_M,
-		CRTYPE_DW_METAL_ARMOR_MK2_M,
-		CRTYPE_DW_METAL_TESLA_M,
-	},{ //SKIN_TYPE_HAIRY
-		CRTYPE_LHD_TRIBAL,
-		CRTYPE_LHD_BUSINESS_SUIT_M,
-		CRTYPE_LHD_JUMPSUIT,
-		CRTYPE_LHD_JUMPSUIT_BLACK,
-		CRTYPE_LHD_JUMPSUIT_LIGHT_GREEN,
-		CRTYPE_LHD_JUMPSUIT_RED,
-		CRTYPE_LHD_JUMPSUIT_SAND,
-		CRTYPE_LHD_JUMPSUIT_GRAY,
-		CRTYPE_LHD_LEATHER_JACKET,
-		CRTYPE_LHD_LEATHER_COAT,
-		CRTYPE_LHD_CLJ,
-		CRTYPE_LHD_LEATHER_ARMOR_MK1,
-		CRTYPE_LHD_LEATHER_ARMOR_MK2,
-		CRTYPE_LHD_LEATHER_ARMOR_BLUE,
-		CRTYPE_LHD_LEATHER_ARMOR_CAMMO,
-		CRTYPE_LHD_LEATHER_ARMOR_RED,
-		CRTYPE_LHD_LEATHER_ARMOR_YELLOW,
-		CRTYPE_LHD_LEATHER_ARMOR_GREY,
-		CRTYPE_LHD_LEATHER_ARMOR_BLACK,
-		CRTYPE_LHD_LEATHER_ARMOR_SWAMP,
-		CRTYPE_LHD_METAL_ARMOR,
-		CRTYPE_LHD_METAL_ARMOR_MK2,
-		CRTYPE_LHD_METAL_TESLA,
-	},{ //SKIN_TYPE_BALD
-		CRTYPE_BLD_TRIBAL,
-		CRTYPE_BLD_BUSINESS_SUIT_M,
-		CRTYPE_BLD_JUMPSUIT,
-		CRTYPE_BLD_JUMPSUIT_BLACK,
-		CRTYPE_BLD_JUMPSUIT_LIGHT_GREEN,
-		CRTYPE_BLD_JUMPSUIT_RED,
-		CRTYPE_BLD_JUMPSUIT_SAND,
-		CRTYPE_BLD_JUMPSUIT_GRAY,
-		CRTYPE_BLD_LEATHER_JACKET,
-		CRTYPE_BLD_LEATHER_COAT,
-		CRTYPE_BLD_CLJ,
-		CRTYPE_BLD_LEATHER_ARMOR_MK1,
-		CRTYPE_BLD_LEATHER_ARMOR_MK2,
-		CRTYPE_BLD_LEATHER_ARMOR_BLUE,
-		CRTYPE_BLD_LEATHER_ARMOR_CAMMO,
-		CRTYPE_BLD_LEATHER_ARMOR_RED,
-		CRTYPE_BLD_LEATHER_ARMOR_YELLOW,
-		CRTYPE_BLD_LEATHER_ARMOR_GREY,
-		CRTYPE_BLD_LEATHER_ARMOR_BLACK,
-		CRTYPE_BLD_LEATHER_ARMOR_SWAMP,
-		CRTYPE_BLD_METAL_ARMOR,
-		CRTYPE_BLD_METAL_ARMOR_MK2,
-		CRTYPE_BLD_METAL_TESLA,
-	},{ //SKIN_TYPE_BLACK
-		CRTYPE_BLACK_TRIBAL,
-		CRTYPE_BLACK_BUSINESS_SUIT_M,
-		CRTYPE_BLACK_JUMPSUIT,
-		CRTYPE_BLACK_JUMPSUIT_BLACK,
-		CRTYPE_BLACK_JUMPSUIT_LIGHT_GREEN,
-		CRTYPE_BLACK_JUMPSUIT_RED,
-		CRTYPE_BLACK_JUMPSUIT_SAND,
-		CRTYPE_BLACK_JUMPSUIT_GRAY,
-		CRTYPE_BLACK_LEATHER_JACKET,
-		CRTYPE_BLACK_LEATHER_COAT,
-		CRTYPE_BLACK_CLJ,
-		CRTYPE_BLACK_LEATHER_ARMOR_MK1,
-		CRTYPE_BLACK_LEATHER_ARMOR_MK2,
-		CRTYPE_BLACK_LEATHER_ARMOR_BLUE,
-		CRTYPE_BLACK_LEATHER_ARMOR_CAMMO,
-		CRTYPE_BLACK_LEATHER_ARMOR_RED,
-		CRTYPE_BLACK_LEATHER_ARMOR_YELLOW,
-		CRTYPE_BLACK_LEATHER_ARMOR_GREY,
-		CRTYPE_BLACK_LEATHER_ARMOR_BLACK,
-		CRTYPE_BLACK_LEATHER_ARMOR_SWAMP,
-		CRTYPE_BLACK_METAL_ARMOR,
-		CRTYPE_BLACK_METAL_ARMOR_MK2,
-		CRTYPE_BLACK_METAL_TESLA,
-	},{ //SKIN_TYPE_FAT
-		CRTYPE_FAT_TRIBAL,
-		CRTYPE_FAT_BUSINESS_SUIT_M,
-		CRTYPE_FAT_JUMPSUIT,
-		CRTYPE_FAT_JUMPSUIT_BLACK,
-		CRTYPE_FAT_JUMPSUIT_LIGHT_GREEN,
-		CRTYPE_FAT_JUMPSUIT_RED,
-		CRTYPE_FAT_JUMPSUIT_SAND,
-		CRTYPE_FAT_JUMPSUIT_GRAY,
-		CRTYPE_FAT_LEATHER_JACKET,
-		CRTYPE_FAT_LEATHER_COAT,
-		CRTYPE_FAT_CLJ,
-		CRTYPE_FAT_LEATHER_ARMOR_MK1,
-		CRTYPE_FAT_LEATHER_ARMOR_MK2,
-		CRTYPE_FAT_LEATHER_ARMOR_BLUE,
-		CRTYPE_FAT_LEATHER_ARMOR_CAMMO,
-		CRTYPE_FAT_LEATHER_ARMOR_RED,
-		CRTYPE_FAT_LEATHER_ARMOR_YELLOW,
-		CRTYPE_FAT_LEATHER_ARMOR_GREY,
-		CRTYPE_FAT_LEATHER_ARMOR_BLACK,
-		CRTYPE_FAT_LEATHER_ARMOR_SWAMP,
-		CRTYPE_FAT_METAL_ARMOR,
-		CRTYPE_FAT_METAL_ARMOR_MK2,
-		CRTYPE_FAT_METAL_TESLA,
-		CRTYPE_FAT_CA_MK1,
-		CRTYPE_FAT_CA_BLUE,
-	    CRTYPE_FAT_CA_DARK,
-	    CRTYPE_FAT_CA_CLAW,
-	    CRTYPE_FAT_CA_SAND_1,
-	    CRTYPE_FAT_CA_SAND_2,
-	    CRTYPE_FAT_CA_GREYHUNTER,
-	    CRTYPE_FAT_CA_SAND_3,
-	    CRTYPE_FAT_CA_NIGHT,
-	    CRTYPE_FAT_CA_ENCLAVE,
-	    CRTYPE_FAT_CA_BASALT,
-	    CRTYPE_FAT_CA_BASALT_MK2,
-	    CRTYPE_FAT_CA_REBERA,
-	    CRTYPE_FAT_CA_REBERA_MK2,
-	    CRTYPE_FAT_CA_MKII,
-	    CRTYPE_FAT_CA_REN_MKI,
-	    CRTYPE_FAT_CA_REN_MKII,
-		CRTYPE_FAT_PA,
-	},{ //SKIN_TYPE_MYRON
-	    CRTYPE_MYRON_TRIBAL,
-		CRTYPE_MYRON_BUSINESS_SUIT_M,
-		CRTYPE_MYRON_JUMPSUIT,
-	    CRTYPE_MYRON_JUMPSUIT_BLACK,
-	    CRTYPE_MYRON_JUMPSUIT_LIGHT_GREEN,
-	    CRTYPE_MYRON_JUMPSUIT_RED,
-	    CRTYPE_MYRON_JUMPSUIT_SAND,
-	    CRTYPE_MYRON_JUMPSUIT_GRAY,
-	    CRTYPE_MYRON_LEATHER_JACKET,
-	    CRTYPE_MYRON_LEATHER_COAT,
-	    CRTYPE_MYRON_CLJ,
-	    CRTYPE_MYRON_LEATHER_ARMOR_MK1,
-	    CRTYPE_MYRON_LEATHER_ARMOR_MK2,
-	    CRTYPE_MYRON_LEATHER_ARMOR_BLUE,
-	    CRTYPE_MYRON_LEATHER_ARMOR_CAMMO,
-	    CRTYPE_MYRON_LEATHER_ARMOR_RED,
-	    CRTYPE_MYRON_LEATHER_ARMOR_YELLOW,
-	    CRTYPE_MYRON_LEATHER_ARMOR_GREY,
-	    CRTYPE_MYRON_LEATHER_ARMOR_BLACK,
-	    CRTYPE_MYRON_LEATHER_ARMOR_SWAMP,
-	    CRTYPE_MYRON_METAL_ARMOR,
-	    CRTYPE_MYRON_METAL_ARMOR_MK2,
-	    CRTYPE_MYRON_METAL_TESLA,
-		CRTYPE_MYRON_CA_MK1,
-		CRTYPE_MYRON_CA_BLUE,
-	    CRTYPE_MYRON_CA_DARK,
-	    CRTYPE_MYRON_CA_CLAW,
-		CRTYPE_MYRON_CA_SAND_1,
-	    CRTYPE_MYRON_CA_SAND_2,
-	    CRTYPE_MYRON_CA_GREYHUNTER,
-	    CRTYPE_MYRON_CA_SAND_3,
-	    CRTYPE_MYRON_CA_NIGHT,
-	    CRTYPE_MYRON_CA_ENCLAVE,
-	    CRTYPE_MYRON_CA_BASALT,
-	    CRTYPE_MYRON_CA_BASALT_MK2,
-	    CRTYPE_MYRON_CA_REBERA,
-	    CRTYPE_MYRON_CA_REBERA_MK2,
-	    CRTYPE_MYRON_CA_MKII,
-	    CRTYPE_MYRON_CA_REN_MKI,
-	    CRTYPE_MYRON_CA_REN_MKII,
-		CRTYPE_MYRON_PA,
-	},{ //SKIN_TYPE_SULIK
-	    CRTYPE_SULIK_TRIBAL,
-		CRTYPE_SULIK_BUSINESS_SUIT_M,
-		CRTYPE_SULIK_JUMPSUIT,
-		CRTYPE_SULIK_JUMPSUIT_BLACK,
-		CRTYPE_SULIK_JUMPSUIT_LIGHT_GREEN,
-		CRTYPE_SULIK_JUMPSUIT_RED,
-		CRTYPE_SULIK_JUMPSUIT_SAND,
-		CRTYPE_SULIK_JUMPSUIT_GRAY,
-		CRTYPE_SULIK_LEATHER_JACKET,
-		CRTYPE_SULIK_LEATHER_COAT,
-		CRTYPE_SULIK_CLJ,
-		CRTYPE_SULIK_LEATHER_ARMOR_MK1,
-		CRTYPE_SULIK_LEATHER_ARMOR_MK2,
-		CRTYPE_SULIK_LEATHER_ARMOR_BLUE,
-		CRTYPE_SULIK_LEATHER_ARMOR_CAMMO,
-		CRTYPE_SULIK_LEATHER_ARMOR_RED,
-		CRTYPE_SULIK_LEATHER_ARMOR_YELLOW,
-		CRTYPE_SULIK_LEATHER_ARMOR_GREY,
-		CRTYPE_SULIK_LEATHER_ARMOR_BLACK,
-		CRTYPE_SULIK_LEATHER_ARMOR_SWAMP,
-		CRTYPE_SULIK_METAL_ARMOR,
-		CRTYPE_SULIK_METAL_ARMOR_MK2,
-		CRTYPE_SULIK_METAL_TESLA,
-		CRTYPE_SULIK_CA_MK1,
-		CRTYPE_SULIK_CA_BLUE,
-	    CRTYPE_SULIK_CA_DARK,
-	    CRTYPE_SULIK_CA_CLAW,
-		CRTYPE_SULIK_CA_SAND_1,
-		CRTYPE_SULIK_CA_SAND_2,
-		CRTYPE_SULIK_CA_GREYHUNTER,
-		CRTYPE_SULIK_CA_SAND_3,
-		CRTYPE_SULIK_CA_NIGHT,
-		CRTYPE_SULIK_CA_ENCLAVE,
-		CRTYPE_SULIK_CA_BASALT,
-		CRTYPE_SULIK_CA_BASALT_MK2,
-		CRTYPE_SULIK_CA_REBERA,
-		CRTYPE_SULIK_CA_REBERA_MK2,
-		CRTYPE_SULIK_CA_MKII,
-		CRTYPE_SULIK_CA_REN_MKI,
-		CRTYPE_SULIK_CA_REN_MKII,
-		CRTYPE_SULIK_PA,
-	},{ //SKIN_TYPE_WOMAN_BLONDE
-		CRTYPE_BL_TRIBAL_F,
-		CRTYPE_BL_BLACK_DRESS_F,
-		CRTYPE_BL_GEKKO_DRESS_F,
-		CRTYPE_BL_JUMPSUIT_F,
-		CRTYPE_BL_JUMPSUIT_BLACK_F,
-		CRTYPE_BL_JUMPSUIT_LIGHT_GREEN_F,
-		CRTYPE_BL_JUMPSUIT_RED_F,
-		CRTYPE_BL_JUMPSUIT_SAND_F,
-		CRTYPE_BL_JUMPSUIT_GRAY_F,
-		CRTYPE_BL_LEATHER_JACKET_F,
-		CRTYPE_BL_LEATHER_COAT_F,
-		CRTYPE_BL_CLJ_F,
-		CRTYPE_BL_LEATHER_ARMOR_MK1_F,
-		CRTYPE_BL_LEATHER_ARMOR_MK2_F,
-		CRTYPE_BL_LEATHER_ARMOR_BLUE_F,
-		CRTYPE_BL_LEATHER_ARMOR_CAMMO_F,
-		CRTYPE_BL_LEATHER_ARMOR_RED_F,
-		CRTYPE_BL_LEATHER_ARMOR_YELLOW_F,
-		CRTYPE_BL_LEATHER_ARMOR_GREY_F,
-		CRTYPE_BL_LEATHER_ARMOR_BLACK_F,
-		CRTYPE_BL_LEATHER_ARMOR_SWAMP_F,
-		CRTYPE_BL_METAL_ARMOR_F,
-		CRTYPE_BL_METAL_ARMOR_MK2_F,
-		CRTYPE_BL_METAL_TESLA_F,
-	},{ //SKIN_TYPE_WOMAN_REDHEAD
-		CRTYPE_FR_TRIBAL_F,
-		CRTYPE_FR_BLACK_DRESS_F,
-		CRTYPE_FR_GEKKO_DRESS_F,
-		CRTYPE_FR_JUMPSUIT_F,
-		CRTYPE_FR_JUMPSUIT_BLACK_F,
-		CRTYPE_FR_JUMPSUIT_LIGHT_GREEN_F,
-		CRTYPE_FR_JUMPSUIT_RED_F,
-		CRTYPE_FR_JUMPSUIT_SAND_F,
-		CRTYPE_FR_JUMPSUIT_GRAY_F,
-		CRTYPE_FR_LEATHER_JACKET_F,
-		CRTYPE_FR_LEATHER_COAT_F,
-		CRTYPE_FR_CLJ_F,
-		CRTYPE_FR_LEATHER_ARMOR_MK1_F,
-		CRTYPE_FR_LEATHER_ARMOR_MK2_F,
-		CRTYPE_FR_LEATHER_ARMOR_BLUE_F,
-		CRTYPE_FR_LEATHER_ARMOR_CAMMO_F,
-		CRTYPE_FR_LEATHER_ARMOR_RED_F,
-		CRTYPE_FR_LEATHER_ARMOR_YELLOW_F,
-		CRTYPE_FR_LEATHER_ARMOR_GREY_F,
-		CRTYPE_FR_LEATHER_ARMOR_BLACK_F,
-		CRTYPE_FR_LEATHER_ARMOR_SWAMP_F,
-		CRTYPE_FR_METAL_ARMOR_F,
-		CRTYPE_FR_METAL_ARMOR_MK2_F,
-		CRTYPE_FR_METAL_TESLA_F,
-	},{ //SKIN_TYPE_WOMAN_DW_OLIMP
-		CRTYPE_OLDW_TRIBAL_F,
-		CRTYPE_OLDW_BLACK_DRESS_F,
-		CRTYPE_OLDW_GEKKO_DRESS_F,
-		CRTYPE_OLDW_JUMPSUIT_F,
-		CRTYPE_OLDW_JUMPSUIT_BLACK_F,
-		CRTYPE_OLDW_JUMPSUIT_LIGHT_GREEN_F,
-		CRTYPE_OLDW_JUMPSUIT_RED_F,
-		CRTYPE_OLDW_JUMPSUIT_SAND_F,
-		CRTYPE_OLDW_JUMPSUIT_GRAY_F,
-		CRTYPE_OLDW_LEATHER_JACKET_F,
-		CRTYPE_OLDW_LEATHER_COAT_F,
-		CRTYPE_OLDW_CLJ_F,
-		CRTYPE_OLDW_LEATHER_ARMOR_MK1_F,
-		CRTYPE_OLDW_LEATHER_ARMOR_MK2_F,
-		CRTYPE_OLDW_LEATHER_ARMOR_BLUE_F,
-		CRTYPE_OLDW_LEATHER_ARMOR_CAMMO_F,
-		CRTYPE_OLDW_LEATHER_ARMOR_RED_F,
-		CRTYPE_OLDW_LEATHER_ARMOR_YELLOW_F,
-		CRTYPE_OLDW_LEATHER_ARMOR_GREY_F,
-		CRTYPE_OLDW_LEATHER_ARMOR_BLACK_F,
-		CRTYPE_OLDW_LEATHER_ARMOR_SWAMP_F,
-		CRTYPE_OLDW_METAL_ARMOR_F,
-		CRTYPE_OLDW_METAL_ARMOR_MK2_F,
-		CRTYPE_OLDW_METAL_TESLA_F,
-	},{ //SKIN_TYPE_WOMAN_ASIAN
-		CRTYPE_FY_TRIBAL_F,
-		CRTYPE_FY_BLACK_DRESS_F,
-		CRTYPE_FY_GEKKO_DRESS_F,
-		CRTYPE_FY_JUMPSUIT_F,
-		CRTYPE_FY_JUMPSUIT_BLACK_F,
-		CRTYPE_FY_JUMPSUIT_LIGHT_GREEN_F,
-		CRTYPE_FY_JUMPSUIT_RED_F,
-		CRTYPE_FY_JUMPSUIT_SAND_F,
-		CRTYPE_FY_JUMPSUIT_GRAY_F,
-		CRTYPE_FY_LEATHER_JACKET_F,
-		CRTYPE_FY_LEATHER_COAT_F,
-		CRTYPE_FY_CLJ_F,
-		CRTYPE_FY_LEATHER_ARMOR_MK1_F,
-		CRTYPE_FY_LEATHER_ARMOR_MK2_F,
-		CRTYPE_FY_LEATHER_ARMOR_BLUE_F,
-		CRTYPE_FY_LEATHER_ARMOR_CAMMO_F,
-		CRTYPE_FY_LEATHER_ARMOR_RED_F,
-		CRTYPE_FY_LEATHER_ARMOR_YELLOW_F,
-		CRTYPE_FY_LEATHER_ARMOR_GREY_F,
-		CRTYPE_FY_LEATHER_ARMOR_BLACK_F,
-		CRTYPE_FY_LEATHER_ARMOR_SWAMP_F,
-		CRTYPE_FY_METAL_ARMOR_F,
-		CRTYPE_FY_METAL_ARMOR_MK2_F,
-		CRTYPE_FY_METAL_TESLA_F
-	},{ //SKIN_TYPE_WOMAN_MEXICAN
-		CRTYPE_FM_TRIBAL_F,
-		CRTYPE_FM_BLACK_DRESS_F,
-		CRTYPE_FM_GEKKO_DRESS_F,
-		CRTYPE_FM_JUMPSUIT_F,
-		CRTYPE_FM_JUMPSUIT_BLACK_F,
-		CRTYPE_FM_JUMPSUIT_LIGHT_GREEN_F,
-		CRTYPE_FM_JUMPSUIT_RED_F,
-		CRTYPE_FM_JUMPSUIT_SAND_F,
-		CRTYPE_FM_JUMPSUIT_GRAY_F,
-		CRTYPE_FM_LEATHER_JACKET_F,
-		CRTYPE_FM_LEATHER_COAT_F,
-		CRTYPE_FM_CLJ_F,
-		CRTYPE_FM_LEATHER_ARMOR_MK1_F,
-		CRTYPE_FM_LEATHER_ARMOR_MK2_F,
-		CRTYPE_FM_LEATHER_ARMOR_BLUE_F,
-		CRTYPE_FM_LEATHER_ARMOR_CAMMO_F,
-		CRTYPE_FM_LEATHER_ARMOR_RED_F,
-		CRTYPE_FM_LEATHER_ARMOR_YELLOW_F,
-		CRTYPE_FM_LEATHER_ARMOR_GREY_F,
-		CRTYPE_FM_LEATHER_ARMOR_BLACK_F,
-		CRTYPE_FM_LEATHER_ARMOR_SWAMP_F,
-		CRTYPE_FM_METAL_ARMOR_F,
-		CRTYPE_FM_METAL_ARMOR_MK2_F,
-		CRTYPE_FM_METAL_TESLA_F		
-	}
-};
+#include "speed_h.fos"
+#include "windup_h.fos"
 
 // Call on critter item moved.
-import void ChangeWindup( Critter& cr, bool ignore_bussy ) from "main";
-import void ArmorEffects( Critter& cr, int8 sign ) from "mio_social";
-import uint ArmorSkin( Critter& cr, uint armor_skin ) from "mio_social";
-import void PAAuth( Critter& cr ) from "mio_tests";
+
 void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 {
-   uint8 toSlot = item.CritSlot;
+	ChangeRunningAP( cr );
+	uint8 toSlot = item.CritSlot;
 	
 	if( toSlot == SLOT_HEAD || fromSlot == SLOT_HEAD )
 	{	
@@ -843,201 +258,467 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 		int signH = ( toSlot == SLOT_HEAD ? int(1) : -1 );
 		switch( item.Proto.HeadItem_Perk )
         {
-			case ( HEAD_PERK_COOL ):
+			case( HEAD_PERK_COOL ):
                 cr.StatBase[ ST_CHARISMA_EXT ] += 1 * signH;
                 break;
-            case ( HEAD_PERK_GLASSES ):
+            case( HEAD_PERK_GLASSES ):
+			{
 				if( cr.StatBase[ ST_PERCEPTION ] <= 3 )
 				{
 					cr.StatBase[ ST_PERCEPTION_EXT ] += 2 * signH;
 				}
+				else if( cr.StatBase[ ST_PERCEPTION ] == 4 )
+				{
+					cr.StatBase[ ST_PERCEPTION_EXT ] += 1 * signH;
+				}
                 break;
-			case HEAD_PERK_VERY_COOL:
+			}
+			case( HEAD_PERK_VERY_COOL ):
 				cr.StatBase[ ST_CHARISMA_EXT ] += 2 * signH;
 				break;
-			case HEAD_PERK_LUCKY_CHARM:
+			case( HEAD_PERK_LUCKY_CHARM ):
 				cr.StatBase[ ST_LUCK_EXT ] += 1 * signH;
 				break;
-			case HEAD_PERK_COOL_LUCKY_CHARM:
+			case( HEAD_PERK_COOL_LUCKY_CHARM ):
 				cr.StatBase[ ST_CHARISMA_EXT ] += 1 * signH;
 				cr.StatBase[ ST_LUCK_EXT ] += 1 * signH;
 				break;
-			case HEAD_PERK_COOL_GLASSES:
+			case( HEAD_PERK_COOL_GLASSES ):
+			{
 				if( cr.StatBase[ ST_PERCEPTION ] <= 3 )
 				{
 					cr.StatBase[ ST_PERCEPTION_EXT ] += 2 * signH;
 					cr.StatBase[ ST_CHARISMA_EXT ] += 1 * signH;
 				}
+				else if( cr.StatBase[ ST_PERCEPTION ] == 4 )
+				{
+					cr.StatBase[ ST_PERCEPTION_EXT ] += 1 * signH;
+					cr.StatBase[ ST_CHARISMA_EXT ] += 1 * signH;
+				}
 				break;
+			}
 		}
 		cr.StatBase[ ST_CURRENT_HEAD_ITEM_PERK ] = ( toSlot == SLOT_HEAD ? item.Proto.HeadItem_Perk : 0 );
+		//face mask
+		uint16 pid = item.GetProtoId();
+		if( toSlot == SLOT_HEAD && HidefaceMasks.find( pid ) != -1 )
+		{
+			SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_FACE_MASK );
+		}
+		else
+		{
+			UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_FACE_MASK );
+		}
+		ArmorEffects( cr, 1 );
 	}	
 		
 	if( cr.ParamBase[ CR_IS_WINDUPED ] != 0 && fromSlot == SLOT_HAND1 && item.GetType() == ITEM_TYPE_WEAPON )
+	{
 		ChangeWindup( cr, true );
+	}
 	
-    if( item.GetType() == ITEM_TYPE_ARMOR && ( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR ) )
-    { //Снятие/одевание брони и одежды:
-		bool isMale = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ); //пол персонажа
+	//Armor skins change
+	if( item.GetType() == ITEM_TYPE_ARMOR && ( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR ) )
+	{
+		bool isMale = ( cr.Stat[ ST_GENDER ] == GENDER_MALE );
 		uint armor_skin = ( isMale ? item.Proto.Armor_CrTypeMale : item.Proto.Armor_CrTypeFemale );
-		uint skin_base = cr.Stat[ ST_BASE_CRTYPE ]; //хранит в себе значение скина "под бронёй"
-		if( skin_base == 0 ) //Стандартный скин М/Ж
+		uint skin_base = cr.Stat[ ST_BASE_CRTYPE ];
+		
+		if( skin_base == 0 )
+		{
 			skin_base = ( isMale ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
-		uint crType = skin_base; //главная рабочая переменная функции
-		uint16 pid = item.GetProtoId(); //номер прототипа брони
-        if( GetCritterAnimType( cr.CrType ) != ANIM_TYPE_3D ) 
-		{ //Увы, 3Д не завезли, только 2Д:
-			if( toSlot == SLOT_ARMOR ) 
-			{ //Одеваем броню:
+		}
+		
+		uint crType = skin_base;
+		
+		uint16 pid = item.GetProtoId();
+
+		if( GetCritterAnimType( cr.CrType ) != ANIM_TYPE_3D )
+		{
+			if( toSlot == SLOT_ARMOR )
+			{
 				if( skin_robe.find( armor_skin ) != -1 && skin_small.find( skin_base ) != -1 )
-					crType = CRTYPE_SMALL_ROBE; //Дети и карлики в маленьких робах.
-				else { //Супермутанты и их брони:
-					if( skin_supermute.find( skin_base ) < skin_supermute.find( armor_skin ) )
-						crType = armor_skin; //Скин меняет лишь та броня, что старше его по уровню.
-					else { //Все кроме детей, карликов и супермутантов:
-						if( skin_armor.find( skin_base ) != -1 ) {
-							if( skin_armor.find( armor_skin ) > skin_armor.find( skin_base ) )
-								crType = armor_skin; //Броне-скины заменялся реально одетой броней только если та выше их по "защищённости" (следующая в списке скинов)
+				{
+					crType = CRTYPE_SMALL_ROBE;  //kids, dwarfs and goris
+				}
+				else // super mutants
+				{
+					if( skin_supermute.find( skin_base ) < skin_supermute.find( armor_skin ) ) {
+						crType = armor_skin;
+					}
+					else // other skins
+					{
+						if( skin_armor.find( skin_base ) != -1 )
+						{
+							if( skin_armor.find( armor_skin ) > skin_armor.find( skin_base ) ) {
+								crType = armor_skin; //Armor is equiped based on armor array position in comparison to skin
+							}
 							else
+							{
 								crType = skin_base;
-						} else if( skin_robe.find( skin_base ) != -1 ) {
+							}
+						}
+						else if( skin_robe.find( skin_base ) != -1 )
+						{
 							if ( skin_armor.find( armor_skin ) != -1 )
-								crType = armor_skin; //Скины халатов меняются лишь на броню.
-						} else { //Если, в итоге, дефолтный скин - это не броня и не халат:
+							{
+								crType = armor_skin; //Robes change for CA and PA only
+							}
+						}
+						else // if default skin is not armor or robe
+						{
 							bool foundIt = false;
 							int skin_armor_level = ( isMale ? skin_armor_levels_male.find( armor_skin ) : skin_armor_levels_female.find( armor_skin ) ) + 1;
 							for( uint n = 0; n < skin_packs.length(); n++ )
-							{ //Находим тот набор, которому принадлежит дефолтный скин персонажа
+							{ // get set for cr skin set
 								int skin_level = skin_packs[n].find( skin_base );
-								if( skin_level >= 0 ) { //Нашли наш пак скинов:
-									
-									if( cr.Param[ QST_GAMEMODE ] == GAME_TEST ) 
+								//if skin pack found
+								if( skin_level >= 0 )
+								{
+									if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
+									{
 										cr.Say( SAY_NORM, skin_level + " -> " + (skin_armor_level+1) + " of " + skin_packs[n].length() );
+									}
 									
 									if( skin_level < skin_armor_level && skin_packs[n].length() > uint( skin_armor_level + 1 ) )
 									{
-										crType = skin_packs[n][skin_armor_level]; //Заменяем, если уровень брони выше нашего уровня скина.
+										crType = skin_packs[n][skin_armor_level];//change if armour level higher than skin
 										foundIt = true;
 									}
 									break;
 								}
 							}
+							
 							if( !foundIt )
 							{
-								if( skin_armor.find( armor_skin ) != -1 || skin_robe.find( armor_skin ) != -1 ) {
-									crType = ArmorSkin( cr, armor_skin ); //Броня и халаты меняют любой социальный/боевой скин.
-								} else if( skin_male.find( skin_base ) != -1 || skin_female.find( skin_base ) != -1 || skin_ghoul.find( skin_base ) != -1 ) {
-										//Тут мог размещаться механ смены социальных скинов при одевании обычных броней.
-								} else { //Если дефолтный скин не социальный:
+								if( skin_armor.find( armor_skin ) != -1 || skin_robe.find( armor_skin ) != -1 )
+								{
+									crType = ArmorSkin( cr, armor_skin ); //CA and robes change any skin
+								} else if( skin_male.find( skin_base ) != -1 || skin_female.find( skin_base ) != -1 || skin_ghoul.find( skin_base ) != -1 )
+								{
+									//reserved for social skin armour
+								}
+								else
+								{ 
+									//if default is socual skin
 								}
 							}
 						}
 					}
 				}
+				
+				uint index = skin_armor.find( crType );
+				if( skin_base == CRTYPE_BLACK_TRIBAL && index < 37 )
+				{
+					crType = 150;
+				}
+				
+				//Power armor protection system
+				if( item.Proto.Item_Subtype == ITEM_SUBTYPE_ARMOR_AC45 || item.Proto.Item_Subtype == ITEM_SUBTYPE_ARMOR_AC50 )
+				{
+					PAAuth( cr, item );
+				}
+				
+				//Flags for face, avatar and description hiding items
+				if( HidefaceHoods.find( pid ) != -1 )
+				{
+					SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HOOD );
+				}
+				if( HidefaceArmor.find( pid ) != -1 )
+				{
+					SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_SUIT );
+				}
+				if( ArmorHelmets.find( pid ) != -1 )
+				{
+					SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HELMET );
+				}
 			}
+			else
+			{
+				if( HidefaceHoods.find( pid ) != -1 )
+				{
+					UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HOOD );
+				}
+				if( HidefaceArmor.find( pid ) != -1 )
+				{
+					UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_SUIT );
+				}
+				if( ArmorHelmets.find( pid ) != -1 )
+				{
+					UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HELMET );
+				}
+			}
+			ArmorEffects( cr, 1 );
 		}
-		//cr.Say( SAY_NETMSG, "" + cr.CrType + " -> " + crType + " / " + armor_skin + " / " + skin_base );
-		if( cr.CrType != crType ) {
+		
+		if( cr.CrType != crType ) 
+		{
 			cr.ChangeCrType( crType );
 			ChangeCritterSpeed( cr );
 		}
-		PAAuth( cr );
 
         // Armor modifiers
         // Also look Armor perk validation in critter_init
         int sign = ( toSlot == SLOT_ARMOR ? int(1) : -1 );
-		ArmorEffects( cr, 1 );
+
         switch( item.Proto.Armor_Perk )
         {
-        case ARMOR_PERK_POWERED:         // +3 strength, +30 radiation resist
-            cr.StatBase[ ST_STRENGTH_EXT ] += 3 * sign;
-            cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 30 * sign;
-            cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
-            break; 
-        case ARMOR_PERK_COMBAT:         // +20 radiation resist
-            cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 20 * sign;
-            break;
-        case ARMOR_PERK_ADVANCED_I:     // +4 strength, +60 radiation resist
-            cr.StatBase[ ST_STRENGTH_EXT ] += 4 * sign;
-            cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 60 * sign;
-			cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
-            break;
-        case ARMOR_PERK_ADVANCED_II:         // +4 strength, +75 radiation resist
-            cr.StatBase[ ST_STRENGTH_EXT ] += 4 * sign;
-            cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 75 * sign;
-			cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
-            break;
-        case ARMOR_PERK_CHARISMA:         // +1 charisma
-            cr.StatBase[ ST_CHARISMA_EXT ] += 1 * sign;
-            break;
-		case ARMOR_PERK_ECZO:         // +2 strength, +50 radiation resist
-            cr.StatBase[ ST_STRENGTH_EXT ] += 2 * sign;
-            cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 50 * sign;
-            cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
-            break; 
-		case ARMOR_PERK_ECZO_2:         // +3 strength, +10 radiation resist
-            cr.StatBase[ ST_STRENGTH_EXT ] += 3 * sign;
-            cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 10 * sign;
-            cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
-            break; 			
-        case ARMOR_PERK_UGLY:         // -1 charisma
-            cr.StatBase[ ST_CHARISMA_EXT ] -= 1 * sign;
-            break;
-        case ARMOR_PERK_ANTIRAD:         // +70 radiation resist
-            cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 70 * sign;
-			break;			
-        case ARMOR_PERK_VERY_COOL:         // +2 charisma
-            cr.StatBase[ ST_CHARISMA_EXT ] += 2 * sign;
-            break;			
-        default:
-            break;
+			case( ARMOR_PERK_POWERED ):         // +3 strength, +30 radiation resist
+				cr.StatBase[ ST_STRENGTH_EXT ] += 3 * sign;
+				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 30 * sign;
+				cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
+				break; 
+			case( ARMOR_PERK_COMBAT ):         // +20 radiation resist
+				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 20 * sign;
+				break;
+			case( ARMOR_PERK_ADVANCED_I ):     // +4 strength, +60 radiation resist
+				cr.StatBase[ ST_STRENGTH_EXT ] += 4 * sign;
+				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 60 * sign;
+				cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
+				break;
+			case( ARMOR_PERK_ADVANCED_II ):         // +4 strength, +75 radiation resist
+				cr.StatBase[ ST_STRENGTH_EXT ] += 4 * sign;
+				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 75 * sign;
+				cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
+				break;
+			case( ARMOR_PERK_CHARISMA ):         // +1 charisma
+				cr.StatBase[ ST_CHARISMA_EXT ] += 1 * sign;
+				break;
+			case( ARMOR_PERK_ECZO ):         // +2 strength, +50 radiation resist
+				cr.StatBase[ ST_STRENGTH_EXT ] += 2 * sign;
+				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 50 * sign;
+				cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
+				break; 
+			case( ARMOR_PERK_ECZO_2 ):         // +3 strength, +10 radiation resist
+				cr.StatBase[ ST_STRENGTH_EXT ] += 3 * sign;
+				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 10 * sign;
+				cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
+				break; 			
+			case( ARMOR_PERK_UGLY ):         // -1 charisma
+				cr.StatBase[ ST_CHARISMA_EXT ] -= 1 * sign;
+				break;
+			case( ARMOR_PERK_ANTIRAD ):         // +70 radiation resist
+				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 70 * sign;
+				break;			
+			case( ARMOR_PERK_VERY_COOL ):         // +2 charisma
+				cr.StatBase[ ST_CHARISMA_EXT ] += 2 * sign;
+				break;			
+			default:
+				break;
         }
-
         cr.StatBase[ ST_CURRENT_ARMOR_PERK ] = ( toSlot == SLOT_ARMOR ? item.Proto.Armor_Perk : 0 );
     }
 	
-	if(cr.IsNpc())
-		cr.Wait(GetActionTime(ACTION_MOVE_ITEM, cr));
-
-    // Slot modifiers
-	// SLOT_PERK_COSMETIC_CASE // +1 charisma to female
-    // SLOT_PERK_MOTION_SENSOR // +20 outdoorsman
-    // SLOT_PERK_STEALTH_BOY   // +20 sneak
+	if( cr.IsNpc() )
+	{
+		cr.Wait( GetActionTime( ACTION_MOVE_ITEM, cr ) );
+	}
+	
+	Item@ hand = _CritGetItemHand( cr );
+	if( valid( hand ) )
+	{
+		if( hand.GetType() == ITEM_TYPE_WEAPON && !IsCritterAnim1( cr.CrType, hand.Proto.Weapon_Anim1 ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_ANIM_FOR_MAIN_HAND );
+			cr.MoveItem( hand.Id, hand.GetCount(), SLOT_INV );
+		}
+	}
+	
+	Item@ offhand = _CritGetItemHandExt( cr );
+	if( valid( offhand ) )
+	{
+		if( offhand.GetType() == ITEM_TYPE_WEAPON && !IsCritterAnim1( cr.CrType, offhand.Proto.Weapon_Anim1 ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_ANIM_FOR_OFF_HAND );
+			cr.MoveItem( offhand.Id, offhand.GetCount(), SLOT_INV );
+		}
+	}
 }
-#endif
 
-#ifdef __SERVER
+// ####################################################################################################
+// #                                            PowerArmour auth                                      #
+// ####################################################################################################
+void PAAuth( Critter& cr, Item& armor )
+{
+	if( armor.ARMOR_BIOSCANNER == OWNER_CONFIRMED )
+	{
+		if( cr.Id == uint ( armor.ARMOR_OWNER ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PA_AUTH );
+		}
+		else
+		{
+			cr.AddTimeEvent( "cte_PAAuthFail", REAL_SECOND( 10 ), CTE_PA_AUTH, 0 ); 
+			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_PA_FAILSWITCH ); 
+		}
+	}
+	else if( armor.ARMOR_BIOSCANNER == OWNER_PENDING )
+	{ 
+		armor.ARMOR_BIOSCANNER = OWNER_CONFIRMED; 
+		armor.ARMOR_BIOSCANNER = cr.Id; 
+	}
+}
+
+uint cte_PAAuthFail( Critter& cr, int identifier, uint& rate )
+{
+	Item@ armor = cr.GetItem( 0, SLOT_ARMOR );
+	if( valid( armor ) && ( armor.Proto.Item_Subtype == ITEM_SUBTYPE_ARMOR_AC45 || armor.Proto.Item_Subtype == ITEM_SUBTYPE_ARMOR_AC50 ) && armor.Val9 == 10 )
+	{
+		cr.MoveItem( armor.Id, 1, SLOT_GROUND );
+		
+		if( cr.Karma[ KARMA_SEPARATED ] == 0 ) //BOS aligment - need change for faction armours mechanics
+		{ 
+			cr.ToDead( ANIM2_DEAD_PULSE_DUST, null ); 
+		}
+		else
+		{
+			cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 0 ) ), 1000, cr.HexX, cr.HexY );
+		}
+	}
+	return 0;
+}
+
+// ####################################################################################################
+// #                                            Hide Face                                             #
+// ####################################################################################################
+
+void ArmorEffects( Critter& cr, int8 sign )
+{
+	bool hidename = B_Showname( cr );
+	int QST = cr.Param[ QST_MEDIUM ];
+	bool update = false;
+
+	if( sign == 1 && hidename )
+	{
+		if( ABS( QST ) != 2 )
+		{
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_HIDE_FACE );
+			cr.ParamBase[ QST_MEDIUM ] = 2;
+			update = true;
+		}
+	}
+	else
+	{
+		if( QST == 2 )
+		{
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_SHOW_FACE );
+			cr.ParamBase[ QST_MEDIUM ] = 0;
+			update = true;
+		}
+	}
+
+	Item@ item = cr.GetItem( 0, SLOT_ARMOR );
+	if( valid( item ) )
+	{
+		uint PID = item.GetProtoId();
+		if( PID == PID_POWERED_ARMOR || PID == PID_POWERED_ARMOR_NEVADA || PID == PID_HYENA_PA || PID == PID_HYENA_PA_MK2 )
+		{
+			cr.ChangeCrType( ArmorSkin( cr, CRTYPE_PA ) ); 
+		}
+		
+		if( PID == PID_HARDENED_POWER_ARMOR )
+		{ 
+			cr.ChangeCrType( ArmorSkin( cr, CRTYPE_PA_HARDY ) ); 
+		}
+	}
+
+	if( update )
+	{
+		Critter@[] crs;
+		GetAllPlayers( crs );
+		for( uint i = 0, l = crs.length(); i < l; i++ )
+		{
+			crs[ i ].RunClientScript( "client_main@NamesUpdater", 0, 0, 0, null, null );
+		}
+	}
+}
+
+bool B_Showname( Critter& cr )
+{
+	int param = cr.ParamBase[ CR_HIDEFACE_ITM ];
+	
+	if( FLAG( param, ITM_FACE_MASK ) )
+	{
+		return true;
+	}
+	else if( FLAG( cr.Param[ PLAYER_FLAGS ], PLAYER_FLAG_HIDE_FACE ) )
+	{
+		if( FLAG( param, ITM_ARMOR_HOOD ) || FLAG( param, ITM_ARMOR_SUIT ) )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+uint ArmorSkin( Critter& cr, uint skin )
+{
+	if( !B_Showname( cr ) )
+	{
+		if( skin == CRTYPE_PA )
+		{
+			if( cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_SULIK_TRIBAL )
+			{
+				skin = CRTYPE_SULIK_PA;
+			}
+			else
+			{
+				skin = CRTYPE_PA_HEADLESS; 
+			}
+		}
+		else if( skin == CRTYPE_PA_HARDY )
+		{ 
+			skin = CRTYPE_PA_HARDY_HEADLESS; 
+		}
+	}
+	return skin;
+}
+
+//Autostack items upon drop to ground - maybe move to somwhere else
 uint e_stack_items( uint[]@ values ) 
 {
     uint itemId = values[0];
     Item@ item = GetItem( itemId );
-	if( !valid( item ) ) { return 0; }
+	if( !valid( item ) )
+	{
+		return 0;
+	}
 	
-    if( item.Accessory != ACCESSORY_HEX ) return 0;
+    if( item.Accessory != ACCESSORY_HEX )
+	{
+		return 0;
+	}
 	
 	uint16 x = 0, y = 0;
     Map@ map = item.GetMapPosition( x, y );
-    
+
     Item@[] items;
     uint count = map.GetItems ( x, y, items );
-    for ( uint i = 0; i < count; i++ ) 
-    {
-        if( !valid( items[i] ) || !items[i].IsStackable() ) continue;
+    for( uint i = 0; i < count; i++ )
+	{
+        if( !valid( items[i] ) || !items[i].IsStackable() )
+		{
+			continue;
+		}
+		
         uint16 protoid = items[i].GetProtoId();
         uint itemCount = items[i].GetCount();
-        
-        for ( uint j = i + 1; j < count; j++ ) 
-        {
-            if( !valid( items[j] ) ) continue;
-            
-            if(  protoid == items[j].GetProtoId() ) 
-            {
+
+        for( uint j = i + 1; j < count; j++ )
+		{
+			if( !valid( items[j] ) )
+			{
+				continue;
+			}
+
+            if( protoid == items[j].GetProtoId() )
+			{
                 itemCount += items[j].GetCount();
                 DeleteItem( items[j] );
                 @items[j] = null;
             }
         }
-        
+
         items[i].SetCount( itemCount );
 		
 		switch( protoid ) 
@@ -1049,60 +730,202 @@ uint e_stack_items( uint[]@ values )
 				ShellAmountChanger( items[i], itemCount );
 				break;
 		}
-		
         items[i].Update( );
     }
     return 0;
 }
 
-// Change PicMap for dropped coins
-uint[] CoinAmoutHash = 
-{
-    GetStrHash( "art\\items\\misc\\coins.png" ),
-	GetStrHash( "art\\items\\misc\\coin_1.png" ),
-    GetStrHash( "art\\items\\misc\\coin_2.png" ),
-    GetStrHash( "art\\items\\misc\\coin_3.png" ),
-	GetStrHash( "art\\items\\misc\\coin_4.png" ),
-	GetStrHash( "art\\items\\misc\\coin_5.png" ),
-	GetStrHash( "art\\items\\misc\\coin_6.png" ),
-	GetStrHash( "art\\items\\misc\\coin_7.png" ),
-	GetStrHash( "art\\items\\misc\\coin_8.png" )
-};
-
 // Change PicMap for dropped coins - Util func
 void CoinAmountChanger( Item& item, uint amount)
 {
-    if( amount <= 8 ) {
+    if( amount <= 8 )
+	{
 		item.PicMap = CoinAmoutHash[ amount ];
-	} else {
+	}
+	else
+	{
 		item.PicMap = CoinAmoutHash[ 0 ];
 	}
-	
     item.Update();
 }
-
-uint[] ShellAmoutHash = 
-{
-    GetStrHash( "art\\items\\misc\\Shells.png" ),
-    GetStrHash( "art\\items\\misc\\shell_1.png" ),
-    GetStrHash( "art\\items\\misc\\shell_2.png" ),
-    GetStrHash( "art\\items\\misc\\shell_3.png" ),
-	GetStrHash( "art\\items\\misc\\shell_4.png" ),
-	GetStrHash( "art\\items\\misc\\shell_5.png" ),
-	GetStrHash( "art\\items\\misc\\shell_6.png" ),
-	GetStrHash( "art\\items\\misc\\shell_7.png" ),
-	GetStrHash( "art\\items\\misc\\shell_8.png" )
-};
 
 // Change PicMap for shells - Util func
 void ShellAmountChanger( Item& item, uint amount)
 {
-    if( amount <= 8 ) {
+    if( amount <= 8 )
+	{
 		item.PicMap = ShellAmoutHash[ amount ];
-	} else {
+	}
+	else
+	{
 		item.PicMap = ShellAmoutHash[ 0 ];
 	}
-	
     item.Update();
 }
-#endif
+
+// Steal container or armor
+bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
+{
+	bool LootedBackpack = false;
+	Item@[] RuckSacks;
+	
+	bool isCritter = valid( targetCr );
+	
+	if( isCritter )
+	{
+		targetCr.GetItems( -1, RuckSacks );
+	}
+	else if( valid( targetItem ) )
+	{
+		targetItem.GetItems( uint( -1 ), RuckSacks );
+	}
+	else
+	{
+		return false;
+	}
+	
+	for( uint i = 0, iEnd = RuckSacks.length(); i < iEnd; i++ )
+	{
+		int pid = RuckSacks[i].GetProtoId();
+		bool isContainer = RuckSacks[i].GetType() == ITEM_TYPE_CONTAINER;
+		bool isBag = (pid == PID_BAG);
+		bool isPack = (pid == PID_BACKPACK);
+		if( isBag || isPack || isContainer )
+		{
+			if( !isGM( cr ) )
+			{
+				uint action_text = isPack ? STR_EMOTE_TAKE_BACKPACK : STR_EMOTE_TAKE_ITEM;
+				cr.SayMsg(SAY_EMOTE, TEXTMSG_TEXT, action_text );
+				
+				CrimeLog( cr, crInfo( cr ) + " has taken item from " + crInfo( targetCr ) );
+				
+				MoveItem( RuckSacks[i], 1, cr.GetMap(), cr.HexX, cr.HexY );
+				
+				uint victim_text = isPack ? STR_CANT_RESIST_BACKPACK : STR_CANT_RESIST_ITEM;
+				targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, victim_text );
+				cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
+			}
+			else
+			{
+				MoveItem( RuckSacks[i], 1, cr );
+				
+				uint containerRemoval = isPack ? STR_YOU_TAKE_BACKPACK : STR_YOU_TAKE_ITEM;
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, containerRemoval );
+				
+				CrimeLog( cr, crInfo( cr ) + " takes item with gm power " + crInfo( targetCr ) );
+			}
+			LootedBackpack = true;
+			return true;
+		}
+	}
+	
+	if( isCritter && !LootedBackpack )
+	{
+		Item@[] armors;
+		uint count = targetCr.GetItems( SLOT_ARMOR, armors );
+		if( count == 0 || !valid( armors[0] ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DID_NOTHING );
+			return true;
+		}
+		
+		CrimeLog( cr, crInfo( cr ) + " is trying to take armor off " + crInfo( targetCr ) );
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_ATTEMPT_TAKE_ARMOR );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_TAKE_EVERYTHING );
+		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ARMOR_IS_BEING_REMOVED );
+		
+		if( uint( cr.Stat[ ST_LAST_STEAL_CR_ID ] ) == targetCr.Id )
+		{
+			cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
+			cr.StatBase[ ST_STEAL_COUNT ] ++;
+			TryToTakeArmor( cr, targetCr );
+		}
+		else
+		{
+			if( isGM( cr ) )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GM_TAKE_ARMOR );
+				CrimeLog( cr, crInfo( cr ) + " takes armour by GM powers from " + crInfo( targetCr ) );
+				cr.StatBase[ ST_STEAL_COUNT ] = 7;
+				TryToTakeArmor( cr, targetCr );
+			}
+			cr.StatBase[ ST_STEAL_COUNT ] = 0;
+			cr.StatBase[ ST_LAST_STEAL_CR_ID ] = targetCr.Id;
+		}
+		return true;
+	}
+	return false;
+}
+
+int[][] armor_delay =
+{
+	{ PID_POWERED_ARMOR, PID_HARDENED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR_MK2 },
+	{ PID_PURPLE_ROBE, PID_BLACK_ROBE, PID_SANDROBE },
+	{ PID_LEATHER_JACKET, PID_CURED_LEATHER_ARMOR, PID_CURED_LEATHER_ARMOR_MK_II },
+	{ PID_LEATHER_ARMOR, PID_LEATHER_ARMOR_MK_II, PID_LEATHER_ARMOR_MK_III },
+	{ PID_METAL_ARMOR, PID_METAL_ARMOR_MK_II, PID_TESLA_ARMOR},
+};
+
+void TryToTakeArmor( Critter& cr, Critter& target ) 
+{
+	bool success = false;
+	Item@[] armors;
+	uint count = target.GetItems( SLOT_ARMOR, armors );
+	
+	if( count == 0 || !valid( armors[0] ) )
+	{
+		return;
+	}
+	
+	int armor = armors[0].GetProtoId();
+	
+	if( armor_delay[0].find( armor ) != -1 ) // Cant take power armour off
+	{
+		return;
+	}
+	
+	uint delay = cr.Stat[ST_STEAL_COUNT], i = 1, iEnd = armor_delay.length();
+	for( ; i < iEnd; i++ )
+	{
+		if( armor_delay[i].find( armor ) != -1 )
+		{
+			success = true;
+			break;
+		}
+	}
+	
+	if( delay >= 6 )
+	{ 
+		success = true;
+	}
+	
+	if( success && delay >= i)
+	{
+		MoveItem( armors[0], 1, cr );
+		target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOUR_ARMOR_REMOVED );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_TAKE_ARMOR );
+		CrimeLog( cr, crInfo( cr ) + " takes armour from " + crInfo( target ) );
+	}
+	else
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_PARTIALLY_TAKE_ARMOR );
+	}
+}
+
+//weight check for running AP calculations
+void ChangeRunningAP( Critter& cr )
+{
+	uint[] armorPerks = { ARMOR_PERK_POWERED, ARMOR_PERK_ADVANCED_I, ARMOR_PERK_ADVANCED_II, ARMOR_PERK_ECZO, ARMOR_PERK_ECZO_2 };
+	bool powerArmor = armorPerks.find( cr.Stat[ ST_CURRENT_ARMOR_PERK ] ) != -1;
+	
+	float weight = powerArmor ? 0 : ItemsWeight( cr );
+	float max_weight = cr.Stat[ ST_CARRY_WEIGHT ] * 0.7;
+	float weight_penalty = 5.0 * weight / max_weight;
+	
+	cr.ParamBase[ QST_AP_COST_RUN ] = 100 * ( 1 + weight_penalty );
+	//Log( "AP cost for running: " + cr.ParamBase[ QST_AP_COST_RUN ] );
+}
+
+#endif // __SERVER
+
+#endif //CRITTER_ITEM_MOVEMENT

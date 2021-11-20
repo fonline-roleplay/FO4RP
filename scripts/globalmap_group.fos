@@ -1,44 +1,18 @@
-// Author: cvet
+#ifndef GLOBALMAP_GROUP
+#define GLOBALMAP_GROUP
+
+#include "_utils.fos"
+#include "globalmap_group_h.fos"
 #include "_maps.fos"
-#include "_macros.fos"
-#include "_msgstr.fos"
-#include "_math.fos"
 #include "entire.fos"
-
-#include "_itempid.fos"
-
+#include "_cell.fos"
 #include "_global_events.fos"
-
-#define MSG_ONLY_SUTTER (15000)
+#include "local_population_h.fos"
 
 import void FindEncounter( Critter@[]& group, Item@ car, uint x, uint y, uint& encounterDescriptor, bool& waitForAnswer, bool empty, int ec ) from "worldmap";
 import void InviteToEncounter( Critter@[]& group, Item@ car, uint encounterDescriptor, int combatMode, uint& mapId, uint16& hexX, uint16& hexY, uint8& dir ) from "worldmap";
 import bool CheckFoundedEncounter( uint index ) from "worldmap";
 import uint GetGlobalMapRelief( uint x, uint y ) from "worldmap";
-
-import void DebugLog( string@ text ) from "debug";
-
-import uint GenerateWasteland( Critter& cr, uint8 x, uint8 y ) from "mapgen_wasteland";
-
-import void testgen( Critter& cr, int, int, int ) from "mapgen_wasteland";
-
-import bool SpawnItemCell( uint mapId ) from "local_population";
-import bool GatherItemCell( Critter& player, uint mapId ) from "local_population";
-
-import void AddCritter( Map& map ) from "local_population";
-
-import bool IsTileAvalible( uint hash, uint8 group ) from "cimp";
-import bool IsTileGround( uint hash ) from "cimp";
-
-#define ADD_HEX_COUNT         ( 5 )
-#define SEARCH_HEX_COUNT      ( 3 )
-#define CELL_SIZE             ( 10 )
-#define CELL_LEVEL_DEFAULT    ( 5 )
-#define CELL_LEVEL_MAX        ( 10 )
-
-#define SKILL_OUTDORSMAN_MOD	(20)
-
-#include "_cell.fos"
 
 class CellContent
 {
@@ -368,58 +342,6 @@ class Cell
         return 0;
     }
 
-    bool SpawnLo()
-    {
-        if( !(Content is null) )
-        {
-			bool result = true;
-			for( uint i = 0; i < Content.MapId.length(); i++ )
-			{
-				if( Content.MapId[ i ] == 0 )
-					continue;
-				else
-					result = SpawnItemCell( Content.MapId[ i ] ) && result;
-			}
-			//DebugLog( "Spawned all loot at cell [" + X + ", " + Y + "]." );
-			return result;
-        }
-        return false;
-    }
-
-    bool SpawnLo( int level )
-    {
-        if( !(Content is null) )
-        {
-            return SpawnItemCell( Content.MapId[ CELL_LEVEL_DEFAULT + level ] );
-        }
-        return false;
-    }
-	
-	bool GatherLo( Critter& player )
-	{
-        if( !(Content is null) )
-        {
-			bool result = true;
-			for( uint i = 0; i < Content.MapId.length(); i++ )
-			{
-				if( Content.MapId[ i ] == 0 )
-					continue;
-				else
-					result = GatherItemCell( player, Content.MapId[ i ] ) && result;
-			}
-			player.Say( SAY_NETMSG, "Gathered all loot at cell [" + X + ", " + Y + "]." );
-			return result;
-        }
-        return false;
-	}
-
-    /*int CellReCreate(uint16 pid)
-       {
-            @Content = CellContent();
-
-       }*/
-
-
     void SetMapLevel( uint[] mapId )
     {
         if( !(Content is null) )
@@ -434,14 +356,16 @@ class CellWorld : iManagerModule, iManager_map_critter_in, iManager_map_critter_
     Cell[] Cells;
     uint16 CellsW;
     uint16 CellsH;
-
+	uint16 next_cell;
+	
     CellWorld()
     {
         AddStartCallback( "globalmap_group", "start" );
 
         CellsW = 7 * 5;
         CellsH = 12 * 5;
-        Cells.resize( CellsW * CellsH );
+        next_cell = 0;
+		Cells.resize( CellsW * CellsH );
         for( uint y = 0; y < CellsH; y++ )
         {
             uint cy = y * CellsW;
@@ -931,9 +855,6 @@ class CellWorld : iManagerModule, iManager_map_critter_in, iManager_map_critter_
     bool global_map_critter_in( Map& map, Critter& cr )
     {
         cells_critter_shift( map, cr, false );
-        // if(cr.IsPlayer()) Log("shift in");
-
-        DypsneaCr( map, cr );
         cr.StatBase[ ST_LOCALMAP_PID ] = map.GetProtoId();
         cr.StatBase[ ST_LOCALMAP_DIR ] = -1;
 
@@ -942,10 +863,6 @@ class CellWorld : iManagerModule, iManager_map_critter_in, iManager_map_critter_
     bool global_map_critter_out( Map& map, Critter& cr )
     {
         cells_critter_shift( map, cr, true );
-        // if(cr.IsPlayer()) Log("shift out");
-
-        // DypsneaCr(map, cr);
-
         return true;
     }
 
@@ -957,8 +874,6 @@ class CellWorld : iManagerModule, iManager_map_critter_in, iManager_map_critter_
         CellContent@ cont = cell.Content;
         if( cont is null )
             return;
-
-        // int level = GetMapLevelByPid(map.GetProtoId());
 
         if( cr.IsNpc() && cont.Type == CELLMAP_TYPE_ENCOUTER )
         {
@@ -984,8 +899,8 @@ class CellWorld : iManagerModule, iManager_map_critter_in, iManager_map_critter_
             loc.AutoGarbage = false;
         }
     }
-
-    void GlobalPopulation()
+	
+	void GlobalPopulation()
     {
         uint skipped_broken = 0;
         for( uint16 i = 0, j = Cells.length(); i < j; ++i )
@@ -1009,48 +924,17 @@ class CellWorld : iManagerModule, iManager_map_critter_in, iManager_map_critter_
 		if( skipped_broken > 0 )
 			DebugLog( "There are " + skipped_broken + " broken cells content map." );
     }
-
-    void GlobalSpawnLo()
-    {
-        for( uint16 i = 0, j = Cells.length(); i < j; ++i )
-        {
-            if( Cells[ i ] is null || Cells[ i ].Content is null )
-                continue;
-
-            Cells[ i ].SpawnLo();
-        }
-    }
-	
-	void GlobalGatherLo( Critter& player )
-	{
-        for( uint16 i = 0, j = Cells.length(); i < j; ++i )
-        {
-            if( Cells[ i ] is null || Cells[ i ].Content is null )
-                continue;
-
-            Cells[ i ].GatherLo( player );
-        }
-	}
 }
 
 CellWorld world;
-
-// import void cells_init() from "globalmap_group";
-// import void cells_world_save() from "globalmap_group";
-// import void cells_critter_shift(Map& map, Critter& cr, bool out) from "globalmap_group";
-// import bool ChangeWildness(uint i, int delta) from "globalmap_group";
-// import bool ChangeWildness(uint16 x, uint16 y, int delta) from "globalmap_group";
-
 
 void start()
 {
     iManagerModule@  module = world;
     iManagerElement@ manager = manager_add_module( module, "CellWorld", 20 );   // чем выше значение приоритета - тем раньше будут вызываться обработчики ивэнтов
-    // if(manager is null) return;
-    // manager.TimeChangeCall() = TIME_NEW_<MINUTE/HOUR/DAY/MONTH/YEAR>;
 }
 
-bool ChangeWildness( uint i, int delta )                                  // Export
+bool ChangeWildness( uint i, int delta )
 {
     Cell@ cell = world.GetCell( i );
     if( cell is null )
@@ -1060,17 +944,7 @@ bool ChangeWildness( uint i, int delta )                                  // Exp
     return true;
 }
 
-/*erlking
-   uint GetWildness(uint16 x, uint16 y)				//Export
-   {
-        Cell@ cell = world.GetCell(x, y);
-        if(cell is null) return false;
-        uint wild=cell.Wildness;
-        return wild;
-   }
- */
-
-bool ChangeWildness( uint16 x, uint16 y, int delta )              // Export
+bool ChangeWildness( uint16 x, uint16 y, int delta )
 {
     Cell@ cell = world.GetCell( x, y );
     if( cell is null )
@@ -1079,7 +953,6 @@ bool ChangeWildness( uint16 x, uint16 y, int delta )              // Export
     cell.ChangeWildness( delta );
     return true;
 }
-
 
 void CellInfo( Critter& cr, int p0, int p1, int p2 )
 {
@@ -1372,24 +1245,6 @@ void global_process( int processType, Critter& cr, Item@ car,
             }
         }
 
-        /*if(++cr.GlobalMapMoveCounter % (__EncounterTime / __GlobalMapMoveTime) == 0)
-           {
-                Critter@[]@ group = cr.GetGlobalGroup();
-
-                // Validate charisma
-                Critter@ leader = group[0];
-                if(int(group.length()) > leader.Stat[ST_CHARISMA] + leader.Perk[PE_MAGNETIC_PERSONALITY])
-                {
-                        leader.SayMsg(SAY_NETMSG, TEXTMSG_GAME, STR_CRIT_BAD_CHARISMA);
-                        speed = 0.0f; // Stop
-                        return;
-                }
-
-                // Try find encounter
-                if(GetVisibleLocations(curXi, curYi, 0, cr, null) == 0)
-                        FindEncounter(group, car, curXi, curYi, encounterDescriptor, waitForAnswer, false);
-           }*/
-
         Cell@ cell = world.PassCell( cr );
 
         if( cell !is null )
@@ -1398,7 +1253,7 @@ void global_process( int processType, Critter& cr, Item@ car,
 
             // Validate charisma
             Critter@ leader = group[ 0 ];
-            if( int( group.length() ) > leader.Stat[ ST_CHARISMA ] + leader.Perk[ PE_MAGNETIC_PERSONALITY ] )
+            if( int( group.length() ) > leader.Stat[ ST_CHARISMA ] )
             {
                 leader.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_CRIT_BAD_CHARISMA );
                 speed = 0.0f;                 // Stop
@@ -1508,7 +1363,7 @@ void global_process( int processType, Critter& cr, Item@ car,
 
         // Validate charisma
         Critter@ leader = group[ 0 ];
-        if( int( group.length() ) > leader.Stat[ ST_CHARISMA ] + leader.Perk[ PE_MAGNETIC_PERSONALITY ] )
+        if( int( group.length() ) > leader.Stat[ ST_CHARISMA ] )
         {
             leader.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_CRIT_BAD_CHARISMA );
             if( valid( car ) )
@@ -1571,14 +1426,6 @@ void global_process( int processType, Critter& cr, Item@ car,
                     }
                 }
             }
-        }
-        else
-        {
-            // Pathfinder perk bonus
-            int speedDiv = 100 - cr.Perk[ PE_PATHFINDER ] * 25;
-            if( speedDiv <= 0 )
-                speedDiv = 1;
-            speed = speed * 100.0f / float(speedDiv);
         }
     }
     else if( processType == GLOBAL_PROCESS_START_FAST || processType == GLOBAL_PROCESS_STOPPED )
@@ -1655,7 +1502,6 @@ void global_invite( Critter& leader, Item@ car, uint encounterDescriptor, int co
 
 	if( !valid( cont ) )
 	{
-		//Log( "No cell context!" );
 		return;
 	}
 
@@ -1663,13 +1509,11 @@ void global_invite( Critter& leader, Item@ car, uint encounterDescriptor, int co
 
     if( type == CELLMAP_TYPE_ENCOUTER )
     {
-        // if(encounterDescriptor==uint(-1)) Log("enc, encounterDescriptor WTF?!");
         if( cont.MapId[ CELL_LEVEL_DEFAULT ] != 0 )
         {
             Map@ map = GetMap( cont.MapId[ CELL_LEVEL_DEFAULT ] );
             if( map !is null and map.GetEntireCoords( 0, 0, hexX, hexY, dir ) )
             {
-                // pm added
                 GetEnterHexFromGlobal( leader, cell, hexX, hexY );
                 cont.Index = uint( -1 );
                 mapId = map.Id;
@@ -1718,7 +1562,7 @@ void ScanZone( Critter@[]& group, int zx, int zy )
         if( !cr.IsPlayer() )
             continue;
 
-        int lookLen = cr.PerkBase[ PE_SCOUT ] != 0 ? 2 : 1;
+        int lookLen = 1;
 
         if( lookLen == 2 && !locIds2Founded )
         {
@@ -1810,25 +1654,13 @@ void TransitCritterToCell( Critter& cr, /*uint16 gridId*/ Scenery& grid ) // uin
         return;
     }
 
-    // Item@ grid = GetItem(gridId);
     if( @grid == null )
     {
         cr.Say( SAY_NETMSG, "grid !valid" );
         return;
     }
 
-    Cell @ cell = world.GetCell( cr ); // world.GetCellByMap(cr.GetMap().Id);//world.GetCell(cr);
-    /*
-       if(cell !is null)
-       {
-
-            string sayText = "x "+cell.X+"\ny "+cell.Y;
-            if(cell.Content !is null)
-            {
-                    sayText += "\ncont true\nindex "+cell.Content.Index+"\nmapId "+cell.Content.MapId;
-            }
-            cr.Say(SAY_NETMSG, sayText);
-       }*/
+    Cell @ cell = world.GetCell( cr );
 
     if( @cell == null )
     {
@@ -1840,13 +1672,6 @@ void TransitCritterToCell( Critter& cr, /*uint16 gridId*/ Scenery& grid ) // uin
         cr.Say( SAY_NETMSG, "cont !valid" );
         return;
     }
-    /*
-       if(cell.X != cell.ParantX || cell.Y != cell.ParantY)
-       {
-            Log("parant != coords");
-            @ cell = world.GetCell(cell.ParantX, cell.ParantY);
-            if(cell is null || cell.Content is null) return;
-       }*/
 
     Map @ map = cr.GetMap();
     if( @map == null )
@@ -1922,11 +1747,6 @@ void TransitCritterToCell( Critter& cr, /*uint16 gridId*/ Scenery& grid ) // uin
 
 
     uint16 wX = cell.X * 10, wY = cell.Y * 10 + CELL_SIZE;
-    /*
-       if(cell.SizeX > 1 || cell.SizeY > 1)
-       {
-            SetOffSetNonStandartMaps(cell, direction, oldHexX, oldHexY, offsetCellX, offsetCellY, destCellX, destCellY);
-       }*/
 
     Cell   @transitCell = world.GetCell( destCellX, destCellY );
     uint16 mapId = 0;
@@ -1935,27 +1755,17 @@ void TransitCritterToCell( Critter& cr, /*uint16 gridId*/ Scenery& grid ) // uin
     // generator
     if( transitCell is null || transitCell.Content is null )
     {
-        // mapId = GenerateWasteland(cr, destCellX, destCellY);
-        // Log("create loc in "+destCellX+":"+destCellY);
-        
-		//cr.Say( SAY_NETMSG, "Только Саттер." );
-        
-		cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, MSG_ONLY_SUTTER);
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, MSG_ONLY_LOCAL_MAP );
 		return;
     }
 
     int level = GetMapLevelByPid( map.GetProtoId() );
-    /*for(uint8 i = 0; i < transitCell.Content.MapId.length(); ++i){
-            Log("TRANSIT CELL MAP "+i+" ID "+transitCell.Content.MapId[i]);
-       }*/
+
     mapId = transitCell.Content.MapId[ CELL_LEVEL_DEFAULT + level ];
-
-
-    // cr.Say(SAY_NETMSG, "mid "+mapId+" level "+level);
 
 	if( mapId == 0 )
 	{
-		cr.Say( SAY_NETMSG, "Свободное посещение данной локации запрещено, она будет открыта по ходу сюжета." );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_FORBIDDEN_LOCATION );
 		return;
 	}
 		
@@ -1963,9 +1773,7 @@ void TransitCritterToCell( Critter& cr, /*uint16 gridId*/ Scenery& grid ) // uin
     @map = GetMap( mapId );
     if( map is null )
     {
-        //cr.Say( SAY_NETMSG, "mapId !valid" ); /*cr.TransitToGlobal(false); use map gen */ /*GenerateWasteland(cr, transitCell.X, transitCell.Y);*/ 
 		return;
-
     }
 	
 	uint[] disabled_map_pids = { 69 };
@@ -1973,11 +1781,11 @@ void TransitCritterToCell( Critter& cr, /*uint16 gridId*/ Scenery& grid ) // uin
 	{
 		if( plotAccess( cr ) )
 		{
-			cr.Say( SAY_NETMSG, "Вы обходите естественные препятствия тайными тропами." );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_SECRET_PATH );
 		}
 		else
 		{
-			cr.Say( SAY_NETMSG, "Совершенно не понятно, как пересечь эту труднопроходимую местность." );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_CANT_TRESPASS_TERAIN );
 			return;
 		}
 	}
@@ -1985,15 +1793,13 @@ void TransitCritterToCell( Critter& cr, /*uint16 gridId*/ Scenery& grid ) // uin
     uint16 destHexX = 0, destHexY = 0;
     if( !map.GetEntireCoords( MAP_EDGE_ENTIRE, 0, destHexX, destHexY ) )
     {
-        //cr.Say( SAY_NETMSG, "no dest ent" );
         return;
     }
-    SetHexDirection( cell, transitCell, direction, oldHexX, oldHexY ); // , transitCell.SizeX, transitCell.SizeY);
+    SetHexDirection( cell, transitCell, direction, oldHexX, oldHexY );
 
 	if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
 		cr.Say( SAY_EMOTE, oldHexX + " " + oldHexY + " : " + destHexX + " " + destHexY );
-    // cr.Say(SAY_NETMSG, "hexx "+(destHexX+oldHexX)+" hexy "+(destHexY+oldHexY)+" x "+(oldHexX)+" y "+(oldHexY));
-    if( oldHexX < 1000 && oldHexY < 1000 )    // SearchForEmptyHex(map, destX, destY))
+    if( oldHexX < 1000 && oldHexY < 1000 )
     {
 		if( CheckMonsterTransitePlace(cr, map, destHexX + oldHexX, destHexY + oldHexY) )
 		{
@@ -2007,15 +1813,14 @@ void TransitCritterToCell( Critter& cr, /*uint16 gridId*/ Scenery& grid ) // uin
 		else
 		{
 			if( !transitWithGroup( cr, mapId, destHexX + oldHexX, destHexY + oldHexY, direction, destCellX * 10, destCellY * 10 ) )
-				cr.Say( SAY_NETMSG, "Что-то пошло не так." );
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SOMETHING_WENT_WRONG );
 		}
         return;
     }
-    cr.Say( SAY_NETMSG, "Вы не можете туда перейти. Гексы заняты." );
+    cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_NO_FREE_HEX );
     return;
 }
 
-//import void transitToMap( Critter& cr, uint mapID, uint16 x, uint16 y, uint8 dir, uint16 cx, uint16 cy ) from "globalmap_group";
 bool transitToMap( Critter& cr, uint mapID, uint16 x, uint16 y, uint8 dir, uint16 cx, uint16 cy ) //exported
 {
 	Map@ map = GetMap( mapID );
@@ -2033,45 +1838,34 @@ bool transitToMap( Critter& cr, uint mapID, uint16 x, uint16 y, uint8 dir, uint1
 			return true;
 		}
 	}
-	//cr.Say( SAY_EMOTE_ON_HEAD, "вы отстали от группы" ); 
-	//Тут будет вызов delayed_transit для транспортировки больших пачек.
 	return false;
 }
 
 bool transitWithGroup( Critter& cr, uint mapID, uint16 x, uint16 y, uint8 dir, uint16 cx, uint16 cy )
 {
-/*	
-	Critter@[] follower;
-	uint count = cr.GetFollowGroup( FIND_ALL, follower );
-	for( uint i = 0; i < count; i++ )
-	{
-		follower[i].Say( SAY_EMOTE_ON_HEAD, "следует" );
-		transitToMap( follower[i], mapID, x, y, dir, cx, cy );
-	}
-*/
 	return transitToMap( cr, mapID, x, y, dir, cx, cy );
 }
 	
-bool CheckMonsterTransitePlace(Critter& cr, Map& map, uint16 hexX, uint16 hexY){
-	//Map @ map = cr.GetMap();
-	if(!(map is null)){
-	
+bool CheckMonsterTransitePlace(Critter& cr, Map& map, uint16 hexX, uint16 hexY)
+{
+	if( valid( map ) )
+	{
 		Critter@[] mobs;
-		//GetCrittersHex (uint16 hexX, uint16 hexY, uint radius, int findType, Critter@[]@+ critters)
 		uint8 radius = cr.Skill[SK_OUTDOORSMAN] / SKILL_OUTDORSMAN_MOD;
 		uint8 temp = map.GetCrittersHex(hexX, hexY, radius, FIND_LIFE, null);
-		//cr.Say(SAY_NETMSG, "temp "+temp+" hex "+hexX+":"+hexY+" rad "+radius+" mob "+mobs.length());
-		if(temp > 0){
+		if(temp > 0)
+		{
 			return true;
 		}
 	}
 	return false;
 }
 
-void ShowAnswerScreen(Critter& cr){
+void ShowAnswerScreen(Critter& cr)
+{
 	cr.ShowScreen( SCREEN_DIALOGBOX, 1, "answer_Mob" );
-        cr.Say( SAY_DIALOGBOX_TEXT, "Вы чувствуете опасность. Перейти?" );
-        cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Да" );
+	cr.SayMsg( SAY_DIALOGBOX_TEXT, TEXTMSG_GAME, STR_FEEL_DANGER );
+	cr.SayMsg( SAY_DIALOGBOX_BUTTON( 0 ), TEXTMSG_GAME, STR_AGREE_MAKE_TRANSFER );
 }
 
 void answer_Mob(Critter& cr, uint answerI, string& answerS)
@@ -2092,8 +1886,10 @@ bool GetEnterHexFromGlobal( Critter& leader, Cell& cell, uint16& hexX, uint16& h
 {
     // leader.Say(SAY_NETMSG, "wSX "+(leader.WorldX * 0.1)+" wSY "+(leader.WorldY * 0.1)+" cSX "+cell.X+" cSY "+cell.Y+" x "+(ABS(cell.X - (leader.WorldX * 0.1)))+" y "+(ABS(cell.Y - (leader.WorldY * 0.1))));
     if( !valid( cell.Content ) )
+	{
         return false;
-		
+	}
+	
     Map @ map = GetMap( cell.Content.MapId[ CELL_LEVEL_DEFAULT ] );
     if( map !is null )
     {
@@ -2108,31 +1904,37 @@ bool GetEnterHexFromGlobal( Critter& leader, Cell& cell, uint16& hexX, uint16& h
             uint8 placeCellX = ( ( REGULAR_MAP_SIZE * 0.1 ) * tempX ), placeCellY = ( ( REGULAR_MAP_SIZE * 0.1 ) * tempY );
 
             if( tempY <= 3 && tempX >= 0 )
-                tempN = 0;
-            else if( tempY >= 0 && tempX >= 5 )
-                tempN = 1;
-            else if( tempY >= 5 && tempX >= 0 )
-                tempN = 2;
+			{
+				tempN = 0;
+            }
+			else if( tempY >= 0 && tempX >= 5 )
+			{
+				tempN = 1;
+            }
+			else if( tempY >= 5 && tempX >= 0 )
+			{
+				tempN = 2;
+			}
             else if( tempY >= 0 && tempX <= 3 )
-                tempN = 3;
+			{
+				tempN = 3;
+			}
 
-
-
-            switch( tempN )
+			switch( tempN )
             {
             // case -1: map.GetEntireCoords(0, 0, placeMapHexX, placeMapHexY);
-            case 0:
+            case( 0 ):
                 placeMapHexX += placeCellX;
                 break;
-            case 1:
+            case( 1 ):
                 placeMapHexX += ADD_HEX_COUNT;
                 placeMapHexY += placeCellY;
                 break;
-            case 2:
+            case( 2 ):
                 placeMapHexX += placeCellX;
                 placeMapHexY += REGULAR_MAP_SIZE - ADD_HEX_COUNT;
                 break;
-            case 3:
+            case( 3 ):
                 placeMapHexX += REGULAR_MAP_SIZE;
                 placeMapHexY += placeCellY;
                 break;
@@ -2140,24 +1942,9 @@ bool GetEnterHexFromGlobal( Critter& leader, Cell& cell, uint16& hexX, uint16& h
                 break;
             }
 
-            // if(tempN == 0 || tempN == 2) placeMapHexX += placeCellX;
-            // else if(tempN == 1 || tempN == 3) placeMapHexY += placeCellY;
-
-
-
-            // float placeCellX = (cell.X - (leader.WorldX * 0.1)), placeCellY = cell.Y - (leader.WorldY * 0.1);
-
-
-            // leader.Say(SAY_NETMSG, "pX "+(placeCellX)+" pY "+(placeCellY)+" n "+tempN);
-            // if(placeCellX > 0) {hexX = placeMapHexX + (REGULAR_MAP_SIZE * (ABS(placeCellX))) - ADD_HEX_COUNT;}
-            // else if (placeCellX < 0) {hexX = placeMapHexX + (REGULAR_MAP_SIZE * (ABS(placeCellX))) + ADD_HEX_COUNT;}
-            // else if (placeCellX < 0) {hexX = placeMapHexX + (REGULAR_MAP_SIZE * (ABS(placeCellX))) + ADD_HEX_COUNT;}
-            // leader.Say(SAY_NETMSG, "old x"+hexX+" y "+hexY);
-            // hexX = placeMapHexX + (REGULAR_MAP_SIZE * ABS(placeCellX));
-            // hexY = placeMapHexY + (REGULAR_MAP_SIZE * ABS(placeCellY));
             hexX = placeMapHexX;
             hexY = placeMapHexY;
-            // leader.Say(SAY_NETMSG, "use new system x"+hexX+" y "+hexY+" pX "+placeCellX+" pY "+placeCellY);
+
             return true;
         }
     }
@@ -2175,8 +1962,7 @@ bool SetMapDirection( uint8 direction, uint16& destCellX, uint16& destCellY, int
     if( cell.X != cell.ParantX || cell.Y != cell.ParantY )
     {
         Cell @ parantCell = world.GetCell( cell.ParantX, cell.ParantY );
-        //Log( "parant != coords" );
-        // @ cell =
+
         if( parantCell is null || parantCell.Content is null )
             return false;
 
@@ -2231,66 +2017,30 @@ bool SetMapDirection( uint8 direction, uint16& destCellX, uint16& destCellY, int
         return false;
     }
 
-    /*destCellX += offsetCellX;
-       destCellY += offsetCellY;*/
-
-    // Log("size "+sizeX+":"+sizeY+" cell "+cell.X+":"+cell.Y+"dest "+destCellX+":"+destCellY+" ofsset "+offsetCellX+":"+offsetCellY);
-
     @targetCell = world.GetCell( destCellX, destCellY );
     if( targetCell is null || targetCell.Content is null )
     {
-        //Log( "fail" );
         return false;
     }
-    // }while(cell.Content.MapId == targetCell.Content.MapId);
 
     return true;
 }
 
 void SetHexDirection( Cell& cell, Cell& targetCell, uint8& direction, uint16& hexX, uint16& hexY ) // , uint8 sizeX, uint8 sizeY)
 {
-    // hexX = REGULAR_MAP_SIZE - hexX;
-    // hexY = REGULAR_MAP_SIZE - hexY;
-
-    /*int8	tempX = targetCell.ParantX - cell.X,
-            tempY = targetCell.ParantY - cell.Y;
-
-
-            Log(""+tempX+" "+tempY);*/
-    /*
-       switch(direction)
-       {
-            case 0 : tempX_ = mapSizeX - tempX_; tempY_ = mapSizeY - tempY_; direction = 0; break;
-            case 1 : tempX_ = mapSizeX - tempX_/* - ADD_HEX_COUNT; if(bigSizeY) {tempY_ = mapSizeY + tempY_;} direction = 1; break;
-            case 2 : tempX_ = mapSizeX - tempX_ - ADD_HEX_COUNT; tempY_ = mapSizeY - tempY_; direction = 2; break;
-            case 3 : if(bigSizeX) {tempX_ = mapSizeX + tempX_;} tempY_ = mapSizeY - tempY_; direction = Random(2,3); break;
-            case 4 : tempX_ = mapSizeX - tempX_; tempY_ = mapSizeY - tempY_; direction = 3; break;
-            case 5 : tempX_ = mapSizeX - tempX_; if(bigSizeY) {tempY_ = mapSizeY + tempY_;} direction = 4; break;
-            case 6 : tempX_ = mapSizeX - tempX_; tempY_ = mapSizeY - tempY_ - ADD_HEX_COUNT; direction = 5; break;
-            case 7 : if(bigSizeX) {tempX_ = mapSizeX + tempX_;} tempY_ = mapSizeY - tempY_ - ADD_HEX_COUNT; direction = (Random(0,1) > 0 ? 5 : 0); break;
-            default: return;
-       }*/
-
     uint16 mapSizeX = REGULAR_MAP_SIZE,
-           mapSizeY = REGULAR_MAP_SIZE;     // + REGULAR_MAP_SIZE * ABS(tempY);
+           mapSizeY = REGULAR_MAP_SIZE;
 
     bool bigSizeX = false,
          bigSizeY = false;
 
     if( targetCell.SizeX > 1 || targetCell.SizeY > 1 )
     {
-        // if(REGULAR_MAP_SIZE * ABS(tempX) > 0) {mapSizeX += REGULAR_MAP_SIZE * ABS(tempX); mapSizeX = CLAMP(mapSizeX, REGULAR_MAP_SIZE, REGULAR_MAP_SIZE * targetCell.SizeX);}
-        // if(REGULAR_MAP_SIZE * ABS(tempY) > 0) {mapSizeY += REGULAR_MAP_SIZE * ABS(tempY); mapSizeY = CLAMP(mapSizeY, REGULAR_MAP_SIZE, REGULAR_MAP_SIZE * targetCell.SizeY);}
-        // *if(ABS(tempY) > 1) *mapSizeY = ABS(mapSizeY + (REGULAR_MAP_SIZE * tempY));
-
         int tempX = targetCell.ParantX - cell.ParantX,
             tempY = targetCell.ParantY - cell.ParantY;
 
         uint tempXX = ABS( tempX ),
              tempYY = ABS( tempY );
-
-        // if(tempXX == 1) tempXX++;
-        // if(tempYY == 1) tempYY++;
 
         if( tempX != 0 )
         {
@@ -2302,42 +2052,8 @@ void SetHexDirection( Cell& cell, Cell& targetCell, uint8& direction, uint16& he
             mapSizeY = ABS( REGULAR_MAP_SIZE * tempY );
             bigSizeY = true;
         }
-
-
-
-
-
-        // bigSize = true;
-        // Log("size x "+(REGULAR_MAP_SIZE * ABS(tempX)+" "+(REGULAR_MAP_SIZE * ABS(tempY))));
-
-
-
     }
 
-    // Log(/*"size 123 "+tempX+":"+tempY+*/" mapsize "+mapSizeX+":"+mapSizeY);
-    /*if(targetCell.X != targetCell.ParantX || targetCell.Y != targetCell.ParantY)
-       {
-            targetCell = world.GetCell(targetCell.ParantX, targetCell.ParantY);
-            if(targetCell is null) return;
-       }*/
-
-    /*
-       if(targetCell.SizeX > 1 || targetCell.SizeY > 1)
-       {
-                    //cr.Say(SAY_NETMSG, "target is big 0 "+cr.HexX+" "+oldHexX+" "+cr.HexY+" "+oldHexY);
-
-                    //uint8 tempHexX = ((oldHexX) / REGULAR_MAP_SIZE),
-                    //      tempHexY = ((oldHexY) / REGULAR_MAP_SIZE);
-
-                    uint8 parantX = (targetCell.ParantX - targetCell.X),
-                          parantY = (targetCell.X - targetCell.ParantX);
-
-                    if(ABS(parantX) > 0) {mapSizeX += (ABS(parantX)+1) * REGULAR_MAP_SIZE;}
-                    if(ABS(parantY) > 0) {mapSizeY += (ABS(parantY)+1) * REGULAR_MAP_SIZE;}
-
-                    //cr.Say(SAY_NETMSG, "target is big "+tempHexX+" "+tempHexY+" "+destHexX+"+"+destHexY);
-       }*/
-    // Log("11111111111 "+hexX+":"+hexY);
     switch( direction )
     {
     case 0:
@@ -2346,7 +2062,7 @@ void SetHexDirection( Cell& cell, Cell& targetCell, uint8& direction, uint16& he
         direction = 0;
         break;
     case 1:
-        hexX = mapSizeX - hexX /* - ADD_HEX_COUNT*/;
+        hexX = mapSizeX - hexX;
         if( bigSizeY )
         {
             hexY = mapSizeY + hexY;
@@ -2395,14 +2111,6 @@ void SetHexDirection( Cell& cell, Cell& targetCell, uint8& direction, uint16& he
     default:
         return;
     }
-    // Log("22222111111 "+hexX+":"+hexY+" "+(mapSizeX - hexX));
-
-    /*
-       Map @ map = GetMap(cell.Content.MapId);
-       if(map !is null)
-       {
-
-       }*/
     return;
 }
 
@@ -2410,11 +2118,6 @@ void SetOffSetNonStandartMaps( Cell& cell, uint8 direction, uint16 hexX, uint16 
 {
     uint16 tempX = hexX / REGULAR_MAP_SIZE,     // (REGULAR_MAP_SIZE * cell.SizeX) / hexX,
            tempY = hexY / REGULAR_MAP_SIZE;     // (REGULAR_MAP_SIZE * cell.SizeY) / hexY;
-
-    // offsetCellX -= tempX;
-    // offsetCellY -= tempY;
-
-    // Log("tempX "+tempX+" tempY "+tempY);
 
     switch( direction )
     {
@@ -2449,17 +2152,10 @@ void SetOffSetNonStandartMaps( Cell& cell, uint8 direction, uint16 hexX, uint16 
     default:
         break;
     }
-
-    // Log("tempX "+tempX+" tempY "+tempY+" offsetX "+offsetCellX+" offsetCellY "+offsetCellY+" destX "+destCellX+" destY "+destCellY);
 }
 
 void SetWorldDirection( uint8 direction, uint16& wX, uint16& wY, uint8 worldOffsetX, uint8 worldOffsetY )
 {
-    // worldOffsetX /= uint(worldOffsetX * 0.1);
-    // worldOffsetY /= uint(worldOffsetY * 0.1);
-
-    // worldOffsetX = CLAMP(worldOffsetX, 0, 10);
-    // worldOffsetY = CLAMP(worldOffsetY, 0, 10);
 
     wY -= worldOffsetY * 0.1;
 
@@ -2493,102 +2189,49 @@ void SetWorldDirection( uint8 direction, uint16& wX, uint16& wY, uint8 worldOffs
         return;
     }
 }
-/*
-   void SetHexDirection(uint8 direction, uint16 hexX, uint16 hexY, uint16& destHexX, uint16& destHexY)
-   {
-        switch(direction)
-        {
-                case 0 : destHexX += REGULAR_MAP_SIZE - hexX - ADD_HEX_COUNT; destHexY += REGULAR_MAP_SIZE - hexY - ADD_HEX_COUNT; break;
-                case 1 : destHexX += REGULAR_MAP_SIZE + hexX + ADD_HEX_COUNT; break;
-                case 2 : destHexX += REGULAR_MAP_SIZE + hexX - ADD_HEX_COUNT; destHexY += REGULAR_MAP_SIZE - hexY - ADD_HEX_COUNT; break;
-                case 3 : destHexY += REGULAR_MAP_SIZE - hexY - ADD_HEX_COUNT; break;
-                case 4 : destHexX += REGULAR_MAP_SIZE - hexX + ADD_HEX_COUNT; destHexY += REGULAR_MAP_SIZE - hexY + ADD_HEX_COUNT; break;
-                case 5 : destHexX += REGULAR_MAP_SIZE - hexX - ADD_HEX_COUNT; break;
-                case 6 : destHexX += REGULAR_MAP_SIZE - hexX - ADD_HEX_COUNT; destHexY += REGULAR_MAP_SIZE - hexY - ADD_HEX_COUNT; break;
-                case 7 : destHexY += REGULAR_MAP_SIZE + hexY - ADD_HEX_COUNT; break;
-                default: return;
-        }
-
-        //hexX -= ADD_HEX_COUNT;
-        //hexY -= ADD_HEX_COUNT;
-
-        return;
-   }*/
-
-/*
-   void GetEnterHex(Critter& cr, Cell& cell uint16& hexX, uint16& hexY)
-   {
-        Map @ map = GetMap(cell.Content.MapId);
-        if(@map == null) return;
-   }*/
 
 void RefrashCoords( Critter& cr )
 {
-    // pm edit
     Cell @ cell = world.GetCell( cr );
     if( @cell == null )
+	{
         return;
-
+	}
 }
-/*
-   void Ttransit(Critter& cr, Scenery& trigger, bool entered, uint8 dir)
-   {
-        //cr.Say(SAY_NETMSG, ""+dir);
-        TransitCritterToCell(cr, dir);
-   }
- */
+
 void Ttransit( Item& item, bool firstTime )
 {
-    // item.SetEvent(ITEM_EVENT_WALK, "e_WalkTrigger");
-    // item.SetEvent(ITEM_EVENT_SKILL, "e_Skill");
 }
-/*
-   void e_WalkTrigger(Item& item, Critter& cr, bool entered, uint8 dir)
-   {
-        TransitCritterToCell(cr, item.Val1);
-   }
 
-   bool e_Skill(Item& item, Critter& cr, int skill)
-   {
-        return true;
-   }
- */
 void unsafe_ExitGridClick( Critter& cr, int hexX, int hexY, int protoId, string@ param3, int[] @ param4 )
 {
     if( cr.IsKnockout() || cr.IsDead() )
-    {
-        cr.Say( SAY_NETMSG, "Вы не можете перейти." );
+	{
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_CANT_MAKE_TRANSFER );
         return;
     }
+	
     if( cr.Timeout[ TO_TRANSFER ] > 0 )
-    {
-        cr.Say( SAY_NETMSG, "Таймаут на переходы. Ждите." );
+	{
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_TIMEOUT_TRANSFER_WAIT );
         return;
     }
-    // Item @ grid = GetItem(itemId);
+	
     Scenery@ grid = cr.GetMap().GetScenery( hexX, hexY, protoId );
     if( grid !is null )
     {
         uint8 length = cr.GetMap().GetPathLength( cr, grid.HexX, grid.HexY, 0 );
-        // cr.Say(SAY_NETMSG, ""+(ABS(int(cr.HexX - grid.HexX)))+" "+(ABS(int(cr.HexY - grid.HexY))));
         if( ABS( int(cr.HexX - grid.HexX) ) <= EXIT_GRID_DISTATION && ABS( int(cr.HexY - grid.HexY) ) <= EXIT_GRID_DISTATION )
         {
-            // if(length  <= EXIT_GRID_DISTATION)
-            // {
             TransitCritterToCell( cr, grid );
-            return;
-            // }
-
         }
-        cr.Say( SAY_NETMSG, "Вы слишком далеко от сетки выхода." );
-        // cr.Say(SAY_NETMSG, "Выход заблокирован.");
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_TOO_FAR_FROM_GRID );
     }
 
 }
 
 void unsafe_GetMapPid( Critter& cr, int hexX, int hexY, int protoId, string@ param3, int[] @ param4 )
 {
-    // Item @ grid = GetItem(gridId);
     Scenery@ grid = cr.GetMap().GetScenery( hexX, hexY, protoId );
     if( grid !is null )
     {
@@ -2614,35 +2257,17 @@ void unsafe_GetMapPid( Critter& cr, int hexX, int hexY, int protoId, string@ par
             cr.StatBase[ ST_LOCALMAP_DIR ] = direction;
             if( SetMapDirection( direction, destCellX, destCellY, offsetCellX, offsetCellY ) )
             {
-                // Cell @ cell = GetCell(destCellX, destCellY);
-                // cr.Say(SAY_NETMSG, ""+destCellX+" "+destCellY);
-                // if(cell !is null && cell.Content !is null)
-                // {
-                /*
-                                      if(cell.SizeX > 1 || cell.SizeY > 1)
-                                      {
-                                              SetOffSetNonStandartMaps(cell, direction, oldHexX, oldHexY, offsetCellX, offsetCellY, destCellX, destCellY);
-                                      }*/
-
                 uint16 mapId = GetCellMap( destCellX * 10, destCellY * 10, level );
-				
 				
                 if( mapId != -1 )
                 {
-                    Map @ map = GetMap( mapId );                  // cell.Content.MapId); //
+                    Map @ map = GetMap( mapId );
                     if( map !is null )
                     {
                         cr.StatBase[ ST_LOCALMAP_PID ] = map.GetProtoId();
-                        //cr.Say(SAY_NETMSG, ""+map.GetProtoId());
                         return;
                     }
                 }
-
-
-                // cr.StatBase[ST_VAR8] = 0;
-                // cr.StatBase[ST_VAR8] |= direction;
-                // cr.StatBase[ST_VAR8] |= cell.Content.MapId<<3;
-                // cr.RunClientScript("client_screen_teach@SetMaxExp", studyTemp, 0, 0, "", null);
             }
         }
     }
@@ -2665,12 +2290,6 @@ int GetCellMap( uint16 x, uint16 y, int level )
         return -1;
     return cell.Content.MapId[ CELL_LEVEL_DEFAULT + level ];
 }
-
-/*
-   Cell@ GetCell(uint16 x, uint16 y)
-   {
-        return world.GetCell(x*0.1, y*0.1);
-   }*/
 
 CellContent@ CreateContent( Cell& cell, uint mapId, uint8 type, int8 visibility )
 {
@@ -2742,9 +2361,6 @@ void ChangeMonsterCount( Critter& cr, uint8 count, bool increase )
 
     cell.ChangeMonsterCount( count, increase );
 }
-
-
-// uint GetCellType(Critter& cr)
 
 const uint16[] wild_1 =
 {
@@ -2845,19 +2461,6 @@ uint16 MonsterTypeTable( uint8 wild )
     return type;
 }
 
-/*
-   10 - крысы, мантисы, муравьи, малые скорпионы						+
-   20 - крысы2, мантисы2, муравьи2, свинокрысы, собаки, малые скорпионы2, гекко		+
-   30 - свинокрысы2, кротокрысы, большие скорпионы, гекко2, золотой гекко			+
-   40 - собаки2, кротокрысы2, большие скорпионы2, золотой гекко2				use wild_3
-   50 - собаки3, мутанты кротокрысы, малый коготь						+
-   60 - малый коготь2, огнегекко, большой коготь
-   70 - большой коготь2, огнегекко2
-   80 - кентавр, летун
-   90 - кентавр2, летун2 (с плюющимися атаками)
-   100 - серый коготь (бегает со скоростью 150% стандартной)
- */
-
 void SpawMonstersCritter( Critter& cr )
 {
     Cell @ cell = world.GetCell( cr );
@@ -2869,7 +2472,6 @@ void SpawMonstersCritter( Critter& cr )
 
 void SpawMonstersCell( Cell& cell, uint16 count )
 {
-    // if(count+cell.PopulationMax > cell.PopulationMax) {return;}
     for( uint8 i = 0, j = cell.Content.MapId.length(); i < j; ++i )
     {
         Map @ map = GetMap( cell.Content.MapId[ i ] );    // CELL_LEVEL_DEFAULT
@@ -2896,9 +2498,7 @@ void SpawMonstersCell( Cell& cell, uint16 count )
 
         map.GetEntireCoords( 255, 0, hexX, hexY );
 
-        // uint16 type = /*cell.MonsterType;*/MonsterTypeTable(cell.Wildness);
         uint16 type = wild_1[ Random( 0, wild_1.length() - 1 ) ];
-        // if(cell.Content.Type == CELLMAP_TYPE_STATIC) type = 310; //rat
 
         bool  condition = false;
 
@@ -2911,19 +2511,8 @@ void SpawMonstersCell( Cell& cell, uint16 count )
             {
                 tempX = Random( hexX, hexX + ( sizeX * REGULAR_MAP_SIZE ) - 5 );
                 tempY = Random( hexY, hexY + ( sizeY * REGULAR_MAP_SIZE ) - 5 );
-
-                // if(!map.IsHexPassed(tempX, tempY)) break;/*continue;*/
-
-                // hash = map.GetTile(THX(tempX), THX(tempY));
-                /*
-                   for(uint8 ii = 0, jj = tileGroups.length(); ii < jj; ++ii){
-                        condition = (IsTileAvalible(hash, tileGroups[ii]));
-                        if(condition) break;
-                   }*/
-
-                // cr.Say(SAY_NORM, "SPAWN!");
             }
-            while( /*!condition*/ /*||  || IsTileGround(hash)*/ !map.IsHexPassed( tempX, tempY ) );
+            while( !map.IsHexPassed( tempX, tempY ) );
 
             Critter @ npc = map.AddNpc( type, tempX, tempY, 3, null, null, "mob@_MobInit" );
 
@@ -2943,24 +2532,6 @@ void GlobalCellPopulation()
     world.GlobalPopulation();
 }
 
-#define renew_rate 12
-int until_renew = 0;
-void GlobalCellSpawnLo( bool renew )
-{
-	if( renew || until_renew <= 1 )
-	{
-		world.GlobalSpawnLo();
-		until_renew = renew_rate;
-	}
-	else
-		until_renew--;	
-}
-
-void GlobalCellGatherLo( Critter& player )
-{
-	world.GlobalGatherLo( player );
-}
-
 void DropWild()
 {
     for( uint16 i = 0, j = world.Cells.length(); i < j; ++i )
@@ -2970,8 +2541,6 @@ void DropWild()
 
         world.Cells[ i ].DropWildness();
     }
-
-    // EraseAnyData("cells_v1");
 }
 
 void ReduseWildByWildness( Critter& cr )
@@ -2999,11 +2568,6 @@ void ForcePopulation( Critter& cr, int count, int type, int )
             GlobalCellPopulation();
         }
     }
-}
-
-void ForceSpawnLo( Critter& cr, int count, int type, int )
-{
-    GlobalCellSpawnLo(true);
 }
 
 void CellWorldPop( Critter& cr, int count, int, int )
@@ -3049,7 +2613,6 @@ void CellSetAnyData( Critter& cr, int min, int max, int add )
                 monstersData[ i ] += Random( min, max );
             else
                 monstersData[ i ] = Random( min, max );
-            // Log("cell "+i+" pop "+monstersData[i]);
         }
 
         SetAnyData( "cells_monsters_v1", monstersData );
@@ -3107,253 +2670,202 @@ int GetMapLevelByPid( uint pid )
     int level = 0;
     switch( pid )
     {
-	case 11:
-	case 13:
-	case 15:
-	case 17:
-	case 19:
-	case 21:
-	case 23:
-	case 25:
-		level =	-1;
-		break;
-	case 26:
-		level =	-2;
-		break;
-	case 27:
-		level =	-3;
-		break;
-	case 28:
-		level =	-4;
-		break;
-	case 29:
-		level =	-5;
-		break;
-	case 31:
-	case 33:
-	case 35:
-	case 37:
-	case 39:
-	case 41:
-	case 43:
-	case 45:
-	case 47:
-	case 49:
-	case 51:
-	case 53:
-	case 55:
-	case 57:
-	case 59:
-	case 61:
-	case 63:
-	case 70:
-	case 71:
-		level =	-2;
-		break;					
-	case 72:
-		level =	-3;
-		break;
-	case 74:
-	case 102:
-	case 104:
-		level =	-1;
-		break;
-	case 105:
-        level =	1;
-        break;			
-	case 106:
-        level =	2;
-        break;			
-	case 108:
-	case 110:
-	case 112:
-	case 114:
-	case 116:
-        level =	-1;
-        break;			
-	case 117:
-        level =	-2;
-        break;			
-	case 118:
-        level =	-3;
-        break;			
-	case 124:
-        level =	-1;
-        break;			
-	case 125:
-        level =	-2;
-        break;			
-	case 127:
-	case 129:
-	case 131:
-        level =	-1;
-        break;			
-	case 132:
-        level =	-2;
-        break;			
-	case 134:
-	case 136:
-	case 140:
-	case 142:
-	case 144:
-	    level = -1;
-        break;
-	case 145:
-	    level = -2;
-        break;
-	case 147:
-	case 149:
-	    level = -1;
-        break;
-	case 150:
-	    level = -2;
-        break;
-	case 152:
-	case 154:
-	case 156:
-	case 158:
-	case 171:
-	case 173:
-	case 175:
-	case 177:
-	case 179:
-	case 181:
-	    level = -1;
-        break;
-	case 182:
-	    level = -2;
-        break;
-	case 197:
-	    level = -1;
-        break;
-	case 198:
-	    level = -2;
-        break;
-	case 199:
-	    level = -3;
-        break;
-	case 227:
-        level = -1;
-        break;
-	case 228:
-        level = 1;
-        break;
-	case 229:
-        level =	2;
-        break;
-	case 230:
-        level = 2;
-        break;
-	case 231:
-        level =	2;
-        break;
-	case 225:
-        level =	-1;
-        break;
-	case 351:
-        level =	-1;
-        break;	
-	case 353:
-        level =	-1;
-        break;		
-	case 355:
-        level =	-1;
-        break;	
-	case 357:
-        level =	-1;
-        break;	
-	case 359:
-        level =	-1;
-        break;		
-	case 361:
-        level =	-1;
-        break;
-	case 363:
-        level =	-1;
-        break;			
-    default:
-        level = 0;
-        break;
+		case 11:
+		case 13:
+		case 15:
+		case 17:
+		case 19:
+		case 21:
+		case 23:
+		case 25:
+			level =	-1;
+			break;
+		case 26:
+			level =	-2;
+			break;
+		case 27:
+			level =	-3;
+			break;
+		case 28:
+			level =	-4;
+			break;
+		case 29:
+			level =	-5;
+			break;
+		case 31:
+		case 33:
+		case 35:
+		case 37:
+		case 39:
+		case 41:
+		case 43:
+		case 45:
+		case 47:
+		case 49:
+		case 51:
+		case 53:
+		case 55:
+		case 57:
+		case 59:
+		case 61:
+		case 63:
+		case 70:
+		case 71:
+			level =	-2;
+			break;					
+		case 72:
+			level =	-3;
+			break;
+		case 74:
+		case 102:
+		case 104:
+			level =	-1;
+			break;
+		case 105:
+			level =	1;
+			break;			
+		case 106:
+			level =	2;
+			break;			
+		case 108:
+		case 110:
+		case 112:
+		case 114:
+		case 116:
+			level =	-1;
+			break;			
+		case 117:
+			level =	-2;
+			break;			
+		case 118:
+			level =	-3;
+			break;
+		case 119:
+			level =	-2;
+			break;	
+		case 120:
+			level =	-3;
+			break;			
+		case 124:
+			level =	-1;
+			break;			
+		case 125:
+			level =	-2;
+			break;			
+		case 127:
+		case 129:
+		case 131:
+			level =	-1;
+			break;			
+		case 132:
+			level =	-2;
+			break;			
+		case 134:
+		case 136:
+		case 140:
+		case 142:
+		case 144:
+			level = -1;
+			break;
+		case 145:
+			level = -2;
+			break;
+		case 147:
+		case 149:
+			level = -1;
+			break;
+		case 150:
+			level = -2;
+			break;
+		case 152:
+		case 154:
+		case 156:
+		case 158:
+		case 171:
+		case 173:
+		case 175:
+		case 177:
+		case 179:
+		case 181:
+			level = -1;
+			break;
+		case 182:
+			level = -2;
+			break;
+		case 184:
+			level = -1;
+			break;
+		case 197:
+			level = -1;
+			break;
+		case 198:
+			level = -2;
+			break;
+		case 199:
+			level = -3;
+			break;
+		case 227:
+			level = -1;
+			break;
+		case 228:
+			level = 1;
+			break;
+		case 229:
+			level =	2;
+			break;
+		case 230:
+			level = 2;
+			break;
+		case 231:
+			level =	2;
+			break;
+		case 225:
+			level =	-1;
+			break;
+		case 251:
+		case 253:
+		case 255:
+		case 257:
+			level =	-1;
+			break;
+		case 258:
+			level =	-2;
+			break;
+		case 259:
+			level =	-3;
+			break;
+		case 260:
+			level =	-4;
+			break;			
+		case 262:
+		case 264:
+		case 266:
+		case 268:
+		case 270:
+		case 272:
+		case 351:
+		case 353:
+		case 355:
+		case 357:
+		case 359:
+		case 361:
+		case 363:
+		case 492:
+		case 495:
+			level =	-1;
+			break;
+		case 501:
+			level = -1;
+			break;
+		default:
+			level = 0;
+			break;
     }
 
     return level;
 
 }
 
-//import void DypsneaCr( Critter& cr ) from "globalmap_group";
-void DypsneaCr( Critter& cr ) //exported
-{
-	if( cr.IsDead() || cr.IsKnockout() || cr.IsNpc() ) return;
-	
-	Map@ map = cr.GetMap();
-	if(!valid(map)) return;
-	DypsneaCr( map, cr );
-}
-
-void DypsneaCr( Map& map, Critter& cr )
-{
-    if( map.GetData( 25 ) > 0)
-    {
-        GameVar @ dyspnea = GetLocalVar( LMVAR_Dyspnea, map.Id );
-        if( !(dyspnea is null) && cr.GetTimeEvents( CTE_DYSPNEA, null, null, null ) < 1 )
-			cr.AddTimeEvent( "cte_Dyspnea", 0, CTE_DYSPNEA, 1 );
-		cr.Say( SAY_NETMSG, "Застоявшийся тяжёлый воздух затрудняет дыхание. Без респиратора здесь лучше не гулять." );
-    }
-    else
-    {
-        if( cr.GetTimeEvents( CTE_DYSPNEA, null, null, null ) > 0 )
-            cr.EraseTimeEvents( CTE_DYSPNEA );
-
-		if( cr.StatBase[ ST_DYSPNEA ] < 100 )
-        {
-            cr.AddTimeEvent( "cte_Dyspnea", 0, CTE_DYSPNEA, 0 );
-            //cr.Say( SAY_NETMSG, "Здесь дышиться легче." );
-        }
-    }
-}
-
-uint cte_Dyspnea( Critter& cr, int identifier, uint& rate )
-{
-    Map @ map = cr.GetMap();
-    if( !(map is null) )
-    {
-        if( map.GetData( 25 ) > 0 )
-        {
-            GameVar @ dyspnea = GetLocalVar( LMVAR_Dyspnea, map.Id );
-            if( !(dyspnea is null) )
-            {
-                Item @ respirator = _CritGetItemHandExt( cr );
-                if( !(respirator is null) && respirator.GetProtoId() == PID_RESPIRATOR && respirator.Indicator > 0 )
-                {
-                    uint8 ind = respirator.Indicator;
-                    if ( Random( 0, 15 ) == 0 )
-					{
-						ind--;
-						ind = CLAMP( ind, 0, 100 );
-						respirator.Indicator = ind;
-						respirator.Update();
-
-						cr.StatBase[ ST_DYSPNEA ]--;					
-					}
-                }
-                else
-                {
-                    if( Random( 0, 4 ) == 0 )
-						cr.StatBase[ ST_DYSPNEA ]--;
-                }
-            }
-        }
-        else
-        {
-            cr.StatBase[ ST_DYSPNEA ]++;
-			if ( cr.StatBase[ ST_DYSPNEA ] >= 100 ) return 0;
-        }
-    }
-
-    return REAL_SECOND( 6 );
-}
-
-//import bool LocIsCity( uint locPid ) from "globalmap_group";
 bool LocIsCity( uint locPid )
 {
     return ( locPid <= 90 && locPid >= 96 || locPid != 300 );
@@ -3363,3 +2875,5 @@ bool LocIsHidden( uint locPid )
 {
     return false;
 }
+
+#endif //GLOBALMAP_GROUP

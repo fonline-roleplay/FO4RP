@@ -1,0 +1,379 @@
+#ifndef AI_GUARDS
+#define AI_GUARDS
+
+#include "_utils.fos"
+#include "npc_planes_h.fos"
+#include "heal_h.fos"
+
+void GM_GuardsInit( Critter& npc ) // Export
+{
+    npc.SetScript( "_AiGuardsInit" );
+	npc.Say( SAY_EMOTE, "salutes" );
+}
+
+void _AiGuardsInit( Critter& npc, bool firstTime )
+{
+	npc.SetEvent( CRITTER_EVENT_SHOW_CRITTER,	"_CritterLookAt" );
+	npc.SetEvent( CRITTER_EVENT_HIDE_CRITTER,	"_CritterOutOfSight" );
+    npc.SetEvent( CRITTER_EVENT_IDLE,			"_Idle" );
+	npc.SetEvent( CRITTER_EVENT_MESSAGE,     	"_OnMessage" );
+    npc.SetEvent( CRITTER_EVENT_PLANE_BEGIN,	"_PlaneBegin" );
+	npc.SetEvent( CRITTER_EVENT_PLANE_END,		"_PlaneEnd" );
+    npc.SetEvent( CRITTER_EVENT_DEAD,			"_MyDeath" );
+    npc.SetEvent( CRITTER_EVENT_ATTACKED,		"_Attacked" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_DEAD,		"_FindKiller" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACK,	"_AssistAttack" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACKED,	"_AssistAttacked" );
+	npc.SetEvent( CRITTER_EVENT_KNOCKOUT,		"_MangeEntanglement" );
+}
+
+void _CritterLookAt( Critter& npc, Critter& target )
+{
+	if( npc.IsDead() )
+	{
+		return;
+	}
+	
+	if( npc.CheckEnemyInStack( target.Id ) )
+	{
+		if( target.IsDead() )
+		{ 
+			npc.EraseEnemyFromStack( target.Id );
+			return;
+		}
+		npc.ErasePlane( AI_PLANE_WALK, true );
+		AddAttackPlane( npc, 0, target );
+		return;
+	}
+	if( Random( 0, 100 ) == 100 )
+	{
+		uint16 hx = npc.HexX, hy = npc.HexY;
+		uint16 tx = target.HexX, ty = target.HexY;
+		uint dir = GetDirection( hx, hy, tx, ty );
+		npc.SetDir( dir );
+	}
+}
+
+void _CritterOutOfSight( Critter& npc, Critter& target )
+{
+	if( npc.IsDead() )
+	{
+		return;
+	}
+	if( npc.CheckEnemyInStack( target.Id ) )
+	{
+		npc.DropPlanes();
+		if( npc.IsSee( target ) )
+		{
+			if( target.IsDead() )
+			{ 
+				npc.EraseEnemyFromStack( target.Id );
+				return;
+			}
+			npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
+			npc.AddEnemyInStack( target.Id );
+			AddAttackPlane( npc, 0, target );
+			
+		}
+		else
+		{
+			uint16 hx = npc.HexX, hy = npc.HexY;
+			uint16 tx = target.HexX, ty = target.HexY;
+			int dir = GetDirection( hx, hy, tx, ty );
+			AddWalkPlane( npc, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, dir, true, 1 );
+		}
+	}
+}
+
+void _Idle( Critter& npc )
+{
+	if( npc.IsPlayer() )
+	{
+		npc.SetEvent( CRITTER_EVENT_IDLE, null );
+		return;
+	}
+
+	if( npc.IsDead() || npc.IsKnockout() )
+	{
+		return;
+	}
+
+	if( npc.IsBusy() || !npc.IsNoPlanes() )
+	{
+		return;
+	}
+}
+
+void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
+{
+    if( npc.IsPlayer() )
+	{
+		return;
+	}
+    if( npc.IsDead() )
+	{
+		return;
+	}
+    if( npc.Stat[ ST_TEAM_ID ] == 0 )
+	{
+		return;
+	}
+    if( npc.Stat[ ST_TEAM_ID ] != fromCrit.Stat[ ST_TEAM_ID ] )
+	{
+		return;
+	}
+ 
+	if( fromCrit.IsPlayer() )
+	{
+		npc.AddEnemyInStack( fromCrit.Id );
+		AddAttackPlane( npc, 10, fromCrit ); 
+	}
+
+    if( message == MSG_GROUP_ATTACK )
+	{
+        Critter@ target = ::GetCritter( value );
+        
+		if( !valid( target ) )
+		{
+			return; 
+		}
+		
+		Map@ mapNpc = npc.GetMap();
+		Map@ mapTarget = target.GetMap();
+		
+		if( mapNpc.Id != mapTarget.Id )
+		{
+			return;
+		}
+		
+		npc.AddEnemyInStack( target.Id );
+		AddAttackPlane( npc, 0, target );
+	}
+}
+
+int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem )
+{
+    if( plane.Type == AI_PLANE_ATTACK )
+	{
+        Critter@ target = GetCritter( plane.Attack_TargId );
+        if( !valid( target ) )
+		{
+			return PLANE_RUN_GLOBAL;
+		}
+
+        if( target.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] )
+		{
+			return PLANE_DISCARD; 
+		}
+	}
+	else if ( reason == REASON_FROM_SCRIPT )
+	{
+		return PLANE_KEEP;
+	}
+    return PLANE_RUN_GLOBAL;
+}
+
+int _PlaneEnd( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem ) 
+{
+	if( reason == REASON_GAG_CRITTER && someCr.IsNpc() )
+	{
+        if( someCr.ParamBase[ST_TEAM_ID] != npc.ParamBase[ST_TEAM_ID] )
+		{
+            return PLANE_RUN_GLOBAL;
+		}
+		
+        if( TryLetPassage( someCr, npc ) ) 
+		{
+            npc.Wait( AI_DELAY );
+            return PLANE_KEEP;
+        }
+    }
+	return PLANE_RUN_GLOBAL;
+}
+
+void _MyDeath( Critter& npc, Critter@ killer ) 
+{
+    npc.ClearEnemyStack();
+}
+
+bool _Attacked( Critter& npc, Critter& target )
+{
+	if( int( target.Id ) == npc.Stat[ST_FOLLOW_CRIT] ) 
+	{
+        npc.EraseEnemyFromStack( target.Id );
+        EraseAttackPlane( npc, target );
+		return true;
+	}
+	else if( !npc.IsKnockout() && hasItems( npc, heal_items, -1 ) )
+	{	
+		Item@ healingItem = null;
+		int damage = npc.Stat[ ST_MAX_LIFE ] - npc.Stat[ ST_CURRENT_HP ];
+		if( damage > 110 && npc.Param[ ST_GLOBAL_OVERDOSE ] <= 40 && hasItem( npc, PID_TRAUMATIN, -1 ) )
+		{
+			@healingItem = npc.GetItem( PID_TRAUMATIN, -1 );
+		}
+		else if( damage >= 80 && npc.Param[ ST_GLOBAL_OVERDOSE ] <= 60 && hasItem( npc, PID_SUPER_STIMPAK, -1 ) )
+		{
+			@healingItem = npc.GetItem( PID_SUPER_STIMPAK, -1 );
+		}
+		else if( damage >= 50 && npc.Param[ ST_GLOBAL_OVERDOSE ] <= 80 && hasItem( npc, PID_STIMPAK, -1 ) )
+		{
+			@healingItem = npc.GetItem( PID_STIMPAK, -1 );
+		}
+		else if( damage >= 30 && npc.Param[ ST_GLOBAL_OVERDOSE ] <= 90 && hasItem( npc, PID_HEALING_POWDER, -1 ) )
+		{
+			@healingItem = npc.GetItem( PID_HEALING_POWDER, -1 );
+		}
+		
+		if( valid( healingItem ) )
+		{
+			uint[] values = { npc.Id, healingItem.Id };
+			CreateTimeEvent( AFTER( REAL_SECOND( AI_HEAL_REACTION_TIME ) ), "e_useHealingItem", values, false );
+		}
+	}
+	else
+	{
+		if( npc.IsSee( target ) ) 
+		{
+			npc.DropPlanes();
+			npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
+			npc.AddEnemyInStack( target.Id );
+			AddAttackPlane( npc, 0, target );
+			return true;
+			
+		} 
+		else if( npc.IsNoPlanes() ) 
+		{
+			uint16 hx = npc.HexX, hy = npc.HexY;
+			uint16 tx = target.HexX, ty = target.HexY;
+			int dir = GetDirection( hx, hy, tx, ty );
+			AddWalkPlane( npc, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, dir, true, 1 );
+		}
+	}
+    return true;
+}
+
+uint e_useHealingItem( uint[]@ values )
+{
+	Critter@ npc = GetCritter( values[0] );
+	Item@ healingItem = GetItem( values[1] );
+	if( valid( healingItem ) && !npc.IsDead() && ! npc.IsKnockout() )
+	{
+		npc.Animate( 0, ANIM2_USE, null, true, true );
+		UseHealingItem( npc, npc, healingItem );
+		npc.StatBase[ ST_CURRENT_AP ] -= 3000;
+	}
+	return 0;
+}
+
+void _FindKiller( Critter& npc, Critter& fromCrit, Critter@ killer )
+{
+	if( !valid( killer ) )
+	{
+		return;
+	}
+	
+    if( npc.IsPlayer() )
+	{
+		return;
+	}
+	
+    if( npc.IsDead() )
+	{
+		return;
+	}
+	
+    if( npc.Stat[ ST_TEAM_ID ] == 0 )
+	{
+		return;
+	}
+	
+    if( npc.Stat[ ST_TEAM_ID ] != fromCrit.Stat[ ST_TEAM_ID ] )
+	{
+		return;
+	}
+ 
+	if( fromCrit.IsPlayer() )
+	{ 
+		AddAttackPlane( npc, 10, fromCrit ); 
+	}
+	
+	if( npc.IsSee( killer ) )
+	{
+		if( killer.IsDead() )
+		{ 
+			npc.EraseEnemyFromStack( killer.Id );
+			return;
+		}
+		npc.SendMessage( MSG_GROUP_ATTACK, killer.Id, MESSAGE_TO_WHO_SEES_ME );
+		npc.AddEnemyInStack( killer.Id );
+		AddAttackPlane( npc, 0, killer );
+	}
+}
+
+void _AssistAttack( Critter& npc, Critter& fromCr, Critter& target )
+{
+	if( npc.IsDead() )
+	{
+		return;
+	}
+	
+	if( fromCr.Stat[ ST_TEAM_ID ] == 0 )
+	{
+		return;
+	}
+	
+	if( fromCr.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] )
+	{
+		if( target.Stat[ ST_TEAM_ID ] != npc.Stat[ ST_TEAM_ID ] && !target.IsDead() )
+		{
+			npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
+			npc.AddEnemyInStack( target.Id );
+			AddAttackPlane( npc, 0, target );
+		}
+	}
+}
+
+void _AssistAttacked( Critter& npc, Critter& fromCr, Critter& attacker )
+{
+	if( npc.IsDead() )
+	{
+		return;
+	}
+	
+	if( fromCr.Stat[ ST_TEAM_ID ] == 0 )
+	{
+		return;
+	}
+	
+	if( fromCr.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] )
+	{
+		if( attacker.Stat[ ST_TEAM_ID ] != npc.Stat[ ST_TEAM_ID ] && !attacker.IsDead() )
+		{
+			npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
+			npc.AddEnemyInStack( attacker.Id );
+			AddAttackPlane( npc, 0, attacker );
+		}
+	}
+}
+
+void _MangeEntanglement( Critter& npc, uint anim2begin, uint anim2idle, uint anim2end, uint lostAp, uint knockDist )
+{
+	if( npc.IsDead() )
+	{
+		return;
+	}
+	Map@ map = npc.GetMap();
+	Item@ hook = map.GetItem( npc.HexX, npc.HexY, PID_HOLD_HOOK );
+	if( valid( hook ) && hook.Val1 == int( npc.Id ) )
+	{
+		npc.DropPlanes();
+
+		if( HasBlade( npc ) )
+		{
+			DeleteItem( hook );
+		}
+	}
+}
+
+#endif //AI_GUARDS

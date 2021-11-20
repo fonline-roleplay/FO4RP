@@ -1,2211 +1,610 @@
+#ifndef HANDCUFFS_MODULE
+#define HANDCUFFS_MODULE
+
 #include "_utils.fos"
-#include "_ltp.fos"
+#include "handcuffs_h.fos"
 
-#include "gathering_h.fos"
-#include "critter_skills_h.fos"
-#include "npc_planes_h.fos"
-
-#define EVENT_ID    ( 9 )
-
-import void Log_factions( Critter& player, int crId, int mode, int level, string@ param3, int[] @ param4 ) from "gm";
-
-import void ChangeCritterSpeed( Critter& cr ) from "speed";
-
-import bool SetDrug( Critter& cr, uint16 drugPid ) from "drugs";
-
-import void F_Dragging( Critter& player, int num ) from "mio_social";
-
-import void setcodedoor( Critter& cr, int p0, int p1, int p3 ) from "debug";
-
-import bool CanResist( Critter@ targetCr ) from "main";
-
-uint papik;
-uint brass;
-
-uint8 GetDir( Critter@ cr, Critter@ crit )
+class BondageItem
 {
-    return GetDirection( cr.HexX, cr.HexY, crit.HexX, crit.HexY );
-}
-
-bool IsNotHuman( Critter& cr ) {    return !IsHuman(cr); }
-bool IsHuman( Critter& cr )
-{
-    if( cr.StatBase[ ST_BODY_TYPE ] < BT_BRAHMIN || cr.IsPlayer() )
-        return true;
-    else
-        return false;
-}
-
-void _ItemInit( Item& item, bool FirstTime )
-{
-	if( item.Accessory == ACCESSORY_NONE ) return; //Заглушка. 
-   
-	if( item.Val1 == 0 ) item.Val1 = Random( 1, 8191 );    
-    item.SetLexems( "$number" + item.Val1 );
-	item.SetEvent( ITEM_EVENT_USE, "_tie" );
-}
-
-void _HandcuffsRefresh( Item& item, bool FirstTime )
-{
-	item.SetEvent( ITEM_EVENT_USE, "_tie" );	
-}
-
-void _InitRope( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_USE, "_tie" );
-}
-
-void _InitUsedHandcuffs( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_SKILL, "_unlock" );
-    item.SetEvent( ITEM_EVENT_MOVE, "_hellno1" );
-    item.SetEvent( ITEM_EVENT_DROP, "_hellno3" );
-}
-
-void _InitHandcuffsKey( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_USE, "_release" );
-}
-
-bool _tie( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-	if( valid( onCritter ) && onCritter.IsDead() )
+	uint16 pid;
+	uint8 slot;
+	uint8 blocker_type;
+	uint16 key_pid;
+	string sound_on;
+	string sound_off;
+	uint msg;
+	
+	BondageItem( uint16 pid, uint8 slot, uint8 blocker_type, uint16 key_pid, string sound_on, string sound_off, uint msg )
 	{
-		InformWarning( crit, "|0xFFFF00 Это бесполезно, цель мертва." );
-		return true;
+        this.pid = pid;
+		this.slot = slot;
+		this.blocker_type = blocker_type;
+		this.key_pid = key_pid;
+		this.sound_on = sound_on;
+		this.sound_off = sound_off;
+		this.msg = msg;
 	}
-	
-    bool onSelf = ( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) );
-    bool isRope = ( item.GetProtoId() == PID_ROPE );
-    if( IsNotHuman( crit ) && !isRope )
-    {
-		InformWarning(crit, "|0xFFFF00 Вы не человек - вы не умеете пользоваться наручниками");
-        return true;
-    }
-
-    if( ( valid( onCritter ) ) && ( IsNotHuman( onCritter ) ) && !isRope )
-    {
-		InformWarning(crit, "|0xFFFF00 На это существо нельзя надеть наручники." );
-        return true;
-    }
-
-    if( onSelf && crit.ParamBase[ HANDCUFFS ] == 0 && ( IsHuman( crit ) ) )
-    {
-		InformWarning(crit, !isRope ? "|0xFFFF00 Вы надели на себя наручники." : "|0xFFFF00 Вы связали себя.");
-        TieUp( item, crit, crit );
-        return true;
-    }
-	
-	if( onSelf && crit.ParamBase[ HANDCUFFS ] != 0 && ( IsHuman( crit ) ) )
-    {
-		Item@ hand = crit.GetItem( 0, SLOT_HAND1 );	
-		isRope = valid( hand ) && hand.GetProtoId() == PID_ROPE_USED;
-		InformError(crit, !isRope ? "|0xFFFF00 На вас уже одеты наручники." : "|0xFFFF00 Вы уже связаны.");
-		return true;
-    }
-	
-    if( ( valid( onCritter ) ) && ( onCritter.ParamBase[ HANDCUFFS ] != 0) && ( IsHuman( onCritter ) ) )
-    {		
-		Item@ hand = onCritter.GetItem( 0, SLOT_HAND1 );	
-		isRope = valid( hand ) && hand.GetProtoId() == PID_ROPE_USED;
-		
-		InformError( crit, !isRope ?  "|0xFFFF00 Цель уже закована в наручники." : "|0xFFFF00 Цель уже связана веревкой." );
-		return true;
-    }
-	
-    if( ( valid( onCritter ) ) && ( onCritter.ParamBase[ HANDCUFFS ] == 0 ) )
-    {
-        bool human_handcuffs = item.GetProtoId() == PID_HANDCUFFS && onCritter.Stat[ ST_BODY_TYPE ] < BT_BRAHMIN;
-		
-		if( human_handcuffs || onCritter.StatBase[ ST_CURRENT_HP ] < 0 || onCritter.IsKnockout() )
-        {
-			if( isOwningNPC( crit, onCritter ) )
-			{
-				InformWarning( crit, "|0xFFFF00 В этом нет необходимости. Используйте хоткей ALT-T для того что бы приказать НПЦ следовать за вами или остановиться." );
-			}
-			else
-			{
-				//InformWarning( crit, "Вы связали жертву верёвкой. Она будет слушаться вас пока вы её не освободите." );
-				
-				onCritter.SetScript( null );
-				TieUp( item, crit, onCritter );
-				if( onCritter.Stat[ST_BODY_TYPE] == ST_BODY_TYPE ) {
-					brahminTie( crit, onCritter );
-				}
-			}
-			
-            return true;
-        }
-        if( onCritter.Timeout[ TO_BATTLE ] != 0 || onCritter.IsNpc() )
-        {
-            if( onCritter.Stat[ ST_BODY_TYPE ] == BT_BRAHMIN )
-            {
-				if( item.GetProtoId() == PID_ROPE )
-				{
-					if( isOwningNPC( crit, onCritter ) )
-					{
-						InformWarning( crit, "|0xFFFF00 В этом нет необходимости. Используйте хоткей ALT-T для того что бы приказать НПЦ следовать за вами или остановиться." );
-					}
-					else
-					{
-						InformWarning( crit, "|0xFFFF00 Вы связали брамина верёвкой. Используйте навык ловушек что бы снять узду." );
-
-						onCritter.SetScript( null );
-						onCritter.ParamBase[ ST_FACTION ] = crit.ParamBase[ ST_FACTION ];
-						onCritter.ParamBase[ MERC_MASTER_ID ] = int( crit.Id );
-						
-						_SubItem( item, 1 );
-						brahminTie( crit, onCritter );
-					}
-				}
-				else
-					InformWarning(crit, "|0xFFFF00 Вам нужна верёвка для этого." );
-				
-                return true;
-            }
-            else
-            {
-                if( onCritter.IsNpc() )
-                    onCritter.AddEnemyInStack( crit.Id );
-				InformWarning(crit, "|0xFFFF00 Вам не удалось связать цель." );
-                return true;
-            }
-        }
-        else
-        {
-            ToAsk( item, crit, onCritter );
-            return true;
-        }
-    }
-	
-	InformWarning(crit, "|0xFFFF00 Вы не смогли придумать, что с этим делать." );
-	return true;
 }
 
-void _hellno1( Item& item, Critter& crit, uint8 fromSlot )
+class BondageItemCollection
 {
-    if( item.CritSlot != SLOT_HAND1 )
-    {
-		InformWarning(crit, "|0xFFFF00 Это просто не могло быть так просто." );
-        crit.MoveItem( item.Id, 1, item.Val1 == 0 ? SLOT_HAND1 : SLOT_HAND2 );
-        item.Update();
-    }
-}
-
-void _hellno2( Item& item, Critter& crit, uint8 fromSlot )
-{
-    if( item.CritSlot != SLOT_HAND2 )
-    {
-		InformWarning(crit, "|0xFFFF00 Это просто не могло быть так просто." );
-        //crit.SayMsg( SAY_NETMSG, TEXTMSG_GAME, 12945 );
-        crit.MoveItem( item.Id, 1, SLOT_HAND2 );
-        item.Update();
-    }
-}
-
-void _hellno3( Item& item, Critter& crit )
-{
-	InformWarning(crit, "|0xFFFF00 Это просто не могло быть так просто. " );
-    MoveItem( item, 1, crit );
-    crit.MoveItem( item.Id, 1, item.Val1 == 0 ? SLOT_HAND1 : SLOT_HAND2 );
-    item.Update();
-}
-
-void _hellno4( Item& item, Critter& crit )
-{
-	InformWarning(crit, "|0xFFFF00 Это просто не могло быть так просто." );
-    MoveItem( item, 1, crit );
-    crit.MoveItem( item.Id, 1, SLOT_HAND2 );
-    item.Update();
-}
-
-void SayGag(Item& item, Critter& crit){
-	switch (_CritGetItemHand(crit).GetProtoId()) 
+	BondageItem@[] bondageItems;
+	BondageItemCollection()
 	{
-		case PID_HANDCUFFS_USED : 	InformWarning(crit, "|0xFFFF00 Вы не можете снять кляп, пока на вас надеты наручники." );	break; 
-		case PID_ROPE_USED 		:	InformWarning(crit, "|0xFFFF00 Вы не можете снять кляп, пока вы связаны веревкой." );		break;
-		default: break;
 	}
-	return;
-}
-
-void _hellno5( Item& item, Critter& crit, uint8 fromSlot )
-{	
-	if( CanResist( crit ) )
-		item.Val0 = 0;
 	
-	if( item.Val0 == 0 )
-		return;
-
-	if( item.CritSlot != SLOT_HEAD )
-		process_SayGag( item, crit );
-}
-
-void _hellno6( Item& item, Critter& crit )
-{	
-	if( CanResist( crit ) )
-		item.Val0 = 0;
-	
-	if( item.Val0 == 0 )
-		return;
-	
-	process_SayGag( item, crit, true );
-}
-
-void process_SayGag( Item& item, Critter& crit, bool force = false )
-{
-	if( !CanResist( crit ) )
+	BondageItemCollection@ bondageItem( uint16 pid, uint8 slot, uint8 blocker_type, uint16 key_pid, string sound_on, string sound_off, uint msg )
 	{
-		InformWarning(crit, "|0xFFFF00 Вы не можете вынуть кляп в данный момент." );
-		
-		if( force )//TODO: Если итем не в инвентаре криттера - тогда насильно запихнуть его криттеру в инвентарь.
-			MoveItem( item, 1, crit );
-		
-		crit.MoveItem( item.Id, 1, SLOT_HEAD );
-		item.Update();
-	}
-	return;
-}
-
-bool _kickme( Critter& cr, Critter& attacker )
-{
-    uint  cuffs = cr.ParamBase[ HANDCUFFS ];
-    uint8 escape = ( cuffs >> 29 ) & 0x1;
-    if( cr.ParamBase[ HANDCUFFS ] != 0 && escape == 0 )
-    {
-        cr.ClearEnemyStack();
-        return true;
-    }
-    else
-        return false;
-}
-
-bool _release( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-    bool onSelf = ( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) );
-	int  cuffs_state;
-    int  keynum;
-    int  nohome;
-
-    if( valid( onCritter ) && onCritter.Param[ HANDCUFFS ] != 0 )
-    {
-        cuffs_state = onCritter.Param[ HANDCUFFS ];
-        keynum = ( cuffs_state >> 16 ) & 0x1FFF;
-        nohome = ( cuffs_state >> 30 ) & 0x1;
-        Item@[] items;
-
-		testInfo( crit, cuffs_state + ":" + keynum + " vs " + item.Val1 + " " + item.LockerId );
-
-        if( item.Val1 == keynum || int( item.LockerId ) == keynum )
-        {
-			InformWarning(crit, "|0xFFFF00 Вы oсвободили  жертву от наручников." );
-			InformWarning(onCritter, "|0xFFFF00 Вас освободили от наручников." );
-			
-			onCritter.ParamBase[ HANDCUFFS ] = 0;
-			
-			if( onCritter.IsNpc() )
-			{
-				onCritter.StatBase[ ST_FOLLOW_CRIT ] = 0;
-				onCritter.ParamBase[ MERC_MASTER_ID ] = 0;
-
-				onCritter.ParamBase[ ST_FACTION ] = onCritter.ParamBase[ CR_VAL0 ];
-				onCritter.SetHomePos( onCritter.HexX, onCritter.HexY, onCritter.Dir );
-				onCritter.EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
-			
-				AddWalkPlane( onCritter, 0, onCritter.HexX, onCritter.HexY, onCritter.Dir, false, 0 );
-			}
-			
-            onCritter.GetItems( SLOT_HAND1, items );
-            //onCritter.GetItems( SLOT_HAND2, items );// баг который удаляет из 2 руки все а не перемещает в инвернтарь
-            DeleteItems( items );
-            Item@ cuffs = crit.AddItem( PID_HANDCUFFS, 1 );
-            cuffs.Val1 = keynum;
-			cuffs.Val2 = 0;
-            cuffs.SetLexems( "$number" + cuffs.Val1 );
-            DeleteItem( item );
-
-            if( onCritter.IsNpc() )
-            {
-                onCritter.EraseTimeEvents( EVENT_ID );
-                onCritter.ModeBase[ MODE_NO_HOME ] = nohome;
-                onCritter.ModeBase[ MODE_NO_FAVORITE_ITEM ] = 0;
-            }
-        }
-		else
-			InformError(crit, "|0xFFFF00 Ключ не подошёл." );
-		
-        return true;
-    }
-
-    if( onSelf && crit.Param[ HANDCUFFS ] != 0 )
-    {
-		
-        cuffs_state = crit.Param[ HANDCUFFS ];
-        keynum = ( cuffs_state >> 16 ) & 0x1FFF;
-
-		testInfo( crit, cuffs_state + ":" + keynum + " vs " + item.Val1 + " " + item.LockerId );
-
-        if( item.Val1 == keynum || int( item.LockerId ) == keynum )
-        {
-            DeleteItem( item );
-			InformWarning(crit, "|0xFFFF00 Вы успешно освободились от наручников." );
-            crit.ParamBase[ HANDCUFFS ] = 0;
-            crit.DeleteItem( PID_HANDCUFFS_USED, 1 );
-            Item@ cuffs = crit.AddItem( PID_HANDCUFFS, 1 );
-            cuffs.Val1 = keynum;
-			cuffs.Val2 = 0;
-            cuffs.SetLexems( "$number" + cuffs.Val1 );
-			cuffs.SetScript( "_HandcuffsRefresh" );          
-			return true;
-        }
-		else
-			InformError(crit, "|0xFFFF00 Ключ не подошёл." );
-		
-		return true;
-    }
-	
-    InformWarning(crit, "|0xFFFF00 Ни цель ни вы не одеты в наручники." );
-	return true;
-}
-
-void _HandcuffsUsed( Item& item, bool FirstTime )
-{
-	item.SetEvent( ITEM_EVENT_SKILL, "_unlock" );
-	item.SetEvent( ITEM_EVENT_MOVE, "_hellno1" );
-	item.SetEvent( ITEM_EVENT_DROP, "_hellno3" );
-}
-
-void _HandcuffsKeyUsed( Item& item, bool FirstTime )
-{
-	item.SetEvent( ITEM_EVENT_USE, "_release" );
-}
-
-void _HandcuffsDrop( Item& item, bool FirstTime )
-{
-	item.SetEvent( ITEM_EVENT_USE, "_dropHandcuffs" );
-}
-
-void _dropHandcuffs( Critter& cr, Critter@ killer )
-{
-    if( cr.ParamBase[ HANDCUFFS ] != 0 )
-    {
-        cr.ParamBase[ HANDCUFFS ] = 0;
-        cr.DeleteItem( PID_HANDCUFFS_USED, 2 );
-    }
-}
-
-void TieUp( Item& item, Critter& crit, Critter@ onCritter )
-{
-    uint8 follow = 1;
-    uint8 escape = 0;
-	if( crit.Id != onCritter.Id ) {
-        onCritter.ParamBase[ HANDCUFFS ] = crit.Id | ( item.Val1 << 16 ) | ( escape << 29 ) | ( onCritter.ModeBase[ MODE_NO_HOME ] << 30 ) | ( follow << 31 );
-	} else {
-        onCritter.ParamBase[ HANDCUFFS ] = onCritter.ParamBase[ HANDCUFFS ] | ( item.Val1 << 16 ) | ( escape << 29 ) | ( onCritter.ModeBase[ MODE_NO_HOME ] << 30 ) | ( follow << 31 );
+		this.bondageItems.insertLast( BondageItem( pid, slot, blocker_type, key_pid, sound_on, sound_off, msg ) );
+		return this;
 	}
 	
-	bool  handCuffs = ( item.GetProtoId() == PID_HANDCUFFS );
-
-	onCritter.ParamBase[ CR_VAL0 ] = onCritter.ParamBase[ ST_FACTION ];
-	onCritter.ParamBase[ ST_FACTION ] = crit.ParamBase[ ST_FACTION ];
-	onCritter.ParamBase[ MERC_MASTER_ID ] = int( crit.Id );
-
-    int lockerId = item.Val1;
-	uint keyId = 0;
-	Item@ key;
-    if( handCuffs )
-    {
-        if( item.Val2 == 0 )
+	BondageItem@ get_by_pid( uint16 pid ) 
+	{
+		for( uint i = 0, len = this.bondageItems.length(); i < len; i++ )
 		{
-			@key = crit.AddItem( PID_CUFFS_KEY, 1 );
-			keyId = key.Id;
-			key.Val1 = lockerId;
-			key.LockerId = lockerId;
-			key.SetLexems( "$keynum" + key.Val1 );
-			key.SetScript( "_HandcuffsKeyUsed" );
-		}
-		else
-			keyId = item.Val2;
-    }
-
-    _SubItem( item, 1 );
-
-    Item@ hands = onCritter.GetItem( 0, SLOT_HAND1 );
-    if( valid( hands ) )
-		onCritter.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
-	
-    @hands = onCritter.AddItem( handCuffs ? PID_HANDCUFFS_USED : PID_ROPE_USED, 1 );
-    onCritter.MoveItem( hands.Id, 1, SLOT_HAND1 );
-    
-	hands.Val1 = lockerId;
-	hands.LockerId = lockerId;
-	hands.SetScript( "_HandcuffsUsed" );
-
-	if( handCuffs )
-		hands.Val2 = keyId;
-	
-    hands.Update();
-	
-	if( crit.Id != onCritter.Id )
-    {
-		CrimeLog( crit, crInfo( crit ) + ( handCuffs ? "|0xFFFF00 одевает наручники на " : "|0xFFFF00 связывает " ) + crInfo( onCritter ) );
-		
-		InformWarning( crit, handCuffs ? "|0xFFFF00 Вы успешно надели наручники на жертву." : "|0xFFFF00 Вы связали жертву." );
-        if( onCritter.IsPlayer() )
-			InformWarning( onCritter, handCuffs ? "|0xFFFF00 На вас одели наручники!" : "|0xFFFF00 Вас связали!" );
-    }
-	//onCritter.SetScript("_HandcuffsDrop");
-}
-
-bool unlock( Critter& cr, Critter& targetCr, uint16 pid ) // export in main.fos -> critter_use_item
-{
-    if( blades.find( pid ) == -1 ) {
-        return false;
-	}
-	
-    cr.AddItem( PID_ROPE, 1 );
-	
-    targetCr.DeleteItem( PID_ROPE_USED, 2 );
-
-	targetCr.ParamBase[ HANDCUFFS ] = 0;
-	targetCr.StatBase[ ST_FOLLOW_CRIT ] = 0;
-	targetCr.ParamBase[ MERC_MASTER_ID ] = 0;
-	targetCr.ParamBase[ ST_FACTION ] = targetCr.ParamBase[ CR_VAL0 ];
-	
-	if( targetCr.IsNpc() )
-	{
-		targetCr.SetHomePos( targetCr.HexX, targetCr.HexY, targetCr.Dir );
-		targetCr.EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
-	
-		AddWalkPlane( targetCr, 0, targetCr.HexX, targetCr.HexY, targetCr.Dir, false, 0 );
-
-		targetCr.ModeBase[ MODE_NO_HOME ] = ( targetCr.ParamBase[ HANDCUFFS ] >> 30 ) & 0x1;
-		targetCr.ModeBase[ MODE_NO_FAVORITE_ITEM ] = 0;
-		targetCr.EraseTimeEvents( EVENT_ID );
-	}
-
-    if( targetCr.IsPlayer() )
-		InformWarning(targetCr, "|0xFFFF00 Вы освободились от веревки." );
-	else
-		targetCr.SetHomePos( targetCr.HexX, targetCr.HexY, targetCr.Dir );
-		
-    CrimeLog( cr, crInfo( cr ) + " разрезает путы на " + crInfo( targetCr ) );
-	return true;
-}
-
-bool _unlock( Item& item, Critter& crit, int skill )
-{
-    if( item.GetProtoId() == PID_ROPE_USED )
-    {
-		if( skill == SK_LOCKPICK )
-		{
-			if( crit.Timeout[ TO_SK_LOCKPICK ] > 0 )
+			if( this.bondageItems[i].pid == pid )
 			{
-				string[] texts = { "|0xFFFF00 Подождите немного, похоже, вы исчерпали себя.", "|0xFFFF00 Вы слишком устали.", "|0xFFFF00 Такое напряжение убьет вас." }; 
-				InformWarningRandomText(crit, texts);
-				return true;
-			}
-			else
-			{
-				crit.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( crit );
-				InformWarning(crit, "|0xFFFF00 Вам не удалось освободиться." );
-				return true;
+				return this.bondageItems[i];
 			}
 		}
-		if( skill == SK_SCIENCE )
+		return null;
+	}
+	
+	BondageItem@ get_by_key_pid( uint16 key_pid ) 
+	{
+		for( uint i = 0, len = this.bondageItems.length(); i < len; i++ )
 		{
-			uint number = ( crit.ParamBase[ HANDCUFFS ] >> 16 ) & 0x1FFF;
-			InformWarning(crit, "|0xFFFF00 Серийный номер: " + number + ".");
-			return true;
+			if( this.bondageItems[i].key_pid == key_pid )
+			{
+				return this.bondageItems[i];
+			}
 		}
+		return null;
+	}
+}
+
+BondageItemCollection@ bondageItems = BondageItemCollection()
+//					pid						slot			blocker_type				  key_pid						sound_on 			sound_off				msg
+	.bondageItem( PID_ROPE			,	SLOT_HAND1	,	BONDAGE_TYPE_ROPE		,			0				,	"rope_on.mp3"		,	"rope_off.mp3"		,	STR_ROPE		)
+	.bondageItem( PID_HANDCUFFS		,	SLOT_HAND1	,	BONDAGE_TYPE_LOCK		,	PID_HANDCUFFS_KEY		,	"cuffs_on.mp3"		,	"cuffs_off.mp3"		,	STR_HANDCUFFS	)
+	.bondageItem( PID_SHACKLES		,   SLOT_MISC	,	BONDAGE_TYPE_LOCK		,	PID_SHACKLES_KEY		,	"shackles_on.mp3"	,	"shackles_off.mp3"	,	STR_SHACKLES	)
+	.bondageItem( PID_SLAVE_COLLAR	, 	SLOT_HEAD	,	BONDAGE_TYPE_ELECTRONIC	,	PID_SLAVE_COLLAR_SWITCH	,	"collar_on.mp3"		,	"collar_off.mp3"	,	STR_COLLAR		)
+	.bondageItem( PID_BALL_GAG		,	SLOT_HEAD	,	BONDAGE_TYPE_SKILL		,			0				,	"ballgag_on.mp3"	,	"ballgag_off.mp3"	,	STR_GAGED		)
+	.bondageItem( PID_PART_OF_ROPE	,	SLOT_HEAD	,	BONDAGE_TYPE_SKILL		,			0				,	"rope_on.mp3"		,	"rope_off.mp3"		,	STR_ROPE_GAG	);
+
+BondageItem@ GetBondageItem( Item@ item ) 
+{
+    uint16 pid = item.GetProtoId();
+    return bondageItems.get_by_pid( pid );
+}
+
+BondageItem@ GetKeyBondageItem( Item@ item ) 
+{
+    uint16 key_pid = item.GetProtoId();
+    return bondageItems.get_by_key_pid( key_pid );
+}
+
+bool BondageTarget( Critter& cr, Critter& targetCr, Item& item )
+{
+	bool IsSelf = targetCr.Id == cr.Id;
+	if( !valid( targetCr ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
 		return false;
 	}
+	
+	if( targetCr.IsDead() )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_DEAD );
+		return false;
+	}
+	
+	if( !valid( item ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
+	}
+	
+	if( item.BONDAGE_STATE == BONDAGE_STATE_BROKEN )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BONDAGE_BROKEN );
+		return false;
+	}
+	
+	if( !IsSelf )
+	{
+		if( !targetCr.IsKnockout() )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_RESIST );
+			return false;
+		}
+	}
+	
+	BondageItem@ bondage = GetBondageItem( item );
+	if( !valid( bondage ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
+	}
+	
+	Item@ moved = targetCr.GetItem( 0, bondage.slot );
+	if( valid( moved ) )
+	{
+		BondageItem@ bondage2 = GetBondageItem( moved );
+		if( valid( bondage2 ) && moved.BONDAGE_STATE == BONDAGE_STATE_ON )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BOUND_BY_SIMILAR );
+			return false;
+		}
+		targetCr.MoveItem( moved.Id, moved.GetCount(), SLOT_INV );
+	}
+	
+	if( !IsSelf )
+	{
+		MoveItem( item, 1, targetCr );
+	}
+	
+	targetCr.MoveItem( item.Id, item.GetCount(), bondage.slot );
+	item.BONDAGE_STATE = BONDAGE_STATE_ON;
+	
+	if( bondage.key_pid != 0 )
+	{
+		Item@ key = cr.AddItem( bondage.key_pid, 1 );
+		if( valid( key ) )
+		{
+			key.KEY_BONDAGE_ID = item.Id;
+			key.BOND_SLAVE_ID = targetCr.Id;
+			key.Update();
+		}
+	}
+	
+	if( bondage.pid == PID_SLAVE_COLLAR )
+	{
+		item.PicInv = GetStrHash( "art\\inven\\misc\\shockcollar_inv.png" );
+	}
+	
+	Map@ map = targetCr.GetMap();
+	PlayGenericSound( map, targetCr.HexX, targetCr.HexY, bondage.sound_on, 10 );
+	
+	uint msgMod = IsSelf ? 0 : 1;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, bondage.msg + msgMod );
+	if( targetCr.IsPlayer() )
+	{
+		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, bondage.msg + msgMod + 2 );
+	}
+	item.Update();
 	return true;
 }
 
-uint come_to_daddy( Critter& cr, int identifier, uint& rate )
+bool ReleaseTarget( Critter& cr, Critter& targetCr, Item& item )
 {
-    int8     y = 0;
-    cr.ClearEnemyStack();
-    uint     cuffs_state = cr.ParamBase[ HANDCUFFS ];
-    uint16   master = ( cuffs_state ) & 0xFFFF;
-    uint16   keynum = ( cuffs_state >> 16 ) & 0x1FFF;
-    uint8    escape = ( cuffs_state >> 29 ) & 0x1;
-    uint8    nohome = ( cuffs_state >> 30 ) & 0x1;
-    uint8    follow = ( cuffs_state >> 31 ) & 0x1;
-    uint8    leavemealone = Random( 0, 300 );
-    Critter@ daddy = GetCritter( master );
-    Map@     daddymap = null;
-    if( valid( daddy ) )
-        @daddymap = daddy.GetMap();
-    //else if( !valid( daddy ) && escape == 0 )
-        //SelfRelease( cr );
-    Map@ crmap = cr.GetMap();
-    if( ( escape == 0 ) && ( leavemealone != 10 ) )
-    {
-        cr.ErasePlane( -1, true );
-        if( follow == 1 )
-        {
-            if( ( !valid( daddymap ) ) && ( valid( crmap ) ) )
-            {
-                if( valid( daddy ) )
-					cr.TransitToGlobalGroup( daddy.Id );
-            }
-            else if( ( valid( daddymap ) ) && ( valid( crmap ) ) && ( daddymap.Id == crmap.Id ) )
-            {
-                /*
-				Critter@[] friends;
-                cr.GetCritters( true, FIND_LIFE, friends );
-                while( y <= int( friends.length() ) - 1 )
-                {
-                    if( valid( friends[ y ] ) && cr.Param[ ST_BODY_TYPE ] != BT_BRAHMIN && ( friends[ y ].Stat[ ST_TEAM_ID ] == cr.Stat[ ST_TEAM_ID ] || friends[ y ].Stat[ ST_TEAM_ID ] == 5 ) )
-                        friends[ y ].AddEnemyInStack( daddy.Id );
-                    y++;
-                }
-				*/
-                if( valid( daddy ) )
-					AddWalkPlane( cr, 0, daddy.HexX, daddy.HexY, GetDir( cr, daddy ), false, 1 );
-            }
-            else if( ( valid( daddymap ) ) && ( valid( crmap ) ) && ( crmap.Id != daddymap.Id ) )
-            {
-                uint8 findPos = 1;
-                while( findPos <= 10 )
-                {
-                    if( valid( daddy ) && daddymap.IsHexPassed( daddy.HexX + findPos, daddy.HexY + findPos ) )
-                    {
-                        cr.TransitToMap( daddymap.Id, daddy.HexX + findPos, daddy.HexY + findPos, GetDir( cr, daddy ) );
-                        findPos = 10;
-                    }
-                    findPos++;
-                }
-            }
-        }
-    }
-    else if( ( escape == 0 ) && ( leavemealone == 10 ) && cr.Param[ ST_BODY_TYPE ] != BT_BRAHMIN )
-    {
-        //SelfRelease( cr );
-		cr.Say( SAY_EMOTE, "пытается освободиться" );
-    }
-    else if( escape == 1 )
-    {
-        uint   homemap = 0;
-        uint8  homedir = 0;
-        uint16 homex = 0;
-        uint16 homey = 0;
-        uint16 EntX = 0;
-        uint16 EntY = 0;
-        uint16 ExitDist = 0;
-        cr.GetHomePos( homemap, homex, homey, homedir );
-
-        Map@ homemap0 = GetMap( homemap );
-
-        if( valid( crmap ) )
-        {
-            if( !crmap.GetEntireCoords( 0, 0, EntX, EntY ) )
-                EntX = cr.HexX;
-            EntY = cr.HexY;
-            ExitDist = GetDistantion( cr.HexX, cr.HexY, EntX, EntY );
-        }
-        else if( homemap0 !is null )
-            cr.TransitToMap( homemap, homex, homey, homedir );
-
-        if( valid( daddymap ) && valid( crmap ) && ( daddymap.Id == crmap.Id ) )
-        {
-            if( valid(daddy) && daddy.IsDead() )
-            {
-                if( cr.Timeout[ TO_BATTLE ] == 0 && ExitDist < 4 )
-                {
-                    if( homemap0 !is null )
-                        cr.TransitToMap( homemap, homex, homey, homedir );
-                    cr.ParamBase[ HANDCUFFS ] = 0;
-                    return 0;
-                }
-                else
-                {
-                    AddWalkPlane( cr, 0, EntX, EntY, 0, true, 1 );
-                }
-            }
-        }
-        else if( ( valid( daddymap ) ) && ( valid( crmap ) ) && ( crmap.Id != daddymap.Id ) || ( !valid( daddymap ) ) && ( valid( crmap ) ) )
-        {
-
-            if( cr.Timeout[ TO_BATTLE ] == 0 && ExitDist < 4 )
-            {
-                if( homemap0 !is null )
-                    cr.TransitToMap( homemap, homex, homey, homedir );
-                cr.ParamBase[ HANDCUFFS ] = 0;
-                return 0;
-            }
-            else
-            {
-                AddWalkPlane( cr, 0, EntX, EntY, 0, true, 1 );
-            }
-        }
-    }
-
-    return 30;
-}
-
-void ToAsk( Item& item, Critter& crit, Critter@ onCritter )
-{
-	
-    if( ( crit.Stat[ ST_STRENGTH ] + crit.Stat[ ST_LUCK ] + crit.Stat[ ST_AGILITY ] + Random( 0, 10 ) ) > ( onCritter.Stat[ ST_STRENGTH ] + onCritter.Stat[ ST_LUCK ] + onCritter.Stat[ ST_AGILITY ] + Random( 1, 15 ) ) )
-    {
-        TieUp( item, crit, onCritter );
-    }
-    else
-    {
-        onCritter.ParamBase[CR_VAL0] = crit.Id;
-        onCritter.ParamBase[CR_VAL1] = item.Id;
-        onCritter.ShowScreen( SCREEN_DIALOGBOX, 1, "AnswerMe" );
-        onCritter.Say( SAY_DIALOGBOX_TEXT, "Вас пытаются связать" );
-        onCritter.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Подчиниться" );
-        onCritter.Say( SAY_DIALOGBOX_BUTTON( 1 ), "Сопротивляться" );
-    }
-
-}
-
-
-void AnswerMe( Critter& cr, uint answerI, string& answerS )
-{
-    if( answerI == 0 )
-    {
-		//InformWarning(crit, "На вас одели наручники!" );
-        TieUp( GetItem( cr.ParamBase[CR_VAL1] ), GetCritter( cr.ParamBase[CR_VAL0] ), cr );
-    }
-}
-
-void SelfRelease( Critter& cr )
-{
-    uint     cuffs_state = cr.ParamBase[ HANDCUFFS ];
-	
-	if( cuffs_state == 0 ) return; //possible fix
-	
-    uint16   master = ( cuffs_state ) & 0xFFFF;
-    uint16   keynum = 0;
-    uint8    escape = 1;
-    uint8    nohome = ( cuffs_state >> 30 ) & 0x1;
-    uint8    follow = ( cuffs_state >> 31 ) & 0x1;
-    Critter@ bastard = GetCritter( master );
-    Item@[] items;
-    cr.GetItems( SLOT_HAND1, items );
-    cr.GetItems( SLOT_HAND2, items );
-    DeleteItems( items );
-    cr.AddItem( PID_BROKEN_CUFFS, 1 );
-    if( valid( bastard ) )
-		InformWarning(bastard, "|0xFFFF00 Ваш пленник освободился от наручников!" );
-	
-    cr.AddEnemyInStack( master );
-    cr.ParamBase[ HANDCUFFS ] = master | ( keynum << 16 ) | ( escape << 29 ) | ( nohome << 30 ) | ( follow << 31 );
-}
-
-void _respawn( Critter& cr )
-{
-    uint   homemap = 0;
-    uint8  homedir = 0;
-    uint16 homex = 0;
-    uint16 homey = 0;
-    Item@  broken = cr.GetItemById( PID_BROKEN_CUFFS );
-    Map@   map = cr.GetMap();
-    MoveItem( broken, 1, map, cr.HexX, cr.HexY );
-    cr.GetHomePos( homemap, homex, homey, homedir );
-    cr.ToLife();
-    cr.TransitToMap( homemap, homex, homey, homedir );
-}
-
-// create Harpoon hook
-void HookAttack( Critter& cr, Critter@ target, uint8 force, uint8 pull )
-{
-    if( valid( target ) && !target.IsDead() )
-    {
-        Map@  map = cr.GetMap();
-        uint8 dist = GetDistantion( cr.HexX, cr.HexY, target.HexX, target.HexY );
-        uint  crit = cr.Id;
-        Item@ Hook;
-        @Hook = map.GetItem( target.HexX, target.HexY, PID_GRAPPLE_HOOK );
-        if( !valid( Hook ) )
-        {
-            @Hook = map.AddItem( target.HexX, target.HexY, PID_GRAPPLE_HOOK, 1 );
-            Hook.Val0 = dist;
-            Hook.Val1 = cr.Id;
-            Hook.Val5 = pull;
-            SETFLAG( Hook.Flags, ITEM_TRAP );
-            Hook.SetScript( "_HookWalkInit" );
-        }
-        else if( Hook.Val1 != int( crit ) )
-        {
-            Hook.Val0 = dist;
-            Hook.Val1 = crit;
-            Hook.Val5 = pull;
-            Hook.SetScript( "_HookWalkInit" );
-        }
-        else if( force + cr.Stat[ ST_CURRENT_HP ] / 20 - target.Stat[ ST_CURRENT_HP ] / 20 + cr.Stat[ ST_STRENGTH ] - target.Stat[ ST_STRENGTH ] > Random( 0, 15 ) )
-        {
-            uint16 targetHx = cr.HexX;
-            uint16 targetHy = cr.HexY;
-            map.GetHexCoordWall( target.HexX, target.HexY, targetHx, targetHy, 0.0f, 4 );
-            target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 200, targetHx, targetHy );
-            MoveItem( Hook, 1, map, targetHx, targetHy );
-        }
-    }
-}
-
-void _HookWalkInit( Item& item, bool firstTime )
-{
-    if( item.GetProtoId() == PID_GRAPPLE_HOOK )
-        item.SetEvent( ITEM_EVENT_WALK, "_HookWalk" );
-}
-
-void _HookWalk( Item& Hook, Critter& cr, bool entered, uint8 dir )
-{
-    if( !entered )
-    {
-        Critter@ Hooker = GetCritter( Hook.Val1 );
-        if( !valid( Hooker ) )
-            DeleteItem( Hook );
-        uint8 dist = GetDistantion( cr.HexX, cr.HexY, Hooker.HexX, Hooker.HexY );
-        uint8 distMax = Hook.Val0;
-        Map@  map = cr.GetMap();
-        uint  crit = cr.Id;
-        Item @ Hook1 = map.GetItem( Hooker.HexX, Hooker.HexY, PID_GRAPPLE_HOOK );
-
-        if( !valid( Hook1 ) )
-            DeleteItem( Hook );
-        else if( cr.GetMapId() != Hooker.GetMapId() || Hooker.IsDead() || Hook1.Val1 != int( crit ) )
-            DeleteItem( Hook );
-        else if( valid( Hook ) )
-        {
-            if( dist > distMax )
-            {
-                uint16 HookHx = Hooker.HexX;
-                uint16 HookHy = Hooker.HexY;
-                map.GetHexCoordWall( cr.HexX, cr.HexY, HookHx, HookHy, 0.0f, 2 );
-                cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 100, HookHx, HookHy );
-				InformWarning(cr, "Вас отбрасывает назад.");
-                MoveItem( Hook, 1, map, cr.HexX, cr.HexY );
-                //cr.Say( SAY_EMOTE_ON_HEAD, "" + crit );
-				Emote(cr, "" + crit, true);
-            }
-            else
-            {
-                if( Hook.Val5 != 0 )
-                    Hook.Val0 = dist;
-                MoveItem( Hook, 1, map, cr.HexX, cr.HexY );
-            }
-        }
-    }
-}
-
-void ClearShadowsFar( Map@ map, uint16 X, uint16 Y )
-{
-	ClearShadows( map, X, Y );
-	for( uint d = 0; d < 6; d++ )
+	if( !valid( targetCr ) )
 	{
-		uint16 x = X;
-		uint16 y = Y;
-		map.MoveHexByDir( x, y, d, 3 );
-		ClearShadowsAround( map, x, y );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
 	}
-}
-
-void ClearShadowsAround( Map@ map, uint16 X, uint16 Y )
-{
-	ClearShadows( map, X, Y );
-	for( uint d = 0; d < 6; d++ )
+	
+	if( !valid( item ) )
 	{
-		uint16 x = X;
-		uint16 y = Y;
-		map.MoveHexByDir( x, y, d, 1 );
-		ClearShadows( map, x, y );
-	}
-}
-
-void ClearShadows( Map@ map, uint16 x, uint16 y )
-{
-	Item@[] shadows;
-	uint count = map.GetItems( x, y, shadows );
-	for( uint i = 0; i < count; i++ )
-		if( shadows[i].GetProtoId() == PID_SHADOW )
-			DeleteItem( shadows[i] );
-}
-
-uint cte_DragAndDrop( Critter& cr, int identifier, uint& rate )
-{
-	Critter@ Hooker = GetCritter( rate );
-	if( !valid( Hooker ) ) { return 0; }
-
-	if( Hooker.IsRuning || Hooker.IsDead() || Hooker.IsKnockout() || ( !cr.IsDead() && !cr.IsKnockout() ) )
-	{ 	
-		DropCr(Hooker, cr);		
-		return 0; 	
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
 	}
 	
-	if (cr.Param[CR_DRAGS_YOU] != int(Hooker.Id))
-	{	InformWarning(Hooker, "Тело уже тащат."); 	return 0;	}
-	
-	Map@ map = cr.GetMap();
-	Map@ Hmap = Hooker.GetMap();
-	if( !valid( Hmap ) ) return 0;
-
-	uint16 HookHx = Hooker.HexX;
-	uint16 HookHy = Hooker.HexY;
-	uint8 dir = Hooker.Dir;
-	uint8 revDir = ( dir + 3 )%6;
-	Hmap.MoveHexByDir( HookHx, HookHy, revDir, 1 );
-	uint8 dist = GetDistantion( cr.HexX, cr.HexY, Hooker.HexX, Hooker.HexY );
-	//if( !Hmap.IsHexPassed( HookHx, HookHy ) || ( dist < 2 ) || ( cr.HexX == HookHx && cr.HexY == HookHy ) ) { return REAL_SECOND( 1 ); }
-	if( !Hmap.IsHexPassed( HookHx, HookHy ) || ( cr.HexX == HookHx && cr.HexY == HookHy ) ) { return REAL_SECOND( 1 ); }
-
-	ClearShadowsAround( Hmap, HookHx, HookHy );
-	ClearShadowsAround( Hmap, Hooker.HexX, Hooker.HexY );
-
-	if( Hmap.Id != map.Id ) 
-	{ 
-		Location@ loc = Hmap.GetLocation();
-		if(!valid(loc)) return 0;
-		
-		cr.TransitToMap( Hmap.Id, HookHx, HookHy, dir ); 
-		cr.SetWorldPos(loc.WorldX, loc.WorldY);
-
-		ChangeCritterSpeed( Hooker ); 
-		return REAL_SECOND( 1 ); 
+	BondageItem@ bondage = GetKeyBondageItem( item );
+	if( !valid( bondage ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
 	}
-	cr.TransitToHex( HookHx, HookHy, dir );
-	return REAL_SECOND( 1 );
+	
+	if( !hasItem( targetCr, bondage.pid, bondage.slot ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_THIS_WONT_HELP );
+		return false;
+	}
+	
+	Item@ moved = targetCr.GetItem( 0, bondage.slot );
+	if( !valid( moved ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
+	}
+	
+	if( moved.BONDAGE_STATE != BONDAGE_STATE_ON )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+		return false;
+	}
+	
+	if( item.KEY_BONDAGE_ID == 0 || uint( item.KEY_BONDAGE_ID ) != moved.Id )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEY_NOT_FIT );
+		return false;
+	}
+	
+	moved.BONDAGE_STATE = BONDAGE_STATE_OFF;
+	targetCr.MoveItem( moved.Id, moved.GetCount(), SLOT_INV );
+	
+	if( bondage.pid == PID_SLAVE_COLLAR )
+	{
+		moved.PicInv = GetStrHash( "art\\inven\\misc\\shockcollar_off_inv.png" );
+	}
+	
+	if( targetCr.Id != cr.Id )
+	{
+		MoveItem( moved, 1, cr );
+	}
+	
+	if( item.GetProtoId() == bondage.key_pid )
+	{
+		_SubItem( item, 1 );
+	}
+	Map@ map = targetCr.GetMap();
+	PlayGenericSound( map, targetCr.HexX, targetCr.HexY, bondage.sound_off, 10 );
+	
+	uint msgMod = cr.Id == targetCr.Id ? 5 : 6;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, bondage.msg + msgMod );
+	if( targetCr.IsPlayer() )
+	{
+		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, bondage.msg + 4 );
+	}
+	moved.Update();
+	return true;
 }
 
-bool CheeckDropCr(Critter@ cr, Critter@ target, uint mode){
-	if( target.GetTimeEvents( mode, null, null, null ) > 0 )
-	{		
-		//cr.Say( SAY_NETMSG, "There are events #" + mode + " for critter #" + target.Id + "." );
-		target.EraseTimeEvents( mode );
-		DropCr(cr, target);
-		return true;
+bool TryRemoveGag( Critter& cr, Critter& targetCr, Item& gagItm )
+{
+	if( !valid( gagItm ) )
+	{
+		return false;
+	}
+	
+	BondageItem@ bondage = GetBondageItem( gagItm );
+	if( !valid( bondage ) )
+	{
+		return false;
+	}
+	
+	if( HandsTied( cr ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FREE_HANDS );
+		return false;
+	}
+	
+	if( bondage.blocker_type != BONDAGE_TYPE_SKILL )
+	{
+		return false;
+	}
+	
+	gagItm.BONDAGE_STATE = BONDAGE_STATE_OFF;
+	targetCr.MoveItem( gagItm.Id, gagItm.GetCount(), SLOT_INV );
+	
+	if( targetCr.Id != cr.Id )
+	{
+		MoveItem( gagItm, 1, cr );
+	}
+	
+	Map@ map = targetCr.GetMap();
+	PlayGenericSound( map, targetCr.HexX, targetCr.HexY, bondage.sound_off, 10 );
+	
+	uint msgMod = cr.Id == targetCr.Id ? 5 : 6;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, bondage.msg + msgMod );
+	if( targetCr.IsPlayer() )
+	{
+		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, bondage.msg + 4 );
+	}
+	gagItm.Update();
+	return true;
+}
+
+bool HandsTied( Critter& cr )
+{
+	Item@ hands = _CritGetItemHand( cr );
+	if( valid( hands ) )
+	{
+		BondageItem@ bondage = GetBondageItem( hands );
+		if( valid( bondage ) && hands.BONDAGE_STATE == BONDAGE_STATE_ON )
+		{
+			return true;
+		}
 	}
 	return false;
 }
 
-void DropCr(Critter@ cr, Critter@ target){	
-	target.ParamBase[CR_DRAGS_YOU] = 0;
-	InformWarning(cr, "|0xFFFF00 Вы отпустили тело.");
-	F_Dragging( cr, 0 );
-	ChangeCritterSpeed( cr );
-}
-
-void DragAndDrop( Critter& cr, Critter@ target )
-{
-	if (cr.IsRuning){
-		InformError(cr, "|0xFFFF00 Пока вы бежите вы не можете тащить тело.");
-		return;
-	}
-	
-	if( !valid( target ) || target.Mode[MODE_NO_PUSH] != 0 )
+//Old use Knife to escape code
+bool CutCheck( Critter& cr, Item@ item, Critter@ target )
+{ 
+	if( !valid( target ) )
 	{
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы не можете сделать этого." );
-		return;
+		return false;
 	}
-	
-	if( target.IsDead() || target.IsKnockout() )
-	{	
-		if ( (target.Param[CR_DRAGS_YOU] == int(cr.Id)) && ( CheeckDropCr( cr, target, CTE_DRAGGING )) ) 
-			return;
 		
-		if( GetDistantion( cr.HexX, cr.HexY, target.HexX, target.HexY ) > 2 )
-		{
-			InformError(cr, "|0xFFFF00 Далеко.");
-			return;
-		}
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return false;
+	}
 
-		if( target.Param[CR_DRAGS_YOU] == 0) 	target.ParamBase[CR_DRAGS_YOU] = cr.Id;
+	Item@ hand = _CritGetItemHand( target );
+	if( valid( hand ) )
+	{
+		BondageItem@ handBound = GetBondageItem( hand );
+		if( valid( handBound) && handBound.blocker_type == BONDAGE_TYPE_ROPE && hand.BONDAGE_STATE == BONDAGE_STATE_ON )
+		{
+			if( !isBlade( item ) )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_THIS_WONT_HELP );
+				return false;
+			}
+			
+			CutRopes( cr, target );
+			return true;
+		}
+	}
+
+	Item@ hook = map.GetItem( target.HexX, target.HexY, PID_HOLD_HOOK );
+	if( !valid( hook ) )
+	{
+		return false; 
+	}
+	
+	testInfo( cr, "Entangle strength: " + hook.Val5 );
+	
+	if( hook.Val5 <= 10 )
+	{
+		if( !isBlade( item ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_THIS_WONT_HELP );
+			return false;
+		}
 		
-		target.AddTimeEvent( "cte_DragAndDrop", REAL_SECOND( 1 ), CTE_DRAGGING, cr.Id );
-		InformWarning(cr, "|0xFFFF00 Вы тащите тело.");
-		F_Dragging( cr, 1 );
-		ChangeCritterSpeed( cr );
-	}
-}
-
-// create Melee hook
-void HookMeleeAttack( Critter& cr, Critter@ target )
-{
-    if( !valid( target ) || target.IsDead() || target.Mode[MODE_NO_PUSH] != 0 )
-	{
-		InformWarning( cr, "|0xFFFF00 Из этого ничего не вышло." );
-		return;
-	}
-	
-	Map@ map = cr.GetMap();
-	uint crit = cr.Id;
-
-	if (target.Stat[ ST_CURRENT_HP ] <= 0 )
-	{
-		if( target.GetTimeEvents( CTE_DOC, null, null, null ) > 0 )
+		Item@ net = map.GetItem( target.HexX, target.HexY, PID_REV_BALL1 );
+		if( !valid( net ) )
 		{
-			target.EraseTimeEvents( CTE_DOC );
-			InformWarning(cr, "|0xFFFF00 Вы отпустили тело.");
-			ChangeCritterSpeed(cr);
-			return;
+			@net = map.GetItem( target.HexX, target.HexY, PID_REV_BALL2 );
 		}
-
-	target.AddTimeEvent( "cte_DragAndDrop", REAL_SECOND( 1 ), CTE_DOC, cr.Id );
-	//cr.ModeBase[MODE_NO_RUN] = 1;
-	InformWarning(cr, "|0xFFFF00 Вы тащите тело.");
-	return;
-	}
-
-	Item @ Hook = map.GetItem( target.HexX, target.HexY, PID_MELEE_HOOK );
-	if( !valid( Hook ) )
-	{
-		@ Hook = map.AddItem( target.HexX, target.HexY, PID_MELEE_HOOK, 1 );
-		Hook.Val1 = int( crit );
-		Hook.Val2 = 0;
-		Hook.Val3 = 0;
-		SETFLAG( Hook.Flags, ITEM_TRAP );
-		Hook.SetScript( "_HookMeleeInit" );
-	}
-	else if( Hook.Val1 != int( crit ) )
-	{
-		Hook.Val1 = int( crit );
-		Hook.Val2 = 0;
-		Hook.Val3 = 0;
-		Hook.SetScript( "_HookMeleeInit" );
-	}
-
-	Item @ Hook2 = map.GetItem( cr.HexX, cr.HexY, PID_MELEE_HOOK );
-	if( !valid( Hook2 ) )
-	{
-		@ Hook2 = map.AddItem( cr.HexX, cr.HexY, PID_MELEE_HOOK, 1 );
-		Hook2.Val1 = target.Id;
-		Hook2.Val2 = 1;
-		SETFLAG( Hook2.Flags, ITEM_TRAP );
-		Hook2.SetScript( "_HookMeleeInit" );
-	}
-	else if( Hook2.Val1 != int( target.Id ) )
-	{
-		Hook2.Val1 = target.Id;
-		Hook2.Val2 = 1;
-		Hook2.SetScript( "_HookMeleeInit" );
-	}
-}
-
-void _HookMeleeInit( Item& item, bool firstTime )
-{
-    if( item.GetProtoId() == PID_MELEE_HOOK )
-        item.SetEvent( ITEM_EVENT_WALK, "_HookMelee" );
-}
-
-void _HookMelee( Item& Hook, Critter& cr, bool entered, uint8 dir )
-{
-    if( entered ) return;
-
-	Critter@ Hooker = GetCritter( Hook.Val1 );
-	if( !valid( Hooker ) ) { DeleteItem( Hook ); return; }
-	
-	Map@ map = cr.GetMap();
-	if( !valid( map ) ) return;
-	Item @ Hook1 = map.GetItem( Hooker.HexX, Hooker.HexY, PID_MELEE_HOOK );
-	if( !valid( Hook1 ) ) { DeleteItem( Hook ); return; }
-
-	uint crit = cr.Id;
-
-	if( cr.GetMapId() != Hooker.GetMapId() || Hooker.IsDead() || Hook1.Val1 != int( crit ) )
-	{
-		DeleteItem( Hook ); 
-		return;
-	}
-
-	if( Hook.Val2 != 0 )
-	{
-		if( Hooker.Stat[ ST_CURRENT_HP ] > 0 || cr.IsRuning )
+		
+		if( valid( net ) )
 		{
-			DeleteItem( Hook );
-			DeleteItem( Hook1 );
-			return;
+			_SubItem( net, 1 );
+			uint strNum = target.Id == cr.Id ? STR_EMOTE_GETS_FREE : STR_EMOTE_FREES_TARGET;
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, strNum );
 		}
-		else 
-		{
-			uint16 HookHx = Hook.HexX;
-			uint16 HookHy = Hook.HexY;
-
-			MoveItem( Hook, Hook.GetCount(), map, cr.HexX, cr.HexY );
-			if( cr.Timeout[ TO_SK_LOCKPICK ] > 0 ) return;
-			cr.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND(1);
-			
-			uint8  revDir;
-			revDir = dir + 3;
-			if( revDir > 5 ) revDir = revDir - 6;
-			
-			map.MoveHexByDir( HookHx, HookHy, revDir, 1 );
-			Hooker.TransitToHex(HookHx, HookHy, dir);
-			MoveItem( Hook1, Hook1.GetCount(), map, Hooker.HexX, Hooker.HexY );
-			return;
-		}
-	}
-
-	int chance = Random( 0, 40 ) +
-		( cr.Stat[ ST_CURRENT_HP ] - Hooker.Stat[ ST_CURRENT_HP ]) * 0.5 + 
-		( cr.Stat[ ST_STRENGTH ] * 4 - Hooker.Stat[ ST_STRENGTH ] * 4) + 
-		( cr.Skill[ SK_UNARMED ] * 0.8 - Hooker.Skill[ SK_UNARMED ] * 0.8 ) * 0.5 + 
-		( cr.Stat[ ST_LUCK ] * 2 - Hooker.Stat[ ST_LUCK ] * 2 ) * 2; //Шанс вырваться из захвата
-	chance = CLAMP( chance, 1, 95 );
-
-	if( chance >= Random( 1, 100 ) )
-	{
-		InformWarning(cr, "|0xFFFF00 Вы вырвались из захвата");
-		//Если Emote пишется надо головой то true
-		Emote(cr, "вырывается", true);
 	}
 	else
 	{
-		uint16 HookHx = cr.HexX;
-		uint16 HookHy = cr.HexY;
+		Item@ trap = map.GetItem( target.HexX, target.HexY, PID_TRAP_ACTIVE );
+		if( !valid(trap) )
+		{
+			@trap = map.GetItem( target.HexX, target.HexY, PID_TRAP_DEACTIVATED );
+		}
 		
-		uint8  revDir;
-		Hook.Val3 +=10;
-		revDir = dir + 3;
-		if( revDir > 5 )
-			revDir = revDir - 6;
-		
-		map.MoveHexByDir( HookHx, HookHy, revDir, 1 );
-		cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 200, HookHx, HookHy );
-		InformWarning(cr, "|0xFFFF00 Вы не смогли вырваться из захвата." );
-		Emote(cr,  "пытается вырваться", true);
-		Emote(Hooker,  "держит", true);
-
-		// cr.Say( SAY_EMOTE_ON_HEAD, "пытается вырваться" );
-		// Hooker.Say( SAY_EMOTE_ON_HEAD, "держит" );
+		if( valid(trap) )
+		{
+			if( item.GetProtoId() != PID_CROWBAR )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_CROWBAR );
+				return false;
+			}
+			uint strNum2 = target.Id == cr.Id ? STR_EMOTE_GETS_FREE_SNARE : STR_EMOTE_FREES_TARGET_SNARE;
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, strNum2 );
+		}
 	}
-	DeleteItem( Hook );
-	DeleteItem( Hook1 );
-}
-
-
-// create Hold hook
-void HookHoldAttack( Critter@ target, uint8 hardness )
-{
-    if( valid( target ) && !target.IsDead() )
-    {
-        Map@ map = target.GetMap();
-        uint targ = target.Id;
-        Item @ Hook = map.GetItem( target.HexX, target.HexY, PID_HOLD_HOOK );
-        if( !valid( Hook ) )
-        {
-            Item @ Hook = map.AddItem( target.HexX, target.HexY, PID_HOLD_HOOK, 1 );
-            Hook.Val1 = targ;
-            Hook.Val5 = hardness;
-            SETFLAG( Hook.Flags, ITEM_TRAP );
-            Hook.SetScript( "_HookHoldInit" );
-        }
-        else if( ( Hook.Val1 != int( targ ) ) )
-        {
-            Hook.Val1 = targ;
-            Hook.Val5 = hardness;
-            Hook.SetScript( "_HookHoldInit" );
-        }
-    }
-}
-
-void _HookHoldInit( Item& item, bool firstTime )
-{
-    if( item.GetProtoId() == PID_HOLD_HOOK )
-        item.SetEvent( ITEM_EVENT_WALK, "_HookHold" );
-}
-
-void _HookHold( Item& Hook, Critter& cr, bool entered, uint8 dir )
-{
-    if( !entered )
-    {
-        uint crit = cr.Id;
-        Map@ map = cr.GetMap();
-        if( valid( Hook ) && Hook.Val1 == int( crit ) )
-        {
-            if( ( cr.Stat[ ST_STRENGTH ] + cr.Stat[ ST_AGILITY ] + cr.Stat[ ST_ENDURANCE ] + cr.Stat[ ST_LUCK ] < Random( 5, 35 ) + 10 * Hook.Val5 ) )
-            { 
-				Emote(cr, "не может вырваться", true);
-                if( cr.IsPlayer() )
-					InformWarning(cr, "|0xFFFF00Вы не смогли вырваться.");
-                uint16 HookHx = cr.HexX;
-                uint16 HookHy = cr.HexY;
-                uint8  revDir;
-                revDir = dir + 3;
-                if( revDir > 5 )
-                    revDir = revDir - 6;
-                map.MoveHexByDir( HookHx, HookHy, revDir, 1 );
-                if( cr.IsPlayer() )
-					cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 25, HookHx, HookHy );
-				else
-					cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 50, HookHx, HookHy );
-				cr.Wait( 500 );
-                if( Hook.Val5 > 0 )
-                    Hook.Val5 -= Random( 0, cr.Stat[ ST_STRENGTH ] / 3 );
-            }
-            else
-            {
-                DeleteItem( Hook );
-				cr.Wait( 500 );
-				Emote(cr, "вырывается", true);
-				if( cr.IsPlayer() )
-					InformWarning(cr, "|0xFFFF00 Вы вырвались из пут.");
-            }
-        }
-        else
-            DeleteItem( Hook );
-    }
-}
-
-void _InitSexItem( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_USE, "e_SexUse" );
-}
-
-bool e_SexUse( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-    if( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) )
-	{
-		InformWarning(cr, "|0xFFFF00Вы не поняли, что с этим делать. Используйте его на цель.");
-        return true;
-	}
-    if( cr.IsPlayer() && onCritter.IsPlayer() && ( IsHuman( cr ) ) && ( IsHuman( onCritter ) ) )
-    {
-        ToAskSex( item, cr, onCritter );
-        return true;
-    }
-    else if( onCritter.StatBase[ ST_BODY_TYPE ] == 5 )
-	{
-        cr.Say( SAY_NETMSG, "|0xFFFF00 Оу..." );
-		onCritter.ParamBase[CR_VAL1] = item.Id;
-		HaveSex( cr, onCritter );
-		return true;
-	}
-	else
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Нет, ведь это даже не брамин!" );
+	
+	DeleteItem( hook );
+	cr.Animate( 0, ANIM2_SWING_1H, null, false, true );
+	target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_FREE_FROM_SNARE );
 	return true;
 }
 
-void ToAskSex( Item& item, Critter& crit, Critter@ onCritter )
+bool CutRopes( Critter& cr, Critter@ targetCr )
 {
-    onCritter.ParamBase[CR_VAL0] = crit.Id;
-	onCritter.ParamBase[CR_VAL1] = item.Id;
-	onCritter.ShowScreen( SCREEN_DIALOGBOX, 1, "AnswerSexMe" );
-	onCritter.Say( SAY_DIALOGBOX_TEXT, "С вами хотят заняться сексом." );
-	onCritter.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Согласиться" );
-	onCritter.Say( SAY_DIALOGBOX_BUTTON( 1 ), "Отказаться" );
-}
+	Item@ moved = _CritGetItemHand( targetCr );
+	moved.BONDAGE_STATE = BONDAGE_STATE_OFF;
+	
+	targetCr.MoveItem( moved.Id, moved.GetCount(), SLOT_INV );
 
-void AnswerSexMe( Critter& cr, uint answerI, string& answerS )
-{
-    if( answerI == 0 )
-    {
-		InformWarning(cr, "|0xFFFF00Вы согласились");
-        HaveSex( GetCritter( cr.ParamBase[CR_VAL0] ), cr );
-    }
-}
-
-void HaveSex( Critter& cr, Critter@ target )
-{
-	Item@ condom = GetItem( target.ParamBase[CR_VAL1] );
-	if(!valid(condom)) return;
-	
-	if( cr.TimeoutBase[ TO_TIREDNESS ] > int( __FullSecond + REAL_SECOND( 60 ) ) ) {
-		InformWarning(cr, "|0xFFFF00Вы слишком устали, и не готовы к новым постельным приключениям." );
-		return;
-    }
-		
-	if( target.TimeoutBase[ TO_TIREDNESS ] > int( __FullSecond + REAL_SECOND( 60 ) ) ) {
-        InformWarning( cr, "|0xFFFF00 Ваш партнер слишком сильно устал, чтобы ублажить вас." );
-        return;
-    }
-	
-	if( cr.TimeoutBase[ TO_TIREDNESS ] < int( __FullSecond ) ) {
-		cr.TimeoutBase[ TO_TIREDNESS ] = __FullSecond;
-	}
-	
-	if( cr.ParamBase[ CR_JETTED ] == 0 ) {
-		cr.TimeoutBase[ TO_TIREDNESS ] += REAL_SECOND( 300 );
-	}
-	
-	if( target.TimeoutBase[ TO_TIREDNESS ] < int( __FullSecond ) ) {
-		target.TimeoutBase[ TO_TIREDNESS ] = __FullSecond;
-	}
-	
-	if( cr.ParamBase[ CR_JETTED ] == 0 ) {
-		target.TimeoutBase[ TO_TIREDNESS ] += REAL_SECOND( 300 );
-	}
-	
-	if( target.StatBase[ ST_BODY_TYPE ] == 5 )
+	if( targetCr.Id != cr.Id )
 	{
-		_SubItem( condom, 1 );
-		cr.ParamBase[CR_VAL0] = target.Id;
-		start_bramin_sex( cr );
-		return;
+		MoveItem( moved, 1, cr );
 	}
-	
-	cr.StatBase[ ST_HUNGER ] -= Random( 15, 20 );
-	target.StatBase[ ST_HUNGER ] -= Random( 15, 20 );
-	cr.StatBase[ ST_THIRST ] -= Random( 20, 30 );
-	target.StatBase[ ST_THIRST ] -= Random( 20, 30 );
-	cr.ParamBase[ CR_DIRTINESS ] += Random( 20, 30 );
-	target.ParamBase[ CR_DIRTINESS ] += Random( 20, 30 );
-    
-    CrimeLog( cr, crInfo( cr ) + " и " + crInfo( target ) + " принимают порцию сладкой любви." );
-	
-	_SubItem( condom, 1 );
-	cr.ParamBase[CR_VAL0] = target.Id;
-	target.ParamBase[CR_VAL0] = cr.Id;
-	start_sex( cr );
-	start_another_sex( target );
-	return;
-}
 
-bool ltp_bramin_inited = false;
-void ltp_bramin_init()
-{
-	LTPREG( LTP_BRAMIN_SEX, process_bramin_sex )
-	ltp_bramin_inited = true;
-}
-
-bool start_bramin_sex( Critter& cr )
-{
-	if(!ltp_bramin_inited) 
-		ltp_bramin_init();
-	
-		Critter@ target = GetCritter( cr.ParamBase[CR_VAL0] );
-		target.SetDir( cr.Dir );
-		target.SetHomePos( target.HexX, target.HexY, target.Dir);
-		target.Animate( 0, ANIM2_DAMAGE_BACK, null, true, true );
-		cr.Animate( 0, ANIM2_DAMAGE_FRONT, null, true, true );
-		StartProcess( cr, LTP_BRAMIN_SEX, 0, 0, 0, 0 );
-		return true;
-}
-
-uint process_bramin_sex( Critter@ cr, int& param0, int& param1, int& param2 )
-{
-	LTPROCESS( cr, param0, LTP_BRAMIN_SEX )
-	Critter@ target = GetCritter( cr.ParamBase[CR_VAL0] );
-	
-	param0++;
-	
-	target.Animate( 0, ANIM2_DAMAGE_BACK, null, true, true );
-	cr.Animate( 0, ANIM2_DAMAGE_FRONT, null, true, true );
-	
-	if( param0 > 10 )
+	uint msgStr = cr.Id == targetCr.Id ? STR_EMOTE_TIES_RELEASED_SELF : STR_EMOTE_TIES_RELEASED;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, msgStr );
+	if( targetCr.IsPlayer() )
 	{
-		cr.Say( SAY_EMOTE, "Ублажает брамина" );
-		target.Say( SAY_EMOTE, "Нежно и протяжно мычит" );
-		if( cr.ParamBase[ SK_SEX ] <= 200 ) {
-			
-			int skillNum = SK_SEX;
-			raiseSkill( cr, skillNum );
-		}
-		return 0;
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_RELEASED_FROM_TIES );
 	}
-	
-	return 700;
-}
-//cr - Fucker
-bool ltp_inited = false;
-void ltp_init()
-{
-	LTPREG( LTP_SEX, process_sex )
-	ltp_inited = true;
-}
-
-bool start_sex( Critter& cr )
-{
-	if(!ltp_inited) 
-		ltp_init();
-	
-	cr.Animate( 0, ANIM2_DAMAGE_FRONT, null, true, true );
-	StartProcess( cr, LTP_SEX, 0, 0, 0, 0 );
+    CrimeLog( cr, crInfo( cr ) + " cuts ropes on " + crInfo( targetCr ) );
 	return true;
 }
 
-uint process_sex( Critter@ cr, int& param0, int& param1, int& param2 )
+bool StartMenuSCollar( Critter& cr, Item& remote )
 {
-	LTPROCESS( cr, param0, LTP_SEX )
-	Critter@ target = GetCritter( cr.ParamBase[CR_VAL0] );
-	param0++;
-	
-	cr.Animate( 0, ANIM2_DAMAGE_FRONT, null, true, true );
-
-	if( cr.ParamBase[ ST_LTP_TIME ] == -1 )
-		return 0;
-	
-	if( target.ParamBase[ ST_LTP_TIME ] == -1 ) {
-		cr.Say( SAY_NETMSG, "|0xFF0000 Кажется, ваш партнер кончил преждевременно..." );
-		target.Say( SAY_EMOTE, "Судорога" );
-		return 0;
-	}
-	
-	if( param0 > 10 )
-	{
-		finish_sex( cr, target );
-		target.ParamBase[ ST_LTP_TIME ] = -1;
-		return 0;
-	}
-	
-	return 700;
-}
-
-//target - Fucked
-bool another_ltp_inited = false;
-void another_ltp_init()
-{
-	LTPREG( LTP_SEX_RECIEVE, another_process_sex )
-	another_ltp_inited = true;
-}
-
-bool start_another_sex( Critter& target )
-{
-	if(!another_ltp_inited) 
-		another_ltp_init();
-	
-	Critter@ cr = GetCritter( target.ParamBase[CR_VAL0] );
-	if( !target.IsKnockout() ) {
-		target.SetDir( cr.Dir );
-	}
-	target.Animate( 0, ANIM2_DAMAGE_BACK, null, true, true );
-	StartProcess( target, LTP_SEX_RECIEVE, 0, 0, 0, 0 );
-	return true;
-}
-
-uint another_process_sex( Critter@ target, int& param0, int& param1, int& param2 )
-{
-	LTPROCESS( target, param0, LTP_SEX_RECIEVE )
-	Critter@ cr = GetCritter( target.ParamBase[CR_VAL0] );
-	param0++;
-	
-	target.Animate( 0, ANIM2_DAMAGE_BACK, null, true, true );
-	
-	if( target.ParamBase[ ST_LTP_TIME ] == -1 )
-		return 0;
-	
-	if( cr.ParamBase[ ST_LTP_TIME ] == -1 ) {
-		target.Say( SAY_NETMSG, "|0xFF0000 Кажется, ваш партнер кончил преждевременно..." );
-		cr.Say( SAY_EMOTE, "Судорога" );
-		return 0;
-	}
-	
-	if( param0 > 10 )
-	{
-		finish_sex( cr, target );
-		cr.ParamBase[ ST_LTP_TIME ] = -1;
-		return 0;
-	}
-	
-	return 700;
-}
-
-//~run handcuffs imitate_finish_sex KARMA_SEXPERT_VALUE times 0
-void imitate_finish_sex( Critter& admin, int KARMA_SEXPERT_VALUE, int times, int )
-{
-	int karma = admin.KarmaBase[ KARMA_SEXPERT ];
-	admin.KarmaBase[ KARMA_SEXPERT ] = KARMA_SEXPERT_VALUE;
-	
-	for( int i = 0; i < times; i++ )
-		finish_sex( admin, admin );
-	
-	admin.KarmaBase[ KARMA_SEXPERT ] = karma;
-}
-
-void finish_sex( Critter@ cr, Critter@ target )
-{
-	target.Say( SAY_EMOTE, "Принимает порцию сладкой любви" );
-	cr.Say( SAY_EMOTE, "Принимает порцию сладкой любви" );
-	
-	int skillNum = SK_SEX;
-	raiseSkill( cr, skillNum );
-	raiseSkill( target, skillNum );
-
-    if( cr.KarmaBase[ KARMA_SEXPERT ] >= 1 || target.KarmaBase[ KARMA_SEXPERT ] >= 1 )
-    {
-		int roll = Random( 0, 2 );    
-		if( roll == 0 )
-        {
-			SetDrug( cr, PID_KITTY_SEX_DRUG_AGILITY );
-			SetDrug( target, PID_KITTY_SEX_DRUG_AGILITY );
-		} else if ( roll == 1 ) {
-			SetDrug( cr, PID_KITTY_SEX_DRUG_INTELLIGENCE );
-			SetDrug( target,PID_KITTY_SEX_DRUG_INTELLIGENCE );
-		} else if ( roll == 2 ) {
-			SetDrug( cr, PID_KITTY_SEX_DRUG_STRENGTH );
-			SetDrug( target, PID_KITTY_SEX_DRUG_STRENGTH );
-		}
-    }
-}
-
-//=========================================GAG============================================//
-
-void _InitEnslaveItemGAG( Item& item, bool firstTime)
-{
-    item.SetEvent( ITEM_EVENT_USE, "e_EnslaveUseGAG" );
-	item.SetEvent( ITEM_EVENT_MOVE, "_hellno5" );
-	item.SetEvent( ITEM_EVENT_DROP, "_hellno6" );
-}
-
-bool e_EnslaveUseGAG( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-	if( CanResist( cr ) )
-		item.Val0 = 0;
-
-	if( item.Val0 != 0 )
-	{
-		cr.Say( SAY_NETMSG, "Сначала кляп нужно вынуть изо рта." );
-		return true;
-	}
-	
-    bool onSelf = ( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) );
-    if( onSelf && IsHuman( cr ) )
-    {
-		brass = item.Id;
-        papik = cr.Id;
-        Enslave_GAG( cr, cr );
-        return true;
-    }
-	
-    if( cr.IsPlayer() && onCritter.IsPlayer() && ( IsHuman( cr ) ) && ( IsHuman( onCritter ) ) )
-    {//NOTE: Какая разница, человек-ли тот, кто одевает кляп?
-		if( !CanResist( onCritter ) )
-		{ //TODO: Вынести подобные проверки в bool canResistActions( Critter@ target );
-			brass = item.Id;
-			papik = onCritter.Id;
-			Enslave_GAG( cr, onCritter );
-		} else {
-			ToAskEnslaveGAG( item, cr, onCritter );
-		}
-		return true;
-    }
-    else
-        cr.Say( SAY_NETMSG, "Это неуместно" );
-	
+    iMenuHandler@ handler = MenuSCollar( remote );
+    iDialogBox@ menu = OpenMenu( cr, "Slave collar", handler );
     return true;
 }
 
-void ToAskEnslaveGAG( Item& item, Critter& crit, Critter@ onCritter )
+class MenuSCollar: CenteredMenuHandler
 {
-    //DEBUG: Обязательно отказаться от костыля с глобальными переменными! Это порождает проблемы, если одновременно две пары игроков пытаются "играть в БДСМ"!
-	papik = crit.Id;
-	brass = item.Id;
-	
-    onCritter.ShowScreen( SCREEN_DIALOGBOX, 1, "AnswerEnslaveGAG" );
-	onCritter.Say( SAY_DIALOGBOX_TEXT, "На вас пытаются одеть кляп!");
-    onCritter.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Подчиниться" );
-    onCritter.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Сопротивляться" );
-}
-
-void AnswerEnslaveGAG( Critter& cr, uint answerI, string& answerS )
-{
-    if( answerI == 0 )
-    {
-        Enslave_GAG( GetCritter( papik ), cr );
-    }
-}
-
-void Enslave_GAG( Critter& who, Critter@ targetCr ){
-	
-	Item@ equipedGag = _CritGetItemHead(targetCr);
-	
-	if( valid( equipedGag ) && (equipedGag.GetProtoId() == PID_COLLAR ) ) 
-	{
-		who.Say( SAY_NETMSG, "|0xFFFF00 Уже надет ошейник" );	
-		return;
-	}
-			
-	if( valid( equipedGag ) && (equipedGag.GetProtoId() == PID_BALL_GAG ) ) 
-	{
-		who.Say( SAY_NETMSG, "|0xFFFF00 Уже надет кляп" );	
-		return;
-	}
-			
-	//TODO: Перенести "передвижение всех итемов из слота в инвентарь" в отдельную ф-ю: bool moveItemsToInv( Critter@ target, uint slot );
-	Item@[] items;
-	uint itemscount = targetCr.GetItems( SLOT_HEAD, items );
-	if( itemscount > 0 )
-        targetCr.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
-	
-	//TODO: Перенести "передвижение итема из инвентаря в слот" в отдельную ф-ю: bool moveItemsToSlot( Critter@ target, Item@ item, uint slot );
-	//Item@ gag = targetCr.AddItem( PID_BALL_GAG, 1 );
-	Item@ PreGag = GetItem( brass );
-	PreGag.Val0 = 1;
-	MoveItem( PreGag, 1, targetCr );
-	targetCr.MoveItem( PreGag.Id, 1, SLOT_HEAD );
-	
-	who.Say( SAY_EMOTE, "Засовывает кляп в рот" );
-	
-	if (who.Id == targetCr.Id) {
-		who.Say( SAY_NETMSG, "|0xFFFF00 Вы засунули кляп себе в рот." );
-	}
-	else{
-		who.Say( SAY_NETMSG, "|0xFFFF00  Вы засунули кляп в рот." );
-		targetCr.Say( SAY_NETMSG, "|0xFFFF00 Вам засунули кляп в рот." );
-	}
-	//DeleteItem( PreGag );
-}
-
-//=========================================SLAVE_COIL============================================//
-
-void _InitEnslaveItem( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_USE, "e_EnslaveUse" );
-}
-
-bool e_EnslaveUse( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-    bool onSelf = ( !valid( onCritter ) && !valid( onItem ) && !valid( onScenery ) );
-    if( onSelf && ( IsHuman( cr ) ) )
-    {
-        brass = item.Id;
-        papik = cr.Id;
-        Enslave( cr, cr );
-        return true;
-    }
-    if( cr.IsPlayer() && onCritter.IsPlayer() && ( IsHuman( cr ) ) && ( IsHuman( onCritter ) ) )
-    {
-		if( onCritter.Stat[ ST_CURRENT_HP ] < 0 || onCritter.IsKnockout() ) {
-			brass = item.Id;
-			papik = onCritter.Id;
-			Enslave( cr, onCritter );
-		} else {
-			ToAskEnslave( item, cr, onCritter );
-		}
-		return true;
-    }
-    else
-		
-        cr.Say( SAY_NETMSG, "Это неуместно" );
-    return true;
-}
-
-void ToAskEnslave( Item& item, Critter& crit, Critter@ onCritter )
-{
-    papik = crit.Id;
-    brass = item.Id;
-	
-    onCritter.ShowScreen( SCREEN_DIALOGBOX, 1, "AnswerEnslave" );
-	
-	onCritter.Say( SAY_DIALOGBOX_TEXT, "На вас пытаются надеть наручники!" );
-    onCritter.SayMsg( SAY_DIALOGBOX_BUTTON( 0 ), TEXTMSG_GAME, 12956 );
-}
-
-void AnswerEnslave( Critter& cr, uint answerI, string& answerS )
-{
-    if( answerI == 0 )
-    {
-        Enslave( GetCritter( papik ), cr );
-    }
-}
-
-
-void Enslave( Critter& cr, Critter@ onCritter )
-{
-	Item@ activeCollarSelf = _CritGetItemHead(cr);
-	if( valid( activeCollarSelf ) && activeCollarSelf.GetProtoId() == PID_COLLAR ) {
-		cr.Say( SAY_NETMSG, "На субъекте уже надет ошейник" );
-		return;
-	}
-	
-	Item@ Precollar = GetItem( brass );
-	Item@[] items;
-	uint itemscount = onCritter.GetItems( SLOT_HEAD, items );
-    if( itemscount > 0 )
-    {
-        onCritter.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
-    }
-	Item @ collar = onCritter.AddItem( PID_COLLAR, 1 );
-    Item @ collarswitch = cr.AddItem( PID_COLLARSWITCH, 1 );
-    onCritter.MoveItem( collar.Id, 1, SLOT_HEAD );
-	
-    cr.Say( SAY_EMOTE, "Одевает ошейник на раба" );
-	if (cr.Id == onCritter.Id) {
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы одели ошейник на себя." );
-	}
-	else{
-		  cr.Say( SAY_NETMSG, "|0xFFFF00 Вы одели ошейник на раба." );
-		onCritter.Say( SAY_NETMSG, "|0xFFFF00 На вас одели ошейник." );
-	}
-    collarswitch.Val1 = collar.Id;
-    collarswitch.Val2 = onCritter.Id;
-    DeleteItem( Precollar );
-}
-
-void _InitUsedCollar( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_MOVE, "_hellno2" );
-    item.SetEvent( ITEM_EVENT_DROP, "_hellno4" );
-    item.SetEvent( ITEM_EVENT_SKILL, "e_used_collar_delete" );
-}
-
-bool e_used_collar_delete( Item& item, Critter& cr, int skill )
-{
-    if( ( skill == SKILL_PICK_ON_GROUND ) && ( item.Accessory == ACCESSORY_HEX ) )
-        DeleteItem( item );
-    return true;
-}
-
-void _InitCollarSwitch( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_USE, "StartMenuSCollar" );
-    item.SetEvent( ITEM_EVENT_SKILL, "e_collarunlock" );
-}
-
-bool StartMenuSCollar( Item& remote, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-    iMenuHandler@ handler = MenuSCollar(remote);
-    iDialogBox@ menu = OpenMenu( cr, "Рабский Ошейник", handler);
-
-    return true;
-}
-
-class MenuSCollar: CenteredMenuHandler {
     uint m_remote_id;
     uint m_collar_id;
     
-    MenuSCollar(Item& remote) {
+    MenuSCollar( Item& remote )
+	{
         m_remote_id = remote.Id;
-        m_collar_id = 0;
+        m_collar_id = remote.KEY_BONDAGE_ID;
     }
 
-    bool BadSignal(iDialogBox& menu) {
+    bool BadSignal( iDialogBox& menu )
+	{
         m_collar_id = 0;
         menu.Button( "Обновить" );
         return true;
     }
 
-    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
         Item@ remote = GetItem( m_remote_id );
-        if( remote is null ) {
+        if( remote is null )
+		{
             return false;
         }
 
-        Critter@ Slave = GetCritter( remote.Val2 );
-        if( Slave is null ) {
+        Critter@ slave = GetCritter( remote.BOND_SLAVE_ID );
+        if( !valid( slave ) )
+		{
             return BadSignal(menu);
         }
-        Map@ map = Slave.GetMap();
-        if( map is null ) {
+		
+        Map@ map = slave.GetMap();
+        if( map is null )
+		{
             return BadSignal(menu);
         }
-        Item@ collar = GetItem( remote.Val1 );
-        if( collar is null ) {
+		
+        Item@ collar = GetItem( remote.KEY_BONDAGE_ID );
+        if( collar is null )
+		{
             return BadSignal(menu);
         }
-
-        m_collar_id = collar.Id;
 
         if( menu.Button( "Наказать" ) ) 
         {
-            cr.Say( SAY_NETMSG, "|0xFFFF00 Вы наказали раба." );
-            Slave.Say( SAY_NETMSG, "|0xFFFF00 Шею обожгло огнем, все тело сотрясают судороги." );
-            Slave.Say( SAY_EMOTE, "Корчится в агонии" );
-            Slave.StatBase[ ST_CURRENT_HP ] -= ( Slave.Stat[ ST_CURRENT_HP ] * 10 / 100 );
-            map.PlaySound( "MASRATBH.ACM", Slave.HexX, Slave.HexY, 3 );
-            Slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 115, Slave.HexX, Slave.HexY );
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
+            slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_PAIN );
+            slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
+            slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] * 10 / 100 );
+			PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+            slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 115, slave.HexX, slave.HexY );
             return true;
         }
+		
         if( menu.Button( "Ранить" ) ) 
         {
-            cr.Say( SAY_NETMSG, "|0xFFFF00 Вы наказали раба." );
-            Slave.Say( SAY_NETMSG, "|0xFFFF00 Шею обожгло огнем, Вы содрагаетесь под множественными ударами тока." );
-            Slave.Say( SAY_EMOTE, "Корчится в агонии" );
-            Slave.StatBase[ ST_CURRENT_HP ] -= ( Slave.Stat[ ST_CURRENT_HP ] * 50 / 100 );
-            map.PlaySound( "MASRATBH.ACM", Slave.HexX, Slave.HexY, 3 );
-            Slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 130, Slave.HexX, Slave.HexY );
+            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
+            slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_HARM );
+            slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
+            slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] * 50 / 100 );
+			PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+            slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 130, slave.HexX, slave.HexY );
             return true;
         }
+		
         if( menu.Button( "Покалечить" ) ) 
         {
-            cr.Say( SAY_NETMSG, "|0xFFFF00 Вы наказали раба." );
-            Slave.Say( SAY_NETMSG, "|0xFFFF00 Шею обожгло огнем, все тело содрагается от мощнейшей непрекращающейся боли." );
-            Slave.Say( SAY_EMOTE, "Корчится в агонии" );
-            Slave.StatBase[ ST_CURRENT_HP ] -= ( Slave.Stat[ ST_CURRENT_HP ] ) + 1;
-            map.PlaySound( "MASRATBH.ACM", Slave.HexX, Slave.HexY, 3 );
-            Slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 160, Slave.HexX, Slave.HexY );
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
+            slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_INJURE );
+            slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
+            slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] ) + 1;
+			PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+            slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 160, slave.HexX, slave.HexY );
             return true;
         }
+		
         if( menu.Button( "Убить" ) ) 
         {
-            DeleteItem( remote );
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+            cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_EXECUTE_SLAVE );
+			slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_DEATH );
+			PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+            slave.ToDead( ANIM2_DEAD_PULSE, cr );
+			DeleteItem( remote );
             DeleteItem( collar );
-            cr.Say( SAY_NETMSG, "|0xFFFF00 Вы казнили раба" );
-            map.PlaySound( "MASRATBH.ACM", Slave.HexX, Slave.HexY, 3 );
-            Slave.Say( SAY_NETMSG, "|0xFFFF00 Боль как от сотни расскаленных игл пронзила вас." );
-            Slave.ToDead( ANIM2_DEAD_PULSE, cr );
-            return true;
+            return false;
         }
+		
         if( menu.Button( "Отпустить" ) ) 
         {
-            DeleteItem( remote );
-            DeleteItem( collar );
-            cr.Say( SAY_NETMSG, "|0xFFFF00 Вы освободили раба" );
-            Slave.Say( SAY_NETMSG, "|0xFFFF00 Ошейник расстегнулся" );
-            Slave.AddItem( PID_INACTIVECOLLAR, 1 );
-            return true;
+            PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+			//cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SLAVE_FREED );
+           // slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_RELEASED_FROM_COLLAR );
+			ReleaseTarget( cr, slave, remote );
+            return false;
         }
         return true;
     }
 
-    // Описание
-    string@ Description(Critter& cr) {
+    string@ Description( Critter& cr )
+	{
         string info;
-        if( m_collar_id != 0 ) {
+        if( m_collar_id != 0 )
+		{
             info = "Пульт активен.";
             info += "\n" + "\nСигнал от ошейника №" + m_collar_id + " принят.";
             info += "\n" + "\nОжидание команды...";
-        } else {
+        }
+		else
+		{
             info = "Пульт активен.";
             info += "\n" + "\nСигнал от ошейника слишком слабый.";
             info += "\n" + "\nОжидание команды...";
         }        
-
         return info;
     }
 }
 
-bool e_shock( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
+bool TryBreakBonds( Critter& cr, Critter& targetCr )
 {
-    Critter@ Slave = GetCritter( item.Val2 );
-    Item @ collar = GetItem( item.Val1 );
-    if( valid( Slave ) )
-    {
-        if( !valid( collar ) )
-        {
-            Item @ collar_new = Slave.AddItem( PID_COLLAR, 1 );
-            item.Val1 = collar_new.Id;
-            cr.Say( SAY_NETMSG, "|0xFFFF00 Раб пытался снять ошейник." );
-        }
-        cr.Say( SAY_NETMSG, "|0xFFFF00 Вы наказали раба." );
-        Slave.Say( SAY_NETMSG, "|0xFFFF00 Шею обожгло огнем, все тело сотрясают судороги." );
-        Slave.Say( SAY_EMOTE, "Корчится в агонии" );
-        Slave.StatBase[ ST_CURRENT_HP ] -= ( Slave.Stat[ ST_CURRENT_HP ] / 100 ) + 1;
-        Slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 100, Slave.HexX, Slave.HexY );
-        return true;
-    }
-    return false;
-}
-
-bool e_collarunlock( Item& item, Critter& cr, int skill )
-{
-    Critter@ Slave = GetCritter( item.Val2 );
-    Item @ collar = GetItem( item.Val1 );
-    if( skill == SK_SCIENCE )
-    {
-        cr.ShowScreen( SCREEN_SAY, 0, "handcuffs@CollarNameScreen" );
-        cr.StatBase[ ST_VAR0 ] = item.Id;
-        return true;
-    }
-    else if( skill == SK_FIRST_AID )
-    {
-        if( valid( Slave ) )
-        {
-            if( !valid( collar ) )
-            {
-                Item @ collar_new = Slave.AddItem( PID_COLLAR, 1 );
-                item.Val1 = collar_new.Id;
-                cr.Say( SAY_NETMSG, "|0xFFFF00 Раб пытался снять ошейник." );
-            }
-            cr.Say( SAY_NETMSG, "|0xFFFF00 Вы наказали раба." );
-            Slave.Say( SAY_NETMSG, "|0xFFFF00 Шею обожгло огнем, все тело сотрясают судороги." );
-            Slave.Say( SAY_EMOTE, "Корчится в агонии" );
-            Slave.StatBase[ ST_CURRENT_HP ] -= Random( 1, 4 );
-            Slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 1000, Slave.HexX, Slave.HexY );
-            return true;
-        }
-        else
-            cr.Say( SAY_NETMSG, "|0xFF0000 Ответный сигнал слишком слабый." );
-        return true;
-    }
-    else if( skill == SK_DOCTOR )
-    {
-        if( valid( Slave ) )
-        {
-            if( !valid( collar ) )
-            {
-                Item @ collar_new = Slave.AddItem( PID_COLLAR, 1 );
-                item.Val1 = collar_new.Id;
-                cr.Say( SAY_NETMSG, "|0xFFFF00 Раб пытался снять ошейник." );
-            }
-            cr.Say( SAY_NETMSG, "|0xFFFF00 Ошейник раба отзывается." );
-            Slave.Say( SAY_NETMSG, "|0xFFFF00 Ошейник колется." );
-            return true;
-        }
-        else
-            cr.Say( SAY_NETMSG, "|0xFF0000 Ответный сигнал слишком слабый." );
-        return true;
-    }
-    else if( skill == SK_REPAIR )
-    {
-        if( valid( Slave ) )
-        {
-            DeleteItem( item );
-            if( valid( collar ) )
-                DeleteItem( collar );
-            cr.Say( SAY_NETMSG, "|0xFFFF00 Вы казнили раба" );
-            Slave.Say( SAY_NETMSG, "|0xFFFF00 Боль как от сотни расскаленных игл пронзила вас." );
-            Slave.ToDead( ANIM2_DEAD_PULSE, cr );
-        }
-        else
-            cr.Say( SAY_NETMSG, "|0xFF0000 Ответный сигнал слишком слабый." );
-        return true;
-    }
-    if( skill == SK_TRAPS )
-    {
-        if( valid( Slave ) )
-        {
-            DeleteItem( item );
-            if( valid( collar ) )
-                DeleteItem( collar );
-            cr.Say( SAY_NETMSG, "|0xFFFF00 Вы освободили раба" );
-            Slave.Say( SAY_NETMSG, "|0xFFFF00 Ошейник расстегнулся" );
-			Slave.AddItem( PID_INACTIVECOLLAR, 1 );
-        }
-        else
-            cr.Say( SAY_NETMSG, "|0xFF0000 Ответный сигнал слишком слабый." );
-        return true;
-    }
-    return false;
-}
-
-void CollarNameScreen( Critter& player, uint answerI, string& answerS )
-{
-    if( answerS.length() != 0 )
-    {
-        Item @ item = GetItem( player.StatBase[ ST_VAR0 ] );
-        item.SetLexems( "" + answerS );
-        item.Update();
-    }
-}
-
-bool canControll( Critter& cr, int targetId, int x, int y )
-{
-	return canControll( cr, targetId ) || canControll( cr, x, y );
-}
-bool canControll( Critter& cr, int x, int y )
-{
-	Map@ map = cr.GetMap();
-	if( !valid( map ) ) return false;
-	
-	Critter@ target = map.GetCritter( x, y );
-	return canControll( cr, valid( target ) ? target.Id : 0 );
-}
-
-bool canControll( Critter& cr, int targetId )
-{
-	if( targetId == 0 ) return false;
-	
-	Critter@ target = GetCritter( targetId );
-	if( !valid( target ) )
+	if( HandsTied( cr ) )
 	{
-		cr.Say( SAY_NETMSG, "Наведите курсор на цель." );
+		cr.Say( SAY_NETMSG, "Hands are tied" );
 		return false;
 	}
 	
-	if( GetDistantion( cr.HexX, cr.HexY, target.HexX, target.HexY ) > 8 )
+	Item@ hands = _CritGetItemHand( targetCr );
+	Item@ misc = _CritGetItemMisc( targetCr );
+	if( valid( hands ) )
 	{
-		cr.Say( SAY_NETMSG, "Цель слишком далеко." );
+		BondageItem@ handBound = GetBondageItem( hands );
+		if( valid( handBound ) && handBound.blocker_type == BONDAGE_TYPE_LOCK && hands.BONDAGE_STATE == BONDAGE_STATE_ON )
+		{
+			hands.PicInv = GetStrHash( "art\\inven\\brokencuffs.png" );
+			hands.Update();
+			
+			hands.BONDAGE_STATE = BONDAGE_STATE_BROKEN;
+			targetCr.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
+			
+			if( targetCr.Id != cr.Id )
+			{
+				MoveItem( hands, 1, cr );
+			}
+			
+			Map@ map = targetCr.GetMap();
+			PlayGenericSound( map, targetCr.HexX, targetCr.HexY, handBound.sound_off, 10 );
+		}
+	}
+	else if( valid( misc ) )
+	{
+		BondageItem@ miscBound = GetBondageItem( misc );
+		if( valid( miscBound ) && miscBound.blocker_type == BONDAGE_TYPE_LOCK && misc.BONDAGE_STATE == BONDAGE_STATE_ON )
+		{
+			misc.BONDAGE_STATE = BONDAGE_STATE_BROKEN;
+			targetCr.MoveItem( misc.Id, misc.GetCount(), SLOT_INV );
+			
+			if( targetCr.Id != cr.Id )
+			{
+				MoveItem( misc, 1, cr );
+			}
+			
+			Map@ map = targetCr.GetMap();
+			PlayGenericSound( map, targetCr.HexX, targetCr.HexY, miscBound.sound_off, 10 );
+		}
+	}
+	else
+	{
 		return false;
 	}
-	
-	if( target.IsPlayer() || target.IsDead() || target.IsKnockout() )
-	{
-		cr.Say( SAY_NETMSG, "Это бесполезно." );
-		return false;
-	}
-
-	if( !isOwningNPC( cr, target ) )
-	{
-		cr.Say( SAY_NETMSG, "Цель вас не слушается." );
-		return false;
-	}	
-	
 	return true;
 }
 
-void unsafe_switch_aggro( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
-{
-	if( !canControll( cr, targetId, x, y ) ) return;
-
-	Critter@ target = GetCritter( targetId );
-	target.ParamBase[ CR_IS_AGGRESSIVE ] = CLAMP( 1 - target.ParamBase[ CR_IS_AGGRESSIVE ], 0, 1 );
-	string state = target.ParamBase[ CR_IS_AGGRESSIVE ] != 0 ? "агрессивен" : "пассивен";
-	InformWarning( cr, "Выбранный НПЦ теперь " + state + "." );
-}
-
-void unsafe_call_mob( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
-{
-	if( !canControll( cr, targetId, x, y ) ) return;
-
-	Critter@ target = GetCritter( targetId );
-	if( !valid( target ) )
-	{
-		@target = cr.GetMap().GetCritter( x, y );
-		if( !valid( target ) ) return;
-	}
-
-    target.DropPlanes();
-    target.ClearEnemyStack();
-	
-	if( target.StatBase [ST_FOLLOW_CRIT] == 0 ) {
-		target.StatBase [ST_FOLLOW_CRIT] = cr.Id;
-		target.SetDir( cr.Dir );
-	} else if( target.StatBase [ST_FOLLOW_CRIT] == int( cr.Id ) ) {
-		target.StatBase [ST_FOLLOW_CRIT] = 0;
-		target.EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
-	}
-}
-
-void unsafe_see( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
-{
-	Critter@ target = GetCritter( targetId );
-	if( !valid( target ) )
-	{
-		if( x == 0 && y == 0 ) return;
-	}
-	else
-	{
-		x = target.HexX;
-		y = target.HexY;
-	}
-	
-	Critter@[] units = getControlledNPC( cr );
-	for( uint i = 0, l = units.length(); i < l; i++ )
-		if( sameFaction( cr, units[i] ) )
-		{
-            if( units[i].ModeBase[ MODE_NO_HOME ] == 1 )
-			{
-				units[i].SetHomePos( units[i].HexX, units[i].HexY, units[i].Dir );
-				units[i].ModeBase[ MODE_NO_HOME ] = 0;
-			}
-
-            units[i].ErasePlane( -1, true );
-            units[i].ClearEnemyStack();
-
- 			if( units[i].GetTimeEvents( CTE_BRAHMIN_FOLLOW, null, null, null ) > 0 )
-				units[i].EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
-
-            units[i].SetDir( GetDirection( units[i].HexX, units[i].HexY, x, y ) );
-		}
-}
-
-void unsafe_attack( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
-{
-	Critter@ target = GetCritter( targetId );
-	if( !valid( target ) )
-	{
-		if( x == 0 && y == 0 ) return;
-	}
-	else
-	{
-		x = target.HexX;
-		y = target.HexY;
-	}
-	
-	bool command_succeed = false;
-	
-	Critter@[] units = getControlledNPC( cr );
-	for( uint i = 0, l = units.length(); i < l; i++ )
-		if( sameFaction( cr, units[i] ) )
-		{
-            if( units[i].ModeBase[ MODE_NO_HOME ] == 0 )
-			{
-				units[i].SetHomePos( units[i].HexX, units[i].HexY, units[i].Dir );
-				units[i].ModeBase[ MODE_NO_HOME ] = 1;
-			}
-
-            units[i].ErasePlane( -1, true );
-            units[i].ClearEnemyStack();
-
- 			if( units[i].GetTimeEvents( CTE_BRAHMIN_FOLLOW, null, null, null ) > 0 )
-				units[i].EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
-
-			if( !valid( target ) )
-			{
-				AddWalkPlane( units[i], 0, x, y, GetDirection( units[i].HexX, units[i].HexY, x, y ), true, Random( 1, 3 ) );
-
-				if( units[i].Stat[ ST_BODY_TYPE ] < BT_BRAHMIN && Random( 0, 1 ) == 0 )
-				{
-					uint n = Random( 0, 2 ) + Random( 0, 2 ) + Random( 0, 1 );
-					units[i].Say( SAY_NORM_ON_HEAD, walk_phrases[n] );
-				}
-			}
-			else
-			{
-				AddAttackPlane( units[i], 0, target, true );
-				units[i].AddEnemyInStack( target.Id );
-				
-				command_succeed = true;
-			}
-			
-		}
-		
-	if( command_succeed )
-		InformWarning( cr, "Вы послали подчинённых в атаку." );
-
-}
-
-void unsafe_walk( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
-{
-	Critter@ target = GetCritter( targetId );
-	if( !valid( target ) )
-	{
-		if( x == 0 && y == 0 ) return;
-	}
-	else
-	{
-		x = target.HexX;
-		y = target.HexY;
-	}
-	
-	Critter@[] units = getControlledNPC( cr );
-	for( uint i = 0, l = units.length(); i < l; i++ )
-		if( sameFaction( cr, units[i] ) )
-		{
-            if( units[i].ModeBase[ MODE_NO_HOME ] == 0 )
-			{
-				units[i].SetHomePos( units[i].HexX, units[i].HexY, units[i].Dir );
-				units[i].ModeBase[ MODE_NO_HOME ] = 1;
-			}
-
-            units[i].ErasePlane( -1, true );
-            units[i].ClearEnemyStack();
-
-			if( units[i].GetTimeEvents( CTE_BRAHMIN_FOLLOW, null, null, null ) > 0 )
-				units[i].EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
-
-			AddWalkPlane( units[i], 0, x, y, GetDirection( units[i].HexX, units[i].HexY, x, y ), false, Random( 1, 2 ) );
-			
-			if( units[i].Stat[ ST_BODY_TYPE ] < BT_BRAHMIN && Random( 0, 1 ) == 0 )
-			{
-				uint n = Random( 0, 2 ) + Random( 0, 2 ) + Random( 0, 1 );
-				units[i].Say( SAY_NORM_ON_HEAD, walk_phrases[n] );
-			}
-		}
-}
-
-string[] walk_phrases = { "Сейчас-сейчас..", "Выдвигаюсь..", "Хорошо.", "Иду.", "Да!", "Вперёд!" };
-
-void unsafe_retreat( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
-{
-	x = cr.HexX;
-	y = cr.HexY;
-	
-	bool command_succeed = false;
-	
-	Critter@[] units = getControlledNPC( cr );
-	for( uint i = 0, l = units.length(); i < l; i++ )
-		if( sameFaction( cr, units[i] ) )
-		{
-            if( units[i].ModeBase[ MODE_NO_HOME ] == 0 )
-			{
-				units[i].SetHomePos( cr.HexX, cr.HexY, units[i].Dir );
-				units[i].ModeBase[ MODE_NO_HOME ] = 1;
-			}
-
-            units[i].ErasePlane( -1, true );
-            units[i].ClearEnemyStack();
-
-			if( units[i].GetTimeEvents( CTE_BRAHMIN_FOLLOW, null, null, null ) > 0 )
-				units[i].EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
-
-			int dist = GetDistantion( units[i].HexX, units[i].HexY, x, y );
-            AddWalkPlane( units[i], 0, x, y, GetDirection( units[i].HexX, units[i].HexY, x, y ), dist > 5, Random( 1, 2 ) );
-			
-			command_succeed = true;
-		}
-		
-	if( command_succeed )
-		InformWarning( cr, "Вы отозвали к себе подконтрольных вам юнитов." );
-}
-
-void unsafe_follow( Critter& cr, int targetId, int x, int y, string@ , int[]@ )
-{
-	if( !canControll( cr, targetId, x, y ) ) return;
-
-	Critter@ target = GetCritter( targetId );
-	if( !valid( target ) )
-	{
-		@target = cr.GetMap().GetCritter( x, y );
-		if( !valid( target ) ) return;
-	}
-
-	if( target.StatBase[ ST_FOLLOW_CRIT ] == 0 || target.StatBase[ ST_FOLLOW_CRIT ] != int( cr.Id ) )
-		return;
-
-    target.DropPlanes();
-    target.ClearEnemyStack();
-
-	if( target.GetTimeEvents( CTE_BRAHMIN_FOLLOW, null, null, null ) > 0 )
-	{
-		target.EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
-		cr.Say( SAY_NETMSG, "Цель больше не следует за вами." );
-		target.ModeBase [MODE_NO_HOME] = 0;
-	}
-	else
-	{
-		target.AddTimeEvent( "cte_brahmin_follow", 0, CTE_BRAHMIN_FOLLOW, 0 );
-		cr.Say( SAY_NETMSG, "Цель идёт следом." );
-		target.ModeBase [MODE_NO_HOME] = 1;
-	}
-}
-
-//=================TYING_UP_BRAMINS========================//
-
-void brahminTie( Critter& cr, Critter& brahmin ) {
-    brahmin.DropPlanes();
-    brahmin.ClearEnemyStack();
-	
-	if( brahmin.StatBase [ST_FOLLOW_CRIT] == 0 ) {
-		brahmin.StatBase [ST_FOLLOW_CRIT] = cr.Id;
-    	brahmin.ModeBase [MODE_NO_HOME] = 1;
-    	brahmin.AddTimeEvent ("cte_brahmin_follow", 0, CTE_BRAHMIN_FOLLOW, 0);
-		brahmin.SetDir( cr.Dir );
-		
-    	cr.Say( SAY_NETMSG, "Цель следует за вами." );
-	} else if( brahmin.StatBase [ST_FOLLOW_CRIT] == int( cr.Id ) ) {
-		brahmin.ModeBase [MODE_NO_HOME] = 0;
-		brahmin.SetHomePos( brahmin.HexX, brahmin.HexY, brahmin.Dir );
-		brahmin.StatBase [ST_FOLLOW_CRIT] = 0;
-		brahmin.EraseTimeEvents( CTE_BRAHMIN_FOLLOW );
-		
-		AddWalkPlane( brahmin, 0, brahmin.HexX, brahmin.HexY, brahmin.Dir, false, 0 );
-		cr.Say( SAY_NETMSG, "Цель остановилась." );
-	}
-}
-
-uint cte_brahmin_follow (Critter& cr, int identifier, uint& rate) {
-	int masterId = cr.Stat [ST_FOLLOW_CRIT];
-	if (masterId > 0) {
-		Critter@ master = GetCritter (masterId);
-		if( master is null )
-			return REAL_MINUTE(1);
-		/*
-		if (master is null) {
-			cr.ModeBase [MODE_NO_HOME] = 0;
-			cr.SetHomePos (cr.HexX, cr.HexY, cr.Dir);
-			cr.StatBase [ST_FOLLOW_CRIT] = 0;
-			return 0;
-		}
-		*/
-		Map@ myMap = cr.GetMap ();
-		Map@ masterMap = master.GetMap ();
-		if (myMap.Id == masterMap.Id) 
-		{
-			cr.ErasePlane (AI_PLANE_WALK, true);
-			
-			if( GetDistantion( cr.HexX, cr.HexY, master.HexX, master.HexY ) > 5 )
-			{
-				AddWalkPlane( cr, 0, master.HexX + Random( -1, 1 ), master.HexY + Random( -1, 1 ), GetDirection( cr.HexX, cr.HexY, master.HexX, master.HexY ), true, 2 );
-			}
-			
-			if( GetDistantion( cr.HexX, cr.HexY, master.HexX, master.HexY ) > 2 )
-			{
-				AddWalkPlane( cr, 0, master.HexX + Random( -1, 1 ), master.HexY + Random( -1, 1 ), GetDirection( cr.HexX, cr.HexY, master.HexX, master.HexY ), false, 1 );
-			}
-		} 
-		else 
-		{
-			cr.TransitToMap (masterMap.Id, master.HexX, master.HexY, Random (0,5));
-			cr.ErasePlane (AI_PLANE_WALK, true);
-		}
-	}
-	return REAL_SECOND(1);
-}
+#endif // HANDCUFFS_MODULE

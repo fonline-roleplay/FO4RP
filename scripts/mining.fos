@@ -7,9 +7,7 @@
 #include "gathering_h.fos"
 #include "critter_skills_h.fos"
 #include "entire_h.fos"
-
-import int  GetDeteriorationProcent( Item& item ) from "repair";
-import void SetDeterioration( Item& item, int deteriorationProcent ) from "repair";
+#include "repair_h.fos"
 
 // Ores array search
 uint16 FindOre( Item@ targetItem )
@@ -25,8 +23,10 @@ uint16 FindOre( uint16 pid )
     {
         index = OreList[i].find( pid );
         if( index != -1 )
+		{
             return ++ i;
-    }
+		}
+	}
     return 0;
 }
 
@@ -61,25 +61,32 @@ bool PrepareMining( Critter& cr, Item@ tool, Item@ target )
 	}
 	if( tool.CritSlot != SLOT_HAND1 )
 	{
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Возьмите инструмент в руку." );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_EQUIP_TOOL );
 		return false;
 	}
 
-	if( IsTired( cr ) ) { return false; }
-	if( IsWounded( cr ) ) { return false; }
+	if( IsTired( cr ) ) 
+	{ 
+		return false;
+	}
+	
+	if( cr.IsInjured() )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_CANT_WORK );
+		return false; 
+	}
 	
 	if( toolPid == PID_DRILL )
 	{
 		if( tool.AmmoCount < 1 )
 		{
-			cr.Say( SAY_EMOTE_ON_HEAD, "Одышка" );
-			cr.Say( SAY_NETMSG, "Это было хорошей идеей, пока вы не поняли, что в буре нет энергии." );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_DRILL_CHARGE );
 			return false;
 		}
 		uint det = GetDeteriorationProcent(tool);
 		if( det >= 95 )
 		{
-			cr.Say( SAY_NETMSG, "Бур слишком повреждён." );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DRILL_DAMAGED );
 			return false;
 		}
 		SetDeterioration( tool, det + 1 );
@@ -90,9 +97,11 @@ bool PrepareMining( Critter& cr, Item@ tool, Item@ target )
 
 bool start_mining( Critter& cr, Item& tool, Item& target )
 {
-	if(!ltp_mining_inited) 
+	if(!ltp_mining_inited)
+	{
 		ltp_mining_init();
-
+	}
+	
 	if( valid( tool ) && valid( target ) )
 	{	
 		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
@@ -101,7 +110,7 @@ bool start_mining( Critter& cr, Item& tool, Item& target )
 		{
 			action_pause = 700;
 			Map@ map = cr.GetMap();
-			map.PlaySound( "drill_mine.ogg", cr.HexX, cr.HexY, 10 );
+			PlayGenericSound( map, cr.HexX, cr.HexY, "drill_mine.ogg", 100 );
 		}
 		else
 		{
@@ -130,21 +139,28 @@ uint process_mining( Critter@ cr, int& param0, int& param1, int& param2 )
 		{
 			uint object_dpa = ( cr.Skill[ SK_MINING ] ) + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
 			int sequence_length = ceil( float( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
-			if ( tool.GetProtoId() == PID_DRILL ) {
+			if ( tool.GetProtoId() == PID_DRILL )
+			{
 				sequence_length = 10;
 			}
 			
-			if( param0 > sequence_length ) {
+			if( param0 > sequence_length )
+			{
 				Profit( cr, tool, target );
 				int skillNum = SK_MINING;
 				Accident( cr, skillNum );
 			
-			} else {
-				if( tool.GetProtoId() == PID_DRILL ) {
-					_CritAnimateBrust(cr);
+			}
+			else
+			{
+				if( tool.GetProtoId() == PID_DRILL )
+				{
+					_CritAnimateBrust( cr );
 					action_pause = 700;
 				
-				} else {
+				}
+				else
+				{
 					_CritAnimateSwing(cr);
 					uint[] values = { cr.Id, tool.Id };
 					CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_MiningSound", values, false );
@@ -164,19 +180,24 @@ uint e_MiningSound( uint[]@ values )
 	Map@ map = cr.GetMap();
 	Item@ tool = GetItem(values[1]);
 	uint toolPid = tool.GetProtoId();
+	string sound = "";
 	switch( toolPid )
 	{
 		case( PID_SLEDGEHAMMER ):
 		case( PID_SUPER_SLEDGE ):
-			map.PlaySound( HammerSounds[ Random( 0, HammerSounds.length() -1 ) ], cr.HexX, cr.HexY, 5 );
+		case( PID_SLEDGEHAMMER2 ):
+		case( PID_SM_HAMMER ):
+		case( PID_SM_CLUB ):
+			sound = _GetOneRandom( HammerSounds );
 			break;
 		case( PID_SHOVEL ):	
 		case( PID_PICKAXE ):
-			map.PlaySound( PickaxeSounds[ Random( 0, PickaxeSounds.length() -1 ) ], cr.HexX, cr.HexY, 5 );
+			sound = _GetOneRandom( PickaxeSounds );
 			break;
 		default:
 			break;
 	}
+	PlayGenericSound( map, cr.HexX, cr.HexY, sound, 30 );
 	return 0;
 }
 
@@ -191,7 +212,11 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 			amount++;
 			break;
 		case( PID_SHOVEL ):
+		case( PID_SM_CLUB ):
 			amount--;
+			break;
+		case( PID_PRIMITIVE_SLEDGE ):
+			amount-= 2;
 			break;
 	}
 	uint OreMod = target.GetProtoId();
@@ -204,26 +229,33 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 			amount--;
 			break;
 		case( PID_GOLD_ORE_S ):
+		case( PID_URANIUM_ORE_S ):
 			amount-= 2;
 			break;
 		case( PID_GOLD_ORE_M ):
+		case( PID_URANIUM_ORE_M ):
 			amount--;
 			break;
 	}
 			
 	uint lootRoll = ( Random( 0, 1 ) + ( cr.ParamBase[ SK_MINING ] / 50 ) );
 	
-	if( toolMod == PID_DRILL ) {
+	if( toolMod == PID_DRILL )
+	{
 		amount = ( ( amount + lootRoll ) * CLAMP( 3, 1, ( target.RESOURCE_CAPACITY / OBJECT_HP_BASE ) ) );
 		
-	} else {
+	}
+	else
+	{
 		amount+= lootRoll;
 	}
 	
-	if( amount < 1 ) {
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Вы не добыли ничего полезного." );
-	
-	} else {
+	if( amount < 1 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NOTHING_USEFULL );
+	}
+	else
+	{
 		int skillNum = SK_MINING;
 		raiseSkill( cr, skillNum );
 		
@@ -232,12 +264,15 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 		{
 			case(0):
 			{	
-				if( Random( 1, 3 ) != 3 ) {
+				if( Random( 1, 3 ) != 3 )
+				{
 					lootPid = PID_ROCK;
-					amount = Random( 1, 8 );
-				} else {
+					amount = Random( 1, 3 );
+				}
+				else
+				{
 					lootPid = PID_FLINT;
-					amount = Random( 1, 2 );
+					amount = 1;
 				}
 				break;
 			}
@@ -259,27 +294,30 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 			case(6):
 				lootPid = PID_METAL_ORE;
 				break;
+			case(7):
+				lootPid = PID_URANIUM_ORE;
+				break;
 		}
 		
 		cr.AddItem( lootPid, amount );
-		string inform = "Вы добыли: \n";
-		inform += "- ";
-		inform += "|0xFFFF00 " + _GetProtoName( lootPid );
-		inform += "|0x3CF800  - ";
-		inform += "|0xFFFF00 " + amount;
-		inform += "|0x3CF800  шт.";
-		cr.Say( SAY_NETMSG, inform );
+		
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_GATHERED, "$proto@msg item " + ( lootPid * 100 ) + "@$amount" + amount );
+		
 		cr.StatBase[ST_EXPERIENCE] += 25;
 		
-		if( toolMod == PID_DRILL ) {	
+		if( toolMod == PID_DRILL )
+		{	
 			target.RESOURCE_CAPACITY = target.RESOURCE_CAPACITY - ( OBJECT_HP_BASE * 3 );	
 			tool.AmmoCount--;
 			tool.Update();
-		} else {	
+		}
+		else
+		{	
 			target.RESOURCE_CAPACITY = target.RESOURCE_CAPACITY - OBJECT_HP_BASE;
 		}
 		
-		if( target.RESOURCE_CAPACITY <= 0 && ( target.ORE_TYPE == 0 && target.DNA != 0 ) ) {
+		if( target.RESOURCE_CAPACITY <= 0 && ( target.ORE_TYPE == 0 && target.RESOURCE_DNA != 0 ) )
+		{
 			Map@ map = GetMap( target.MapId );
 			uint16 hx = target.HexX, hy = target.HexY;
 			
@@ -287,13 +325,13 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 			{
 				case( PID_ORE_DEPOSIT_S ):
 				case( PID_ORE_DEPOSIT_S2 ):
-					map.AddItem( hx, hy, OreList[target.DNA][ OreList[target.DNA].length() - 3 ], 1 );
+					map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ OreList[target.RESOURCE_DNA].length() - 3 ], 1 );
 					break;
 				case( PID_ORE_DEPOSIT_M ):
-					map.AddItem( hx, hy, OreList[target.DNA][ Random( 0, OreList[target.DNA].length() - 2 ) ], 1 );
+					map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ Random( 0, OreList[target.RESOURCE_DNA].length() - 2 ) ], 1 );
 					break;
 				case( PID_ORE_DEPOSIT_L ):
-					map.AddItem( hx, hy, OreList[target.DNA][ Random( 1, OreList[target.DNA].length() - 1 ) ], 1 );
+					map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ Random( 1, OreList[target.RESOURCE_DNA].length() - 1 ) ], 1 );
 					break;
 			}
 			
@@ -301,79 +339,24 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 			return true;
 		}
 		
-		if( target.RESOURCE_CAPACITY <= 0 ) {
+		if( target.RESOURCE_CAPACITY <= 0 )
+		{
 			DeleteItem( target );
 			return true;
 		}
 	}
 	return true;
 }
+
 //===============ORE SPAWNER MECHANIC===============//
-
-void OreAutoInit() //export to gameplay.fos
-{    
-    Map@[] maps;
-    for( int i = 0, iend = GetAllMaps( 0, maps ); i < iend; i++)
-	{   
-		CheckMapEvent( maps[i] );
-	}
-}
-
-uint e_SpawnOres( int[] @ values )
-{
-	Map @ map = GetMap( values[ 0 ] );
-	if( !valid( map ) )
-	{	
-		return 0;
-	}
-	
-	SpawnOre( map );
-
-	EraseTimeEvent( map.GetData( MAP_TIME_DATA ) );
-	timeNumb = CreateTimeEvent( AFTER( DELAY_FOR_HARVESTABLE_LOOT_RESPAWN ), "e_SpawnOres", values, true );
-	map.SetData( MAP_TIME_DATA, timeNumb );
-	return 0;
-}
-
-bool SpawnOre( Map& map )
-{
-	for( int i = 0; i < ORE_SPAWNER_COUNT; i++ )
-	{
-		int entireId = ORE_ENTIRE + i;
-		int entires = map.CountEntire( entireId );
-		//Log("" + entires);
-		uint16 hx=0, hy=0;
-		for( int j = 0; j < entires; j++ )
-		{
-			map.GetEntireCoords( entireId, j, hx, hy );
-			if( map.IsHexPassed( hx, hy ) )
-			{	
-				Item@ BaseOre = map.AddItem( hx, hy, OreList[0][ Random( 0, OreList[0].length() - 2 ) ], 1 );
-				BaseOre.DNA = ( entireId - 1000 );
-				/*for( uint i = 0; i < 6; i++ ) 
-				{
-					hx = BaseOre.HexX; hy = BaseOre.HexY;
-					map.MoveHexByDir( hx, hy, i, 1 );
-					if( map.IsHexPassed( hx, hy ) )
-					{
-						map.AddItem( hx, hy, OreList[0][ Random( 0, 2 ) ], 1 );
-					}
-				}*/ // отключен спавн доп камней вокруг рудной жилы
-			}
-		}
-	}
-	return true;
-}
-
 //Forced Spawn
-void _OresInit(Critter& player, int param0, int param1, int param2)
+void _ForceOresInit( Critter& player, int param0, int param1, int param2 )
 {
-	ForceSpawnOres();
+	OreInit();
 }
 
-//import void ForceSpawnOres() from "mining";
-void ForceSpawnOres()
-{
+void OreInit()
+{    
     Map@[] maps;
     for( int i = 0, iend = GetAllMaps( 0, maps ); i < iend; i++)
 	{   
@@ -388,12 +371,46 @@ bool CheckMapEvent( Map& map )
 		if( map.CountEntire(  n ) != 0 ) 
 		{
 			int[] values = {map.Id};
-			map.SetData( MAP_TIME_DATA, CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_SpawnOres", values, true ) );
-			//Log("ore_event_started");
+			map.SetData( MAP_ORE_SPAWN_TE, CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_SpawnOres", values, true ) );
 			return true;
 		}
 	} 
     return false;
+}
+
+uint e_SpawnOres( int[] @ values )
+{
+	Map @ map = GetMap( values[ 0 ] );
+	if( !valid( map ) )
+	{	
+		return 0;
+	}
+	
+	SpawnOre( map );
+
+	EraseTimeEvent( map.GetData( MAP_ORE_SPAWN_TE ) );
+	map.SetData( MAP_ORE_SPAWN_TE, CreateTimeEvent( AFTER( DELAY_FOR_HARVESTABLE_LOOT_RESPAWN ), "e_SpawnOres", values, true ) );
+	return 0;
+}
+
+bool SpawnOre( Map& map )
+{
+	for( int i = 0; i < ORE_SPAWNER_COUNT; i++ )
+	{
+		int entireId = ORE_ENTIRE + i;
+		int entires = map.CountEntire( entireId );
+		uint16 hx=0, hy=0;
+		for( int j = 0; j < entires; j++ )
+		{
+			map.GetEntireCoords( entireId, j, hx, hy );
+			if( map.IsHexPassed( hx, hy ) )
+			{	
+				Item@ BaseOre = map.AddItem( hx, hy, OreList[0][ Random( 0, OreList[0].length() - 2 ) ], 1 );
+				BaseOre.RESOURCE_DNA = ( entireId - 1000 );
+			}
+		}
+	}
+	return true;
 }
 
 #endif //MINING

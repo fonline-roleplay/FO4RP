@@ -1,383 +1,474 @@
+#ifndef FURNACE
+#define FURNACE
+
 #include "_utils.fos"
+#include "furnace_h.fos"
 #include "firestarter_h.fos"
 
-import void AskCooking( Critter& cr ) from "cooking";
-
-/* Печки:
-    Пока горит - преобразует рандомно 1 предмет в себе и тратит 1 бревно.
-    Когда печка горячая - взаимодействовать с ней можно лишь лопатой (совком).
-    Тикает раз в 10 секунд, но после розжига разогревается минуту. Разжигается зажигалкой.
-    Что бы потушить тратится бутылка воды. Если нет дров - тухнет сам. Остывает минуту. Дрова выгребаются монтировкой.
- Тёплая печка имеет стандартный функционал "плиты для готовки". Использование науки на печку даёт подсказку.
- Остальные навыки лишь показывают её состояние (греется-остывает) и температуру: обжигающая, тёплая или холодная.
- Слитки: золотой (PID 1682), железный (PID 1474).
-*/
-
-bool IsFlammable(Item@ item)
+class MenuFurnace: CenteredMenuHandler
 {
-    return FireFuel.find(item.GetProtoId()) > -1;
-}
+    uint furnace_id;
+    uint map_id;
 
-const array<uint16> FurnaceState = {30, 30, 60};
+    MenuFurnace( Item& furnace, Map& map ) 
+	{
+		furnace_id = furnace.Id;
+		map_id = map.Id;
+    }
 
-uint FurnaceToIndex (uint16 pid)
-{
-	uint resolve = 0;
-	
-	switch(pid)
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-		case(1844):
-			resolve = 0;
-		break;
-		default:
-			resolve = 0;
-		break;
-		
-	}
-	
-	return resolve;
-}
+        Map@ map = GetMap( map_id );
+        Item@ furnace = GetItem( furnace_id );
 
-uint[][] FurnaceResourceTransfer = { //Таблица соответствий, что во что плавится/готовится:
-	//[RESOURCE] PID COUNT  == [RESULT] PID COUNT
-	{ PID_METAL_ORE, 1, PID_IRON_BAR, 1 },
-	{ PID_GOLD_NUGGET, 1, PID_GOLDEN_BAR, 4 },
-	{ PID_GOLD_ORE, 1, PID_GOLDEN_BAR, 8 },
-	{ PID_COPPER_NUGGET, 3, PID_COPPER_BAR, 1 },
-	{ PID_COPPER_ORE, 1, PID_COPPER_BAR, 1 },
-	{ PID_IRON_PROD, 2, PID_IRON_BAR, 1 },
-	{ PID_WATER_TUBE, 4, PID_IRON_BAR, 1 },
-	{ PID_IRON_ROD, 3, PID_IRON_BAR, 1 },
-	{ PID_LEAD_ORE, 1, PID_LEAD_INGOT, 1 },
-	{ PID_METAL_LIST_MEH, 2, PID_IRON_BAR, 1 },
-	{ PID_TUBE, 3, PID_IRON_BAR, 1 },
-	{ PID_SHORT_TUBE, 10, PID_IRON_BAR, 1 }
-	
-	//Добавить: плавку железяк, патронов, труб, оружия, крышек, денег и т.п.
-};
-
-void MakeFurnace( Critter& player, int id, int p1, int p2 )
-{
-	if( id == 0 || p1 != 0 || p2 != 0 )
-	{
-		player.Say( SAY_NETMSG, "Введите айди контейнера, который станет печкой, остальные 2 аргумента должны быть равны 0." );
-		return;
-	}
-	Item@ target = GetItem( id );
-	if(!valid(target))
-	{
-		player.Say( SAY_NETMSG, "Объект не обнаружен. Используйте #sinf 119 что бы видеть айди объектов!" );
-		return;
-	}
-	if( target.GetType() != ITEM_TYPE_CONTAINER )
-	{
-		player.Say( SAY_NETMSG, "Выбранный вами объект - не контейнер!" );
-		return;
-	}
-	
-	player.Say( SAY_NETMSG, "Вы активировали печку." );
-    target.SetScript( "furnace@_FurnaceInit" );
-    target.Update();
-}
-
-void _FurnaceInit(Item& item, bool firstTime){ //old flags were: 269226496
-    item.SetEvent( ITEM_EVENT_SKILL, "_FurnaceSkill" ); //нельзя трогать руками, если нагрета, впрочем можно на ней готовить
-    item.SetEvent( ITEM_EVENT_USE_ON_ME, "_FurnaceOnMe" ); //лом, вода, зажигалка, или лопата
-}
-
-bool _FurnaceSkill( Item& item, Critter& cr, int skill )
-{
-	if( skill == SKILL_PICK_ON_GROUND )
-	{
-		if( item.Val1 == 0 ) {
-			ShowContainer( cr, item, TRANSFER_HEX_CONT_DOWN );
-		}
-		else
-			AskCooking(cr);
-	}
-	else
-	{
-		if( skill == SK_SCIENCE )
-			if( item.Val1 == 0 )
-				cr.Say( SAY_NETMSG, "Нужно загрузить топливо и использовать зажигалку, чтобы растопить печку." );
-			else
-			{
-				Item @wood = item.GetItem( PID_FIREWOOD, 0 );
-				Item @coal = item.GetItem( PID_COAL, 0);
-				cr.Say( SAY_NETMSG, "Чтобы потушить печку, используйте воду. Сейчас в ней " + ( valid( wood ) ? ( "" + wood.GetCount() ) : "нет" ) + " дров и " + ( valid( coal ) ? ( "" + coal.GetCount() ) : "нет" ) + " угля." );
-			}
-		else
+        if( map is null || furnace is null )
 		{
-			string temp = ( item.Val1 > 0 ? ( item.Val1 > 1 ? "обжигающая" : "горячая" ) : "холодная" );
-			cr.Say( SAY_NETMSG, "Печка " + ( item.Val0 == 1 ? "греется" : "остывает" ) + ", она " + temp + "." );
-		}
-	}
-    return true;
-}
+            return false;
+        }
 
-bool _FurnaceOnMe( Item& item, Critter& cr, Item@ usedItem )
-{
-	//Т.к. внутри switch-case нельзя объявлять переменные, объявляем их здесь:
-	Item@ wood;
-	Item@ coal;
-	Item@ plank;
-	Map@ map = GetMap( item.MapId );
-	@wood = item.GetItem( PID_FIREWOOD, 0 );
-	@plank = item.GetItem( PID_WOOD_PLANK2, 0 );
-	// @board = item.GetItem( PID_COAL, 0 );
-	@coal = item.GetItem( PID_COAL, 0 );
-	uint[] values = { item.Id, 0 };
-	// bool extinguish (Item& item, Critter& cr, Item@ usedItem)
-	// {
-		
-	// }
-	// bool lightup (Item& item, Critter& cr, Item@ usedItem)
-	// {
-		
-	// }
-	
-	switch( usedItem.GetProtoId() )
-	{
-		case( PID_GLASS_BOTTLE_FULL ):
-			if( item.Val0 == 0 )  //pechqa ostila
+        if( menu.Button( "Examine" )  )
+		{
+			if( furnace.STATE == STATE_BURNING )
 			{
-				if (cr.Stat[ST_INTELLECT] >= 5)
+				if( hasItems( cr, FurnaceTools, SLOT_HAND1 ) )
 				{
-					cr.Say( SAY_NETMSG, "В остывшую печь воду лучше не лить." ); 
+					ShowContainer( cr, furnace, TRANSFER_HEX_CONT_DOWN );
 					return false;
 				}
 				else
 				{
-					cr.Say( SAY_EMOTE_ON_HEAD, "заливает и так остывшую печку водой" );
-					_SubItem( usedItem, 1 );
-					item.Val0 = 0; //Гасим огонь
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOOLS_REQUIRED );
+					return true;
 				}
 			}
-			else if( item.Val0 == 1 && item.Val3 != 1 )  //pechqa gorit i eto ne ugol
-				{
-					cr.Say( SAY_EMOTE_ON_HEAD, "выливает воду в печку" );
-					map.SetText( item.HexX, item.HexY, COLOR_GRAY, ":" + "пшик испаряющейся воды" + ":" );
-					_SubItem( usedItem, 1 );
-					item.Val0 = 0; //Гасим огонь, по-настоящему
-				}
-			else if (item.Val3 == 1 ) //GORIT UGOL, seriozna
+            ShowContainer( cr, furnace, TRANSFER_HEX_CONT_DOWN );
+            return false; 
+        }
+
+		if( furnace.STATE == STATE_EXTINGUISHED )
+		{
+			if( menu.Button( "Ignite" )  )
 			{
-				if (cr.Stat[ST_INTELLECT] >= 5 )
+				if( hasItems( cr, Igniters ) )
 				{
-					cr.Say( SAY_NETMSG, "Вы догадались, что уголь просто так водой не потушить." ); 
-					return false;
+					Item@[] igniters = getItems( cr, Igniters );
+					Item@ igniter = igniters[0];
+					Ignite( cr, igniter, furnace );
+					return true;
 				}
 				else
 				{
-					cr.Say( SAY_EMOTE_ON_HEAD, "выливает воду в гудящую печку" );
-					map.SetText( item.HexX, item.HexY, COLOR_GRAY, ":" + "из печки брызнуло паром" + ":" );
-					_SubItem( usedItem, 1 );
-					//item.Val0 = 0; //Гасим огонь
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_LIGHTER );
+					return false;
 				}
 			}
-		break;	
-		case( PID_CLEAN_WATER2 ):
-			if( item.Val0 == 0 ) //pechqa ostila
+		}
+
+		if( menu.Button( "Extinguish" )  )
+		{
+			if( hasItems( cr, WaterSource ) )
 			{
-				if (cr.Stat[ST_INTELLECT] >= 5)
-				{
-					cr.Say( SAY_NETMSG, "В остывшую печь воду лучше не лить." ); 
-					return false;
-				}
-				else
-				{
-					cr.Say( SAY_EMOTE_ON_HEAD, "заливает и так остывшую печку водой" );
-					_SubItem( usedItem, 1 );
-					item.Val0 = 0; //Гасим огонь
-				}
-			}	
-			else if( item.Val0 == 1 && item.Val3 != 1 )  //pechqa gorit i eto ne ugol
-				{
-					cr.Say( SAY_EMOTE_ON_HEAD, "выливает воду в печку" );
-					map.SetText( item.HexX, item.HexY, COLOR_GRAY, ":" + "пшик испаряющейся воды" + ":" );
-					_SubItem( usedItem, 1 );
-					item.Val0 = 0; //Гасим огонь, по-настоящему
-				}
-			else if (item.Val3 == 1 ) //GORIT UGOL, seriozna
-			{
-				if (cr.Stat[ST_INTELLECT] >= 5 )
-				{
-					cr.Say( SAY_NETMSG, "Вы догадались, что уголь просто так водой не потушить." ); 
-					return false;
-				}
-				else
-				{
-					cr.Say( SAY_EMOTE_ON_HEAD, "вывает воду в гудящую печку" );
-					map.SetText( item.HexX, item.HexY, COLOR_GRAY, ":" + "из печки брызнуло паром" + ":" );
-					_SubItem( usedItem, 1 );
-					//item.Val0 = 0; //Гасим огонь, но ничего не происходит, т.к. горит уголь
-				}
-			}
-		break;	
-		case( PID_LIGHTER ):
-			if( item.Val0 == 1 ) return false;
-			if( !valid( wood ) && !valid( coal) )
-			{
-				cr.Say( SAY_NETMSG, "В печке нет ни дров, ни угля для розжига." );
+				Item@[] watersource = getItems( cr, WaterSource );
+				Item@ water = watersource[0];
+				Extinguish( cr, water, furnace );
 				return false;
-			}
-			else if ( !valid( wood ) && valid( coal ) )
-			{
-				cr.Say( SAY_NETMSG, "Одной зажигалкой заставить уголь гореть не получится. Нужна температура повыше." );
-				return false;
-			}
-			else if ( valid( wood ) && !valid( coal ) )
-			{
-				cr.Say( SAY_EMOTE_ON_HEAD, "разжигает огонь в печи" );
-				item.Val0 = 1; //разжигаем огонь в печи
-				EraseTimeEvent( item.Val2 ); //удаляет старый ивент, что бы печка одновременно не грелась-остужалась
-				item.Val2 = CreateTimeEvent( __FullSecond, "e_FurnaceBurn", values, true );
 			}
 			else
 			{
-				cr.Say( SAY_EMOTE_ON_HEAD, "разжигает огонь в печи" );
-				item.Val0 = 1; //разжигаем огонь в печи
-				EraseTimeEvent( item.Val2 ); //удаляет старый ивент, что бы печка одновременно не грелась-остужалась
-				item.Val2 = CreateTimeEvent( __FullSecond, "e_FurnaceBurn", values, true );
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_WATER_FOR_FIRE );
+				return true;
 			}
-		break;
-		case( PID_SHOVEL ):
-			cr.Say( SAY_EMOTE_ON_HEAD, "орудует совком" );
-			ShowContainer( cr, item, TRANSFER_HEX_CONT_DOWN );
-		break;
-		case( PID_CROWBAR ):
-			@wood = item.GetItem( PID_FIREWOOD, 0 );
-			@coal = item.GetItem( PID_COAL, 0 );
-			if( !valid( wood ) && !valid( coal )  ) 
-			{
-				cr.Say( SAY_NETMSG, "Нечего здесь выгребать." );
-				return false; 
-			}
-			else if ( valid( wood ) && !valid( coal ) ) 
-			{
-				cr.Say( SAY_EMOTE_ON_HEAD, "выгребает дрова" ); 
-				MoveItem( wood, wood.GetCount(), cr.GetMap(), cr.HexX, cr.HexY ); //выгребаем дрова под себя
-			}
-			else if ( !valid( wood ) && valid( coal ) ) 
-			{
-				cr.Say( SAY_EMOTE_ON_HEAD, "выгребает уголь" ); 
-				MoveItem( coal, coal.GetCount(), cr.GetMap(), cr.HexX, cr.HexY ); //выгребаем уголь под себя
-			}
-			else 
-			{
-				cr.Say( SAY_EMOTE_ON_HEAD, "выгребает дрова и уголь" );
-				MoveItem( wood, wood.GetCount(), cr.GetMap(), cr.HexX, cr.HexY ); //выгребаем дрова под себя
-				MoveItem( coal, coal.GetCount(), cr.GetMap(), cr.HexX, cr.HexY ); //выгребаем уголь под себя
-			}
+		}
 		
-		break;
-		default:
-			cr.Say( SAY_EMOTE_ON_HEAD, "бросает что-то в печь" );
-			MoveItem( usedItem, 1, item, 0 );
-		break;
+		if( menu.Button( "Add fuel" ) )
+		{
+			if( hasItems( cr, FireFuel ) )
+			{
+				Item@[] fireFuel = getItems( cr, FireFuel );
+				Item@ fuel = fireFuel[0];
+				FeedTheFire( cr, fuel, furnace );
+				return true;
+			}
+			else
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_FIREFUEL_2 );
+				return false;
+			}
+		}
+
+		if( menu.Button( "Close menu" ) )
+		{
+			return false;
+		}
+		return true;
 	}
-    return true;
+
+	string@ Description( Critter& cr )
+	{
+		string info;
+		Item@ furnace = GetItem( furnace_id );
+		Item@[] MaterialsCheck;
+		furnace.GetItems( uint( -1 ), MaterialsCheck );
+		Item@ material = null;
+		int check_kg = 0;
+
+		if( furnace.MAX_FUEL == 0 )
+		{
+            furnace.MAX_FUEL = 24000;
+        }
+
+ 		info += "|0x3CF800 Fuel: |0xFFFF00 " + furnace.CURRENT_FUEL * 100 / furnace.MAX_FUEL + "|0x3CF800 % Temprature: |0xFFFF00 " + furnace.FIRE_STRENGTH + "|0x3CF800 C.";
+		info += "\n|0x3CF800 Smelted products:";
+
+		if( furnace.FURN_IRON > 0 )
+		{
+			info += "\n|0x3CF800 Iron: |0xFFFF00 " + ( furnace.FURN_IRON / 1000.0f ) + "|0x3CF800  kg."; 
+			check_kg++;
+		}
+
+		if( furnace.FURN_GOLD > 0 )
+		{
+			info += "\n|0x3CF800 Gold: |0xFFFF00 " + ( furnace.FURN_GOLD / 1000.0f ) + "|0x3CF800  kg."; 
+			check_kg++; 
+		}
+
+		if( furnace.FURN_LEAD > 0 )
+		{
+			info += "\n|0x3CF800 Led: |0xFFFF00 " + ( furnace.FURN_LEAD / 1000.0f ) + "|0x3CF800  kg."; 
+			check_kg++;
+		}
+
+		if( furnace.FURN_COPPER > 0 )
+		{
+			info += "\n|0x3CF800 Cupper: |0xFFFF00 " + ( furnace.FURN_COPPER / 1000.0f ) + "|0x3CF800  kg."; 
+			check_kg++;
+		}
+
+		if( furnace.FURN_GLASS > 0 )
+		{
+			info += "\n|0x3CF800 Glass: |0xFFFF00 " + ( furnace.FURN_GLASS / 1000.0f ) + "|0x3CF800  kg."; 
+			check_kg++;
+		}
+
+		if ( check_kg < 1 )
+		{
+			info += "\n|0xFFFF00 The furnace is empty!";
+		}
+		return info;
+    }
+	
+    string@ ButtonCancel()
+	{
+        return ButtonDecorator( " ", null );
+    }
+
+	bool ShouldRedraw( Critter& cr )
+	{
+		return true;
+    }
 }
 
-uint e_FurnaceBurn( uint[]@ values )
+void StartMenuFurnace( Critter& cr, Item& furnace )
 {
-	if( !valid(values) ) return 0;
-	
-	Item@ furnace = GetItem( values[0] );
-	if( !valid(furnace) ) return 0;
+    Map@ map = cr.GetMap();
+    if( map is null )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuFurnace( furnace, map );
+    iDialogBox@ menu = OpenMenu( cr, "Furnace", handler );
+}
+
+void FurnaceStage( Item& furnace )
+{
+	if( !valid( furnace ) )
+	{
+		return;
+	}
 	
 	Map@ map = GetMap( furnace.MapId );
-	if( !valid(map) ) return 0;
-
-	Item@ wood  = furnace.GetItem( PID_FIREWOOD, 0 );
-	Item@ coal  = furnace.GetItem( PID_COAL, 0 );
-	
-	bool isOn = furnace.Val0 == 1; //нагревается или остывает)
-	bool isCoalBurning = furnace.Val3 == 0; //горит ли уголь в печи
-	int temp = furnace.Val1; //0 остыла, 1 - нагревается/остывает (нельзя трогать руками), 2 - нагрета (идёт процесс)
-	uint index = FurnaceToIndex(furnace.GetProtoId() );
-	uint parasha = FurnaceState[ (index * 3) + temp ];
-	
-	if( furnace.Val0 == 1 ) //огонь горит
+	if( !valid( map ) )
 	{
-		if (values[1] <= 0)
+		return;
+	}
+	
+	if( furnace.FIRE_STRENGTH < 0 )
+	{
+		furnace.FIRE_STRENGTH = 0;
+		EraseTimeEvent( furnace.EVENT );
+		furnace.EVENT = 0;
+		return;
+	}
+
+	if( furnace.STATE == STATE_EXTINGUISHED && furnace.FIRE_STRENGTH > 0 )
+	{
+		uint[] values = { furnace.Id };
+		furnace.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ),"e_CoolDown", values, true );
+	}
+
+	if( furnace.STATE == 1 && furnace.FIRE_STRENGTH < 1800 )
+	{
+		furnace.FIRE_STRENGTH += FUEL_BURN_AMMOUNT / 2;
+	}
+
+	Item@[] resources;
+	int burn_check = 0;
+
+	if( furnace.FURN_IRON > 0 ) 
+	{
+		ProtoItem@ MaterialProto = GetProtoItem( PID_IRON_BAR );	
+		burn_check = furnace.FURN_IRON - MaterialProto.Weight;
+
+		if( ( burn_check ) >= 0 )
 		{
-			if( valid( wood ) )
+			furnace.FURN_IRON = burn_check;
+			furnace.AddItem( PID_IRON_BAR, 1, 0 );
+		}
+	}
+
+	if( furnace.FURN_GOLD > 0 )
+	{
+		ProtoItem@ MaterialProto = GetProtoItem( PID_GOLDEN_BAR );	
+		burn_check = furnace.FURN_GOLD - MaterialProto.Weight;
+
+		if( ( burn_check ) >= 0 )
+		{
+			furnace.FURN_GOLD = burn_check;
+			furnace.AddItem( PID_GOLDEN_BAR, 1, 0 );
+		}
+	}
+
+	if( furnace.FURN_COPPER > 0 )
+	{
+		ProtoItem@ MaterialProto = GetProtoItem( PID_COPPER_BAR );	
+		burn_check = furnace.FURN_COPPER - MaterialProto.Weight;
+
+		if( ( burn_check ) >= 0 )
+		{
+			furnace.FURN_COPPER = burn_check;
+			furnace.AddItem( PID_COPPER_BAR, 1, 0 );
+		}
+	}
+
+	if( furnace.FURN_LEAD > 0 )
+	{
+		ProtoItem@ MaterialProto = GetProtoItem( PID_LEAD_INGOT );	
+		burn_check = furnace.FURN_LEAD - MaterialProto.Weight;
+
+		if ( ( burn_check ) >= 0 )
+		{
+			furnace.FURN_LEAD = burn_check;
+			furnace.AddItem( PID_LEAD_INGOT, 1, 0 );
+		}
+	}
+
+	if( furnace.FURN_GLASS > 0 )
+	{
+		ProtoItem@ MaterialProto = GetProtoItem( PID_GLASS_BAR );	
+		burn_check = furnace.FURN_GLASS - MaterialProto.Weight;
+
+		if( ( burn_check ) >= 0 )
+		{
+			furnace.FURN_GLASS = burn_check;
+			furnace.AddItem( PID_GLASS_BAR, 1, 0 );
+		}
+	}
+	
+	int count = furnace.GetItems( uint ( -1 ) , resources );
+	if( count > 0 )
+	{
+		int n = Random( 0, count - 1 );
+		uint type = BURN_TYPE_MISC;
+		uint16 materialPid = resources[n].GetProtoId();
+		ProtoItem@ MaterialProto = GetProtoItem( materialPid );
+
+		if( MaterialProto.Type == ITEM_TYPE_MISC )
+		{
+			if( MaterialProto.Material == MATERIAL_STONE )
 			{
-				furnace.Val3 = 0;
-				values[1] = MAX (1, GetProtoItem(wood.GetProtoId() ).BurnTime / parasha);
-				_SubItem( wood, 1 ); // горит сначала дерево, удаляем 1 шт
-			}
-			else if( valid( coal ) )
-			{
-				values[1] = MAX (1, GetProtoItem(coal.GetProtoId() ).BurnTime / parasha);
-				_SubItem( coal, 1 ); //потом горит уголь, удаляем 1 шт
-				furnace.Val3 = 1; //переводим печку на высокие температуры, когда начал гореть уголь
+				if ( materialPid == PID_METAL_ORE || materialPid == PID_GOLD_NUGGET || materialPid == PID_GOLD_ORE || materialPid == PID_COPPER_ORE 
+					|| materialPid == PID_COPPER_NUGGET || materialPid == PID_LEAD_NUGGET || materialPid == PID_LEAD_ORE )
+				{
+					type = BURN_TYPE_ORE;
+				}
 			}
 			else
 			{
-				furnace.Val0 = 0; //гаснет от нехватки топлива
-			} 
-		}
-	}
-	
-	if( !isOn ) {
-		if( temp == 2 ) {
-			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":огонь в печи меркнет:" );
-			furnace.Val1 = 1;
-			values[1] --;
-			return REAL_SECOND( parasha );
-		}
-		if( temp == 1 ) {
-			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":печь остывает:" );	
-			furnace.Val1 = 0;
-			values[1] --;
-			return REAL_SECOND( parasha );
-		}
-		if( temp == 0 ) {
-			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":печь остыла:" );	
-			return 0;
-		}
-	}
-	else
-	{
-		if( temp == 0 ) {
-			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":огонь разгорается в печи:" );	
-			furnace.Val1 = 1;
-			values[1] --;
-			return REAL_SECOND( parasha );
-		}
-		if( temp == 1 ) {
-			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":печь нагревается:" );	
-			furnace.Val1 = 2;
-			values[1] --;
-			return REAL_SECOND( parasha );
-		}
-		if( temp == 2 ) {
-			//Log("Vremya: " + values[1] + "." );
-			string[] desc = { "громкий треск огня в печи", "от печи исходит жар", "мерцание пламени в печи", "из печи валит дым", "из трубы валит дымок" };
-			map.SetText( furnace.HexX, furnace.HexY, COLOR_GRAY, ":" + desc[Random( 0, desc.length() - 1 )] + ":" );	
-			//Готовка происходит тут:
-			Item@[] resources;
-			int count = furnace.GetItems( 0, resources );
-			if( count > 0 ) 
-			{
-				int n = Random( 0, count - 1 );
-				for( uint i = 0; i < FurnaceResourceTransfer.length(); i++ )
+				if( materialPid == PID_IRON_BAR || materialPid == PID_GOLDEN_BAR || materialPid == PID_COPPER_BAR || materialPid == PID_LEAD_INGOT || materialPid == PID_GLASS_BAR )
 				{
-					if( valid(FurnaceResourceTransfer[i]) && FurnaceResourceTransfer[i].length() == 4
-						&& resources[n].GetProtoId() == FurnaceResourceTransfer[i][0] 
-						&& resources[n].GetCount() >= FurnaceResourceTransfer[i][1] )
-					{
-						_SubItem( resources[n], FurnaceResourceTransfer[i][1] );
-						furnace.AddItem( FurnaceResourceTransfer[i][2], FurnaceResourceTransfer[i][3], 0 );
-					}
+					type = 101;
+				}
+				else
+				{
+					type = BURN_TYPE_MISC;
 				}
 			}
-			values[1] --;
-			return REAL_SECOND( parasha );
-			
+		}
+
+		if( MaterialProto.Type == ITEM_TYPE_ARMOR )
+		{
+			type = BURN_TYPE_ARMOUR;
+		}
+
+		if( MaterialProto.Type == ITEM_TYPE_WEAPON )
+		{
+			type = BURN_TYPE_WEAPON;
+		}
+
+		if( type != 101 )
+		{
+			BurnItem ( furnace, materialPid, type );
+			if( Explosives.find( materialPid ) != -1 )
+			{
+				uint[] values = { furnace.Id };
+				CreateTimeEvent( AFTER( REAL_SECOND( Random( 0, 10 ) ) ),"firestarter@e_Explosives", values, true );
+			}
+			_SubItem( resources[n], 1 );
 		}
 	}
-	return 0;
 }
+
+uint e_CoolDown( uint[]@ values )
+{
+	Item@ furnace = GetItem( values[0] );
+	
+	if( furnace.STATE == STATE_BURNING )
+	{
+		return 0;
+	}
+	
+	furnace.FIRE_STRENGTH -= FUEL_BURN_AMMOUNT / 2;
+	if( furnace.FIRE_STRENGTH <= 0 )
+	{
+		furnace.FIRE_STRENGTH = 0;
+		EraseTimeEvent( furnace.EVENT );
+		furnace.EVENT = 0;
+		return 0;
+	}
+	return FIRE_BURNING_TIME;
+}
+
+void BurnItem(  Item& furnace, uint16 materialPid, uint16 type )
+{
+    Map@ map = GetMap( furnace.MapId );
+    ProtoItem@ MaterialProto = GetProtoItem( materialPid );
+    uint16 hx = furnace.HexX, hy = furnace.HexY;
+
+	if( furnace.FIRE_STRENGTH == 0 || furnace.STATE == 0 )
+	{
+		return;
+	}
+
+    Item@ fireFX = map.AddItem( furnace.HexX, furnace.HexY, PID_SMOKE, 1 );
+    uint[] values = { fireFX.Id };
+    fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ),"firestarter@e_fireFX", values, true );
+
+	float burn_k = 0.0f;
+
+    switch( type )
+    {
+        case( BURN_TYPE_ORE ):
+            burn_k = ORE_K;
+            break;
+        case( BURN_TYPE_MISC ):
+            burn_k = MISC_K;
+            break;
+        case( BURN_TYPE_ARMOUR ):
+            burn_k = ARMOUR_K;
+            break;
+        case( BURN_TYPE_WEAPON ):
+            burn_k = WEAPON_K;
+            break;
+        default:
+            burn_k = 0.5f;
+            break;
+    }
+
+	string resourceType;
+    uint16 SmeltingTemp;
+
+    switch( MaterialProto.Material )
+    {
+        case( MATERIAL_METAL ):
+            resourceType = "FURN_IRON";
+            SmeltingTemp = BURN_IRON;
+            break;
+        case( MATERIAL_GOLD ):
+            resourceType = "FURN_GOLD";
+            SmeltingTemp = BURN_GOLD;
+            break;
+        case( MATERIAL_LEAD ):
+            resourceType = "FURN_LEAD";
+            SmeltingTemp = BURN_LEAD;
+            break;
+        case( MATERIAL_COPPER ):
+            resourceType = "FURN_COPPER";
+            SmeltingTemp = BURN_COPPER;
+            break;
+        case( MATERIAL_GLASS ):
+            resourceType = "FURN_GLASS";
+            SmeltingTemp = BURN_GLASS;
+            break;
+        case( MATERIAL_STONE ):
+        {
+            switch( materialPid )
+            {
+                case( PID_METAL_ORE ):
+                    resourceType = "FURN_IRON";
+                    SmeltingTemp = BURN_IRON;
+                    break;
+                case( PID_GOLD_NUGGET ):
+                case( PID_GOLD_ORE ):
+                    resourceType = "FURN_GOLD";
+                    SmeltingTemp = BURN_GOLD;
+                    break;
+                case( PID_COPPER_ORE ):
+                case( PID_COPPER_NUGGET ):
+                    resourceType = "FURN_COPPER";
+                    SmeltingTemp = BURN_COPPER;
+                    break;
+                case( PID_LEAD_NUGGET ):
+                case( PID_LEAD_ORE ):
+                    resourceType = "FURN_LEAD";
+                    SmeltingTemp = BURN_LEAD;
+                    break;
+            }
+            break;
+        }
+        default:
+            SmeltingTemp = 600;
+            break;
+    }
+
+	if ( furnace.FIRE_STRENGTH >= SmeltingTemp && SmeltingTemp != 0 )
+	{
+		if ( resourceType == "FURN_IRON" )
+		{
+			furnace.FURN_IRON += ( MaterialProto.Weight * burn_k );
+		}
+
+		if ( resourceType == "FURN_GOLD" )
+		{
+			furnace.FURN_GOLD += ( MaterialProto.Weight * burn_k );
+		}
+
+		if ( resourceType == "FURN_COPPER" )
+		{
+			furnace.FURN_COPPER += ( MaterialProto.Weight * burn_k );
+		}
+
+		if ( resourceType == "FURN_LEAD" )
+		{
+			furnace.FURN_LEAD += ( MaterialProto.Weight * burn_k );
+		}
+
+		if ( resourceType == "FURN_GLASS" )
+		{
+			furnace.FURN_GLASS += ( MaterialProto.Weight * burn_k );
+		}
+	}
+	return;
+}
+
+#endif //FURNACE

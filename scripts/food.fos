@@ -1,27 +1,21 @@
-// Author: Anuri
+#ifndef FOOD
+#define FOOD
 
 #include "_utils.fos"
+#include "food_h.fos"
 #include "_ltp.fos"
 #include "gathering_h.fos"
-
-import void AffectPoison( Critter& cr, int value ) from "poison";
-import void AffectRadiation( Critter& cr, int value ) from "radiation";
-import bool SetDrug( Critter& cr, uint16 drugPid ) from "drugs";
-import void AffectParalysis( Critter& cr, int value ) from "paralysis";
-
-#define REMAINING_USES							Val0 	// Кол-во оставшихся использований
-#define EXTRA_WEIGHT							Val2	// Дополнительный вес жидкости
-#define TOXIN_LEVEL								Val5 	// Уровень токсичности
-#define POLUTION_LEVEL							Val7 	// Кол-во загрязнения
-#define TASTE 									Val8 	// Вкус
-#define SPIRIT_LEVEL							Val9 	// Градус спирта
+#include "drugs_h.fos"
+#include "radiation_h.fos"
+#include "paralysis_h.fos"
+#include "poison_h.fos"
 
 void ProccessFood( Critter& cr, Critter& target, Item& item )
 {
 	if( cr.Id != target.Id && !target.IsDead() && !target.IsKnockout() && target.StatBase[ ST_CURRENT_HP ] > 0 && !isOwningNPC( cr, target ) && !sameFaction( cr, target ) )
 	{
-		cr.Say( SAY_NETMSG, "Цель сопротивляется." );
-		SayLog( cr, crInfo( cr ) + " безуспешно пытается применить " + itemDesc( item ) + " на " + crInfo( target ) + "." );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_RESIST );
+		SayLog( cr, crInfo( cr ) + " unsuccessfully tried to use " + itemDesc( item ) + " on " + crInfo( target ) + "." );
 		return;
 	}
 	
@@ -34,12 +28,13 @@ void ProccessDrink( Critter& cr, Critter& target, Item& item )
 {
 	if( cr.Id != target.Id && !target.IsDead() && !target.IsKnockout() && target.StatBase[ ST_CURRENT_HP ] > 0 && !isOwningNPC( cr, target ) && !sameFaction( cr, target ) )
 	{
-		cr.Say( SAY_NETMSG, "Цель сопротивляется." );
-		SayLog( cr, crInfo( cr ) + " безуспешно пытается применить " + itemDesc( item ) + " на " + crInfo( target ) + "." );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_RESIST );
+		SayLog( cr, crInfo( cr ) + " unsuccessfully tried to use " + itemDesc( item ) + " on " + crInfo( target ) + "." );
 		return;
 	}
 	
-	if( item.REMAINING_USES <= 0) { //защита от багованных бутылок
+	if( item.REMAINING_USES <= 0)
+	{
 		SpillOut( item );
 		return;
 	}
@@ -58,17 +53,20 @@ void drinking_process( Critter& cr, Item@ item )
 {		
 	Emote( cr, item );
 	
-	if( !SpillOut( item ) )//После этой ф-ии в &item уже указатель на предмет-замену (вскрытую тару).
+	if( !SpillOut( item ) ) //change of pointer to opened bottle
+	{
 		return;
-		
+	}	
 	start_consuming( cr, item );
 }
 
 bool affectFoodEffects( Critter& cr, uint food_pid, uint amount = 1 )
 {
 	ProtoItem@ proto = GetProtoItem( food_pid );
-	if( !valid( proto ) ) return testInfo( cr, "affectFoodEffects: !valid pid " + food_pid );
-
+	if( !valid( proto ) )
+	{
+		return testInfo( cr, "affectFoodEffects: !valid pid " + food_pid );
+	}
 	uint flag = proto.Food_Flags;
     CheckFoodFlags( cr, flag );
 	
@@ -79,11 +77,13 @@ void CheckFoodFlags( Critter& target, uint flag )
 {
 	if( flag != 0 )
     {
-        if( FLAG( FOOD_KNOCKOUT, flag ) ) {
+        if( FLAG( FOOD_KNOCKOUT, flag ) )
+		{
            target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 100, target.HexX, target.HexY );
         }
         
-		if( FLAG( FOOD_POISONED, flag ) ) {
+		if( FLAG( FOOD_POISONED, flag ) )
+		{
             AffectPoison( target, Random( 10, 25 ) );
         }
 		
@@ -95,67 +95,60 @@ void CheckFoodFlags( Critter& target, uint flag )
 
 void CheckToxins( Critter& target, Item& item )
 {
-	if( item.TOXIN_LEVEL >= 100 ) {
-		
-		if( target.Param[ QST_GAMEMODE ] == GAME_TEST ) {
-			target.Say( SAY_NETMSG, "Вы чувствуете нейротоксин в употребляемом продукте. Его сила ~" + item.TOXIN_LEVEL + "." );
-		}
-		
-		target.ParamBase[CR_VAL9] = 1; //Быстрый режим паралича.
+	if( item.TOXIN_LEVEL >= 100 )
+	{
+		target.ParamBase[CR_VAL9] = 1; //fast neuro-toxin
 		AffectParalysis( target, item.TOXIN_LEVEL );
-		
-	} else {
-		
-		if( target.Param[ QST_GAMEMODE ] == GAME_TEST ) {
-			target.Say( SAY_NETMSG, "Употребляемый продукт недостаточно вреден, что бы подействовать как нейротоксин. Его сила ~" + item.TOXIN_LEVEL + "." );
-		}
 	}
 }
 
 void ApplyFoodEffects( Critter& target, Item& item )
 {
+	CheckSpiritLevel( target, item );
 	uint8  hungerModifier = item.Proto.Food_Restore;
     uint8  ThirstModifier = item.Proto.Food_Thrist;
-	target.StatBase[ ST_HUNGER ] += hungerModifier; //* SATURATION_SIMPLIFIER; пока отключено для напитков
+	target.StatBase[ ST_HUNGER ] += hungerModifier; //* SATURATION_SIMPLIFIER;
 	target.StatBase[ ST_THIRST ] += ThirstModifier; //* SATURATION_SIMPLIFIER;
 	target.ParamBase[ ST_POISONING_LEVEL ] += item.POLUTION_LEVEL;
-	if( target.ParamBase[ ST_RADIATION_LEVEL ] > 0 ) {
+	if( target.ParamBase[ ST_RADIATION_LEVEL ] > 0 )
+	{
 		target.ParamBase[ ST_RADIATION_LEVEL ] -= item.SPIRIT_LEVEL * 0.25;
 	}
-	if( target.ParamBase[ ST_DRUNK ] != 100 ) {
+	if( target.ParamBase[ ST_DRUNK ] != 100 )
+	{
 		target.ParamBase[ ST_DRUNK ] += item.SPIRIT_LEVEL * 0.25;
-	} else {
+		if( target.StatBase[ ST_DRUNK ] > 0 && target.GetTimeEvents( CTE_DRUNK, null, null, null ) < 1 )
+		{
+			target.AddTimeEvent( "gameplay@cte_Drunk", REAL_SECOND( target.Param[ CR_DRUNK_SPEED ] ), CTE_DRUNK, 0 );
+		}
+	}
+	else
+	{
 		AffectPoison( target, item.SPIRIT_LEVEL * 0.25 );
 	}
 }
 
 void Emote( Critter& target, Item& consumed )
 {
-	target.Say( SAY_EMOTE_ON_HEAD, "Пьет" );
-
-	string consumedTaste = "";
-	string radLevel = "";
-	string poisonLevel = "";
+	target.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT,STR_EMOTE_DRINKS );
+	target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CONSUMED_DRINK, "$proto@msg item " + ( consumed.Proto.ProtoId * 100 ) + "@" );
 	
-	if( target.ParamBase[ ST_RADIATION_LEVEL ] > 0 && consumed.SPIRIT_LEVEL != 0 ) {
-		int amount = consumed.SPIRIT_LEVEL;
-		radLevel = " Вы потеряли: " + "|0xFFFF00 " + amount + " |0x3CF800 рад.";
+	if( target.ParamBase[ ST_RADIATION_LEVEL ] > 0 && consumed.SPIRIT_LEVEL != 0 )
+	{
+		target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOST_RAD, "$rad" + consumed.SPIRIT_LEVEL );
 	}
 	
-	if( consumed.POLUTION_LEVEL != 0 ) {
-		int poison = consumed.POLUTION_LEVEL;
-		poisonLevel = " Вы получили: " + "|0xFFFF00 " + poison + " |0x3CF800 пунктов отравления.";
+	if( consumed.POLUTION_LEVEL != 0 )
+	{
+		target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DRUNK_POISON, "$poison" + consumed.POLUTION_LEVEL );
 	}
-	
-	uint16 consumedPid = consumed.GetProtoId();
-	consumedTaste = " " + GetMsgStr( 0, TEXTMSG_ITEM, consumedPid * 100 );
-	
-	target.Say( SAY_NETMSG, "Вы употребили: " + "|0xFFFF00" + consumedTaste + "|0x3CF800 . " + radLevel  + " |0x3CF800 " + poisonLevel ); 	
 }
 
 void CheckSpiritLevel( Critter& target, Item& consumed )
 {
-	if( consumed.SPIRIT_LEVEL != 0 ) { return;
+	if( consumed.SPIRIT_LEVEL != 0 )
+	{
+		return;
 	}
 	
 	const uint8 item_Subtype = consumed.Proto.Item_Subtype;
@@ -179,20 +172,21 @@ void CheckSpiritLevel( Critter& target, Item& consumed )
 	}
 }
 
-bool ltp_install_inited = false;
-void ltp_install_init()
+bool ltp_consuming_inited = false;
+void ltp_consuming_init()
 {
 	LTPREG( LTP_CONSUMING, process_consuming )
-	ltp_install_inited = true;
+	ltp_consuming_inited = true;
 }
 
 bool start_consuming( Critter& cr, Item& consumed )
 {
-	if(!ltp_install_inited) 
-		ltp_install_init();
-	
+	if(!ltp_consuming_inited)
+	{
+		ltp_consuming_init();
+	}
 	//cr.ParamBase[ CR_IS_USING ] = 1;
-	//cr.SetAnims( COND_LIFE, 0, ANIM2_DRINKING ); - не хватает технологии выбора фрейма
+	//cr.SetAnims( COND_LIFE, 0, ANIM2_DRINKING ); - extra anims required
 	
 	StartProcess( cr, LTP_CONSUMING, 0, 0, consumed.Id, 0 );
 
@@ -210,7 +204,7 @@ uint process_consuming( Critter@ cr, int& param0, int& param1, int& param2 )
 	if( param0 > 4 )
 	{
 		/*cr.ParamBase[ CR_IS_USING ] = 0;
-		if(cr.Anim2Life == ANIM2_DRINKING) {		 - не хватает технологии выбора фрейма
+		if(cr.Anim2Life == ANIM2_DRINKING) {		 - extra anims required
 			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
 		}*/
 		return 0;
@@ -218,3 +212,5 @@ uint process_consuming( Critter@ cr, int& param0, int& param1, int& param2 )
 
 	return 1000;
 }
+
+#endif //FOOD

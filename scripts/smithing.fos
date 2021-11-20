@@ -1,53 +1,199 @@
-// Author: Anuri
+#ifndef SMITHING
+#define SMITHING
 
 #include "_utils.fos"
+#include "smithing_h.fos"
 #include "_ltp.fos"
 #include "gathering_h.fos"
+#include "speed_h.fos"
 
+class MenuAnvil: CenteredMenuHandler
+{
+    uint anvil_id;
+    uint map_id;
+	
+    MenuAnvil( Item& anvil, Map& map )
+	{
+        anvil_id = anvil.Id;
+        map_id = map.Id;
+    }
 
-const uint16[] SmithingTools = { PID_SLEDGEHAMMER, PID_SUPER_SLEDGE, PID_SLEDGEHAMMER2, PID_mltelctr, PID_mlthmmr1, PID_mltmlot2, PID_SLEDGE, PID_PRIMITIVE_SLEDGE };
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+        Item@ anvil = GetItem( anvil_id );
+	
+		bool locked_in_place = !FLAG( anvil.Flags, ITEM_CAN_PICKUP );
+	
+        if( map is null || anvil is null )
+		{
+            return false;
+        }
 
-const uint16[] MaterialList = { PID_IRON_BAR,	PID_COPPER_BAR,  PID_GOLDEN_BAR  };
-const uint16[] ResultList   = { PID_IRON_PLATE, PID_COPPER_LEAF, PID_GOLDEN_COIN };
-const uint16[] Amount 		= { 	1, 				  1, 			  100 		 };
+		if( locked_in_place )
+		{
+			if( hasItems( cr, SmithingTools, SLOT_HAND1 ) && menu.Button( "Smith" ) )
+			{
+				Item@ tool = _CritGetItemHand( cr );
+				PrepareSmithing( cr, tool, anvil );
+				return false;
+			}
 
-const string[] SmithingSounds = { "smithing1.ogg", "smithing2.ogg" };
+			if( menu.Button( "Examine" ) )
+			{
+				ShowContainer( cr, anvil, TRANSFER_HEX_CONT_UP );
+				return false;
+			}
+			
+			if( menu.Button( "Detach" ) )
+			{
+				LockInPlace( cr, anvil );
+				return true;
+			}
+		}
+		else
+		{
+			if( menu.Button( "Anchor" ) )
+			{
+				LockInPlace( cr, anvil );
+				return true;
+			}
 
-// LTP (long time process)
+			if( menu.Button( "Pick up" ) )
+			{
+				PickItem( cr, anvil );
+				ChangeCritterSpeed( cr );
+				return false;
+			}			
+		}
+		return true;
+    }
+	
+    string@ Description( Critter& cr )
+	{
+	
+		string info;
+		Item@ anvil = GetItem( anvil_id );
+		
+		Item@[] MaterialsCheck;
+		anvil.GetItems( uint( -1 ), MaterialsCheck );
+		Item@ material = null;
+		
+		if( MaterialsCheck.length() == 0 )
+		{ 
+			info = "|0x3CF800 The anvil is empty."; 
+		}
+		else
+		{
+			for( uint i = 0; i < MaterialsCheck.length(); i ++ )
+			{
+				uint16 materialPid = MaterialsCheck[i].GetProtoId();
+				if( MaterialList.find( materialPid ) != -1 )
+				{
+					@material = MaterialsCheck[i];
+					break;
+				}
+			}
+		}
+		
+		if( !valid( material ) )
+		{ 
+			info = "|0x3CF800 There is no approporiate metal ingot on the anvil.";
+        }
+		else
+		{
+			string amount = 0;
+			uint16 materialPid = material.GetProtoId();
+			info = "|0x3CF800 There is a ";
+			info += "|0xFFFF00 " + GetMsgStr( 1, TEXTMSG_ITEM, materialPid * 100 ) + "|0x3CF800  on the anvil";
+			amount = "|0xFFFF00 " + material.GetCount();
+			info += "|0x3CF800  - ";
+			info += "|0xFFFF00 " + amount;
+			info += "|0x3CF800  pcs.";
+		}
+		return info;
+    }
+	
+    string@ ButtonCancel()
+	{
+        return ButtonDecorator( "Hide menu", null );
+    }
+}
+
+void StartMenuAnvil( Critter& cr, Item& anvil )
+{
+    Map@ map = cr.GetMap();
+    if( map is null )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuAnvil( anvil, map );
+    iDialogBox@ menu = OpenMenu( cr, "Anvil", handler );
+}
+
 bool ltp_smithing_inited = false;
 void ltp_smithing_init()
 {
 	LTPREG( LTP_SMITHING, process_Smithing )
 	ltp_smithing_inited = true;
 }
-//exported to main.fos - checks before start
+
 bool PrepareSmithing( Critter& cr, Item@ tool, Item@ anvil ) 
 {
 	Map@ map = cr.GetMap();
-    if( !valid( map ) ) { return false; }
-	if( !valid( tool ) || !valid( anvil ) ) { return false; }
-	if( !hasItems( cr, SmithingTools, SLOT_HAND1 ) ) { return false; }
+    if( !valid( map ) )
+	{
+		return false;
+	}
+	
+	if( !valid( tool ) || !valid( anvil ) || anvil.GetProtoId() != PID_ANVIL )
+	{
+		return false;
+	}
+	
+	if( !hasItems( cr, SmithingTools, SLOT_HAND1 ) )
+	{
+		return false;
+	}
 
-	if( IsTired( cr ) ) { return false; }
-	if( IsWounded( cr ) ) { return false; }
+	if( IsTired( cr ) )
+	{
+		return false;
+	}
+	
+	if( cr.IsInjured() )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_CANT_WORK );
+		return false; 
+	}
 	
 	Item@[] MaterialsCheck;
 	anvil.GetItems( uint( -1 ), MaterialsCheck );
 	Item@ material = null;
 	
-	if( MaterialsCheck.length() == 0 ) { 
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Наковальня пуста." ); 
+	if( MaterialsCheck.length() == 0 )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ANVIL_EMPTY ); 
 		return false; 
-		
-	} else {
-		for( uint i = 0; i < MaterialsCheck.length(); i ++ ) {
+	}
+	else
+	{
+		for( uint i = 0; i < MaterialsCheck.length(); i ++ )
+		{
 			uint16 materialPid = MaterialsCheck[i].GetProtoId();
-			if( MaterialList.find( materialPid ) != -1 ) {
+			if( MaterialList.find( materialPid ) != -1 )
+			{
 				@material = MaterialsCheck[i];
 				break;
 			}
 		}
-		if( !valid( material ) ) { cr.Say( SAY_NETMSG, "|0xFFFF00 На наковальне нет подходящего бруса." ); return false; }
+		
+		if( !valid( material ) )
+		{ 
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_INGOT ); 
+			return false; 
+		}
 	}
 	
 	start_Smithing( cr, tool, anvil, material );
@@ -56,16 +202,19 @@ bool PrepareSmithing( Critter& cr, Item@ tool, Item@ anvil )
 
 bool start_Smithing( Critter& cr, Item& tool, Item& anvil, Item@ material )
 {
-	if(!ltp_smithing_inited) 
+	if(!ltp_smithing_inited)
+	{
 		ltp_smithing_init();
-
+	}
+	
 	if( valid( tool ) && valid( anvil ) )
 	{	
 		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
 		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
 		uint[] values = { cr.Id };
 		
-		CreateTimeEvent( AFTER( REAL_MS( 500 ) ), "e_SmithingSound", values, false);
+		_CritAnimateSwing( cr );
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_SmithingSound", values, false);
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
 
 		StartProcess( cr, LTP_SMITHING, 0, anvil.Id, material.Id, action_pause );
@@ -90,7 +239,7 @@ uint process_Smithing( Critter@ cr, int& param0, int& param1, int& param2 )
 		
 		if( param0 > sequence_length )
 		{
-			cr.Say( SAY_EMOTE, "завершает работу" );
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_FINISH_SMITHING );
 			Profit( cr, anvil, material );
 			int skillNum = SK_REPAIR;
 			Accident( cr, skillNum );
@@ -98,7 +247,7 @@ uint process_Smithing( Critter@ cr, int& param0, int& param1, int& param2 )
 		}
 		
 		uint[] values = { cr.Id };
-		CreateTimeEvent( AFTER( REAL_MS( 500 ) ), "e_SmithingSound", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_SmithingSound", values, true);
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
 
 		_CritAnimateSwing( cr );
@@ -118,7 +267,10 @@ uint e_SmithingSound( uint[]@ values )
 
 void Profit(  Critter& cr, Item& anvil, Item& material )
 {
-	if( !valid( anvil) && !valid( material ) ) { return ; }
+	if( !valid( anvil) && !valid( material ) )
+	{
+		return;
+	}
 	
 	uint16 materialPid = material.GetProtoId();
 	uint8 index = MaterialList.find( materialPid );
@@ -127,13 +279,9 @@ void Profit(  Critter& cr, Item& anvil, Item& material )
 	cr.AddItem( resultPid, amount );
 	_SubItem( material, 1 );
 	
-	string inform = "Вы получили: \n";
-	inform += "- ";
-	inform += "|0xFFFF00 " + _GetProtoName( resultPid );
-	inform += "|0x3CF800  - ";
-	inform += "|0xFFFF00 " + amount;
-	inform += "|0x3CF800  шт.";
-	cr.Say( SAY_NETMSG, inform );
-	
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_CRAFTED_PID, "$proto@msg item " +  ( resultPid * 100 ) + "@$amount" + amount + "\n" );
+
 	cr.StatBase[ST_EXPERIENCE] += 25;
 }
+
+#endif //SMITHING
