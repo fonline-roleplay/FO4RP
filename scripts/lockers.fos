@@ -78,20 +78,24 @@ bool hasKey( Item& locker, int dir = NO_DIR )
 
 bool hasKey( Critter& cr, Item& locker )
 {
-	Item@ hand = cr.GetItem( 0, SLOT_HAND1 );
-	if( !valid( hand ) )
+	Item@[] keys;
+	cr.GetItemsByType( ITEM_TYPE_KEY, keys );
+	uint len = keys.length();
+	if( len > 0 )
 	{
-		return testInfo( cr, "Empty hand." );
+		for( uint i = 0; i < len; i ++ )
+		{
+			if( keys[i].LockerId != locker.LockerId )
+			{
+				continue;
+			}
+			else
+			{
+				return true;
+			}
+		}
 	}
-	if( hand.GetType() != ITEM_TYPE_KEY )
-	{
-		return testInfo( cr, "Not a key." );
-	}
-	if( hand.LockerId != locker.LockerId )
-	{
-		return testInfo( cr, "Wrong locker id: " + hand.LockerId + " != " + locker.LockerId );
-	}
-	return true;
+	return false;
 }
 
 bool LockpickMenu( Critter& cr, Item& locker )
@@ -266,7 +270,7 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
     else if( skill == SK_STEAL )
     {
         if( locker.GetType() == ITEM_TYPE_CONTAINER &&
-            ( ( !locker.Proto.Container_Changeble && FLAG( locker.Flags, ITEM_CAN_PICKUP ) && locker.Accessory == ACCESSORY_HEX ) ||
+            ( ( !locker.Proto.Container_Changeble && locker.Accessory == ACCESSORY_HEX ) ||
               FLAG( locker.LockerCondition, LOCKER_ISOPEN ) ) )
         {
             ShowContainer( cr, locker, locker.Proto.GroundLevel ? TRANSFER_HEX_CONT_DOWN : TRANSFER_HEX_CONT_UP );
@@ -492,6 +496,7 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
 				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_UNLOCK_DOOR );
 				LogItemMovement( player, lock, "unlocks" ); 
 				player.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_UNLOCKS );
+				PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
 			}
 			else
 			{
@@ -499,6 +504,7 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
 				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOCK_DOOR );
 				LogItemMovement( player, lock, "locks" ); 
 				player.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_LOCKS );
+				PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
 			}
 		}
 		else
@@ -511,14 +517,16 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
 					UNSETFLAG( lock.LockerCondition, LOCKER_LOCKED );
 					player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_UNLOCK_DOOR );
 					player.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_UNLOCKS );
-					LogItemMovement( player, lock, "unlocks" ); 
+					LogItemMovement( player, lock, "unlocks" );
+					PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
 				}
 				else
 				{
 					SETFLAG( lock.LockerCondition, LOCKER_LOCKED );
 					player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOCK_DOOR );
 					player.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_LOCKS );
-					LogItemMovement( player, lock, "locks" ); 
+					LogItemMovement( player, lock, "locks" );
+					PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
 				}
 			}
 			else 
@@ -534,21 +542,27 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
 
 bool takeKey( Critter& cr, Item& locker )
 {
-	Item@[] list = getItemsAround( locker );
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return false;
+	}
 	
+	Item@[] list = getItemsAround( locker );
 	for( uint i = 0, len = list.length(); i < len; i++ )
 	{
 		if( list[i].GetType() == ITEM_TYPE_KEY && list[i].LockerId == locker.LockerId )
 		{
-			if( list[i].Val9 != 0 )
+			if( list[i].KEY_EVENT != 0 )
 			{
-				EraseTimeEvent( list[i].Val9 );
-				list[i].Val9 = 0;
+				EraseTimeEvent( list[i].KEY_EVENT );
+				list[i].KEY_EVENT = 0;
 			}
 			
 			MoveItem( list[i], 1, cr );
 			UNSETFLAG( list[i].Flags, ITEM_HIDDEN );
 			list[i].Update();
+			PlayGenericSound( map, cr.HexX, cr.HexY, "ui_lockpicking_enter.wav", 6 );
 			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_EJECT_KEY );
 			return true;
 		}
@@ -558,33 +572,43 @@ bool takeKey( Critter& cr, Item& locker )
 
 bool putKey( Critter& cr, Item& locker )
 {
-	Item@ hand = cr.GetItem( 0, SLOT_HAND1 );
-	if( !valid( hand ) )
-	{
-		return testInfo( cr, "Empty hand." );
-	}
-	if( hand.GetType() != ITEM_TYPE_KEY )
-	{
-		return testInfo( cr, "Not a key." );
-	}
-	if( hand.LockerId != locker.LockerId )
-	{
-		return testInfo( cr, "Wrong locker id: " + hand.LockerId + " != " + locker.LockerId );
-	}
-	
 	Map@ map = cr.GetMap();
 	if( !valid( map ) )
 	{
-		return testInfo( cr, "Attempted to 'putKey' on global by cr #" + cr.Id + " for locker #" + locker.Id + "." );
+		return false;
 	}
-	MoveItem( hand, 1, map, cr.HexX, cr.HexY );
-	SETFLAG( hand.Flags, ITEM_HIDDEN );
 	
-	uint[] vals = { hand.Id, locker.Id };
-	hand.Val9 = CreateTimeEvent( AFTER( REAL_DAY( 10 ) ), "e_KeyRust", vals, true );
+	Item@[] keys;
+	Item@ key = null;
+	cr.GetItemsByType( ITEM_TYPE_KEY, keys );
+	uint len = keys.length();
+	if( len > 0 )
+	{
+		for( uint i = 0; i < len; i ++ )
+		{
+			if( keys[i].LockerId != locker.LockerId )
+			{
+				continue;
+			}
+			else
+			{
+				@key = keys[i];
+			}
+		}
+	}
 	
-	hand.Update();
+	if( !valid( key ) )
+	{
+		return false;
+	}
 	
+	MoveItem( key, 1, map, cr.HexX, cr.HexY );
+	SETFLAG( key.Flags, ITEM_HIDDEN );
+	uint[] vals = { key.Id, locker.Id };
+	key.KEY_EVENT = CreateTimeEvent( AFTER( REAL_DAY( 10 ) ), "e_KeyRust", vals, true );
+
+	key.Update();
+	PlayGenericSound( map, cr.HexX, cr.HexY, "ui_lockpicking_enter.wav", 6 );
 	cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_INJECTS_KEY );
 	return true;
 }
@@ -1042,7 +1066,7 @@ void LockerBudge( Item& item )
 	{
         return;
 	}
-	string sound = item.GetType() == ITEM_TYPE_DOOR ? "SLDOORSC.ACM" : "ILCNTNRB.ACM"; // fix to sound database
+	string sound = item.GetType() == ITEM_TYPE_DOOR ? "SLDOORSC.mp3" : "ILCNTNRB.mp3"; // fix to sound database
     map.PlaySound( sound, item.HexX, item.HexY, 8 );
 }
 
@@ -1105,7 +1129,7 @@ bool LockerRemoval( Critter& cr, Item@ item, Item@ targetItem )
 		targetItem.Update();
 		
 		Map@ map = cr.GetMap();
-		PlayGenericSound( map, cr.HexX, cr.HexY, "ILCNTNRC.ACM", 20 );
+		PlayGenericSound( map, cr.HexX, cr.HexY, "ILCNTNRC.mp3", 20 );
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REMOVED_LOCK );
 	}
 	return true;

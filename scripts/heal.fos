@@ -10,6 +10,8 @@
 #include "critter_status_h.fos"
 #include "speed_h.fos"
 #include "poison_h.fos"
+#include "_ltp.fos"
+#include "gathering_h.fos"
 
 void StartMenuDOC( Critter& healer, Critter& target )
 {
@@ -139,7 +141,7 @@ class MenuDOC: CenteredMenuHandler
 		if( FLAG( target.StatBase[ ST_CRSTATUS ], CR_STATUS_BULLET_OVER ) )
 		{
 			state += "\n" + "there is a bullet or a shard is in the wound, that requires to be removed before anything else is done.";
-			if ( menu.Button( "Removal" ) )
+			if ( menu.Button( "Extraction" ) )
 			{
 				OpenMenu( cr, "BulletOver", MenuDOC_Bullet( target ) );
 				return false;
@@ -1004,8 +1006,10 @@ class MenuDOC_Heavy: CenteredMenuHandler
 						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOCTOR_NEED_FIRE );
 					}
 					else 
+					{
 						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOCTOR_SURGERY_FAILED );
-
+					}
+					
 					cr.TimeoutBase[ TO_SK_DOCTOR ] = DOCTOR_TIMEOUT( player );
 					
 					OpenMenu( cr, "DOC", MenuDOC( target ) );
@@ -1346,62 +1350,6 @@ uint cte_Doc( Critter& cr, int identifier, uint& rate )
     return 0;
 }
 
-/*bool UseBandage( Critter& cr, Critter& targetCr, uint16 sk )
-{
-	uint rate = 0;
-	
-	Map@ map = cr.GetMap();
-	map.PlaySound( "bandage.ogg", cr.HexX, cr.HexY, 2 );
-	
-	rate = 1.0f + targetCr.Stat[ST_MAX_LIFE] * sk / 750.0f;
-    targetCr.AddTimeEvent( "cte_Heal", 0, CTE_HEAL, rate );
-
-    ChangeStatus( targetCr, CR_STATUS_BLEED, sk * 0.5, false );
-
-    if( targetCr.Id != cr.Id ) {
-		targetCr.Say( SAY_NETMSG, "Вам наложили повязки.");
-	}
-	
-	targetCr.ParamBase[ CR_DIRTINESS ] += targetCr.StatBase[ ST_BLEED ];
-	targetCr.StatBase[ ST_BLEED ] /= 8.0f;
-	
-	if ( valid (cr) ) {
-		if( cr.IsPlayer() ) {
-			cr.Say( SAY_NETMSG, "Вы наложили повязку." );	
-			cr.TimeoutBase[ TO_SK_FIRST_AID ] = FIRST_AID_TIMEOUT( cr );
-			cr.AddScore( SCORE_DOCTOR, 1 );
-		}
-	}
-    return true;
-}*/
-
-uint cte_Heal( Critter& cr, int identifier, uint& rate )
-{
-    int heal = cr.Stat[ST_HEALING_RATE];
-    if( heal < 1 ) heal = 3;
-    if( heal > int(rate) ) heal = rate;
-	if( heal <= 0 ) return 0;
-    
-	cr.StatBase[ST_CURRENT_HP] += heal;
-    
-	cr.Say( SAY_NETMSG, "Вы восстановили " + heal + " жизней." );
-
-	testInfo( cr, "Healed " + heal + " , rate = " + rate );
-	
-    int result = int(rate) - heal;
-	if( result < 0 || cr.Stat[ ST_CURRENT_HP ] >= cr.Stat[ ST_MAX_LIFE ] )
-	{
-		cr.Say( SAY_NETMSG, "Кажется, от повязки больше нет проку." );
-		return 0;
-    }
-		
-	rate = uint(result);
-
-    ChangeCritterSpeed( cr );
-	
-    return REAL_SECOND( 60 );
-}
-
 bool HealingProcessSucceed( Critter@ cr, int skill )
 {
 	if( !valid( cr ) )
@@ -1417,21 +1365,222 @@ bool HealingProcessSucceed( int skill, int luck )
 	int bug_check_1 = skill + rollLuck( luck ) * HEALING_LUCK_DEPENDENCY; 
 	int bug_check_2 = Random( 0, 100 * HEALING_DIFFICULTY ); 
 
-	Log("checkie beckie > " + bug_check_1);
-	Log("checkie beckie > " + bug_check_2);
+	Log( "checkie beckie > " + bug_check_1 );
+	Log( "checkie beckie > " + bug_check_2 );
 
-	if( bug_check_1 > 15000 ) {
+	if( bug_check_1 > 15000 )
+	{
 		return false;
 	}
 
-	if ( bug_check_1 < 0 || bug_check_2 < 0 ) {
+	if ( bug_check_1 < 0 || bug_check_2 < 0 )
+	{
 		return false;
 	}
 
-	if( bug_check_1 > bug_check_2 ) {
+	if( bug_check_1 > bug_check_2 )
+	{
 		return true;
 	}
 	return false;
+}
+
+//Bandages
+class BandageItem
+{
+	uint16 pid;
+	uint8 value_heal;
+	float healing_rate;
+	uint8 sk_mod;
+	uint8 value_bleed;
+	string SoundName;
+	
+	BandageItem( uint16 pid, uint8 value_heal, float healing_rate, uint8 sk_mod, uint8 value_bleed, string SoundName )
+	{
+        this.pid = pid;
+		this.value_heal = value_heal;
+		this.healing_rate = healing_rate;
+		this.sk_mod = sk_mod;
+		this.value_bleed = value_bleed;
+		this.SoundName = SoundName;
+	}
+}
+
+class BandageItemCollection
+{
+	BandageItem@[] bandageItems;
+	BandageItemCollection()
+	{
+	}
+	
+	BandageItemCollection@ bandageItem( uint16 pid, uint8 value_heal, float healing_rate, uint8 sk_mod, uint8 value_bleed, string SoundName ) 
+	{
+		this.bandageItems.insertLast( BandageItem( pid, value_heal, healing_rate, sk_mod, value_bleed, SoundName ) );
+		return this;
+	}
+	
+	BandageItem@ get_by_pid( uint16 pid ) 
+	{
+		for( uint i = 0, len = this.bandageItems.length(); i < len; i++ )
+		{
+			if( this.bandageItems[i].pid == pid )
+			{
+				return this.bandageItems[i];
+			}
+		}
+		return null;
+	}
+}
+
+BandageItemCollection@ bandageItems = BandageItemCollection()
+//					    Pid   		value_heal,		healing_rate,	 sk_mod,	   value_bleed,		  SoundName
+	.bandageItem( PID_BANDAGE,			20,				1,				3,				6,			"bandage.ogg" 	)
+	.bandageItem( PID_CRAFT_L_RAGS,		15,			  0.5f,				5,				3,			"bandage.ogg"	);
+	
+BandageItem@ GetBandageItem( Item@ item )
+{
+    uint16 Pid = item.GetProtoId();
+    return bandageItems.get_by_pid( Pid );
+}
+
+void UseBandageItem( Critter& cr, Critter& targetCr, Item& bandage )
+{
+	if( valid( bandage ) && valid( targetCr ) )
+	{
+		cr.TimeoutBase[ TO_SK_FIRST_AID ] = FIRST_AID_TIMEOUT( cr );
+		start_Bandage( cr, targetCr, bandage );
+	}
+}
+
+bool ltp_bandage_inited = false;
+void ltp_bandage_init()
+{
+	LTPREG( LTP_FIRST_AID, process_Bandage )
+	ltp_bandage_inited = true;
+}
+
+bool start_Bandage( Critter& cr, Critter& targetCr, Item& bandage )
+{
+	if( !ltp_bandage_inited )
+	{
+		ltp_bandage_init();
+	}
+	
+	if( valid( targetCr ) && valid( bandage ) )
+	{
+		Map@ map = cr.GetMap();
+		if( valid( map ) )
+		{
+			BandageItem@ bandageItem = GetBandageItem( bandage );
+			if( valid( bandageItem ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, bandageItem.SoundName, 6 );
+			}
+		}
+		
+		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
+		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		StartProcess( cr, LTP_FIRST_AID, 0, targetCr.Id, bandage.Id, action_pause );
+		
+		if( targetCr.IsKnockout() || cr.Id == targetCr.Id )
+		{
+			cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+		}
+		else
+		{
+			cr.SetAnims( COND_LIFE, 0, ANIM2_BANDAGE );
+		}
+		return true;
+	}
+	return false;
+}
+
+uint process_Bandage( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+	LTPROCESS( cr, param0, LTP_FIRST_AID )
+	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
+	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	
+    Critter@ targetCr = GetCritter( param1 );
+  	Item@ bandage = GetItem( param2 );
+	Map@ map = cr.GetMap();
+  	if( valid( targetCr ) && valid( bandage ) )
+    {
+		param0++;
+	
+		uint bandage_rate = ( cr.Skill[ SK_FIRST_AID ] / 10 ) + cr.Stat[ ST_AGILITY ] + cr.Stat[ ST_INTELLECT ];
+		int difficuty = targetCr.Stat[ ST_CURRENT_HP ] >= 0 ? targetCr.Stat[ ST_MAX_LIFE ] - targetCr.Stat[ ST_CURRENT_HP ] : targetCr.Stat[ ST_MAX_LIFE ];
+		int sequence_length = difficuty * 3 / bandage_rate;
+		
+		PlayGenericSound( map, cr.HexX, cr.HexY, "ROBE.mp3", 6 );
+		
+		//Log( "Bandage rate: " + bandage_rate + " Sequence length: " + sequence_length );
+		if( param0 > sequence_length )
+		{
+			uint msgStr = cr.Id == targetCr.Id ? STR_EMOTE_BANDAGES_SELF : STR_EMOTE_BANDAGES_TERGET;
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, msgStr );
+			BandageResult( cr, targetCr, bandage );
+			targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_HAVE_BEEN_BANDAGES );
+			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+			return 0;
+		}
+		return action_pause;
+	}
+	cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+	return 0;
+}
+
+void BandageResult( Critter& cr, Critter& targetCr, Item& bandage )
+{
+	if( !valid( targetCr ) )
+	{
+		return;
+	}
+		
+	if( !valid( bandage ) )
+	{
+		return;
+	}
+
+	BandageItem@ bandageItem = GetBandageItem( bandage );
+	if( !valid( bandageItem ) )
+	{
+		return;
+	}
+	
+	int heal_amount = bandageItem.value_heal + ( cr.Skill[ SK_FIRST_AID ] / bandageItem.sk_mod );
+	int max_heal = targetCr.Stat[ ST_CURRENT_HP ] >= 0 ? targetCr.Stat[ ST_MAX_LIFE ] - targetCr.Stat[ ST_CURRENT_HP ] : targetCr.Stat[ ST_MAX_LIFE ];
+	//Log( "cr.Skill[ SK_FIRST_AID ]: " + cr.Skill[ SK_FIRST_AID ] + " bandageItem.sk_mod: " + bandageItem.sk_mod + " heal_amount: " + heal_amount + " max_heal: " + max_heal );
+	targetCr.ParamBase[ CR_BANDAGE_HEAL ] = CLAMP( targetCr.ParamBase[ CR_BANDAGE_HEAL ] + heal_amount, 0, max_heal );
+	targetCr.StatBase[ ST_BLEED ] /= bandageItem.value_bleed;
+	
+	uint[] index;
+	uint rate = targetCr.Stat[ ST_HEALING_RATE ] * bandageItem.healing_rate;
+	if( targetCr.GetTimeEvents( CTE_BANDAGE, index, null, null ) > 0 )
+	{
+		targetCr.ChangeTimeEvent(	index[0],REAL_MINUTE( BANDAGE_HEALING_TIME ), rate );
+	}
+	else
+	{
+		targetCr.AddTimeEvent( "cte_Bandage", REAL_MINUTE( BANDAGE_HEALING_TIME ), CTE_BANDAGE, rate );
+	}
+	_SubItem( bandage, 1 );
+}
+
+uint cte_Bandage( Critter& targetCr, int identifier, uint& rate )
+{
+	targetCr.ParamBase[ CR_BANDAGE_HEAL ] -= rate;
+	targetCr.StatBase[ ST_CURRENT_HP ] += rate;
+	targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BANDAGE_RESTORE_HP, "$rate" + rate );
+	if( targetCr.Param[ CR_BANDAGE_HEAL ] <= 0 || targetCr.Stat[ ST_CURRENT_HP ] >= targetCr.Stat[ ST_MAX_LIFE ] )
+	{
+		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BANDAGE_END );
+		return 0;
+    }
+
+    ChangeCritterSpeed( targetCr );
+	
+    return REAL_MINUTE( BANDAGE_HEALING_TIME );
 }
 
 class HealingItem
@@ -1489,11 +1638,11 @@ HealingItemCollection@ healingItems = HealingItemCollection()
 	.healingItem( PID_STIMPAK,			30,				50,				30,				STR_EMOTE_INJECT_STIM, 		true,			 "Stimpack.ogg" 	)
 	.healingItem( PID_HEALING_POWDER,	20,				30,				40,				STR_EMOTE_APPLY_HP, 	   	false,	  		 "powder_use.ogg"	);
 	
-HealingItem@ GetHealingItem( Item@ item ) 
+HealingItem@ GetHealingItem( Item@ item )
 {
     uint16 Pid = item.GetProtoId();
     return healingItems.get_by_pid( Pid );
-}	
+}
 
 void UseHealingItem( Critter& cr, Critter& targetCr, Item& item )
 {
@@ -1537,13 +1686,13 @@ void proccessHealItem( Critter& cr, HealingItem& usedItem )
 	uint traitMul = 1;
 	uint traitDiv = 1;
 	
-	if( cr.Trait[TRAIT_CHEM_RELIANT] != 0 )
+	if( cr.Trait[ TRAIT_CHEM_RELIANT ] != 0 )
 	{
 		traitMul = 13;
 		traitDiv = 10;
 	}
 	
-	if( cr.Trait[TRAIT_CHEM_RESISTANT] != 0 )
+	if( cr.Trait[ TRAIT_CHEM_RESISTANT ] != 0 )
 	{
 		traitMul = 7;
 		traitDiv = 10;
@@ -1604,7 +1753,7 @@ uint cte_quickheal( Critter& cr, int identifier, uint& rate )
 
 void TryResurect( Critter& cr, Critter& targetCr )
 {
-	if( targetCr.Stat[ST_MAX_LIFE] > 50 )
+	if( targetCr.Stat[ST_MAX_LIFE] > 100 )
 	{
 		
 		Map@ map = targetCr.GetMap();
@@ -1629,7 +1778,7 @@ void TryResurect( Critter& cr, Critter& targetCr )
 		targetCr.ToLife();
 		targetCr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 1000, targetCr.HexX, targetCr.HexY );
 		targetCr.StatBase[ ST_CURRENT_HP ] = __DeadHitPoints + 1;
-		targetCr.StatBase[ST_MAX_LIFE] -= 30;
+		targetCr.StatBase[ ST_MAX_LIFE ] -= 30;
 		if( targetCr.IsPlayer() )
 		{
 			targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_RESURECTION_SUCCESS );
@@ -1665,36 +1814,40 @@ class MenuFirstAid: CenteredMenuHandler
 		if( hasItem( cr, PID_HEALING_POWDER ) && menu.Button( "Healing Powder" ) )
 		{
 			Item@ item = getItem( cr, PID_HEALING_POWDER );
-			cr.Action( ACTION_USE_ITEM, 2, item );
-			UseHealingItem( cr, targetCr, item );
-			cr.ParamBase[ ST_CURRENT_AP ] -= 20 * 100;
+			if( valid( item ) )
+			{
+				HealingItemApplied( cr, targetCr, item );
+			}
 			return false;
 		}
 		
 		if( hasItem( cr, PID_STIMPAK ) && menu.Button( "Stimpack" ) )
 		{
 			Item@ item = getItem( cr, PID_STIMPAK );
-			cr.Action( ACTION_USE_ITEM, 2, item );
-			UseHealingItem( cr, targetCr, item );
-			cr.ParamBase[ ST_CURRENT_AP ] -= 20 * 100;
+			if( valid( item ) )
+			{
+				HealingItemApplied( cr, targetCr, item );
+			}
 			return false;
 		}
 		
 		if( hasItem( cr, PID_SUPER_STIMPAK ) && menu.Button( "Superstim" ) )
 		{
 			Item@ item = getItem( cr, PID_SUPER_STIMPAK );
-			cr.Action( ACTION_USE_ITEM, 2, item );
-			UseHealingItem( cr, targetCr, item );
-			cr.ParamBase[ ST_CURRENT_AP ] -= 20 * 100;
+			if( valid( item ) )
+			{
+				HealingItemApplied( cr, targetCr, item );
+			}
 			return false;
 		}
 		
 		if( hasItem( cr, PID_TRAUMATIN ) && menu.Button( "Traumatin" ) )
 		{
 			Item@ item = getItem( cr, PID_TRAUMATIN );
-			cr.Action( ACTION_USE_ITEM, 2, item );
-			UseHealingItem( cr, targetCr, item );
-			cr.ParamBase[ ST_CURRENT_AP ] -= 20 * 100;
+			if( valid( item ) )
+			{
+				HealingItemApplied( cr, targetCr, item );
+			}
 			return false;
 		}
 		
@@ -1716,29 +1869,25 @@ class MenuFirstAid: CenteredMenuHandler
 			return false;
 		}
 		
-		if( targetCr.Stat[ ST_BLEED ] > 0 )
-		{	//temp
-			if( hasItem( cr, PID_CRAFT_L_RAGS, -1 ) && menu.Button( "Rags" ) )
+		if( hasItem( cr, PID_CRAFT_L_RAGS, -1 ) && menu.Button( "Rags" ) )
+		{
+			Item@ item = getItem( cr, PID_CRAFT_L_RAGS );
+			if( valid( item ) )
 			{
-				uint msgStr = targetCr_id == cr.Id ? STR_EMOTE_BANDAGES_SELF : STR_EMOTE_BANDAGES_TERGET;
-				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, msgStr );
-				targetCr.StatBase[ ST_BLEED ] /= 4;
-				cr.DeleteItem( PID_CRAFT_L_RAGS, 1 );
-				PlayGenericSound( map, cr.HexX, cr.HexY, "bandage.ogg", 6 );
-				return false;
+				BandageItemApplied( cr, targetCr, item );
 			}
-			//temp
-			if( hasItem( cr, PID_BANDAGE, -1 ) && menu.Button( "Bandage" ) )
-			{
-				uint msgStr = targetCr_id == cr.Id ? STR_EMOTE_BANDAGES_SELF : STR_EMOTE_BANDAGES_TERGET;
-				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, msgStr );
-				targetCr.StatBase[ ST_BLEED ] /= 6;
-				cr.DeleteItem( PID_BANDAGE, 1 );
-				PlayGenericSound( map, cr.HexX, cr.HexY, "bandage.ogg", 6 );
-				return false;
-			}
+			return false;
 		}
 
+		if( hasItem( cr, PID_BANDAGE, -1 ) && menu.Button( "Bandage" ) )
+		{
+			Item@ item = getItem( cr, PID_BANDAGE );
+			if( valid( item ) )
+			{
+				BandageItemApplied( cr, targetCr, item );
+			}
+			return false;
+		}
 		return true;
     }
 	
@@ -1752,6 +1901,20 @@ class MenuFirstAid: CenteredMenuHandler
 	{
         return ButtonDecorator( "Hide menu", null );
     }
+}
+
+void HealingItemApplied( Critter& cr, Critter& targetCr, Item& item )
+{
+	cr.Action( ACTION_USE_ITEM, 2, item );
+	UseHealingItem( cr, targetCr, item );
+	cr.ParamBase[ ST_CURRENT_AP ] -= 20 * 100;
+}
+
+void BandageItemApplied( Critter& cr, Critter& targetCr, Item& item )
+{
+	cr.Action( ACTION_USE_ITEM, 2, item );
+	UseBandageItem( cr, targetCr, item );
+	cr.ParamBase[ ST_CURRENT_AP ] -= 20 * 100;
 }
 
 void StartMenuFirstAid( Critter& cr, Critter& targetCr )
@@ -1848,7 +2011,14 @@ void answer_UseHealingItem( Critter& targetCr, uint answerI, string& answerS )
 		return;
 	}
 	
-	UseHealingItem( cr, targetCr, item );
+	if( bandage_items.find( item.GetProtoId() ) != -1 )
+	{
+		UseBandageItem( cr, targetCr, item );
+	}
+	else
+	{
+		UseHealingItem( cr, targetCr, item );
+	}
 }
 
 #endif // HEAL

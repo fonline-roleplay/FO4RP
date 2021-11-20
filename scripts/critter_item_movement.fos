@@ -27,34 +27,38 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 	}
 #endif // __CLIENT
-	
-    int fromSlot = item.CritSlot;
-	const uint16 pid = item.GetProtoId( );
 
+    int fromSlot = item.CritSlot;
+	uint16 pid = item.GetProtoId( );
+
+#ifdef __SERVER
 	if( item.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE && item.BONDAGE_STATE == BONDAGE_STATE_ON )
     {
-#ifdef __CLIENT
-        Message( TEXTMSG_TEXT, STR_CANT_FREE_YOURSELF);
-#endif //__CLIENT
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_FREE_YOURSELF);
 		return false;
     }
-#ifdef __SERVER	
+
 	if( ( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR ) && HandsTied( cr ) )
 	{
-#ifdef __CLIENT
-        Message( TEXTMSG_TEXT, STR_FREE_HANDS );
-#endif //__CLIENT
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FREE_HANDS );
 		return false;
 	}
-#endif // __SERVER	
+
 	if( pid == PID_WORKBENCH_TOKEN || pid == PID_FIREPLACE_TOKEN )
 	{
-#ifndef __CLIENT
         DeleteItem( item );
-#endif // __CLIENT
 		return true;
 	}
-	
+
+	if( cr.Stat[ ST_BODY_TYPE ] == BT_DOG )
+	{
+		if( ( toSlot == SLOT_ARMOR && pid != PID_DOG_ARMOR ) || toSlot == SLOT_HAND2 || toSlot == SLOT_MISC )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOGS_CANT_DO_THAT );
+			return false;
+		}
+	}
+#endif // __SERVER
     bool  moveFreeze = false,
           dropFreeze = false;
 
@@ -220,9 +224,12 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 		bool isMutePlayer = skin_supermute.find( skin ) != -1,
 			 isRoboPlayer = skin_robot.find( skin ) != -1,
 			 isMuteArmor = armor_supermute_pids.find( pid ) != -1;
-		
-		if( isRoboPlayer || isMutePlayer != isMuteArmor )
+		if( isRoboPlayer || isMutePlayer != isMuteArmor || ( cr.Stat[ ST_BODY_TYPE ] != BT_DOG && pid == PID_DOG_ARMOR ) )
 		{
+			#ifdef __CLIENT
+			Message( TEXTMSG_TEXT, STR_HUMANS_CANT_WEAR ); 
+			#endif // __CLIENT
+			//cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HUMANS_CANT_WEAR );
 			return false;
 		}
 	}
@@ -249,7 +256,7 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 
 void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 {
-	ChangeRunningAP( cr );
+	ChangeRunningAP( cr, false );
 	uint8 toSlot = item.CritSlot;
 	
 	if( toSlot == SLOT_HEAD || fromSlot == SLOT_HEAD )
@@ -288,13 +295,12 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 				if( cr.StatBase[ ST_PERCEPTION ] <= 3 )
 				{
 					cr.StatBase[ ST_PERCEPTION_EXT ] += 2 * signH;
-					cr.StatBase[ ST_CHARISMA_EXT ] += 1 * signH;
 				}
 				else if( cr.StatBase[ ST_PERCEPTION ] == 4 )
 				{
 					cr.StatBase[ ST_PERCEPTION_EXT ] += 1 * signH;
-					cr.StatBase[ ST_CHARISMA_EXT ] += 1 * signH;
 				}
+				cr.StatBase[ ST_CHARISMA_EXT ] += 1 * signH;
 				break;
 			}
 		}
@@ -322,14 +328,13 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 	{
 		bool isMale = ( cr.Stat[ ST_GENDER ] == GENDER_MALE );
 		uint armor_skin = ( isMale ? item.Proto.Armor_CrTypeMale : item.Proto.Armor_CrTypeFemale );
-		uint skin_base = cr.Stat[ ST_BASE_CRTYPE ];
 		
-		if( skin_base == 0 )
+		if( cr.Stat[ ST_BASE_CRTYPE ] == 0 )
 		{
-			skin_base = ( isMale ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
+			cr.StatBase[ ST_BASE_CRTYPE ] = ( isMale ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
 		}
 		
-		uint crType = skin_base;
+		uint crType = cr.Stat[ ST_BASE_CRTYPE ];
 		
 		uint16 pid = item.GetProtoId();
 
@@ -337,28 +342,30 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 		{
 			if( toSlot == SLOT_ARMOR )
 			{
-				if( skin_robe.find( armor_skin ) != -1 && skin_small.find( skin_base ) != -1 )
+				if( skin_robe.find( armor_skin ) != -1 && skin_small.find( cr.Stat[ ST_BASE_CRTYPE ] ) != -1 )
 				{
 					crType = CRTYPE_SMALL_ROBE;  //kids, dwarfs and goris
 				}
 				else // super mutants
 				{
-					if( skin_supermute.find( skin_base ) < skin_supermute.find( armor_skin ) ) {
+					if( skin_supermute.find( cr.Stat[ ST_BASE_CRTYPE ] ) < skin_supermute.find( armor_skin ) )
+					{
 						crType = armor_skin;
 					}
 					else // other skins
 					{
-						if( skin_armor.find( skin_base ) != -1 )
+						if( skin_armor.find( cr.Stat[ ST_BASE_CRTYPE ] ) != -1 )
 						{
-							if( skin_armor.find( armor_skin ) > skin_armor.find( skin_base ) ) {
+							if( skin_armor.find( armor_skin ) > skin_armor.find( cr.Stat[ ST_BASE_CRTYPE ] ) )
+							{
 								crType = armor_skin; //Armor is equiped based on armor array position in comparison to skin
 							}
 							else
 							{
-								crType = skin_base;
+								crType = cr.Stat[ ST_BASE_CRTYPE ];
 							}
 						}
-						else if( skin_robe.find( skin_base ) != -1 )
+						else if( skin_robe.find( cr.Stat[ ST_BASE_CRTYPE ] ) != -1 )
 						{
 							if ( skin_armor.find( armor_skin ) != -1 )
 							{
@@ -371,7 +378,7 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 							int skin_armor_level = ( isMale ? skin_armor_levels_male.find( armor_skin ) : skin_armor_levels_female.find( armor_skin ) ) + 1;
 							for( uint n = 0; n < skin_packs.length(); n++ )
 							{ // get set for cr skin set
-								int skin_level = skin_packs[n].find( skin_base );
+								int skin_level = skin_packs[n].find( cr.Stat[ ST_BASE_CRTYPE ] );
 								//if skin pack found
 								if( skin_level >= 0 )
 								{
@@ -394,9 +401,13 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 								if( skin_armor.find( armor_skin ) != -1 || skin_robe.find( armor_skin ) != -1 )
 								{
 									crType = ArmorSkin( cr, armor_skin ); //CA and robes change any skin
-								} else if( skin_male.find( skin_base ) != -1 || skin_female.find( skin_base ) != -1 || skin_ghoul.find( skin_base ) != -1 )
+								}
+								else if( skin_male.find( cr.Stat[ ST_BASE_CRTYPE ] ) != -1 || skin_female.find( cr.Stat[ ST_BASE_CRTYPE ] ) != -1 || skin_ghoul.find( cr.Stat[ ST_BASE_CRTYPE ] ) != -1 )
 								{
-									//reserved for social skin armour
+								}
+								else if( cr.Stat[ ST_BODY_TYPE ] == BT_DOG && pid == PID_DOG_ARMOR )
+								{
+									crType = CRTYPE_DOG_K9;
 								}
 								else
 								{ 
@@ -408,12 +419,17 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 				}
 				
 				uint index = skin_armor.find( crType );
-				if( skin_base == CRTYPE_BLACK_TRIBAL && index < 37 )
+				if( cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_BLACK_TRIBAL && index < 37 )
 				{
 					crType = 150;
 				}
 				
-				//Power armor protection system
+				if( ExoCheck( cr ) )
+				{
+					ChangeRunningAP( cr, true );
+				}
+
+				//Power armor features
 				if( item.Proto.Item_Subtype == ITEM_SUBTYPE_ARMOR_AC45 || item.Proto.Item_Subtype == ITEM_SUBTYPE_ARMOR_AC50 )
 				{
 					PAAuth( cr, item );
@@ -768,11 +784,14 @@ bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
 {
 	bool LootedBackpack = false;
 	Item@[] RuckSacks;
-	
-	bool isCritter = valid( targetCr );
-	
-	if( isCritter )
+
+	if( valid( targetCr ) )
 	{
+		if( !isGM( cr ) && targetCr.Mode[ MODE_NO_STEAL ] == 1 )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_NO_LOOT );
+			return true;
+		}
 		targetCr.GetItems( -1, RuckSacks );
 	}
 	else if( valid( targetItem ) )
@@ -788,8 +807,8 @@ bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
 	{
 		int pid = RuckSacks[i].GetProtoId();
 		bool isContainer = RuckSacks[i].GetType() == ITEM_TYPE_CONTAINER;
-		bool isBag = (pid == PID_BAG);
-		bool isPack = (pid == PID_BACKPACK);
+		bool isBag = ( pid == PID_BAG );
+		bool isPack = ( pid == PID_BACKPACK );
 		if( isBag || isPack || isContainer )
 		{
 			if( !isGM( cr ) )
@@ -819,7 +838,7 @@ bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
 		}
 	}
 	
-	if( isCritter && !LootedBackpack )
+	if( valid( targetCr ) && !LootedBackpack )
 	{
 		Item@[] armors;
 		uint count = targetCr.GetItems( SLOT_ARMOR, armors );
@@ -866,11 +885,16 @@ int[][] armor_delay =
 	{ PID_METAL_ARMOR, PID_METAL_ARMOR_MK_II, PID_TESLA_ARMOR},
 };
 
-void TryToTakeArmor( Critter& cr, Critter& target ) 
+void TryToTakeArmor( Critter& cr, Critter& targetCr ) 
 {
+	if( !valid( targetCr ) )
+	{
+		return;
+	}
+	
 	bool success = false;
 	Item@[] armors;
-	uint count = target.GetItems( SLOT_ARMOR, armors );
+	uint count = targetCr.GetItems( SLOT_ARMOR, armors );
 	
 	if( count == 0 || !valid( armors[0] ) )
 	{
@@ -902,9 +926,9 @@ void TryToTakeArmor( Critter& cr, Critter& target )
 	if( success && delay >= i)
 	{
 		MoveItem( armors[0], 1, cr );
-		target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOUR_ARMOR_REMOVED );
+		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOUR_ARMOR_REMOVED );
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_TAKE_ARMOR );
-		CrimeLog( cr, crInfo( cr ) + " takes armour from " + crInfo( target ) );
+		CrimeLog( cr, crInfo( cr ) + " takes armour from " + crInfo( targetCr ) );
 	}
 	else
 	{
@@ -913,17 +937,29 @@ void TryToTakeArmor( Critter& cr, Critter& target )
 }
 
 //weight check for running AP calculations
-void ChangeRunningAP( Critter& cr )
+void ChangeRunningAP( Critter& cr, bool Powered )
 {
-	uint[] armorPerks = { ARMOR_PERK_POWERED, ARMOR_PERK_ADVANCED_I, ARMOR_PERK_ADVANCED_II, ARMOR_PERK_ECZO, ARMOR_PERK_ECZO_2 };
-	bool powerArmor = armorPerks.find( cr.Stat[ ST_CURRENT_ARMOR_PERK ] ) != -1;
-	
-	float weight = powerArmor ? 0 : ItemsWeight( cr );
-	float max_weight = cr.Stat[ ST_CARRY_WEIGHT ] * 0.7;
-	float weight_penalty = 5.0 * weight / max_weight;
-	
-	cr.ParamBase[ QST_AP_COST_RUN ] = 100 * ( 1 + weight_penalty );
-	//Log( "AP cost for running: " + cr.ParamBase[ QST_AP_COST_RUN ] );
+	float weight_penalty = 5.0f * ItemsWeight( cr ) / ( cr.Stat[ ST_CARRY_WEIGHT ] * 0.7f );
+	cr.ParamBase[ QST_AP_COST_RUN ] = Powered ? 100 : 100 * ( 1 + weight_penalty );
+	//Log( "AP cost for running: " + cr.ParamBase[ QST_AP_COST_RUN ] + " " + Powered );
+}
+
+bool ExoCheck( Critter& cr )
+{
+	Item@ armor = _CritGetItemArmor( cr );
+	if( valid( armor ) )
+	{
+		switch( armor.Proto.Armor_Perk )
+		{
+			case( ARMOR_PERK_POWERED ):
+			case( ARMOR_PERK_ADVANCED_I ):
+			case( ARMOR_PERK_ADVANCED_II ):
+			case( ARMOR_PERK_ECZO ):
+			case( ARMOR_PERK_ECZO_2 ):
+				return true;
+		}
+	}
+	return false;
 }
 
 #endif // __SERVER
