@@ -23,6 +23,7 @@ struct _GlobalVars
     uint* HitAimTorso;
     uint* HitAimArms;
     uint* HitAimLegs;
+	uint* __AllowRealDayTime;
 } extern GlobalVars;
 
 // #ifdef __CLIENT

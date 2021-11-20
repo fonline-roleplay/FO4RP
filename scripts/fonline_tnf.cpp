@@ -4,6 +4,8 @@
 #include "fonline_tnf.h"
 #include "AngelScript/scriptfilesystem.cpp"
 
+#include <time.h>
+
 // Extern data definition
 _GlobalVars GlobalVars;
 
@@ -71,6 +73,7 @@ EXPORT uint Map_GetTile( Map& map, uint16 tx, uint16 ty );
 EXPORT uint Map_GetRoof( Map& map, uint16 tx, uint16 ty );
 EXPORT bool Map_SetTile( Map& map, uint16 tx, uint16 ty, uint picHash );
 EXPORT bool Map_SetRoof( Map& map, uint16 tx, uint16 ty, uint picHash );
+EXPORT bool Map_HasRoof( Map& map, uint16 hexX, uint16 hexY );
 
 // EXPORT uint Critter_GetItemTransferCount( Critter& cr );
 EXPORT void Critter_GetIp( Critter& cr, ScriptArray* array );
@@ -80,8 +83,49 @@ EXPORT void Critter_GetIp( Critter& cr, ScriptArray* array );
 /*                          TNF - includes                              */
 /************************************************************************/
 
-#ifdef __CLIENT
 
+#ifdef __SERVER
+time_t GetTime( )
+{
+    return time( nullptr );
+}
+#endif
+
+#ifdef __CLIENT
+time_t ServerTime;
+time_t TimeSetTime;
+
+void trySetServerTime( time_t _time )
+{
+    ServerTime = _time;
+    TimeSetTime = time( nullptr );
+}
+
+time_t GetTime( )
+{
+    return ServerTime + TimeSetTime - time( nullptr );
+}
+
+EXPORT void SetServerTime( int timepart0, int timepart1, int, ScriptString*, ScriptArray* )
+{
+	trySetServerTime( timepart0 | timepart1 );
+}
+#endif
+
+EXPORT int64 Script_GetServerTime( )
+{
+    return GetTime( );
+}
+
+int GetServerHour( )
+{
+    tm timeinfo;
+    time_t rawtime = GetTime( );
+    localtime_s( &timeinfo, &rawtime );
+    return timeinfo.tm_hour;
+}
+
+#ifdef __CLIENT
 
 #include <Windows.h>
 
@@ -256,6 +300,7 @@ FONLINE_DLL_ENTRY( isCompiler )
         REGISTER_GLOBAL_VAR( uint, HitAimTorso );
         REGISTER_GLOBAL_VAR( uint, HitAimArms );
         REGISTER_GLOBAL_VAR( uint, HitAimLegs );
+        REGISTER_GLOBAL_VAR( uint, __AllowRealDayTime  );
     }
 	
 	// #ifdef __CLIENT
@@ -351,14 +396,15 @@ EXPORT int getParam_Ap( CritterMutual& cr, uint )
 
 EXPORT int getParam_RegenAp( CritterMutual& cr, uint )
 {
-    if(cr.Params[CR_SLEEPING_STATE] > 0)
+    if( cr.Params[CR_SLEEPING_STATE] > 0 )
     {
         return 0;
     }
-    int val = APREGEN_BASE + cr.Params[ST_APREGEN] + cr.Params[ST_APREGEN_EXT];
-    val += (cr.Params[ST_AGILITY] + cr.Params[ST_AGILITY_EXT] )* APREGEN_PER_AGI;
-    val += (cr.Params[ST_ENDURANCE] + cr.Params[ST_ENDURANCE_EXT]) * APREGEN_PER_END;
-    return CLAMP(val, 0, APREGEN_MAX);
+    int val = APREGEN_BASE + cr.Params[ ST_APREGEN ] + cr.Params[ ST_APREGEN_EXT ];
+    val += ( cr.Params[ ST_AGILITY ] + cr.Params[ ST_AGILITY_EXT ] )* APREGEN_PER_AGI;
+    val += ( cr.Params[ ST_ENDURANCE ] + cr.Params[ ST_ENDURANCE_EXT ] ) * APREGEN_PER_END;
+	val -= CLAMP( cr.Params[ ST_POISONING_LEVEL ] * 3, 0, 900 );
+    return CLAMP( val, 0, APREGEN_MAX );
 }
 
 EXPORT int getParam_MaxMoveAp( CritterMutual& cr, uint )
@@ -780,14 +826,39 @@ uint GetAttackDistantion( CritterMutual& cr, Item& item, uint8 mode )
 /* Generic stuff                                                        */
 /************************************************************************/
 
-int GetNightPersonBonus()
+int GetNightPersonBonus( )
 {
-    if( FOnline->Hour < 6 || FOnline->Hour > 18 )
-        return 1;
-    if( FOnline->Hour == 6 && FOnline->Minute == 0 )
-        return 1;
-    if( FOnline->Hour == 18 && FOnline->Minute > 0 )
-        return 1;
+    if( *GlobalVars.__AllowRealDayTime != 1 )
+    {
+        if( FOnline->Hour < 6 || FOnline->Hour > 18 )
+        {
+            return 1;
+        }
+        if( FOnline->Hour == 6 && FOnline->Minute == 0 )
+        {
+            return 1;
+        }
+        if( FOnline->Hour == 18 && FOnline->Minute > 0 )
+        {
+            return 1;
+        }
+    }
+    else
+    {
+        const int hour = GetServerHour( );
+        if( hour < 6 || hour > 18 )
+        {
+            return 1;
+        }
+        if( hour == 6 && hour == 0 )
+        {
+            return 1;
+        }
+        if( hour == 18 && hour > 0 )
+        {
+            return 1;
+        }
+    }
     return -1;
 }
 
@@ -923,6 +994,22 @@ EXPORT uint Map_GetRoof( Map& map, uint16 tx, uint16 ty )
     return finded[ 0 ];
 }
 
+// Returns true if map cell {hexX,hexY} is under roof
+EXPORT bool Map_HasRoof( Map& map, uint16 hexX, uint16 hexY )
+{
+	ProtoMap::TileVec & tiles = const_cast < ProtoMap::TileVec & > ( map.Proto -> Tiles );
+	for( uint i = 0, length = tiles.size(); i < length; i++ )
+	{
+    	if( ( ( tiles[ i ].HexX == hexX) || ( tiles[ i ].HexX == hexX + 1 ) ) // Roof tile may have size 2x2
+    		&& ( ( tiles[ i ].HexY == hexY) || ( tiles[ i ].HexY == hexY + 1 ) )
+    		&& tiles[ i ].IsRoof )
+		{
+			return true;
+		}
+    }
+    return false;
+}
+
 EXPORT bool Map_SetTile( Map& map, uint16 tx, uint16 ty, uint picHash )
 {
     // if(map.IsNotValid) return 0;
@@ -949,8 +1036,6 @@ EXPORT void Critter_GetIp( Critter& cr, ScriptArray* array )
     const uint* p = cr.DataExt->PlayIp;
     memcpy( array->GetBuffer(), p, MAX_STORED_IP * 4 );
 }
-
-// pm added
 
 EXPORT void Critter_SetWorldPos( CritterMutual& cr, uint16 x, uint16 y ) // pm added
 {

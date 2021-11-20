@@ -17,6 +17,7 @@
 #include "gm_h.fos"
 #include "windup_h.fos"
 #include "handcuffs_h.fos"
+#include "plants_h.fos"
 
 import void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo ) from "main";
 import bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param ) from "main";
@@ -24,7 +25,7 @@ import void ShowInputBoxScreen( Critter& cr, string funcName, uint16 textLength,
 
 import void Actions( Critter& cr, uint8 actionType, uint16 pickType ) from "context_callback";
 
-import void tryGetSand( Critter& cr, Item& shovel, int hexX, int hexY ) from "digging";
+import void TryGetSand( Critter& cr, Item& shovel, int hexX, int hexY ) from "digging";
 
 import void DragAndDrop( Critter& cr, Critter@ target ) from "gameplay";
 
@@ -129,6 +130,12 @@ void unsafe_MobGoHome( Critter& player, int param0, int param1, int param2, stri
 
 void unsafe_radioHead( Critter& cr, int, int, int, string@ message, int[]@ ) 
 {
+	if( cr.IsDead() )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DEAD_CANT_TALK );
+		return;
+	}
+	
 	Item@[] items;
 	if( cr.GetItems( -1, items ) > 0 )
 	{
@@ -303,6 +310,7 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 		return;
 	}
 	
+	cr.ParamBase[ CR_IS_RELAXING ] = 0;
     Map@ map = cr.GetMap();
 
     if( map is null )
@@ -327,6 +335,12 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_FIGHT );
 		return;
+	}
+
+	if( cr.GetTimeEvents( CTE_SLOWRELOAD, null, null, null ) > 0 )
+	{
+		cr.EraseTimeEvents( CTE_SLOWRELOAD );
+		hand.SetEvent( ITEM_EVENT_MOVE, null );
 	}
 
     uint16 toHx = hexX, toHy = hexY;
@@ -405,6 +419,10 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 			uint[] values = { cr.Id, weapon.ProtoId };
 			CreateTimeEvent( AFTER( REAL_MS( windupTime ) ), "e_emptySFX", values, false );
 			cr.ParamBase[ CR_IS_WINDUPED ] = 1;
+			if( cr.GetTimeEvents( CTE_WINDUP, null, null, null ) == 0 )
+			{
+				cr.AddTimeEvent( "windup@cte_windup", 0, CTE_WINDUP, 0 );
+			}
 			return;
 		}
 		else
@@ -447,7 +465,7 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 		uint8 weapon_Subtype = valid( weapon ) ? weapon.Item_Subtype : 0;
 		if( weapon_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_MINIGUN )
 		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COMBAT_SPIN_BARRELS );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_COMBAT_SPIN_BARRELS );
 			return;
 		}
 		cr.Wait( windupTime );
@@ -494,6 +512,7 @@ void unsafe_hex_useItem( Critter& cr, int hexX, int hexY, int itm_pid, string@ c
 {
 	Item@ usedItem = _CritGetItemHand( cr );
 	uint16 usedItemPid = usedItem.GetProtoId();
+	
 	if( usedItemPid == PID_ROD_STRING_HOOK )
 	{
 		uint8 throwDir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
@@ -505,7 +524,14 @@ void unsafe_hex_useItem( Critter& cr, int hexX, int hexY, int itm_pid, string@ c
 	{
 		uint8 digDir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
 		cr.SetDir( digDir );
-		tryGetSand( cr, usedItem, hexX, hexY );
+		TryGetSand( cr, usedItem, hexX, hexY );
+	}
+	
+	if( farm_seeds.find( usedItemPid ) != -1 )
+	{
+		uint8 digDir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
+		cr.SetDir( digDir );
+		TryPlantSeed( cr, usedItem, hexX, hexY, null );
 	}
 }
 
@@ -683,6 +709,127 @@ void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string
 			player.ParamBase[ CR_SLEEPING_STATE ] = 3;
 		}
     }
+}
+
+void unsafe_relax( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	if( !player.IsLife() )
+	{
+		return;
+	}
+	
+	Map@ map = player.GetMap();
+	uint[] index;
+	//player.Wait( 500 );
+	string sound = "ROBE.mp3";
+	uint time = 1000;
+	if( param0 > 0 )
+	{
+		player.ParamBase[ CR_IS_RELAXING ] = param0;
+		SayLog( player, crInfo( player ) + " lies down to relax." );
+		player.ParamBase[ CR_IS_WINDUPED ] = 0;
+		
+		switch( player.Param[ CR_IS_RELAXING ] )
+		{
+			case( 1 ):
+			case( 2 ):
+				sound = player.Stat[ ST_GENDER ] == GENDER_MALE ?  "GenericM_KnockFront.wav" : ( player.Stat[ ST_GENDER ] == GENDER_FEMALE ? "GenericF_KnockBack.wav" : "ROBE.mp3" );
+				player.Animate( 0, ANIM2_LIE_DOWN, null, false, true );
+				break;
+			case( 3 ):
+			case( 4 ):
+				player.Animate( 0, ANIM2_LEAN_BEGIN, null, false, true );
+				time = 300;
+				break;
+			case( 5 ):
+			case( 6 ):
+			case( 7 ):
+				//player.Animate( 0, ANIM2_KNEEL_BEGIN, null, false, true );
+				time = 250;
+				break;	
+			default:
+				break;
+		}
+
+		if( player.GetTimeEvents( CTE_RELAX, index, null, null ) == 0 )
+		{
+			player.AddTimeEvent( "cte_unsafe_relax", REAL_MS( time ), CTE_RELAX, param0 );
+		}
+
+		PlayGenericSound( map, player.HexX, player.HexY, sound, 6 );
+	}
+	else
+	{
+		SayLog( player, crInfo( player ) + " stops relaxing." );
+		switch( player.Param[ CR_IS_RELAXING ] )
+		{
+			case( 1 ):
+			case( 2 ):
+				sound = player.Stat[ ST_GENDER ] == GENDER_MALE ?  "GenericM_Standup.wav" : ( player.Stat[ ST_GENDER ] == GENDER_FEMALE ? "GenericF_Standup.wav" : "ROBE.mp3" );
+				player.Animate( 0, ANIM2_LIE_UP, null, false, false );
+				break;
+			case( 3 ):
+			case( 4 ):
+				player.Animate( 0, ANIM2_LEAN_END, null, false, true );
+				break;
+			case( 5 ):
+			case( 6 ):
+			case( 7 ):
+				player.Animate( 0, ANIM2_KNEEL_END, null, false, true );
+				break;							
+			default:
+				break;
+		}
+		
+		if( player.GetTimeEvents( CTE_RELAX, index, null, null ) > 0 )
+		{
+			player.ChangeTimeEvent( index[0], REAL_MS( 1000 ), 0 );
+		}
+		
+		PlayGenericSound( map, player.HexX, player.HexY, sound, 6 );
+	}
+}
+
+uint cte_unsafe_relax( Critter& player, int identifier, uint& rate )
+{
+	switch( player.Param[ CR_IS_RELAXING ] )
+	{
+		case( 1 ):
+			player.SetAnims( COND_LIFE, 0, ANIM2_LYING );
+			break;
+		case( 2 ):
+			player.SetAnims( COND_LIFE, 0, ANIM2_LYING1 );
+			break;
+		case( 3 ):
+			player.SetAnims( COND_LIFE, 0, ANIM2_LEANING );
+			break;
+		case( 4 ):
+			player.SetAnims( COND_LIFE, 0, ANIM2_LEANING1 );
+			break;
+		case( 5 ):
+			player.SetAnims( COND_LIFE, 0, ANIM2_KNEEL );
+			break;
+		case( 6 ):
+			player.SetAnims( COND_LIFE, 0, ANIM2_KNEEL1 );
+			break;
+		case( 7 ):
+			player.SetAnims( COND_LIFE, 0, ANIM2_KNEEL2 );
+			break;
+		default:
+			break;
+	}
+
+	if( MovementState( player ) > 0 || rate == 0 || player.Param[ CR_IS_WINDUPED ] != 0 )
+	{
+		player.ParamBase[ CR_IS_RELAXING ] = 0;
+		if( player.Param[ CR_IS_WINDUPED ] == 0 )
+		{
+			player.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+		}
+		return 0;
+	}
+	
+	return REAL_MS( 500 );
 }
 
 void unsafe_itemhit2( Critter& player, int itemId, int x, int y, string@ param3, int[] @ param4 )
@@ -969,7 +1116,7 @@ void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ par
 	player.ParamBase[ ST_CURRENT_AP ] -= 50 * 100;
 }
 
-void unsafe_selfLex( Critter& player, int, int, int, string@ text, int[]@ )
+void unsafe_selfLex( Critter& player, int param0, int param1, int param2, string@ text, int[]@ param4 )
 {
     if( !valid(text) || text == "" )
 	{
@@ -1228,7 +1375,7 @@ void MakeDescLex( Critter& player, uint answerI, string& answerS )
     target.Update();
 }
 
-void unsafe_addLexem( Critter& player, int, int, int, string@ text, int[]@ )
+void unsafe_addLexem( Critter& player, int param0, int param1, int param2, string@ text, int[]@ param4 )
 {
 	Item@ hand = _CritGetItemHand( player );
     if( !valid( hand ) )
@@ -1262,4 +1409,167 @@ void unsafe_toglobal( Critter& cr, int, int, int, string@, int[]@ )
 	}
 }
 
+void unsafe_VoiceVolumeAdjust( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	if( player.Stat[ ST_SPEECH_VOLUME ] == 50 && param0 == 5 )
+	{
+		return;
+	}
+	
+	if( player.Stat[ ST_SPEECH_VOLUME ] == 0 && param0 == -5 )
+	{
+		return;
+	}
+	
+	int var = CLAMP( player.StatBase[ ST_SPEECH_VOLUME ] + param0, 0, 50 );
+	player.StatBase[ ST_SPEECH_VOLUME ] = var;
+	uint hexes = CLAMP( 50 - var, 1, 50 );
+	player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_VOICE_VOLUME, "$hexes" + hexes );
+}
+
+void unsafe_store_last_checked_item( Critter& cr, int itemId, int type, int, string@, int[]@ )
+{
+    cr.ParamBase[ CR_TARGET_CONTAINER_ID ] = itemId;
+}
+
+void unsafe_rolling( Critter& player, int param0, int param1, int param2, string@ param3, int[]@ param4 )
+{
+	Roll( player, param0, param1, param2 );
+}
+
+void unsafe_rolling_GM( Critter& gm, int param0, int param1, int param2, string@ param3, int[]@ vals )
+{
+	if( !valid(vals) || vals.length() != 4 )
+	{
+		return;
+	}
+	
+	Critter@ cr = GetCritter( vals[3] );
+	if( !valid( cr ) )
+	{
+		return;
+	}
+	
+	Roll( cr, vals[0], vals[1], vals[2] );
+}
+
+void Roll( Critter& cr, int stat, int n, int val )
+{
+	if( stat < 0 || stat > 7 || n < 0 || val < 0 )
+	{
+		return;
+	}
+	
+	uint statMsg;
+	string result;
+	int summ = 0;
+	if( stat > 0 && stat < 8)
+	{
+		statMsg = STR_STAT_ROLL( stat );
+		summ += cr.Stat[stat - 1];
+	}
+	
+	if( n != 0 && val != 0 )
+	{
+		result += stat != 0 ? " + " : "";
+		result += n + "d" + val + " =";
+		for( int i = 0; i < n; i++ )
+		{
+			summ += Random( 1, val );
+		}
+		result += " " + summ;
+	}
+	else
+	{
+		result += " " + summ;
+	}
+	
+	if( stat != 0 )
+	{
+		cr.SayMsg( SAY_NORM, TEXTMSG_TEXT, statMsg, "$result" + result );
+	}
+	else
+	{
+		cr.Say( SAY_NORM, "|0xA6EEF900 " + result );
+	}
+}
+
+void unsafe_setCombatState( Critter& cr, int state, int, int, string@, int[]@ )
+{
+	if( state == 1 && cr.GetTimeEvents( CTE_AGGRESSION, null, null, null ) == 0 )
+	{
+		if( cr.IsKnockout() || cr.IsDead() )
+		{
+			return;
+		}
+		
+		cr.AddTimeEvent( "cte_aggression", REAL_SECOND( 3 ), CTE_AGGRESSION );
+	}
+	
+	if( state == 0 )
+	{
+		if( cr.ParamBase[ CR_IS_AGGRESSIVE ] > 1 )
+		{
+			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, STR_EMOTE_MANIAC_RELAX );
+		}
+		cr.EraseTimeEvents( CTE_AGGRESSION );
+	}
+	cr.ParamBase[ CR_IS_AGGRESSIVE ] = state;
+}
+
+uint cte_aggression( Critter& cr, int identifier, uint& rate )
+{
+	cr.ParamBase[ CR_IS_AGGRESSIVE ] = 2;
+	
+	if( cr.IsKnockout() || cr.IsDead() )
+	{
+		return 0;
+	}
+	
+	uint[] emote = { STR_EMOTE_MANIAC0, STR_EMOTE_MANIAC1, STR_EMOTE_MANIAC2, STR_EMOTE_MANIAC3, STR_EMOTE_MANIAC4, STR_EMOTE_MANIAC5 };
+	
+	uint[] grade = { 40, 30, 20, 3, 3, 3 };
+	uint i = 0;
+	
+	if( grade.length() != emote.length() )
+	{
+		return 0;
+	}
+	
+	uint maxval = 0;
+	for( i = 0; i < grade.length(); i++ )
+	{
+		maxval += grade[i];
+	}
+	
+	uint roll = Random( 0, maxval );
+	for( i = 0; i < grade.length(); i++ )
+	{
+		if( roll <= grade[i] )
+		{
+			break;
+		}
+		else
+		{
+			roll -= grade[i];
+		}
+	}	
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, emote[ CLAMP( i, 0, rate ) ] );
+	
+	if( rate < emote.length() )
+	{
+		rate++;
+	}
+	return REAL_SECOND( Random( 5, 10 ) );
+}
+
+void unsafe_InitSexState( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	player.ParamBase[ CR_INIT_SEX ] = 1;
+}
+
+void unsafe_InitDevourState( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	player.ParamBase[ CR_INIT_DEVOUR ] = 1;
+}
 #endif // GENERAL_UNSAFE
