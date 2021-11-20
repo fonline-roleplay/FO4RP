@@ -17,6 +17,7 @@
 #include "rotting_h.fos"
 #include "time_h.fos"
 #include "globalmap_group_h.fos"
+#include "weather_h.fos"
 
 bool SwitchGameMode( Critter& cr, int mode )
 {
@@ -193,8 +194,10 @@ class Gameplay : iManagerModule, iManager_loop,
 
         int replTime = cr.Stat[ ST_REPLICATION_TIME ];
         if( cr.Stat[ ST_BODY_TYPE ] == BT_ROBOT && cr.IsPlayer() )
+		{
             replTime = -1;
-
+		}
+		
         if( replTime < 0 )
         {
             if( cr.StatBase[ ST_BODY_TYPE ] > 0 )
@@ -232,6 +235,12 @@ class Gameplay : iManagerModule, iManager_loop,
 		{
 			cr.TimeoutBase[ TO_REPLICATION ] = __FullSecond + replTime;
 		}
+		
+		if( cr.IsNpc() )
+		{
+			cr.AddTimeEvent( "rotting@cte_rotten", 0, CTE_ROTTEN, 0 );
+		}
+		
         return true;
     }
 
@@ -290,6 +299,24 @@ class Gameplay : iManagerModule, iManager_loop,
 		if( !cr.IsPlayer() )
 		{
 			return;
+		}
+		
+		Item@[] shadows;
+		Map@ crMap = cr.GetMap();
+		if( valid( crMap ) )
+		{
+			crMap.GetItems( PID_SHADOW, shadows );
+			if( shadows.length() > 0 )
+			{
+				for( uint i = 0; i < shadows.length(); i ++ )
+				{
+					Item@ shadow = shadows[i];
+					if( valid( shadow ) && shadow.Val0 == int( cr.Id ) )
+					{
+						DeleteItem( shadow );
+					}
+				}
+			}
 		}
 		
 		if( cr.StatBase[ST_CARRY_WEIGHT_EXT] != 0 )
@@ -376,6 +403,11 @@ class Gameplay : iManagerModule, iManager_loop,
 		{
 			cr.AddTimeEvent( "cte_Dirt", 0, CTE_DIRT, 0 );			
 		}
+
+		if (cr.StatBase [ ST_WETNESS ] > 0 && cr.GetTimeEvents( CTE_WETNESS, null, null, null ) < 1 )
+		{
+			cr.AddTimeEvent( "cte_Wetness", REAL_SECOND( cr.Param[ CR_WETNESS_SPEED ] ), CTE_WETNESS, 0);
+		}
 		
 		RottenFood( cr );
 		
@@ -383,11 +415,58 @@ class Gameplay : iManagerModule, iManager_loop,
 		{
 			cr.StatBase[ ST_UNSPENT_PERKS ] = 0;
 		}
-		// ÒÅËÅÏÎÐÒ ÎÔÔËÀÉÍ ÒÅË ÑÞÄÀ
-    }
+	}
 
     bool global_time( int8 type )
     {
+        Map@[] maps;
+        uint mapsLength = GetAllMaps( 0, maps );
+		uint[] ignored_map_pids = { MAP_UTILITY_START, MAP_DREAM, MAP_HEAVEN, MAP_HELL };
+		
+		if( type == TIME_NEW_MINUTE )
+		{
+			for( uint i = 0; i < mapsLength; i++ )
+			{
+				if( ignored_map_pids.find( maps[i].GetProtoId() ) != -1 )
+				{
+					continue;
+				}
+
+				if( !valid( maps[i]  ) )
+				{
+					continue;
+				}
+
+				Critter@[] crs;
+
+				/* Called for all critters on valid maps ever ingame minute */
+				if( maps[i].GetCritters( 0, FIND_LIFE, crs ) > 0 )
+				{
+					for( uint j = 0; j < crs.length(); j++ )
+					{
+						/* Called for critters that are not under roof */
+						if( !maps[i].HasRoof( crs[j].HexX, crs[j].HexY ) )
+						{
+							uint8 rainIntensity = maps[i].GetRain();
+
+							/* Increases wetness amount based on rain intensity at the map */
+							if( rainIntensity > 0 )
+							{
+								applyWetness( crs[j] );
+
+								/* Rain washes away dirtiness */
+								if( crs[j].Param[ CR_DIRTINESS ] > 0 )
+								{
+									uint8 dirt = crs[j].Param[ CR_DIRTINESS ];
+									crs[j].ParamBase[ CR_DIRTINESS ] -= MIN( (rainIntensity / 17), dirt );
+								}
+							}					
+						}
+					}
+				}
+			}
+		}
+
         if( type == TIME_NEW_HOUR )
         {
            	GameVar@ cycle = GetGlobalVar( GVAR_rotten_cycle );
@@ -402,27 +481,23 @@ class Gameplay : iManagerModule, iManager_loop,
 					cycle.opAssign( 0 );
 				}
 			}
-			//rotting
-			Map@ map;
-			for( uint i = 1; i < 10000; i++ )
+
+			for( uint i = 0; i < mapsLength; i++ )
 			{
-				uint[] ignored_map_pids = { MAP_UTILITY_START, MAP_DREAM, MAP_HEAVEN, MAP_HELL };
-		
-				if( ignored_map_pids.find( i ) != -1 )
+				if( ignored_map_pids.find( maps[i].GetProtoId() ) != -1 )
 				{
 					continue;
 				}
 	
-				@map = GetMapByPid( i, 0 );
-				if( !valid( map ) )
+				if( !valid( maps[i] ) )
 				{
 					continue;
 				}
 		
-				RottenFood( map );
+				RottenFood( maps[i] );
 
 				Critter@[] crs;
-				if( map.GetCritters( 0, FIND_ONLY_PLAYERS, crs ) > 0 )
+				if( maps[i].GetCritters( 0, FIND_ONLY_PLAYERS, crs ) > 0 )
 				{
 					for( uint j = 0; j < crs.length(); j++ )
 					{
@@ -435,15 +510,18 @@ class Gameplay : iManagerModule, iManager_loop,
 					int timeH = GetRealHour() * 60;
 					int timeM = GetRealMinute();
 					int time = timeH + timeM;
-					if( GetMapLevelByPid( i ) < 0 )
+					if( GetMapLevelByPid( maps[i].GetProtoId() ) >= 0 )
 					{
-						continue;
+						maps[i].SetTime( time );
+						//Log( "time set: " + time + " on map: " + maps[i].Id );
 					}
-					map.SetTime( time );
 				}
-				else if( map.GetTime() != -1 )
+				else if( __AllowRealDayTime == 0 && maps[i].GetTime() != -1 )
 				{
-					map.SetTime( -1 );
+					if( GetMapLevelByPid( maps[i].GetProtoId() ) >= 0 )
+					{
+						maps[i].SetTime( -1 );
+					}
 				}
 			}
 		}
@@ -582,7 +660,17 @@ bool _RespawnCritter( Critter& cr )
 		
 		if( valid( skeleton ) )
 		{
+			skeleton.Val0 = cr.Stat[ ST_BODY_TYPE ];
 			skeleton.Val1 = cr.Id;
+			skeleton.Val2 = cr.Stat[ ST_AGE ];
+			skeleton.Val3 = cr.Stat[ ST_GENDER ];
+			skeleton.Val4 = cr.Stat[ ST_CHARISMA ];
+			skeleton.Val5 = cr.Stat[ ST_STRENGTH ];
+			skeleton.Val6 = cr.Stat[ ST_ENDURANCE ];
+			skeleton.Val7 = cr.Stat[ ST_AGILITY ];
+			string@ lexem = "Notisable features: " + cr.GetLexems() + ".";
+			skeleton.SetLexems( lexem );
+			
 			MoveItems( items, skeleton, 0 );
 			uint[] values = { dieMap.Id, skeleton.Id };
 			CreateTimeEvent( __FullSecond + REAL_MINUTE( 180 ), "e_deleteBody", values, true );
@@ -908,6 +996,44 @@ uint cte_Global_Overdose( Critter& cr, int identifier, uint& rate )
     return REAL_MS( cr.Param[ CR_GLOBAL_OVERDOSE_SPEED ] );
 }
 
+/* Process of drying up passively */
+uint cte_Wetness( Critter& cr, int identifier, uint& rate )
+{
+	int amount = 10;
+	Map@ map = cr.GetMap();
+	uint8 rainIntensity = map.GetRain();
+	Item@ armor = cr.GetItem( 0, SLOT_ARMOR );
+	Item@ helmet = cr.GetItem( 0, SLOT_HEAD );
+
+	if( cr.StatBase[ ST_WETNESS ] > 0 )
+	{
+		if( !map.HasRoof( cr.HexX, cr.HexY ) && rainIntensity > 0 )
+		{
+			return REAL_MS( cr.Param[ CR_WETNESS_SPEED ] );
+		}
+		else if( map.HasRoof( cr.HexX, cr.HexY ) )
+		{
+			amount += 5;
+		}
+		else if( valid( armor ) )
+		{
+			amount -= 5;
+		}
+		else if( valid( helmet ) )
+		{
+			amount -= 1;
+		}
+
+		cr.StatBase[ ST_WETNESS ] -= MIN( cr.StatBase[ ST_WETNESS ], amount );
+		//Log("Proc Wetness");
+		return REAL_MS( cr.Param[ CR_WETNESS_SPEED ] );
+	}
+	else
+	{
+		return REAL_MS( cr.Param[ CR_WETNESS_SPEED ] );
+	}  
+}
+
 Gameplay gameplay;
 
 void start()
@@ -1001,17 +1127,7 @@ bool respawn_npc( Critter& cr, Map@ map )
     cr.DropPlanes();
     cr.ClearEnemyStackNpc();
     cr.StatBase[ ST_LAST_WEAPON_ID ] = 0;
-
-    if( cr.Stat[ ST_DEAD_BLOCKER_ID ] != 0 )
-    {
-        Item@ block = ::GetItem( cr.Stat[ ST_DEAD_BLOCKER_ID ] );
-        if( valid( block ) )
-		{
-            DeleteItem( block );
-        }
-		cr.StatBase[ ST_DEAD_BLOCKER_ID ] = 0;
-    }
-
+	
     cr.DamageBase[ DAMAGE_EYE ] = 0;
     cr.DamageBase[ DAMAGE_RIGHT_ARM ] = 0;
     cr.DamageBase[ DAMAGE_LEFT_ARM ] = 0;
@@ -1108,7 +1224,7 @@ void CheckDragging( Critter& cr )
 		}
 	
 		Map@ tMap = target.GetMap();
-		if( valid( tMap ) && tMap.GetProtoId() == MAP_HEAVEN )
+		if( valid( tMap ) && ( tMap.Id == MAP_HEAVEN || tMap.Id == MAP_HELL || tMap.Id == MAP_UTILITY_START || tMap.Id == MAP_DREAM ) )
 		{ 
 			DropCr( cr, target ); 
 			return; 
@@ -1137,7 +1253,6 @@ void TeleportIt( Critter& cr, Critter& target )
 	}
 	
 	uint16 hx = 0, hy = 0;
-	PreviousHex( cr, hx, hy );
 	
 	Map@ cMap = cr.GetMap();
 	if( !valid( cMap) )
@@ -1161,19 +1276,24 @@ void TeleportIt( Critter& cr, Critter& target )
 			return;
 		}
 		
-		if( tMap.Id == MAP_HEAVEN || tMap.Id == MAP_HELL || tMap.Id == MAP_UTILITY_START || tMap.Id == MAP_DREAM )
+		if( valid( tMap ) && ( tMap.Id == MAP_HEAVEN || tMap.Id == MAP_HELL || tMap.Id == MAP_UTILITY_START || tMap.Id == MAP_DREAM ) )
 		{
 			DropCr( cr, target );
 			return;
 		}
-	
-		target.TransitToMap( cMap.Id, hx, hy, cr.Dir ); 
-		target.SetWorldPos( loc.WorldX, loc.WorldY );
+		
+		hx = cr.HexX;
+		hy = cr.HexY;
+		cMap.MoveHexByDir( hx, hy, cr.Dir, 1 );
 
-		ChangeCritterSpeed( cr ); 
+		target.TransitToMap( cMap.Id, hx, hy, cr.Dir, 0 ); 
+		target.SetWorldPos( loc.WorldX, loc.WorldY );
+		DropCr( cr, target ); //Temporary solution. The problem is that PreviousHex( cr, hx, hy ) takes into account the old coordinates of cr from previous map
 		return; 
 	}
-		
+	
+	PreviousHex( cr, hx, hy );
+	
 	if( tMap.IsHexPassed( hx, hy ) )
 	{
 		Critter@[] dragged = {target};
@@ -1197,6 +1317,7 @@ void TeleportIt( Critter& cr, Critter& target )
 			DropCr( cr, target );
 		}
 	}
+	ChangeCritterSpeed( cr );
 }
 
 void DragAndDrop( Critter& cr, Critter@ target )
@@ -1307,19 +1428,14 @@ uint cte_Dyspnea( Critter& cr, int identifier, uint& rate )
         if( map.GetData( 25 ) > 0 )
         {
             GameVar @ dyspnea = GetLocalVar( LMVAR_Dyspnea, map.Id );
-            if( !(dyspnea is null) )
+            if( !( dyspnea is null ) )
             {
-                Item @ respirator = _CritGetItemHandExt( cr );
-                if( !(respirator is null) && respirator.GetProtoId() == PID_RESPIRATOR && respirator.Indicator > 0 )
+                Item@ respirator = _CritGetItemHead( cr );
+                if( valid( respirator ) )
                 {
-                    uint8 ind = respirator.Indicator;
-                    if ( Random( 0, 15 ) == 0 )
+					uint pid = respirator.GetProtoId();
+					if( pid == PID_RESPIRATOR || pid == PID_RESPIRATOR2 || pid == PID_RESPIRATOR3 || pid == PID_CIVIL_GAS_MASK || pid == PID_GASMASK )
 					{
-						ind--;
-						ind = CLAMP( ind, 0, 100 );
-						respirator.Indicator = ind;
-						respirator.Update();
-
 						cr.StatBase[ ST_DYSPNEA ]--;					
 					}
                 }
