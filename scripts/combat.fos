@@ -12,7 +12,7 @@
 #include "effects_h.fos"
 #include "critter_status_h.fos"
 #include "speed_h.fos"
-
+#include "traps_h.fos"
 class AttackStruct
 {
     Critter@   Attacker;
@@ -1744,7 +1744,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     uint eff = 0;
     uint msgEff = 0;
     int weaponPerk = attack.WeaponPerk;
-    Critter@ attacker = attack.Attacker;
+    Critter@ attacker = valid( attack.Attacker ) ? attack.Attacker : null;
     bool validAttacker = valid( attacker );
     Map@ map = target.GetMap();
     bool isBloodyMess = attack.BloodyMess;
@@ -1761,7 +1761,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 	
 	uint8 item_Subtype = valid( realWeapon ) ? realWeapon.Proto.Item_Subtype : 0;
 	
-	if( valid( attacker ) )
+	if( validAttacker )
 	{
 		if( hexX == 0 )
 		{
@@ -3511,7 +3511,7 @@ void CriticalFailure( Critter& cr, ProtoItem& weapon, uint8 weaponUse, ProtoItem
     return;
 }
 
-void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attackerId, uint hitLocation )
+void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attackerId, uint hitLocation, bool isCritical )
 {
     if( dmgType > DAMAGE_EXPLODE )
     {
@@ -3519,15 +3519,7 @@ void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attacker
         return;
     }
 
-    Critter@ attacker = null;
-    if( attackerId > 0 )
-	{
-        @attacker = GetCritter( attackerId );
-	}
-	else
-	{
-		@attacker = cr;
-	}
+	Critter@ attacker = attackerId > 0 ? GetCritter( attackerId ) : cr;
 	
     AttackStruct attack;
     @attack.Attacker = attacker;
@@ -3565,7 +3557,7 @@ void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attacker
 	}
 	
     CombatRes[] results;
-    ApplyDamage( attack, cr, 1, false, true, results );
+    ApplyDamage( attack, cr, 1, isCritical, true, results );
 
     FlushResults( results );
 }
@@ -4608,9 +4600,10 @@ uint e_DelayedExplosion( uint[]@ values )
 	{
 		return 0;
 	}
-	
+
 	AttackStruct attack;
-    @attack.Attacker = GetCritter( values[4] );
+	Critter@ attacker = GetCritter( values[4] );
+	@attack.Attacker = valid( attacker ) ? attacker : null;
 	
 	uint8 radius = weapon.Blast_Radius;
 	
@@ -4631,7 +4624,8 @@ uint e_DelayedExplosion( uint[]@ values )
             attack.DDMod = 1;
 		}
     }
-	
+
+	attack.WeaponPid = weapon.ProtoId;
     attack.Hx = hx;
     attack.Hy = hy;
     attack.Aim = HIT_LOCATION_NONE;
@@ -4645,24 +4639,26 @@ uint e_DelayedExplosion( uint[]@ values )
     attack.DmgType = weapon.Weapon_DmgType_0;
     attack.BonusDmg = 0;
     attack.DmgMul = 1;
-
     attack.ShowHitAnimForce = true;
 	
-	CombatRes[] results;
+	bool isCritical = false;
 	
+	CombatRes[] results;
+
 	int type = 0;
 	string sound = "LAUGHTE1.mp3";
 	int hearRadius = 50;
 
 	switch( weapPid )
 	{
-		case( PID_FLASH_GRENADE ): 		
+		case( PID_FLASH_GRENADE ): 
 			type = PID_EXPLODE_EMP;
 			hearRadius = 50;
 			sound = "Flashbang_explode.mp3";
 			break;
 		case( PID_HOLY_HAND_GRENADE ):
-		case( PID_FRAG_GRENADE ): 		
+		case( PID_IMPOVISED_TRAP_ACTIVE ):
+		case( PID_FRAG_GRENADE ):	
 			type = PID_EXPLODE_FIRE_SMALL;
 			hearRadius = 140;
 			sound = "Grenade_explode.wav";
@@ -4673,28 +4669,32 @@ uint e_DelayedExplosion( uint[]@ values )
 			hearRadius = 50;
 			sound = "Fire_explode.mp3";
 			break;
-		case( PID_PIROZ_GRENADE ): 	
+		case( PID_PIROZ_GRENADE ):
 			type = PID_EXPLODE_ORB;
 			hearRadius = 100;
 			sound = "Piroz_explode.mp3";
 			break;
 		case( PID_PULSE_GRENADE ):
+		case( PID_IMPOVISED_TRAP_PULSE_ACTIVE ):
+		case( PID_ACTIVE_MINE_PULSE ):
 			type = PID_EXPLODE_EMP;
 			hearRadius = 80;
 			sound = "Pulse_explode.mp3";
 			break;
-		case( PID_PLASMA_GRENADE ): 	
+		case( PID_PLASMA_GRENADE ):
+		case( PID_IMPOVISED_TRAP_PLASMA_ACTIVE ): 
+		case( PID_ACTIVE_MINE_PLASMA ):
 			type = PID_EXPLODE_PLASMA; 
 			hearRadius = 100;
 			sound = "Plasma_explode.wav";
 			break;
-		default: 						
+		default:
 			type = PID_EXPLODE_FIRE_BIG;
 			hearRadius = 160;
 			sound = "Rocket_explode.wav";				
 			break;
 	}
-	
+
 	PlayGenericSound( map, hx, hy, sound, hearRadius );
 	
     Critter@[] critsHit;
@@ -4715,7 +4715,13 @@ uint e_DelayedExplosion( uint[]@ values )
 		CreateTimeEvent( __FullSecond + 1, "e_DelayedExplosionEff", vals, true );
 		SayLog( map, "Explosion " + itemName( weapPid ) + ".", hx, hy );
 	}
-
+	
+	Item@ trap = null;
+	if( !valid( attacker ) && weapon.Item_Subtype == ITEM_SUBTYPE_TRAP )
+	{
+		@trap = map.GetItem( hx, hy, weapPid );
+	}
+	
 	//Initial blast
     for( uint k = 0; k < critsHit.length(); k++ )
 	{
@@ -4739,29 +4745,27 @@ uint e_DelayedExplosion( uint[]@ values )
 		int dir = GetDirection( hx, hy, critsHit[ k ].HexX, critsHit[ k ].HexY );
 		
 		attack.TargetId = critsHit[ k ].Id;
-		bool isCritical = CritRoll( attack.Attacker, critsHit[ k ] );
-		ApplyDamage( attack, critsHit[ k ], 1, isCritical, true, results, hx, hy );
-		if( attack.Attacker.Id > 0 )
+		
+		if( valid( attacker ) )
 		{
-			if( valid( attack.Attacker ) && critsHit[ k ].IsNpc() )
+			isCritical = CritRoll( attack.Attacker, critsHit[ k ] );
+		}
+		else if( weapon.Item_Subtype == ITEM_SUBTYPE_TRAP )
+		{
+			@attack.Attacker = critsHit[ k ];
+			if( valid( trap ) )
+			{
+				isCritical = TrapCritRoll( trap, critsHit[ k ] );
+			}
+		}
+
+		ApplyDamage( attack, critsHit[ k ], 1, isCritical, true, results, hx, hy );
+		if( valid( attacker ) && attack.Attacker.Id > 0 )
+		{
+			if( critsHit[ k ].IsNpc() )
 			{
 				critsHit[ k ].EventAttacked( attack.Attacker );
 			}
-		}
-	}
-
-	//Collateral damage
-	uint[] val = { map.Id, hx, hy };
-	CreateTimeEvent( __FullSecond + 2, "e_CollateralDamageDelay", val, true );
-	uint16 tx = hx, ty = hy;
-	for( uint n = 1; n < radius; n++ )
-	{
-		for( uint m = 0; m < 6; m++ )
-		{
-			tx = hx; ty = hy;
-			map.MoveHexByDir( tx, ty, m, n );
-			uint[] val2 = { map.Id, tx, ty };
-			CreateTimeEvent( __FullSecond + 2, "e_CollateralDamageDelay", val2, true );
 		}
 	}
 
@@ -4784,18 +4788,52 @@ uint e_DelayedExplosion( uint[]@ values )
 			attack.DmgMax *= mul;
 			attack.DmgType = DAMAGE_NORMAL;
 			attack.TargetId = critsHit2[ l ].Id;
-			bool isCritical = CritRoll( attack.Attacker, critsHit2[ l ] );
-			ApplyDamage( attack, critsHit2[ l ], 1, isCritical, true, results, hx, hy );
-			if( attack.Attacker.Id > 0 )
+
+			if( valid( attacker ) )
 			{
-				if( valid( attack.Attacker ) && critsHit2[ l ].IsNpc() )
+				isCritical = CritRoll( attack.Attacker, critsHit2[ l ] );
+			}
+			else if( weapon.Item_Subtype == ITEM_SUBTYPE_TRAP )
+			{
+				@attack.Attacker = critsHit2[ l ];
+				if( valid( trap ) )
+				{
+					isCritical = TrapCritRoll( trap, critsHit2[ l ] );
+				}
+			}
+			ApplyDamage( attack, critsHit2[ l ], 1, isCritical, true, results, hx, hy );
+			if( valid( attack.Attacker ) && attack.Attacker.Id > 0 )
+			{
+				if( critsHit2[ l ].IsNpc() )
 				{
 					critsHit2[ l ].EventAttacked( attack.Attacker );
 				}
 			}
 		}
 	}
+	
+	if( valid( trap ) )
+	{
+		DeleteItem( trap );
+	}
+	
 	FlushResults( results );
+	
+	//Collateral damage
+	uint[] val = { map.Id, hx, hy };
+	CreateTimeEvent( __FullSecond + 2, "e_CollateralDamageDelay", val, true );
+	uint16 tx = hx, ty = hy;
+	for( uint n = 1; n < radius; n++ )
+	{
+		for( uint m = 0; m < 6; m++ )
+		{
+			tx = hx; ty = hy;
+			map.MoveHexByDir( tx, ty, m, n );
+			uint[] val2 = { map.Id, tx, ty };
+			CreateTimeEvent( __FullSecond + 2, "e_CollateralDamageDelay", val2, true );
+		}
+	}
+
 	return 0;
 }
 
@@ -5011,7 +5049,7 @@ bool CritRoll( Critter& cr, Critter& target )
 {
 	bool isCritical = false;
 	
-	float critBase = cr.Stat[ ST_CRITICAL_CHANCE ]; 
+	float critBase = cr.Stat[ ST_CRITICAL_CHANCE ];
 	
 	float critArmor = target.Stat[ ST_LUCK ] + target.Stat[ ST_ARMOR_CLASS ];
 	float critMult = ( 100 - critArmor ) * 0.01;
