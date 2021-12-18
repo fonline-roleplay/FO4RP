@@ -54,7 +54,7 @@ FOFMOD::Sound* FMOD_GetSound( ScriptString& soundName, int soundType );
 FOFMOD::Channel* FMOD_PlaySound( ScriptString& soundName, bool paused );
 FOFMOD::Channel* FMOD_PlayMusic( ScriptString& soundName, bool paused );
 
-FOFMOD::DSP* FMOD_CreateEffect( int effectType, ScriptArray& params );
+FOFMOD::DSP* FMOD_CreateEffect( int effectType, CScriptArray& params );
 void FMOD_ApplyEffect( FOFMOD::DSP& effect );
 void FMOD_DropEffect( FOFMOD::DSP& effect );
 void FMOD_ApplyMusicEffect( FOFMOD::DSP& effect );
@@ -242,7 +242,7 @@ void FMOD_Set3DListenerUp( float x, float y, float z )
 	FMODSystem->Set3DListenerUp( x, y, z );
 }
 
-FOFMOD::DSP* FMOD_CreateEffect( int effectType, ScriptArray& params )
+FOFMOD::DSP* FMOD_CreateEffect( int effectType, CScriptArray& params )
 {
 	FMODCHECK(NULL);
 	FOFMOD::DSP* ret = NULL;

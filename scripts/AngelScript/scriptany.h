@@ -9,8 +9,7 @@ public:
     #ifdef FONLINE_DLL
     static ScriptAny& Create()
     {
-        static int typeId = ASEngine->GetTypeIdByDecl( "any" );
-        ScriptAny* scriptAny = (ScriptAny*) ASEngine->CreateScriptObject( typeId );
+        ScriptAny* scriptAny = (ScriptAny*) ASEngine->CreateScriptObject( ASEngine->GetTypeInfoByName( "any" ) );
         return *scriptAny;
     }
 protected:
@@ -61,6 +60,7 @@ protected:
     virtual void FreeObject();
 
     mutable int      refCount;
+	mutable bool gcFlag;
     asIScriptEngine* engine;
 
     // The structure for holding the values

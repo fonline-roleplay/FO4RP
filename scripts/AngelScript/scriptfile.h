@@ -1,3 +1,10 @@
+//
+// ScriptFile
+//
+// This class encapsulates a FILE pointer in a reference counted class for
+// use within AngelScript.
+//
+
 #ifndef SCRIPTFILE_H
 #define SCRIPTFILE_H
 
@@ -13,8 +20,7 @@ public:
     #ifdef FONLINE_DLL
     static ScriptFile& Create()
     {
-        static int  typeId = ASEngine->GetTypeIdByDecl( "file" );
-        ScriptFile* scriptFile = (ScriptFile*) ASEngine->CreateScriptObject( typeId );
+        ScriptFile* scriptFile = (ScriptFile*) ASEngine->CreateScriptObject( ASEngine->GetTypeInfoByName( "file" ) );
         return *scriptFile;
     }
 protected:
@@ -27,6 +33,7 @@ public:
     virtual void AddRef() const;
     virtual void Release() const;
 
+    // TODO: Implement the "r+", "w+" and "a+" modes
     // mode = "r" -> open the file for reading
     //        "w" -> open the file for writing (overwrites existing file)
     //        "a" -> open the file for appending
@@ -64,12 +71,12 @@ public:
     virtual unsigned short ReadUint16();
     virtual unsigned int   ReadUint32();
     virtual asQWORD        ReadUint64();
-    virtual unsigned int   ReadData( unsigned int count, ScriptArray& data );
+    virtual unsigned int   ReadData( unsigned int count, CScriptArray& data );
     virtual bool           WriteUint8( unsigned char data );
     virtual bool           WriteUint16( unsigned short data );
     virtual bool           WriteUint32( unsigned int data );
     virtual bool           WriteUint64( asQWORD data );
-    virtual bool           WriteData( ScriptArray& data, unsigned int count );
+    virtual bool           WriteData( CScriptArray& data, unsigned int count );
 
 protected:
     virtual ~ScriptFile();
