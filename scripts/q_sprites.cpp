@@ -161,7 +161,7 @@ void fillNoiseBuffer( float* buffer, uint8 size )
     center  =  Noise2d(x, y) / 4;
    }
  */
-void GenerateDesert( ScriptArray* array, uint size )
+void GenerateDesert( CScriptArray* array, uint size )
 {
     if( array->GetElementSize() != sizeof( float ) )
     {
