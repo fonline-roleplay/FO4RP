@@ -522,12 +522,19 @@ struct GameOptions
     const bool         MouseScroll;
     const int          IndicatorType;
     const uint         DoubleClickTime;
-    const uint8        RoofAlpha;
-    const bool         HideCursor;
-    const bool         DisableLMenu;
-    const bool         DisableMouseEvents;
-    const bool         DisableKeyboardEvents;
-    const bool         HidePassword;
+    uint8        RoofAlpha;
+	uint8        WallAlpha;
+	bool         ShowContourContainer;
+	bool         ShowContourItems;
+	bool         ShowContourDoors;
+	bool         ShowContourDeadCritters;
+	bool         ShowContourScenery;
+	bool         ShowContourWalls;
+    bool         HideCursor;
+    bool         DisableLMenu;
+    bool         DisableMouseEvents;
+    bool         DisableKeyboardEvents;
+    bool         HidePassword;
     const ScriptString PlayerOffAppendix;
     const int          CombatMessagesType;
     const bool         DisableDrawScreens;
@@ -1966,7 +1973,7 @@ inline void static_asserts()
     STATIC_ASSERT( sizeof( IntPair )      == 8    );
     STATIC_ASSERT( sizeof( ProtoItem )    == 912  );
     STATIC_ASSERT( sizeof( Mutex )        == 24   );
-    STATIC_ASSERT( sizeof( GameOptions )  == 1312 );
+    STATIC_ASSERT( sizeof( GameOptions )  == 1320 );
     STATIC_ASSERT( sizeof( SpriteInfo )   == 36   );
     STATIC_ASSERT( sizeof( Field )        == 76   );
     # ifdef __MAPPER
