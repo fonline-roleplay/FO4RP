@@ -35,7 +35,7 @@ void RegisterScriptFileSystem_Native()
 	r = ASEngine->RegisterObjectMethod("filesystem", "bool changeCurrentPath(const string &in)", asMETHOD(ScriptFileSystem, ChangeCurrentPath), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "string@+ getCurrentPath() const", asMETHOD(ScriptFileSystem, GetCurrentPath), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "array<string@> @getDirs() const", asMETHOD(ScriptFileSystem, GetDirs), asCALL_THISCALL); assert( r >= 0 );
-	r = ASEngine->RegisterObjectMethod("filesystem", "array<string@> @getFiles() const", asMETHOD(ScriptFileSystem, GetFiles), asCALL_THISCALL); assert( r >= 0 );
+	r = ASEngine->RegisterObjectMethod("filesystem", "uint getFiles( string&out files, const string&in separator = \"\\n\") const", asMETHOD(ScriptFileSystem, GetFiles), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "bool isDir(const string &in) const", asMETHOD(ScriptFileSystem, IsDir), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "bool isLink(const string &in) const", asMETHOD(ScriptFileSystem, IsLink), asCALL_THISCALL); assert(r >= 0);
 	r = ASEngine->RegisterObjectMethod("filesystem", "int64 getSize(const string &in) const", asMETHOD(ScriptFileSystem, GetSize), asCALL_THISCALL); assert(r >= 0);
@@ -80,63 +80,30 @@ void ScriptFileSystem::Release() const
 		delete this;
 }
 
-CScriptArray *ScriptFileSystem::GetFiles() const
+unsigned int ScriptFileSystem::GetFiles( ScriptString& outStr, ScriptString& separator ) const
 {
-	CScriptArray *array = &CScriptArray::Create("string");
+	unsigned int count = 0;
+	WIN32_FIND_DATA ffd;
+    HANDLE          hFind = INVALID_HANDLE_VALUE;
 
-#if defined(_WIN32)
-	// Windows uses UTF16 so it is necessary to convert the string
-	wchar_t bufUTF16[10000];
 	string searchPattern = currentPath + "/*";
-	MultiByteToWideChar(CP_UTF8, 0, searchPattern.c_str(), -1, bufUTF16, 10000);
+    hFind = FindFirstFile( searchPattern.c_str(), &ffd );
 
-	WIN32_FIND_DATAW ffd;
-	HANDLE hFind = FindFirstFileW(bufUTF16, &ffd);
-	if( INVALID_HANDLE_VALUE == hFind ) 
-		return array;
-	
-	do
-	{
-		// Skip directories
-		if( (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) )
-			continue;
+    if( INVALID_HANDLE_VALUE == hFind )
+        return count;
 
-		// Convert the file name back to UTF8
-		char bufUTF8[10000];
-		WideCharToMultiByte(CP_UTF8, 0, ffd.cFileName, -1, bufUTF8, 10000, 0, 0);
+    do
+    {
+        if( ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY )
+            continue;
 		
-		// Add the file to the array
-		array->InsertLast( &ScriptString::Create( bufUTF8 ) );
-	}
-	while( FindNextFileW(hFind, &ffd) != 0 );
-
-	FindClose(hFind);
-#else
-	dirent *ent = 0;
-	DIR *dir = opendir(currentPath.c_str());
-	while( (ent = readdir(dir)) != NULL ) 
-	{
-		const string filename = ent->d_name;
-
-		// Skip . and ..
-		if( filename[0] == '.' )
-			continue;
-
-		// Skip sub directories
-		const string fullname = currentPath + "/" + filename;
-		struct stat st;
-		if( stat(fullname.c_str(), &st) == -1 )
-			continue;
-		if( (st.st_mode & S_IFDIR) != 0 )
-			continue;
-
-		// Add the file to the array
-		array->InsertLast( &ScriptString::Create( filename ) );
-	}
-	closedir(dir);
-#endif
-
-	return array;
+		if( count++ != 0 )
+			outStr += separator.c_str();
+        outStr += ffd.cFileName;
+    }
+    while( FindNextFile( hFind, &ffd ) != 0 );
+    FindClose( hFind );
+    return count;
 }
 
 CScriptArray *ScriptFileSystem::GetDirs() const

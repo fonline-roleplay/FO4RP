@@ -38,7 +38,7 @@ public:
 	asINT64 GetSize(const ScriptString &path) const;
 
 	// Returns a list of the files in the current path
-	CScriptArray *GetFiles() const;
+	unsigned int GetFiles( ScriptString& outStr, ScriptString& separator ) const;
 
 	// Returns a list of the directories in the current path
 	CScriptArray *GetDirs() const;

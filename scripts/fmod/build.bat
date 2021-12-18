@@ -3,16 +3,16 @@
 @:1
 
 @: Environment
-@set PATH=C:\Program Files (x86)\Microsoft Visual Studio 10.0\Common7\IDE;%PATH%
-@set PATH=C:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\BIN;%PATH%
-@set LIB=C:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\LIB;%LIB%
+@set PATH=D:\Program Files (x86)\Microsoft Visual Studio 10.0\Common7\IDE;%PATH%
+@set PATH=D:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\bin;%PATH%
+@set LIB=D:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\lib;%LIB%
 @set LIB=C:\Program Files (x86)\Microsoft SDKs\Windows\v6.0A\Lib;%LIB%
 @set LIB=C:\Program Files (x86)\Microsoft SDKs\Windows\v7.0A\Lib;%LIB%
 @set LIB=..\StlPort;%LIB%
 @set LIB=.\lib;%LIB%
 @set LIB=.\lib\fmod;%LIB%
-@set INCLUDE=C:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\include;%INCLUDE%
 @set INCLUDE=C:\Program Files (x86)\Microsoft SDKs\Windows\v7.0A\Include;%INCLUDE%
+@set INCLUDE=D:\Program Files (x86)\Microsoft Visual Studio 10.0\VC\include;%INCLUDE%
 @set INCLUDE=..\StlPort;%INCLUDE%
 @set INCLUDE=.\inc;%INCLUDE%
 @set INCLUDE=.\inc\tinydir;%INCLUDE%
@@ -62,3 +62,5 @@ link.exe /nologo /dll /incremental:no /machine:X86 cwalk.obj fofmodlock.obj fofm
 @del ".\bin\fofmod_client.exp"
 @del ".\bin\fofmod_client.lib"
 @del ".\bin\fofmod_client.idb"
+
+@pause
