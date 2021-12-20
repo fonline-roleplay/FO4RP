@@ -54,7 +54,7 @@ FOFMOD::Sound* FMOD_GetSound( ScriptString& soundName, int soundType );
 FOFMOD::Channel* FMOD_PlaySound( ScriptString& soundName, bool paused );
 FOFMOD::Channel* FMOD_PlayMusic( ScriptString& soundName, bool paused );
 
-FOFMOD::DSP* FMOD_CreateEffect( int effectType, CScriptArray& params );
+FOFMOD::DSP* FMOD_CreateEffect( int effectType, CScriptArray* params );
 void FMOD_ApplyEffect( FOFMOD::DSP& effect );
 void FMOD_DropEffect( FOFMOD::DSP& effect );
 void FMOD_ApplyMusicEffect( FOFMOD::DSP& effect );
@@ -242,31 +242,19 @@ void FMOD_Set3DListenerUp( float x, float y, float z )
 	FMODSystem->Set3DListenerUp( x, y, z );
 }
 
-FOFMOD::DSP* FMOD_CreateEffect( int effectType, CScriptArray& params )
+FOFMOD::DSP* FMOD_CreateEffect( int effectType, CScriptArray* params )
 {
 	FMODCHECK(NULL);
 	FOFMOD::DSP* ret = NULL;
-	// int typei = params.GetElementTypeId();
-	// asIObjectType* arrOType = ASEngine->GetObjectTypeById( typei );
-	// const char* typeName = arrOType->GetName();
-	// Log( "typename %s \n", typeName );
-	// if( strcmp( typeName, "float" ) == 0 )
-	// {
-		asUINT paramCount = params.GetSize();
-		float* fparams = NULL;
-		if( paramCount )
-		{
-			fparams = (float*)malloc( paramCount*sizeof( float ) );
-			memset(fparams, 0, paramCount*sizeof( float ) );
-			for( asUINT i = 0; i < paramCount; i++ )
-			{
-				fparams[i] =  *( ( float* ) params.At( i ) ) ;
-			}
-			
-		}
-		FMODSystem->CreateDSPEffect( (FMOD_DSP_TYPE)effectType, fparams, (unsigned int)paramCount, &ret );
-		free(fparams);
-	// }
+	asUINT paramCount = params->GetSize();
+	float* fparams = NULL;
+	if( paramCount )
+	{
+		fparams = (float*)malloc( paramCount*sizeof( float ) );
+		memcpy( fparams, params->GetBuffer(), paramCount*sizeof( float ) );			
+	}
+	FMODSystem->CreateDSPEffect( (FMOD_DSP_TYPE)effectType, fparams, (unsigned int)paramCount, &ret );
+	free(fparams);
 	if( ret )
 		Script_DSP_Addref( ret );
 	return ret;
@@ -551,7 +539,7 @@ void RegisterASInterface()
 		r = ASEngine->RegisterGlobalFunction("FMODSound@ FMOD_GetSound( string& soundName, int soundType )",   		asFUNCTION(FMOD_GetSound), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_GetSound", r );
-		r = ASEngine->RegisterGlobalFunction("FMODEffect@ FMOD_CreateEffect( int effectType, array<float>& params )",  asFUNCTION( FMOD_CreateEffect ), 		asCALL_CDECL );
+		r = ASEngine->RegisterGlobalFunction("FMODEffect@ FMOD_CreateEffect( int effectType, array<float>@+ params )",  asFUNCTION( FMOD_CreateEffect ), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_CreateEffect", r );
 		r = ASEngine->RegisterGlobalFunction("void FMOD_ApplyEffect( FMODEffect& effect )",         asFUNCTION(FMOD_ApplyEffect), 		asCALL_CDECL );
