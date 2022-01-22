@@ -1345,7 +1345,8 @@ struct Critter
     const uint                GlobalIdleNextTick;
     const uint                ApRegenerationTick;
     const bool                IsNotValid;
-    const int                 RefCounter;
+	const bool 				  CanBeRemoved;
+    const long                RefCounter;
 
     uint                      GetItemsWeight() const
     {
@@ -1376,6 +1377,7 @@ struct Client: Critter
     const char  PassHash[ PASS_HASH_SIZE ];
     const uint8 Access;
     const uint  LanguageMsg;
+	
 };
 
 struct Npc: Critter

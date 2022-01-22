@@ -6,6 +6,7 @@
 
 #include <time.h>
 
+
 // Extern data definition
 _GlobalVars GlobalVars;
 
@@ -74,9 +75,11 @@ EXPORT uint Map_GetRoof( Map& map, uint16 tx, uint16 ty );
 EXPORT bool Map_SetTile( Map& map, uint16 tx, uint16 ty, uint picHash );
 EXPORT bool Map_SetRoof( Map& map, uint16 tx, uint16 ty, uint picHash );
 EXPORT bool Map_HasRoof( Map& map, uint16 hexX, uint16 hexY );
-
+EXPORT int  Critter_GetSocket(Critter& cr);
+EXPORT uint Critter_GetUID(Critter& cr, uint8 num);
 // EXPORT uint Critter_GetItemTransferCount( Critter& cr );
 EXPORT void Critter_GetIp( Critter& cr, CScriptArray* array );
+EXPORT uint Critter_GetCurrentIp( Critter& cr );
 #endif // __SERVER
 
 /************************************************************************/
@@ -945,6 +948,30 @@ EXPORT void Item_SetMapPic( Item& item, uint hash )
 
 #ifdef __SERVER
 
+struct ClientEx : Client
+{
+	uint UID[5];
+	volatile int Sock; // in fact, SOCKET
+	sockaddr_in From;
+};
+
+
+
+EXPORT int Critter_GetSocket(Critter& cr)
+{
+    if (cr.CritterIsNpc) return 0;
+    return ((ClientEx&)cr).Sock;
+}
+
+
+EXPORT uint Critter_GetUID(Critter& cr, uint8 num)
+{
+    if (cr.CritterIsNpc) return 0;
+    return ((ClientEx&)cr).UID[num];
+}
+
+
+
 uint GetTiles( Map& map, uint16 hexX, uint16 hexY, bool is_roof, vector< uint >& finded )
 {
     ProtoMap::TileVec& tiles = const_cast< ProtoMap::TileVec& >( map.Proto->Tiles );
@@ -1036,6 +1063,20 @@ EXPORT void Critter_GetIp( Critter& cr, CScriptArray* array )
     array->Resize( MAX_STORED_IP );
     for( uint i = 0; i < MAX_STORED_IP; i++ )
 		array->InsertAt( i, &(const_cast<uint&>(cr.DataExt->PlayIp[i])) );
+}
+
+EXPORT uint Critter_GetCurrentIp( Critter& cr )
+{
+	if( cr.CritterIsNpc )
+		return( 0 );
+	else
+	{
+		uint idx = cr.DataExt->CurrentIp;
+		if( idx >= MAX_STORED_IP )
+			return( 0 );
+		else
+			return( cr.DataExt->PlayIp[idx] );
+	}
 }
 
 EXPORT void Critter_SetWorldPos( CritterMutual& cr, uint16 x, uint16 y ) // pm added
