@@ -18,6 +18,7 @@
 #include "time_h.fos"
 #include "weather_h.fos"
 #include "radio_h.fos"
+#include "radiation_h.fos"
 
 import  void GM_brokeItem( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 ) from "gm_commands";
 
@@ -1202,10 +1203,12 @@ string[] sinf_menu_list =
 		"ID in chat", 			// SINF_ID_CHAT		( 0x00000008 )
 		"ID items in chat", 	// SINF_ID_ITEMS	( 0x00000010 )
 		"Hex coordinates", 		// SINF_COORDS		( 0x00000020 )
+		"Radiation markers", 	// SINF_RAD_SIGN	( 0x00000040 )
 		"Cursor sprites", 		// SINF_SPRITES		( 0x00000080 )
 		"Hear radios", 			// SINF_RADIO		( 0x00000100 )
 		"Hear whisper",			// SINF_WHISPER		( 0x00000200 )
 		"Info ~desc", 			// SINF_DESC_INFO	( 0x00000400 )
+
 };
 
 string[] status_arr = {": Yes", ": No"};
@@ -1225,7 +1228,7 @@ class MenuGMSinf: DefaultMenuHandler
 	{
         Map@ map = GetMap( map_id );
 		
-		uint len = sinf_menu_list.length() -1 ;
+		uint len = sinf_menu_list.length() - 2; //Sinf DESC is not needed yet, make -1 when code is updated
 
 		for( uint i = 0; i < len; i++ )
 		{
@@ -4596,6 +4599,13 @@ class MenuGMHex: DefaultMenuHandler
 			return true;
 		}
 		
+		if( menu.Button( "Add Radiation" ) )
+		{
+			MenuGMHexRad@ GM_Hex_Rad_Spawn = MenuGMHexRad( map, hex_X, hex_Y );
+			GM_Hex_Rad_Spawn.level = level + 1;
+			return menu.OpenChild( "Level " + GM_Hex_Rad_Spawn.level, GM_Hex_Rad_Spawn );
+		}
+		
 		if( menu.Button( "Teleport there" ) )
 		{
 			gm.TransitToHex( hex_X, hex_Y, gm.Dir );
@@ -4970,6 +4980,118 @@ void hex_spawn_NPC( Critter& gm, Map& map, uint16 hexX, uint16 hexY )
     }
 }
 //end hex spawning
+
+//Menu for mob spawn
+class MenuGMHexRad: DefaultMenuHandler
+{
+    uint map_id;
+	uint16 hex_X;
+	uint16 hex_Y;
+	uint level;
+	
+    MenuGMHexRad( Map& map, uint16 hexX, uint16 hexY )
+	{
+        map_id = map.Id;
+		hex_X = hexX;
+		hex_Y = hexY;
+		level = 1;
+    }
+
+    bool MenuUpdate( Critter& gm, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+		
+        if( !valid( map ) )
+		{
+            return true;
+        }
+		
+		if( gm.ParamBase[ CR_VAL2 ] > 0 && gm.ParamBase[ CR_VAL3] > 0 && gm.ParamBase[ CR_VAL4 ] > 0 )
+		{
+			if( menu.Button( "Radiate Hex" ) )
+			{
+				RadiateHex( gm, map.Id, hex_X, hex_Y, gm.Param[ CR_VAL2 ], gm.Param[ CR_VAL3], gm.Param[ CR_VAL4 ] );
+				return true;
+			}
+		}
+		
+		string rad_strength = gm.ParamBase[ CR_VAL2 ];
+		if( menu.ButtonExtSay( "Strength: ", rad_strength, "Strength:" ) )
+		{
+			string strength = menu.GetSayValue();
+			int val = 0;
+			StrToInt( strength, val );
+			if( val > 0 )
+			{
+				gm.ParamBase[ CR_VAL2 ] = val;
+				gm.Say( SAY_NETMSG, "|0xFFFF00 Radiation source strength is: " + val + "." );
+			}
+			else
+			{
+				gm.ParamBase[ CR_VAL2 ] = 0;
+				gm.Say( SAY_NETMSG, "|0xFFFF00 The value must be positive!" );
+			}
+			return true;
+		}
+		
+		string rad_time = gm.ParamBase[ CR_VAL3 ];
+		if( menu.ButtonExtSay( "Tick: ", rad_time, "Set time between 1 and 60 minutes:" ) )
+		{
+			string tick = menu.GetSayValue();
+			int	val = 0;
+			StrToInt( tick, val );
+			if( val > 0 && val < 61)
+			{
+				gm.ParamBase[ CR_VAL3 ] = val;
+				gm.Say( SAY_NETMSG, "|0xFFFF00 Radiation tick is: " + val + " minutes." );
+			}
+			else
+			{
+				gm.Say( SAY_NETMSG, "|0xFFFF00 You must set time between 1 and 60 minutes!" );
+			}
+			return true;
+		}
+
+		string rad_distance = gm.ParamBase[ CR_VAL4 ];
+		if( menu.ButtonExtSay( "Radius: ", rad_distance, "Set radiation radius:" ) )
+		{
+			string radius = menu.GetSayValue();
+			int val = 0;
+			StrToInt( radius, val );
+			if( val > 0 )
+			{
+				gm.ParamBase[ CR_VAL4 ] = val;
+				gm.Say( SAY_NETMSG, "|0xFFFF00 Radiation source radius is: " + val + " hex." );
+			}
+			else
+			{
+				gm.ParamBase[ CR_VAL4 ] = 0;
+				gm.Say( SAY_NETMSG, "|0xFFFF00 The value must be positive!" );
+			}
+			return true;
+		}
+		
+		if( menu.Button( "Return" ) )
+		{
+			level = 0;
+			return false;
+		}
+		return true;
+    }
+
+    string@ Description( Critter& gm )
+	{	
+		string info = "Radiation spawn menu. \nSelect options and press [ |0xFFFF00 Radiate Hex |0x3CF800 ]. \nStrength: [|0xFFFF00 " + gm.Param[ CR_VAL2 ] + " |0x3CF800 ] rad"
+					+ "\nTick: [ |0xFFFF00 " + gm.Param[ CR_VAL3 ] + " |0x3CF800 ] minutes\nRadius: [ |0xFFFF00 " 
+					+ gm.Param[ CR_VAL4 ] + " |0x3CF800 ] hex ";
+		return info;
+	}
+		
+	string@ ButtonCancel()
+	{
+        return ButtonDecorator( "Hide menu", null );
+    }
+}
 
 string PlayerGameMode( Critter& cr )
 {

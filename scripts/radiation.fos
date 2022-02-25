@@ -196,18 +196,11 @@ void ChangeStage( Critter& cr, uint stage, bool gain )
     }
 }
 
-
 uint e_radFlow( uint[]@ values )
 {
-	if( values is null )
-	{
-		Log( "radFlow error: values is null" );
-		return 0;
-	}
-    
-    Item@ item = GetItem( values[0] );
+    Item@ radMarker = GetItem( values[0] );
 
-    if( item is null )
+    if( !valid( radMarker ) )
 	{
 		return 0;
 	}
@@ -216,13 +209,14 @@ uint e_radFlow( uint[]@ values )
 	Critter@ owner;
 	Item@ cont;
 	
-	switch( item.Accessory )
+	switch( radMarker.Accessory )
 	{
 		case( ACCESSORY_NONE ):
+			DeleteItem( radMarker );
 			return 0;
 		case( ACCESSORY_CRITTER ):
 		{
-			@owner = GetCritter( item.CritId );
+			@owner = GetCritter( radMarker.CritId );
 			if( !valid( owner ) )
 			{
 				return REAL_MINUTE( 1 );
@@ -232,50 +226,45 @@ uint e_radFlow( uint[]@ values )
 			break;
 		}
 		case( ACCESSORY_HEX ): 
-			x = item.HexX;
-			y = item.HexY;
+			x = radMarker.HexX;
+			y = radMarker.HexY;
 			break;
 		case( ACCESSORY_CONTAINER ):
 		{
-			@cont = GetItem( item.ContainerId );
+			@cont = GetItem( radMarker.ContainerId );
 			if( !valid( cont ) )
 			{
-				return REAL_MINUTE(1);
+				return REAL_MINUTE( 1 );
 			}
 			x = cont.HexX;
 			y = cont.HexY;
 			break;
 		}
 		default:
+			DeleteItem( radMarker );
 			return 0;
 	}
 	
-    Map@ map = GetMap( item.MapId );
-    if( map is null )
+    Map@ map = GetMap( radMarker.MapId );
+    if( !valid( map ) )
 	{
-		Log( "radFlow error: map #" + item.MapId + " is null" );
+		Log( "radFlow error: map #" + radMarker.MapId + " is null" );
+		DeleteItem( radMarker );
 		return 0;
 	}
-    
-	int dist = item.Val2;
-
+	
 	Critter@[] critters;
-    uint count = map.GetCrittersHex( x, y, dist, FIND_ALL, critters );
+    uint count = map.GetCrittersHex( x, y, radMarker.RADIATION_DISTANCE, FIND_ALL, critters );
 
     for( uint i = 0; i < count; i++ )
     {
-		int step = GetDistantion( x, y, critters[i].HexX, critters[i].HexY );
-		int rad = item.Val0 - item.Val1 * step;
-		rad = CLAMP( rad, 0, rad );
-		rad = Random( rad * 100 / 80, rad );
-		
-		AffectRadiation( critters[i], rad );
+		AffectRadiation( critters[i], radMarker.RADIATION_STRENGTH );
 		
 		Item@ active = critters[i].GetItem( 0, SLOT_HAND1 );
 
 		if( valid( active ) && active.GetProtoId() == PID_GEIGER_COUNTER && active.Val1 == 1 )
 		{
-			critters[i].SayMsg( SAY_WHISP_ON_HEAD, TEXTMSG_GAME, 10354, "$rem" + rad );
+			critters[i].SayMsg( SAY_WHISP_ON_HEAD, TEXTMSG_GAME, 10354, "$rem" + radMarker.RADIATION_STRENGTH );
 		}
     }
 	
@@ -288,54 +277,13 @@ uint e_radFlow( uint[]@ values )
 			continue;
 		}
 		
-		int step = GetDistantion( x, y, geigers[i].HexX, geigers[i].HexY );
-		int rad = item.Val0 - item.Val1 * step;
-		rad = CLAMP( rad, 0, rad );
-		rad = Random( rad * 100 / 80, rad );
-		map.SetTextMsg( geigers[i].HexX, geigers[i].HexY, COLOR_GRAY, TEXTMSG_GAME, 10354, "$rem" + rad );
+		map.SetTextMsg( geigers[i].HexX, geigers[i].HexY, COLOR_GRAY, TEXTMSG_GAME, 10354, "$rem" + radMarker.RADIATION_STRENGTH );
 	}
 	
-	return REAL_SECOND( item.Val3 );
+	return REAL_MINUTE( radMarker.RADIATION_TICK );
 }
 
-void _showRadItem( Item& item, Critter& player, bool entered, uint8 dir ) 
-{
-	
-	Item@ active = player.GetItem( 0, SLOT_HAND1 );
-
-	if( valid( active ) && active.GetProtoId() == PID_GEIGER_COUNTER && active.Val1 == 1 )
-	{
-		if( entered )
-		{	
-			player.Say( SAY_NETMSG, "You have discovered source of radiation." );
-			if( isGM( player ) )
-			{
-				UNSETFLAG( item.Flags, ITEM_HIDDEN );
-			}
-		}
-		else
-		{
-			if( isGM( player ) )
-			{
-				SETFLAG( item.Flags, ITEM_HIDDEN );
-			}
-		}
-	}
-}
-
-void radiate( Critter& cr, int VAL, int FADE, int DIST )
-{
-    Map@ map = cr.GetMap();
-    if( not valid( map ) )
-	{
-		cr.Say( SAY_NETMSG, "Can't do on Global." );
-        return;
-	}
-
-	item_radiate( map.Id, cr.HexX, cr.HexY, VAL, FADE, DIST, 3, PID_URANIUM_ORE );
-}
-
-void unsafe_GM_ItemRadiate( Critter& cr, int p0, int p1, int p2, string@ p3, int[]@ data )
+void unsafe_GM_ItemRadiate( Critter& cr, int param0, int hexX, int hexY, string@ param3, int[]@ data )
 {
 	if( !isGM( cr ) )
 	{
@@ -343,23 +291,24 @@ void unsafe_GM_ItemRadiate( Critter& cr, int p0, int p1, int p2, string@ p3, int
 	}
 	
     Map@ map = cr.GetMap();
-    if( not valid( map ) )
+    if( !valid( map ) )
 	{
-		cr.Say( SAY_NETMSG, "Can't do on Global." );
+		cr.Say( SAY_NETMSG, "|0xFFFF00 Can't do on Global." );
         return;
 	}
-
-	if( !valid(data) || data.length() != 7 )
+	
+	if( data[1] < 1 || data[1] > 60 )
 	{
-		cr.Say( SAY_NETMSG, "Incorrect arguments!" );
+		cr.Say( SAY_NETMSG, "|0xFFFF00 You must set time between 1 and 60 minutes!" );
 		return;
 	}
-	item_radiate( map.Id, data[0], data[1], data[2], data[3], data[4], data[5], data[6] );
+
+	RadiateHex( cr, map.Id, hexX, hexY, data[0], data[1], data[2] );
 }
 
-void item_radiate( int mapID, int x, int y, int VAL, int FADE, int DIST, int TIME, int PID )
+void RadiateHex( Critter& cr, int mapID, int hx, int hy, int rad_strength, int rad_time, int rad_radius )
 {
-	if( VAL < 0 || FADE < 0 || DIST < 0 || TIME < 0 )
+	if( rad_strength < 0 || rad_time < 0 || rad_radius < 0 )
 	{
 		return;
 	}
@@ -370,17 +319,18 @@ void item_radiate( int mapID, int x, int y, int VAL, int FADE, int DIST, int TIM
 		return;
 	}
 	
-	Item@ item = map.AddItem( x, y, PID, 1 );
-	SETFLAG( item.Flags, ITEM_HIDDEN );
-	item.SetEvent( ITEM_EVENT_WALK, "_showRadItem" );
-	
-	item.Val0 = VAL;
-	item.Val1 = FADE;
-	item.Val2 = DIST;
-	item.Val3 = TIME;
-
-    uint[] values = { item.Id };
-    CreateTimeEvent( __FullSecond, "e_radFlow", values, false );
+	Item@ radMarker = map.AddItem( hx, hy, PID_RADIATION_MARKER, 1 );
+	if( valid( radMarker ) )
+	{
+		radMarker.RADIATION_STRENGTH = rad_strength;
+		radMarker.RADIATION_TICK = rad_time;
+		radMarker.RADIATION_DISTANCE = rad_radius;
+		radMarker.Update();
+		
+		uint[] values = { radMarker.Id };
+		radMarker.RADIATION_EVENT = CreateTimeEvent( __FullSecond, "e_radFlow", values, false );
+		cr.Say( SAY_NETMSG, "Radiation source set at X: " + hx + " Y: " + hy + " , strength: "+ rad_strength + " , tick: "+ rad_time + " minutes, radius: " + rad_radius + " hex " );
+	}
 }
 
 #endif //RADIATION
