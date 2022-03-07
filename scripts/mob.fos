@@ -8,8 +8,8 @@
 import uint CountMapPlayers( Map@ map ) from "manager";
 
 #define DISTANCE_GROUP_RADIUS		( 15 )
-#define DISTANCE_AGGRO				# (cr)	( ( cr.StatBase[ST_STRENGTH] + 2 ) * 2 )
-#define DISTANCE_UNAGGRO			# (cr)	( ( cr.StatBase[ST_STRENGTH] + 2 ) * 4 )
+#define DISTANCE_AGGRO				# (cr)	( ( cr.StatBase[ ST_PERCEPTION ] + 2 ) * 2 )
+#define DISTANCE_UNAGGRO			# (cr)	( ( cr.StatBase[ ST_PERCEPTION ] + 2 ) * 4 )
 
 #define VarWandering             StatBase[ ST_VAR5 ]
 
@@ -37,7 +37,8 @@ void _MobInit( Critter& npc, bool firstTime )
     npc.SetEvent( CRITTER_EVENT_DEAD,        	"_MyDeath" );
     npc.SetEvent( CRITTER_EVENT_RESPAWN,    	 null );
     npc.SetEvent( CRITTER_EVENT_ATTACKED,    	"_Attacked" );
-	
+	npc.SetEvent( CRITTER_EVENT_SMTH_KNOCKOUT,  "_TargetDown" );
+
     npc.ShowCritterDist1 = DISTANCE_AGGRO( npc );
     npc.SetEvent( CRITTER_EVENT_SHOW_CRITTER_1, "_CritterInAggroRange" );
 
@@ -48,11 +49,13 @@ void _MobInit( Critter& npc, bool firstTime )
 void _CritterBecameVisible( Critter& self, Critter& target )
 {
 	uint dist = GetDistantion( self.HexX, self.HexY, target.HexX, target.HexY );
-	if( int( dist ) > DISTANCE_AGGRO( self ) ) {
+	if( int( dist ) > DISTANCE_AGGRO( self ) )
+	{
 		return;
 	}
     _ShowPlayer( self, target );
 }
+
 void _CritterInAggroRange( Critter& self, Critter& target )
 {
 	if( not self.IsSee( target ) )
@@ -84,6 +87,15 @@ void _MyDeath( Critter& npc, Critter@ killer )
 void _Respawn( Critter& npc )
 {
     DeleteNpc( npc );
+}
+
+// ENEMY DOWN
+void _TargetDown( Critter& self, Critter& player, uint anim2begin, uint anim2idle, uint anim2end, uint lostAp, uint knockDist )
+{
+	if( player.IsPlayer() && player.StatBase[ ST_CURRENT_HP ] <= 0 )
+	{
+		EraseAttackPlane( self, player );
+	}
 }
 
 // CRITTER_EVENT_SHOW_CRITTER
@@ -220,6 +232,12 @@ void _Idle( Critter& npc )
 		npc.SetEvent( CRITTER_EVENT_IDLE, null );
 		return;
 	}
+	
+	Map@ map = npc.GetMap();
+	if( !valid(map) )
+	{
+		return; 
+	}
 
 	if( npc.StatBase [ST_FOLLOW_CRIT] != 0 )
 	{
@@ -237,62 +255,74 @@ void _Idle( Critter& npc )
 		return;
 	}
 	
+	Critter@[] enemies;
+	uint len = map.GetCrittersHex( npc.HexX, npc.HexY, DISTANCE_AGGRO( npc ), FIND_ONLY_PLAYERS | FIND_KO, enemies );
+	if( len > 0 ) 
+	{
+		for( uint i = 0; i < len; i++ )
+		{
+			Critter@ target = enemies[ i ];
+			if( valid( target ) )
+			{
+				_ShowPlayer( npc, target );
+			}
+		}
+	}	
+	
+	// DOG BEHAVIOUR
 	if( npc.StatBase[ ST_BODY_TYPE ] == BT_DOG )
 	{
-		Map@ map = npc.GetMap();
-		if( !valid(map) )
-		{
-			return; 
-		}
-		
 		Critter@[] players;
-		uint count = map.GetCrittersHex( npc.HexX, npc.HexY, 15, FIND_ONLY_PLAYERS | FIND_LIFE, players );
-		Critter@ closest = null;
-		uint min = 999;
-		
-		for( uint i = 0; i < count; i++ )
+		uint len2 = map.GetCrittersHex( npc.HexX, npc.HexY, 15, FIND_ONLY_PLAYERS | FIND_LIFE, players );
+		if( len2 > 0 )
 		{
-			uint dist = GetDistantion( players[i].HexX, players[i].HexY, npc.HexX, npc.HexY );
-			if( dist > 8 )
-			{
-				EraseAttackPlane( npc, players[i] );
-				continue;
-			}
+			Critter@ closest = null;
+			uint min = 999;
 			
-			if( dist < 4 )
+			for( uint i = 0; i < len2; i++ )
 			{
-				if( dist < min )
+				uint dist = GetDistantion( players[i].HexX, players[i].HexY, npc.HexX, npc.HexY );
+				if( dist > 8 )
 				{
-					min = dist;
-					@closest = @players[i];
+					EraseAttackPlane( npc, players[i] );
+					continue;
 				}
+				
+				if( dist < 4 )
+				{
+					if( dist < min )
+					{
+						min = dist;
+						@closest = @players[i];
+					}
+				}
+				else
+				{
+					_ShowPlayer( npc, players[i] );
+				}
+			}
+		
+			if( valid( closest ) )
+			{
+				npc.DropPlanes();
+				AddAttackPlane( npc, 0, closest );
+				return;
 			}
 			else
 			{
-				_ShowPlayer( npc, players[i] );
-			}
-		}
-		
-		if( valid( closest ) )
-		{
-			npc.DropPlanes();
-			AddAttackPlane( npc, 0, closest );
-			return;
-		}
-		else
-		{
-			if( Random( 1, 100 ) == 100 )
-			{
-				npc.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_COMBAT, STR_EMOTE_HOWL );
+				if( Random( 1, 100 ) == 100 )
+				{
+					npc.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_COMBAT, STR_EMOTE_HOWL );
+				}
 			}
 		}
 	}
+	
 	uint mapId = 0;
 	uint16 homeX = 0;
 	uint16 homeY = 0;
 	uint8 dir = 0;
 	npc.GetHomePos( mapId, homeX, homeY, dir );
-	Map@ map = npc.GetMap();
 	
 	if( map.Id != mapId )
 	{
@@ -347,7 +377,7 @@ int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Ite
         {
             uint distantion = ::GetCrittersDistantion( npc, target );
 			bool can_see = npc.IsSee(target);
-            if( int(distantion) <= DISTANCE_UNAGGRO(npc) )
+            if( int( distantion ) <= DISTANCE_UNAGGRO(npc) )
             {
 				if( distantion > 1 )
 				{
@@ -366,6 +396,11 @@ int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Ite
 				}
                 return PLANE_KEEP;
             }
+			/*else if( target.Stat[ ST_CURRENT_HP ] < -20 )
+			{
+				npc.EraseEnemyFromStack( target.Id );
+				return PLANE_DISCARD;
+			}*/
             else
             {
                 return PLANE_DISCARD;
@@ -388,7 +423,7 @@ int _PlaneEnd( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@
 {
 	if( reason == REASON_GAG_CRITTER && someCr.IsNpc() )
 	{
-        if( someCr.ParamBase[ST_TEAM_ID] != npc.ParamBase[ST_TEAM_ID] )
+        if( someCr.ParamBase[ ST_TEAM_ID ] != npc.ParamBase[ ST_TEAM_ID ] )
 		{
             return PLANE_RUN_GLOBAL;
 		}
@@ -412,7 +447,7 @@ bool _Attacked( Critter& npc, Critter& attacker )
 		return true;
 	}
 	npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
-	AttackOrFind(npc, attacker);
+	AttackOrFind( npc, attacker );
     return true;     // Handle attacked processing
 }
 
