@@ -9,6 +9,7 @@
 #include "flask_h.fos"
 #include "drugs_h.fos"
 #include "radiation_h.fos"
+#include "firestarter_h.fos"
 
 class MenuWell: CenteredMenuHandler
 {
@@ -400,14 +401,14 @@ class MenuWaterPump: CenteredMenuHandler
         Map@ map = GetMap(map_id);
         Item@ waterPump = GetItem(waterPump_id);
 	
-        if( map is null || waterPump is null )
+        if( !valid( map ) || !valid( waterPump ) )
 		{
             return false;
         }
 		
 		if( isGM( cr ) )
 		{
-			string type = _GetProtoName( waterPump.WATERSOURCE_DNA );
+			string type = GetMsgStr( 0, TEXTMSG_ITEM, waterPump.WATERSOURCE_DNA * 100 );
 			if( menu.Button( type ) )
 			{
 				if( waterPump.WATERSOURCE_DNA == PID_GLASS_BOTTLE_DIRTY_FULL_PRT )
@@ -440,16 +441,15 @@ class MenuWaterPump: CenteredMenuHandler
 				UNSETFLAG( waterPump.BROKEN, BROKEN_FILTER );
 				waterPump.WATERSOURCE_DNA = PID_GLASS_BOTTLE_FULL_PRT;
 			}
-			return true;
 		}
 		
 		if( !FLAG( waterPump.BROKEN, BROKEN_MECHANICS ) )
 		{
-			if( waterPump.STATE > 0 )
+			if( waterPump.STATE > STATE_OFF )
 			{
 				if( menu.Button( "Switch off" ) )
 				{
-					waterPump.STATE = 0;
+					waterPump.STATE = STATE_OFF;
 					setAnimState( waterPump );
 					return true;
 				}
@@ -482,7 +482,23 @@ class MenuWaterPump: CenteredMenuHandler
 			}
 			else if( menu.Button( "Switch on" ) )
 			{
-				waterPump.STATE = 1;
+				Item@[] generators;
+				map.GetItems( PID_COAL_POWERGEN, generators );
+
+				if( generators.length() > 0 )
+				{
+					Item@ generator = generators[0];
+					if( valid( generator ) )
+					{
+						if( generator.STATE != STATE_BURNING )
+						{
+							cr.Say( SAY_NETMSG, "|0xFFFF00 Power is offline!" );
+							return true;
+						}
+					}
+				}
+				
+				waterPump.STATE = STATE_ON;
 				setAnimState( waterPump );
 				return true;
 			}
@@ -493,9 +509,10 @@ class MenuWaterPump: CenteredMenuHandler
     string@ Description( Critter& cr )
 	{
 		Item@ waterPump = GetItem( waterPump_id );
+		Map@ map = GetMap( map_id );
 
-		string info = "Waterpump ¹ ";
-		info += "|0xFFFF00 " + waterPump.Id + "\n";
+		string info = "Waterpump ¹ " += "|0xFFFF00 " + waterPump.Id;
+		info += "\n|0x3CF800 Status: [ " + ( waterPump.STATE == STATE_ON ? "|0xFFFF00 Online " : "|0xFF0000 Offline" ) + "|0x3CF800  ]\n";
 		
 		info += "|0x3CF800 The water is";
 		if( waterPump.WATERSOURCE_DNA == PID_GLASS_BOTTLE_DIRTY_FULL_PRT )
@@ -522,7 +539,19 @@ class MenuWaterPump: CenteredMenuHandler
 		float maxAmount = maxCharge / 10.0f;
 		info += "|0xFFFF00 " + maxAmount;
 		info += "|0x3CF800  l.";
+		
+		Item@[] generators;
+		map.GetItems( PID_COAL_POWERGEN, generators );
 
+		if( generators.length() > 0 )
+		{
+			Item@ generator = generators[ 0 ];
+			if( valid( generator ) )
+			{
+				info += "\nConnected to power generator.\nGenerator status: [ " + ( generator.STATE == STATE_BURNING ? "|0xFFFF00 Online " : "|0xFF0000 Offline" ) + "|0x3CF800  ]"; 
+			}
+		}
+		
         return info;
     }
 	
@@ -567,7 +596,7 @@ bool start_gathering_water( Critter& cr, Item& waterPump )
 			return false;
 		}
 	
-		if( waterPump.STATE < 1 )
+		if( waterPump.STATE < STATE_ON )
 		{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUMP_OFFLINE );
 			return false;
@@ -709,7 +738,7 @@ uint process_gather_water( Critter@ cr, int& param0, int& param1, int& param2 )
 
 void setAnimState( Item& item )
 {
-	if( item.STATE == 1 )
+	if( item.STATE == STATE_ON )
 	{	
 		SETFLAG( item.Flags, ITEM_SHOW_ANIM );
 		UNSETFLAG( item.Flags, ITEM_SHOW_ANIM_EXT );
