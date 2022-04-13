@@ -2605,12 +2605,18 @@ void CritterRegen( Critter& cr )
 		if( cr.Timeout[ TO_HEALING ] == 0 )
 		{
 			cr.TimeoutBase[ TO_HEALING ] = __FullSecond + REAL_MINUTE( cr.IsKnockout() ? 2 : 4 );
-			if( cr.Mode[ MODE_NO_HEAL ] != 0 || cr.StatBase[ ST_CURRENT_HP ] == cr.Stat[ ST_MAX_LIFE ] )
+			if( cr.Mode[ MODE_NO_HEAL ] != 0 )
 			{
 				return;
 			}
 
-			int regen = cr.Stat[ ST_HEALING_RATE ], penalty = 0;
+			if( RecoverMaxHP( cr ) )
+			{
+				return;
+			}
+			
+			int regen = cr.StatBase[ ST_HEALING_RATE ];
+			int penalty = 0;
 			if( FLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BULLET_OVER ) )
 			{ 
 				penalty += 5;
@@ -2622,9 +2628,14 @@ void CritterRegen( Critter& cr )
 			}
 			
 			regen = CLAMP( regen * ( 10 - penalty ) / 10, 1, regen );
-			_testInfo( cr, CR_TEST_MODE_HEALTH, SAY_NETMSG, "You regened " + regen + " HP." );
             cr.StatBase[ ST_CURRENT_HP ] += regen;
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REGENERATED_HP, "$regen" + regen );
 
+            if( cr.StatBase[ ST_CURRENT_HP ] > cr.Stat[ ST_MAX_LIFE ] )
+			{
+                cr.StatBase[ ST_CURRENT_HP ] = cr.Stat[ ST_MAX_LIFE ];
+			}
+			
             if( cr.StatBase[ ST_CURRENT_HP ] > cr.Stat[ ST_MAX_LIFE ] )
 			{
                 cr.StatBase[ ST_CURRENT_HP ] = cr.Stat[ ST_MAX_LIFE ];
@@ -2633,12 +2644,54 @@ void CritterRegen( Critter& cr )
 			{
 				if( !cr.IsKnockout() )
 				{
-					cr.StatBase[ ST_HUNGER ] -= Random( 1, 1 + regen / 5 );
-					cr.StatBase[ ST_THIRST ] -= Random( 1, 1 + regen / 5 );
+					cr.StatBase[ ST_HUNGER ] -= Random( 10, 10 + regen * 2 );
+					cr.StatBase[ ST_THIRST ] -= Random( 10, 10 + regen * 2 );
 				}
 			}
 		}
 	}
+}
+
+bool RecoverMaxHP( Critter& cr )
+{
+	if( cr.Stat[ ST_CURRENT_HP ] < cr.Stat[ ST_MAX_LIFE ] )
+	{
+		return false;
+	}
+	
+	if( !cr.IsPlayer() )
+	{
+		return false;
+	}
+
+	if( cr.StatBase[ ST_MAX_LIFE ] >= 0 )
+	{
+		cr.StatBase[ ST_HP_RECOVERY ] = 0;
+		return true;
+	}
+
+	bool malnourishment = cr.Stat[ ST_HUNGER ] < 500 || cr.Stat[ ST_THIRST ] < 500;
+	bool illness = cr.Param[ ST_POISONING_LEVEL ] != 0 || cr.Param[ ST_RADIATION_LEVEL ] != 0 || cr.Param[ ST_PARALYSIS_LEVEL ] != 0;
+	bool wounds = FLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BULLET_OVER ) || FLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG ) || cr.IsInjured();
+	
+	if( malnourishment || illness || wounds )
+	{
+		return true;
+	}
+
+	int regen = cr.Stat[ ST_HEALING_RATE ];
+	cr.StatBase[ ST_HP_RECOVERY ] += regen;
+	cr.StatBase[ ST_HUNGER ] -= 1;
+	cr.StatBase[ ST_THIRST ] -= 1;
+	
+	if( cr.Stat[ ST_HP_RECOVERY ] >= MAX_HP_RESTORE_TRIGGER )
+	{
+		cr.StatBase[ ST_HP_RECOVERY ] = 0;
+		cr.StatBase[ ST_MAX_LIFE ] ++;
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_RESTORED_MAX_HP, "$regen" + 1 );
+	}
+	
+	return true;
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -3198,7 +3251,7 @@ bool player_login( uint ip, string& name, uint id, uint& textMsg, uint& strNum )
 	if( valid( player ) ) 
 	{
 		// character already in game thing
-		if( _IsOnline(player) && player.GetCurrentIp() == ip )
+		if( _IsOnline( player ) && player.GetCurrentIp() == ip )
 		{
 			player.Disconnect();
 			textMsg = TEXTMSG_GAME;
@@ -3217,7 +3270,7 @@ bool player_login( uint ip, string& name, uint id, uint& textMsg, uint& strNum )
         return false;
 	}
 	
-    if( !(player is null) )
+    if( valid( player ) )
     {
         player.ParamBase[ ST_QMAP ] = 0;
         CreateTimeEvent( __FullSecond + REAL_MS( 100 ), "e_player_after_login", id, false );
@@ -3238,7 +3291,7 @@ uint e_player_after_login( uint[] @ values )
 
     Critter@ cr = GetCritter( id );
 
-    if( cr is null )
+    if( !valid( cr ) )
     {
         Log( "can't get player " + id );
         return 0;
@@ -3248,7 +3301,7 @@ uint e_player_after_login( uint[] @ values )
 
     Map@ map = cr.GetMap();
 
-    if( !(map is null) && uint( cr.Param[ ST_QMAP ] ) == 0 )
+    if( valid( map ) && uint( cr.Param[ ST_QMAP ] ) == 0 )
     {
         qmap_critter_in( map.Id, cr );
     }
