@@ -792,6 +792,12 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		case( PID_SLAVE_COLLAR_SWITCH ):
 			StartMenuSCollar( cr, item );
 			return true;
+		case( PID_DYNAMITE ):	
+		case( PID_TNT_PACK ):	
+		case( PID_TNT_PACK_ACTIVE ):
+		case( PID_REMOTE_DETONATOR ):
+			SetExplosives( cr, item, param );
+			return true;
 	}
 	//Show single Card
 	if( Cards.find( pid ) != -1 )
@@ -998,12 +1004,6 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
         }
 		return true;
     }
-
-    // Explosion
-    if( OnUseExplode( cr, item, targetCr, targetItem, targetScen, param ) )
-	{
-        return true;
-	}
 
 	// Drinks
 	if( item.GetType() == ITEM_TYPE_DRINK )
@@ -1569,6 +1569,12 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			if( valid( targetItem ) )
 			{
 				uint16 Pid = targetItem.GetProtoId();
+				// Boom
+				if( Pid == PID_TNT_PACK_ACTIVE )
+				{
+					Explode( targetItem );
+					return true;
+				}
 				// Stationary radio station
 				if( FLAG( targetItem.Flags, ITEM_RADIO ) && !FLAG( targetItem.Flags, ITEM_CAN_PICKUP ) )
 				{
@@ -1601,12 +1607,6 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				{
 					UseLightSwitch( cr, targetItem );
 					return true; 
-				}
-				// Explosion
-				if( Pid == PID_ACTIVE_MINE || Pid == PID_ACTIVE_MINE_PLASMA || Pid == PID_ACTIVE_MINE_PULSE )
-				{
-					OnUseExplode( cr, targetItem, null, null, null, 0 );
-					return true;
 				}
 				// Gather wildplant
 				if( Wildplants.find( Pid ) != -1 )
@@ -2044,6 +2044,17 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			}
 
 			uint16 tiPid = targetItem.GetProtoId();
+			//Explosives
+			if( valid( targetItem ) && tiPid == PID_REMOTE_DETONATOR )
+			{
+				cr.RunClientScript( "client_screen_numberpad@ShowScreen", targetItem.Id, 0, 0, "Input radio frequency", null );
+				return true;
+			}
+			if( valid( targetItem ) && ( tiPid == PID_TNT_PACK_ACTIVE || tiPid == PID_ACTIVE_DYNAMITE ) )
+			{
+				Explode( targetItem );
+				return true;
+			}
 			//X3 container stack decrease
 			if( valid( targetItem ) && ContainersX3.find( tiPid ) != -1 )
 			{
@@ -2185,9 +2196,9 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			if( valid( targetItem ) )
 			{
 				uint16 pid = targetItem.GetProtoId();
-				if( ( pid == PID_ACTIVE_DYNAMITE || pid == PID_ACTIVE_PLASTIC_EXPLOSIVE || pid == PID_ACTIVE_MINE ) )
+				if( ( pid == PID_ACTIVE_DYNAMITE || pid == PID_TNT_PACK_ACTIVE ) )
 				{
-					OnUseExplode( cr, targetItem, null, null, null, 0 );
+					ExplosivesDisarm( cr, targetItem );
 					return true;
 				}
 				
@@ -2961,14 +2972,20 @@ void items_crafted( Item@[]& items, uint[]& itemsCount, Item@[]& resources, Crit
     for( uint i = 0, j = items.length(); i < j; i++ )
     {
         // Unload weapons
-        Item@ item = items[ i ];
-        if( item.GetType() == ITEM_TYPE_WEAPON && item.Proto.Weapon_MaxAmmoCount > 0 )
+        if( items[ i ].GetType() == ITEM_TYPE_WEAPON && items[ i ].Proto.Weapon_MaxAmmoCount > 0 )
         {
-            item.AmmoCount = 0;
-            item.Update();
+            items[ i ].AmmoCount = 0;
         }
-        SetDeterioration( item, maxDeterioration );
-		crafter.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_CRAFTED_PID, "$proto@msg item " + ( item.Proto.ProtoId * 100 ) + "@" );
+		
+		// Set frequency
+		if( items[ i ].GetProtoId() == PID_REMOTE_DETONATOR )
+		{
+			items[ i ].SetLexems( "$frequency" + 0 );
+		}
+		
+        SetDeterioration( items[ i ], maxDeterioration );
+		crafter.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_CRAFTED_PID, "$proto@msg item " + ( items[ i ].Proto.ProtoId * 100 ) + "@" );
+		items[ i ].Update();
 	}
 	
 	ChangeCritterSpeed( crafter );
@@ -3313,7 +3330,6 @@ void SetStartCrTimeEvent( Critter& cr, string func, uint time, int identifier, u
     }
 
     cr.AddTimeEvent( func, time, identifier, rate );
-
 }
 
 // Call on player try change access

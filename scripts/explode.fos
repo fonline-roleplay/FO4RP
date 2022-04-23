@@ -7,26 +7,20 @@
 #include "effects_h.fos"
 #include "firestarter_h.fos"
 
-// Global on use, export
-bool OnUseExplode( Critter& cr, Item& explode, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint timer ) // Export
+bool SetExplosives( Critter& cr, Item& item, int timer )
 {
-    if( valid( targetCr ) || valid( targetItem ) || valid( targetScen ) )
+    if( !valid( item ) )
 	{
         return false;
 	}
 	
-    uint16 pid = explode.GetProtoId();
-    if( pid != PID_DYNAMITE && pid != PID_ACTIVE_DYNAMITE && pid != PID_PLASTIC_EXPLOSIVES && pid != PID_ACTIVE_PLASTIC_EXPLOSIVE && pid != PID_TOGGLE_SWITCH 
-		&& pid != PID_MINE && pid != PID_ACTIVE_MINE )
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
 	{
-        return false;
+		return false;
 	}
 	
-    int  trapsSkill = cr.Skill[ SK_TRAPS ];
-    if( trapsSkill < 0 )
-	{
-        trapsSkill = 0;
-	}
+    uint16 pid = item.GetProtoId();
 	
     if( timer < TIMER_MIN_VALUE )
 	{
@@ -45,176 +39,160 @@ bool OnUseExplode( Critter& cr, Item& explode, Critter@ targetCr, Item@ targetIt
 		{
             return false;
 		}
-
-        uint numEvent = CreateTimeEvent( AFTER( REAL_SECOND( timer ) ), "explode@e_Explode", activateExpl.Id, true );
-        SETFLAG( activateExpl.Flags, ITEM_TRAP );
-		SETFLAG( activateExpl.Flags, ITEM_BAD_ITEM );
-        _ExplodeSetNumEvent( activateExpl, numEvent );
-        _ExplodeSetOwner( activateExpl, cr.Id );
-        activateExpl.TrapValue = TRAPS_HIDE( cr.Skill[ SK_TRAPS ] );
-        if( cr.Timeout[ TO_REMOVE_FROM_GAME ] < int( timer ) + REAL_MINUTE( 5 ) )
+		
+		_SubItem( item, 1 );
+		
+		activateExpl.TRAP_SKILL = cr.Skill[ SK_TRAPS ];
+		activateExpl.TrapValue = cr.Skill[ SK_TRAPS ];
+		activateExpl.TRAP_OWNER = cr.Id;
+		activateExpl.TRAP_CRITICAL_CHANCE = cr.Stat[ ST_CRITICAL_CHANCE ];
+        activateExpl.EXPLOSION_TIMEOUT = CreateTimeEvent( AFTER( REAL_SECOND( timer ) ), "explode@e_Explode", activateExpl.Id, true );
+		
+        if( cr.Timeout[ TO_REMOVE_FROM_GAME ] < timer + REAL_MINUTE( 5 ) )
 		{
             cr.TimeoutBase[ TO_REMOVE_FROM_GAME ] = __FullSecond + timer + REAL_MINUTE( 5 );
 		}
 	}
-	else if( pid == PID_PLASTIC_EXPLOSIVES )
+	else if( pid == PID_TNT_PACK )
 	{
-		Item@ expl = cr.AddItem( PID_ACTIVE_PLASTIC_EXPLOSIVE, 1 );
+		Item@ expl = cr.AddItem( PID_TNT_PACK_ACTIVE, 1 );
         if( !valid( expl ) )
 		{
             return false;
 		}
 		
-		Item@ explSwitch = cr.AddItem( PID_TOGGLE_SWITCH, 1 );
-        if( not valid( explSwitch ) )
-		{
-            return false;
-		}
+		_SubItem( item, 1 );
 		
-        SETFLAG( expl.Flags, ITEM_TRAP );
-        _ExplodeSetSwitch( expl, explSwitch );
-        _ExplodeSetOwner( expl, cr.Id );
-        expl.TrapValue = TRAPS_HIDE( cr.Skill[ SK_TRAPS ] );
-        _ExplodeSetBonusDamage( expl, Random( 0, trapsSkill / 10 ) );
-
-        expl.Info += 2;
-        explSwitch.Info += 2;
-        expl.SetLexems( "$frequency" + expl.Id );
-        explSwitch.SetLexems( "$frequency" + expl.Id );
-        expl.Update();
-        explSwitch.Update();
-		
+		expl.SetLexems( "$frequency" + 0 );
+		cr.RunClientScript( "client_screen_numberpad@ShowScreen", expl.Id, 0, 0, "Input radio frequency", null );
+		PlayGenericSound( map, cr.HexX, cr.HexY, "IB1P1XX1.mp3", 6 );
     }
-	else if( pid == PID_TOGGLE_SWITCH )
+	else if( pid == PID_TNT_PACK_ACTIVE && item.Accessory == ACCESSORY_CRITTER )
 	{
-        Item@ expl = _ExplodeGetExplode( explode );
-        if( valid( expl ) )
-		{
-            uint16   hexX = 0, hexY = 0;
-            Map@     map = expl.GetMapPosition( hexX, hexY );
-            Critter@ crExpl = ( expl.Accessory == ACCESSORY_CRITTER ? ::GetCritter( expl.CritId ) : null );
-            Explode( map, hexX, hexY, crExpl, PID_ACTIVE_PLASTIC_EXPLOSIVE, _ExplodeGetOwner( expl ), _ExplodeGetBonusDamage( expl ), _ExplodeGetBonusRadius( expl ) );
-            DeleteItem( expl );
-        }
-    }
-	else if( pid == PID_ACTIVE_DYNAMITE || pid == PID_ACTIVE_PLASTIC_EXPLOSIVE )
+		cr.RunClientScript( "client_screen_numberpad@ShowScreen", item.Id, 0, 0, "Input radio frequency", null );
+	}
+	else if( pid == PID_REMOTE_DETONATOR )
 	{
-		if( pid == PID_ACTIVE_DYNAMITE )
+		PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN2.mp3", 6 );
+        Item@[] explosives;
+		GetAllItems( PID_TNT_PACK_ACTIVE, explosives );
+		for( uint i = 0; i < explosives.length(); i ++ )
 		{
-            ::EraseTimeEvent( _ExplodeGetNumEvent( explode ) );
+			if( explosives[i].TRAP_FREQUENCY == item.TRAP_FREQUENCY )
+			{
+				uint16 x = 0, y = 0;
+				Map@ explMap = explosives[i].GetMapPosition( x, y );
+				if( explMap.Id == map.Id )
+				{
+					uint[] vals = { explosives[i].Id };
+					CreateTimeEvent( AFTER( REAL_MS( 0 ) ), "explode@e_Explode", vals, true );
+				}
+			}
 		}
-        int chance = cr.Skill[ SK_TRAPS ] - ( explode.TrapValue - 10 ) * ( cr.Id == _ExplodeGetOwner( explode ) ? 5 : 10 );
-        chance = CLAMP( chance, 5, 90 ) + cr.Stat[ ST_LUCK ];
+    }
+	return true;
+}
 
-        if( chance > Random( 1, 100 ) )
+bool ExplosivesDisarm( Critter& cr, Item& item )
+{
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return false;
+	}
+	
+	if( !valid( item ) )
+	{
+		return false;
+	}
+	
+	uint16 pid = item.GetProtoId();
+	
+	if( pid == PID_ACTIVE_DYNAMITE || pid == PID_TNT_PACK_ACTIVE )
+	{
+        if( disarmCheck( item, cr ) )
 		{
             if( pid == PID_ACTIVE_DYNAMITE )
 			{
+				EraseTimeEvent( item.EXPLOSION_TIMEOUT );
                 cr.AddItem( PID_DYNAMITE, 1 );
 			}
-			else if( pid == PID_ACTIVE_PLASTIC_EXPLOSIVE )
+			else if( pid == PID_TNT_PACK_ACTIVE )
 			{
-                cr.AddItem( PID_PLASTIC_EXPLOSIVES, 1 );
+                cr.AddItem( PID_TNT_PACK, 1 );
 			}
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TRAP_SUCCESS_DISARM );
+			_SubItem( item, item.GetCount() );
+		}
+		else if( LuckCheck( cr ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOW_SKILL_TRAP_LUCKY );
+			return true;
 		}
 		else
 		{
-            Map@ map = cr.GetMap();
-            Explode( map, cr.HexX, cr.HexY, cr, pid, _ExplodeGetOwner( explode ), _ExplodeGetBonusDamage( explode ), _ExplodeGetBonusRadius( explode ) );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TRAP_FAILED_DISARM );
+            uint[] vals = { item.HexX, item.HexY, map.Id, item.GetProtoId(), item.TRAP_OWNER, 0 };
+			CreateTimeEvent( AFTER( REAL_MS( 0 ) ), "combat@e_DelayedExplosion", vals, true );
         }
     }
-    _SubItem( explode, 1 );
-    return true;
+	return true;
 }
 
 // Time event
 uint e_Explode( uint[] @ values ) 
 {
-    Item@ item = GetItem( values[ 0 ] );
-    if( not valid( item ) )
+	Item@ expl = GetItem( values[0] );
+	if( valid( expl ) )
 	{
-        return 0;
-	}
-	
-    uint16 explodePid = item.GetProtoId();
-    uint ownerId = _ExplodeGetOwner( item );
-    int bonusDamage = _ExplodeGetBonusDamage( item );
-    int bonusRadius = _ExplodeGetBonusRadius( item );
-    uint16 hexX = 0;
-    uint16 hexY = 0;
-    Map@   map = item.GetMapPosition( hexX, hexY );
-    DeleteItem( item );
-
-    if( valid( map ) )
-	{
-        Explode( map, hexX, hexY, null, explodePid, ownerId, bonusDamage, bonusRadius );
-    }
-	else if( item.Accessory == ACCESSORY_CRITTER )
-	{
-        Critter@ cr = ::GetCritter( item.CritId );
-        if( valid( cr ) )
+		uint16 hexX = 0, hexY = 0;
+		
+		Map@ map = expl.GetMapPosition( hexX, hexY );
+		if( !valid( map ) )
 		{
-            Explode( null, 0, 0, cr, explodePid, ownerId, bonusDamage, bonusRadius );
+			return 0;
 		}
+		
+		Critter@ crExpl = null;
+		
+		if( expl.Accessory == ACCESSORY_CRITTER )
+		{
+			@ crExpl = GetCritter( expl.CritId );
+			crExpl.MoveItem( expl.Id, expl.GetCount(), SLOT_GROUND );
+		}
+		else if( expl.Accessory == ACCESSORY_CONTAINER )
+		{
+			Item@ container = GetItem( expl.ContainerId );
+			if( valid( container ) )
+			{
+				if( container.Accessory == ACCESSORY_CRITTER )
+				{
+					@ crExpl = GetCritter( container.CritId );
+					crExpl.MoveItem( container.Id, container.GetCount(), SLOT_GROUND );
+				}
+				else if( container.Accessory == ACCESSORY_CONTAINER )
+				{
+					Item@ container2 = GetItem( container.ContainerId );
+					MoveItem( container2, container2.GetCount(), map, hexX, hexY );
+					DropContainerItems( map, container2 );
+				}
+
+				MoveItem( expl, expl.GetCount(), map, hexX, hexY );
+				DropContainerItems( map, container );
+			}
+		}
+
+		uint[] vals = { hexX, hexY, map.Id, expl.GetProtoId(), expl.TRAP_OWNER, 0 };
+		CreateTimeEvent( AFTER( REAL_MS( 0 ) ), "combat@e_DelayedExplosion", vals, true );
 	}
     return 0;
 }
 
-void Explode( Map@ map, uint16 hexX, uint16 hexY, Critter@ cr, uint16 explodePid, uint ownerId, int bonusDamage, int bonusRadius ) // Export
+//Generic explosion
+void Explode( Item& item )
 {
-    uint16 effectPid;
-    uint   effectRadius;
-    uint   damage;
-    uint   damageType;
-    uint   damageRadius;
-
-    switch( explodePid )
-    {
-		case( PID_ACTIVE_DYNAMITE ):
-			effectPid = PID_EXPLODE_ROCKET;
-			effectRadius = 1;
-			damage = Random( 30, 50 );
-			damageType = DAMAGE_EXPLODE;
-			damageRadius = 3;
-			break;
-		case( PID_ACTIVE_PLASTIC_EXPLOSIVE ):
-			effectPid = PID_EXPLODE_ROCKET;
-			effectRadius = 2;
-			damage = Random( 40, 80 );
-			damageType = DAMAGE_EXPLODE;
-			damageRadius = 3;
-			break;
-		case( PID_ACTIVE_MINE ):
-			effectPid = PID_EXPLODE_ROCKET;
-			effectRadius = 1;
-			damage = Random( 40, 80 );
-			damageType = DAMAGE_EXPLODE;
-			damageRadius = 3;
-			break;
-		default:
-			Log( "Invalid explode pid." );
-			return;
-    }
-
-    damage += bonusDamage;
-    if( damage <= 0 )
-	{
-        damage = 1;
-	}
-    damageRadius += bonusRadius;
-    if( damageRadius <= 0 )
-	{
-        damageRadius = 1;
-	}
-	
-    if( valid( map ) ) 
-	{
-        ExplodeEx( map, hexX, hexY, effectPid, effectRadius, damage, damageType, damageRadius, ownerId );
-    }
-	else if( valid( cr ) )
-	{
-        InjureCritter( cr, damage, damageType, cr.Dir, ownerId, HIT_LOCATION_NONE, false );
-	}
+	uint[] vals = { item.Id };
+	CreateTimeEvent( AFTER( REAL_MS( 0 ) ), "explode@e_Explode", vals, true );
 }
 
 void ExplodeEx( Map& map, uint16 hexX, uint16 hexY, uint16 effectPid, uint effectRadius, uint damage, uint damageType, uint damageRadius, uint ownerId ) // Export
@@ -269,92 +247,6 @@ void ExplodeEx( Map& map, uint16 hexX, uint16 hexY, uint16 effectPid, uint effec
             cr.AddEnemyInStack( ownerId );
 		}
 	}
-}
-
-void _TimerMineInit( Item& mine, bool firstTime )
-{
-    if( mine.GetProtoId() == PID_ACTIVE_MINE )
-	{
-        mine.SetEvent( ITEM_EVENT_WALK, "_TimerMineWalk" );
-        mine.SetEvent( ITEM_EVENT_SKILL, "_OnSkillTimerMine" );
-        mine.Val4 = CLAMP( mine.Val4, 1, 5 );
-        SETFLAG( mine.Flags, ITEM_TRAP );
-        mine.Update();
-    }
-}
-
-void _TimerMineWalk( Item& mine, Critter& cr, bool entered, uint8 dir )
-{
-	if( entered && cr.Stat[ ST_LOCOMOTION_TYPE ] != LOCOMOTION_FLY && Random( 0, 1 ) == 0 )
-	{
-        CreateTimeEvent( __FullSecond, "e_Explode", mine.Id, true );
-
-        // Respawn
-        if( mine.Val1 > 0 )
-		{
-            uint[] values = { mine.MapId, mine.HexX, mine.HexY, mine.GetProtoId(), mine.Val1, mine.Val2, mine.TrapValue, mine.Val3, mine.Val4 };            // 9 элементов массива
-            CreateTimeEvent( __FullSecond + mine.Val1 * 60, "e_RespawnTimerMine", values, true );
-        }
-    }
-}
-
-uint e_RespawnTimerMine( uint[] @ values )
-{
-    if( values.length() < 9 ) 
-	{
-        return 0;
-	}
-	
-    Map@ map = GetMap( values[ 0 ] );
-    if( valid( map ) )
-	{
-        Item @ mine = map.AddItem( values[ 1 ], values[ 2 ], values[ 3 ], 1 );
-		
-        if( valid( mine ) )
-		{
-            mine.Val1 = values[ 4 ];
-            mine.Val2 = values[ 5 ];
-            mine.TrapValue = ( values[ 6 ] == 0 ? Random( 30, 50 ) : values[ 6 ] );
-            mine.Val3 = values[ 7 ];
-            mine.Val4 = CLAMP( values[ 8 ], 1, 5 );
-            mine.Update();
-            mine.SetScript( "_TimerMineInit" );
-        }
-    }
-    return 0;
-}
-
-bool _OnSkillTimerMine( Item& mine, Critter& cr, int skill )
-{
-    uint16 pid = mine.GetProtoId();
-    if( pid != PID_ACTIVE_MINE )
-	{
-        return false;
-	}
-	
-    int  trapsSkill = cr.Skill[ SK_TRAPS ];
-    if( trapsSkill < 0 )
-	{
-        trapsSkill = 0;
-	}
-	
-    int chance = cr.Skill[ SK_TRAPS ] - ( mine.TrapValue - 10 ) * ( cr.Id == _ExplodeGetOwner( mine ) ? 5 : 10 );
-    chance = CLAMP( chance, 5, 90 ) + cr.Stat[ ST_LUCK ];
-
-    // Success
-    if( chance < Random( 1, 100 ) )
-	{
-        Map@ map = cr.GetMap();
-        Explode( map, cr.HexX, cr.HexY, cr, pid, _ExplodeGetOwner( mine ), _ExplodeGetBonusDamage( mine ), _ExplodeGetBonusRadius( mine ) );
-    }
-
-    if( mine.Val1 > 0 )
-	{
-        uint[] values = { mine.MapId, mine.HexX, mine.HexY, mine.GetProtoId(), mine.Val1, mine.Val2, mine.TrapValue, mine.Val3, mine.Val4 };        // 9 элементов массива
-        CreateTimeEvent( __FullSecond + mine.Val1 * 60 + Random( 120, 240 ) * 60, "e_RespawnTimerMine", values, true );
-    }
-    _SubItem( mine, 1 );
-    return true;
 }
 
 #endif //EXPLODE
