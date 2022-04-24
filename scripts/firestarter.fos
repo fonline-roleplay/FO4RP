@@ -9,6 +9,7 @@
 #include "npc_planes_h.fos"
 #include "speed_h.fos"
 #include "furnace_h.fos"
+#include "waterworks_h.fos"
 
 bool FireCheck( Critter& cr, Item@ item, Item@ target )
 {
@@ -24,11 +25,19 @@ bool FireCheck( Critter& cr, Item@ item, Item@ target )
 	}
 	
 	uint16 firePid = target.GetProtoId();
-    if(	FireSource.find(firePid) == -1 && FireLightSource.find(firePid) == -1 )
+    if(	FireSource.find( firePid ) == -1 && FireLightSource.find( firePid ) == -1 )
 	{
 		return false;
 	}
 
+
+	if(	( item.GetProtoId() == PID_SHOVEL || item.GetProtoId() == PID_SPADE ) && firePid == PID_FIREPLACE_OFF )
+	{
+ 		cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_REMOVE_ASH );
+		DeleteItem( target );
+		return true;
+	}
+	
 	uint16 itemPid = item.GetProtoId();
     if( FireFuel.find( itemPid ) == -1 && Igniters.find( itemPid ) == -1 && WaterSource.find( itemPid ) == -1 && item.Proto.Type != ITEM_TYPE_FLASK )
 	{
@@ -95,6 +104,9 @@ bool Ignite( Critter& cr, Item& item, Item& target )
 				break;
 			case( PID_BRAZIER ):
 				target.PicMap = PIC_CHANDELIER_ANIM_ON;
+				break;
+			case( PID_COAL_POWERGEN ):
+				target.PicMap = PIC_COAL_POWERGEN_ANIM_ON;
 				break;
 			case( PID_FURNACE_SMALL ):
 				target.PicMap = PIC_FURNACE_ANIM_ON;
@@ -212,6 +224,25 @@ bool Extinguish( Critter& cr, Item& item, Item& target )
 			ProtoItem@ proto = GetProtoItem( PID_BRAZIER );
 			target.PicMap = proto.PicMap;
 		}
+		else if( target.GetProtoId() == PID_COAL_POWERGEN )
+		{
+			ProtoItem@ proto = GetProtoItem( PID_COAL_POWERGEN );
+			target.PicMap = proto.PicMap;
+			
+			Item@[] waterpumps;
+			map.GetItems( PID_OBJECT_WATERPUMP, waterpumps );
+
+			if( waterpumps.length() > 0 )
+			{
+				Item@ waterpump = waterpumps[ 0 ];
+				if( valid( waterpump ) )
+				{
+					waterpump.STATE = STATE_OFF;
+					setAnimState( waterpump );					
+				}
+			}
+			
+		}
 		else if( target.GetProtoId() == PID_FURNACE_SMALL )
 		{
 			ProtoItem@ proto = GetProtoItem( PID_FURNACE_SMALL );
@@ -284,6 +315,9 @@ uint e_Burn( uint[]@ values )
 				break;
 			case( PID_BRAZIER ):
 				@ proto = GetProtoItem( PID_BRAZIER );
+				break;
+			case( PID_COAL_POWERGEN ):
+				@ proto = GetProtoItem( PID_COAL_POWERGEN );
 				break;
 			case( PID_FURNACE_SMALL ):
 				@ proto = GetProtoItem( PID_FURNACE_SMALL );
@@ -370,9 +404,9 @@ bool FeedTheFire( Critter& cr, Item& item, Item& target )
 
 void BurnIt( Critter& cr, Item& item, Item& target )
 {
-	_CritAnimateUse(cr);
+	_CritAnimateUse( cr );
 	uint destructablePid = item.GetProtoId();
-	if( Destructables.find(destructablePid) == -1 && Explosives.find(destructablePid) == -1 || target.STATE == STATE_EXTINGUISHED )
+	if( Destructables.find( destructablePid ) == -1 && Explosives.find( destructablePid ) == -1 || target.STATE == STATE_EXTINGUISHED )
 	{	
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_BURN_THIS );
 		return;
@@ -413,7 +447,7 @@ uint e_Explosives( uint[]@ values )
 		map.AddItem( hexX, hexY, Ashes[ Random( 0, Ashes.length() - 1 ) ], 1 );
 		Item@ fireFX = map.AddItem( hexX, hexY, PID_SMOKE, 1 );
 		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", array<uint> = { fireFX.Id }, true );
-		if( target.GetProtoId() == PID_FIREBARREL || target.GetProtoId() == PID_BRAZIER )
+		if( target.GetProtoId() == PID_FIREBARREL || target.GetProtoId() == PID_BRAZIER || target.GetProtoId() == PID_COAL_POWERGEN )
 		{
 			uint randomDebree = Random( 2,5 );
 			for( uint i = 0; i < randomDebree; i++ )
@@ -616,10 +650,11 @@ void FireUp( Item& burningItem, uint pid, int strength )
 	{
 		return;
 	}
-	
+
 	uint firablePid = burningItem.GetProtoId();	
 	bool isWoodFurniture = ( burningItem.Proto.Material == MATERIAL_WOOD && burningItem.Proto.Item_Subtype == ITEM_SUBTYPE_FURNITURE );
-	if( FireFuel.find( firablePid ) == -1 && Collaterals.find( firablePid ) == -1 && Explosives.find( firablePid ) == -1 && Destructables.find( firablePid ) == -1 && !isWoodFurniture )
+	bool isPersonalContainer = ( ( burningItem.Proto.Item_Subtype == ITEM_SUBTYPE_PERSONAL_BAG || burningItem.Proto.Item_Subtype == ITEM_SUBTYPE_BRIEFCASE ) && burningItem.Proto.Material != MATERIAL_METAL );
+	if( FireFuel.find( firablePid ) == -1 && Collaterals.find( firablePid ) == -1 && Explosives.find( firablePid ) == -1 && Destructables.find( firablePid ) == -1 && !isWoodFurniture && !isPersonalContainer )
 	{
 		return;
 	}
@@ -641,11 +676,12 @@ void FireUp( Item& burningItem, uint pid, int strength )
 	}		
 	
 	Item@ fire = map.AddItem( hx, hy, WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
-	PlayGenericSound( map, hx, hy, "WAI1XXX2.mp3", 10 );
 	if( !valid( fire ) )
 	{
 		return;
 	}
+	
+	PlayGenericSound( map, hx, hy, "WAI1XXX2.mp3", 10 );
 	
 	if( burningItem.Proto.Type == ITEM_TYPE_CONTAINER )
 	{
@@ -862,7 +898,7 @@ uint e_FireBurn( uint[]@ values )
 void StartMenuFireBarrel( Critter& cr, Item& firebarrel )
 {
     Map@ map = cr.GetMap();
-    if( map is null )
+    if( !valid( map ) )
 	{
         return;
     }
@@ -896,7 +932,7 @@ class MenuFireBarrel: CenteredMenuHandler
 
 		if( firebarrel.STATE > STATE_EXTINGUISHED )
 		{
-			if( firebarrel.GetProtoId() != PID_BRAZIER )
+			if( FireLightSource.find( firebarrel.GetProtoId() ) == -1 )
 			{
 				if( menu.Button( "Cook" ) )
 				{
@@ -1009,5 +1045,112 @@ class MenuFireBarrel: CenteredMenuHandler
         return ButtonDecorator( "Hide menu", null );
     }
 }
+
+void StartMenuPowerGen( Critter& cr, Item& powergen )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuPowerGen( powergen, map );
+    iDialogBox@ menu = OpenMenu( cr, "", handler );
+}
+
+class MenuPowerGen: CenteredMenuHandler
+{
+    uint powergen_id;
+    uint map_id;
+	
+    MenuPowerGen( Item& powergen, Map& map )
+	{
+		powergen_id = powergen.Id;
+		map_id = map.Id;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+        Item@ powergen = GetItem( powergen_id );
+	
+		bool locked_in_place = !FLAG( powergen.Flags, ITEM_CAN_PICKUP );
+	
+        if( !valid( map ) || !valid( powergen ) )
+		{
+            return false;
+        }
+
+		if( powergen.STATE > STATE_EXTINGUISHED )
+		{
+			if( menu.Button( "Extinguish" ) )
+			{
+				if( hasItems( cr, WaterSource ) )
+				{
+					Item@[] watersource = getItems( cr, WaterSource );
+					Item@ water = watersource[0];
+					Extinguish( cr, water, powergen );
+					return false;
+				}
+				else
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_WATER_FOR_FIRE );
+					return true;
+				}
+			}
+		}
+		else
+		{
+			if( menu.Button( "Ignite" ) )
+			{
+				if( hasItems( cr, Igniters ) )
+				{
+					Item@[] igniters = getItems( cr, Igniters );
+					Item@ igniter = igniters[0];
+					Ignite( cr, igniter, powergen );
+					return true;
+				}
+				else
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_LIGHTER );
+					return false;
+				}
+			}
+			
+			if( menu.Button( "Add fuel" ) )
+			{
+				if( hasItems( cr, FireFuel ) )
+				{
+					Item@[] fireFuel = getItems( cr, FireFuel );
+					Item@ fuel = fireFuel[0];
+					FeedTheFire( cr, fuel, powergen );
+					return true;
+				}
+				else
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_FIREFUEL_2 );
+					return false;
+				}
+			}
+		}
+		return true;
+    }
+	
+    string@ Description( Critter& cr )
+	{
+		Item@ powergen = GetItem( powergen_id );
+		string TXT = powergen.STATE == STATE_EXTINGUISHED ? "There is no fire burning, you may require fire fuel, a flint or a lighter." : "The generator is online.";
+		string occupancy_level = ( powergen.CURRENT_FUEL * 100 / powergen.MAX_FUEL );
+		TXT += "\n";
+		TXT += "\n" "The object is filled with fuel to |0xFFFF00 " + occupancy_level + "|0x3CF800 %\nof it's capacity.\n\nChoose your action:";
+		return TXT;
+    }
+	
+    string@ ButtonCancel()
+	{
+        return ButtonDecorator( "Hide menu", null );
+    }
+}
+
 
 #endif // FIRESTARTER
