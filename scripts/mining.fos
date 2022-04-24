@@ -8,6 +8,7 @@
 #include "critter_skills_h.fos"
 #include "entire_h.fos"
 #include "repair_h.fos"
+#include "combat_h.fos"
 
 // Ores array search
 uint16 FindOre( Item@ targetItem )
@@ -45,20 +46,24 @@ bool PrepareMining( Critter& cr, Item@ tool, Item@ target )
     {
     	return false;
     }
+	
 	if( !valid( tool ) || !valid(target) )
 	{
 		return false;
 	}
+	
    	uint toolPid = tool.GetProtoId();
 	if( MiningTools.find( toolPid ) == -1 )
 	{
 		return false;
 	}
+	
 	uint8 Ore = FindOre( target );
 	if( Ore == 0 )
 	{
 		return false;
 	}
+	
 	if( tool.CritSlot != SLOT_HAND1 )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_EQUIP_TOOL );
@@ -70,7 +75,7 @@ bool PrepareMining( Critter& cr, Item@ tool, Item@ target )
 		return false;
 	}
 	
-	if( cr.IsInjured() )
+	if( cr.IsDmgTwoArm() || cr.IsDmgTwoLeg() )
 	{ 
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_CANT_WORK );
 		return false; 
@@ -83,6 +88,7 @@ bool PrepareMining( Critter& cr, Item@ tool, Item@ target )
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_DRILL_CHARGE );
 			return false;
 		}
+		
 		uint det = GetDeteriorationProcent(tool);
 		if( det >= 95 )
 		{
@@ -127,48 +133,51 @@ bool start_mining( Critter& cr, Item& tool, Item& target )
 uint process_mining( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_MINING )
-	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
 	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
     Item@ tool = GetItem( param1 );
   	Item@ target = GetItem( param2 );
   	if( valid( tool ) && valid( target ) )
     {
       	param0++;
-		Item@ tool = cr.GetItem( 0, SLOT_HAND1 );
-		if( valid( tool ) )
+		
+		uint object_dpa = cr.Skill[ SK_MINING ] + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
+		int sequence_length = uint( ceil( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
+		
+		if ( tool.GetProtoId() == PID_DRILL )
 		{
-			uint object_dpa = ( cr.Skill[ SK_MINING ] ) + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
-			int sequence_length = ceil( float( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
-			if ( tool.GetProtoId() == PID_DRILL )
+			sequence_length = 10;
+		}
+		
+		if( param0 > sequence_length )
+		{
+			Profit( cr, tool, target );
+			int skillNum = SK_MINING;
+			Accident( cr, skillNum );
+		}
+		else
+		{
+			if( tool.GetProtoId() == PID_DRILL )
 			{
-				sequence_length = 10;
-			}
-			
-			if( param0 > sequence_length )
-			{
-				Profit( cr, tool, target );
-				int skillNum = SK_MINING;
-				Accident( cr, skillNum );
-			
+				_CritAnimateBrust( cr );
+				action_pause = 700;
 			}
 			else
 			{
-				if( tool.GetProtoId() == PID_DRILL )
-				{
-					_CritAnimateBrust( cr );
-					action_pause = 700;
-				
-				}
-				else
-				{
-					_CritAnimateSwing(cr);
-					uint[] values = { cr.Id, tool.Id };
-					CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_MiningSound", values, false );
-				}
-
-				CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true );
-				return action_pause;
+				_CritAnimateSwing(cr);
+				uint[] values = { cr.Id, tool.Id };
+				CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_MiningSound", values, false );
 			}
+
+			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true );
+			
+			if( cr.IsInjured() )
+			{
+				uint damage = INJURED_HP_DAMAGE - cr.Stat[ ST_ENDURANCE ];
+				InjureCritter( cr, damage, DAMAGE_UNCALLED, cr.Dir, cr.Id, HIT_LOCATION_NONE, false );
+			}
+			
+			return action_pause;
 		}
     }
 	return 0;

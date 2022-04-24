@@ -4,9 +4,6 @@
 #include <direct.h> // _getcwd
 #include <Windows.h> // FindFirstFile, GetFileAttributes
 
-#undef DeleteFile
-#undef CopyFile
-
 #else
 #include <unistd.h> // getcwd
 #include <dirent.h> // opendir, readdir, closedir
@@ -38,14 +35,14 @@ void RegisterScriptFileSystem_Native()
 	r = ASEngine->RegisterObjectMethod("filesystem", "bool changeCurrentPath(const string &in)", asMETHOD(ScriptFileSystem, ChangeCurrentPath), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "string@+ getCurrentPath() const", asMETHOD(ScriptFileSystem, GetCurrentPath), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "array<string@> @getDirs() const", asMETHOD(ScriptFileSystem, GetDirs), asCALL_THISCALL); assert( r >= 0 );
-	r = ASEngine->RegisterObjectMethod("filesystem", "uint getFiles( string& out ) const", asMETHOD(ScriptFileSystem, GetFiles), asCALL_THISCALL); assert( r >= 0 );
+	r = ASEngine->RegisterObjectMethod("filesystem", "uint getFiles( string&out files, const string&in separator = \"\\n\") const", asMETHOD(ScriptFileSystem, GetFiles), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "bool isDir(const string &in) const", asMETHOD(ScriptFileSystem, IsDir), asCALL_THISCALL); assert( r >= 0 );
 	r = ASEngine->RegisterObjectMethod("filesystem", "bool isLink(const string &in) const", asMETHOD(ScriptFileSystem, IsLink), asCALL_THISCALL); assert(r >= 0);
 	r = ASEngine->RegisterObjectMethod("filesystem", "int64 getSize(const string &in) const", asMETHOD(ScriptFileSystem, GetSize), asCALL_THISCALL); assert(r >= 0);
 	r = ASEngine->RegisterObjectMethod("filesystem", "int makeDir(const string &in)", asMETHOD(ScriptFileSystem, MakeDir), asCALL_THISCALL); assert(r >= 0);
 	r = ASEngine->RegisterObjectMethod("filesystem", "int removeDir(const string &in)", asMETHOD(ScriptFileSystem, RemoveDir), asCALL_THISCALL); assert(r >= 0);
-	r = ASEngine->RegisterObjectMethod("filesystem", "int deleteFile(const string &in)", asMETHOD(ScriptFileSystem, DeleteFile), asCALL_THISCALL); assert(r >= 0);
-	r = ASEngine->RegisterObjectMethod("filesystem", "int copyFile(const string &in, const string &in)", asMETHOD(ScriptFileSystem, CopyFile), asCALL_THISCALL); assert(r >= 0);
+	r = ASEngine->RegisterObjectMethod("filesystem", "int deleteFile(const string &in)", asMETHOD(ScriptFileSystem, FileDelete), asCALL_THISCALL); assert(r >= 0);
+	r = ASEngine->RegisterObjectMethod("filesystem", "int copyFile(const string &in, const string &in)", asMETHOD(ScriptFileSystem, FileCopy), asCALL_THISCALL); assert(r >= 0);
 	r = ASEngine->RegisterObjectMethod("filesystem", "int move(const string &in, const string &in)", asMETHOD(ScriptFileSystem, Move), asCALL_THISCALL); assert(r >= 0);
 }
 
@@ -83,7 +80,7 @@ void ScriptFileSystem::Release() const
 		delete this;
 }
 
-unsigned int ScriptFileSystem::GetFiles( ScriptString& outStr ) const
+unsigned int ScriptFileSystem::GetFiles( ScriptString& outStr, ScriptString& separator ) const
 {
 	unsigned int count = 0;
 	WIN32_FIND_DATA ffd;
@@ -100,8 +97,8 @@ unsigned int ScriptFileSystem::GetFiles( ScriptString& outStr ) const
         if( ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY )
             continue;
 		
-		count++;
-        outStr += "\n";
+		if( count++ != 0 )
+			outStr += separator.c_str();
         outStr += ffd.cFileName;
     }
     while( FindNextFile( hFind, &ffd ) != 0 );
@@ -109,9 +106,9 @@ unsigned int ScriptFileSystem::GetFiles( ScriptString& outStr ) const
     return count;
 }
 
-ScriptArray *ScriptFileSystem::GetDirs() const
+CScriptArray *ScriptFileSystem::GetDirs() const
 {
-	ScriptArray *array = &ScriptArray::Create("string");
+	CScriptArray *array = &CScriptArray::Create("string");
 
 #if defined(_WIN32)
 	// Windows uses UTF16 so it is necessary to convert the string
@@ -343,7 +340,7 @@ int ScriptFileSystem::RemoveDir(const ScriptString &path)
 #endif
 }
 
-int ScriptFileSystem::DeleteFile(const ScriptString &path)
+int ScriptFileSystem::FileDelete(const ScriptString &path)
 {
 	string search;
 	if (path.c_std_str().find(":") != string::npos || path.c_std_str().find("/") == 0 || path.c_std_str().find("\\") == 0)
@@ -366,7 +363,7 @@ int ScriptFileSystem::DeleteFile(const ScriptString &path)
 #endif
 }
 
-int ScriptFileSystem::CopyFile(const ScriptString &source, const ScriptString &target)
+int ScriptFileSystem::FileCopy(const ScriptString &source, const ScriptString &target)
 {
 	string search1;
 	if (source.c_std_str().find(":") != string::npos || source.c_std_str().find("/") == 0 || source.c_std_str().find("\\") == 0)

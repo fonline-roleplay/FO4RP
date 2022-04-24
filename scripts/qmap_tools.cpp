@@ -3,12 +3,12 @@
 
 #include "qmap_tools.h"
 
-inline bool DMO64_ChechDataSize( ScriptArray* array, uint tile )
+inline bool DMO64_ChechDataSize( CScriptArray* array, uint tile )
 {
     return ( ( array->GetElementSize() <= 8 ) && ( ( array->GetSize() * array->GetElementSize() ) >= ( tile + 1 ) * 8 ) );
 }
 
-bool DMO64_get( ScriptArray* array, uint tile, uint16& hs, uint16& val, uint16& hexX, uint16& hexY, uint8& layer )
+bool DMO64_get( CScriptArray* array, uint tile, uint16& hs, uint16& val, uint16& hexX, uint16& hexY, uint8& layer )
 {
     // if(data.length()<tile*2+2) return false;
     if( !DMO64_ChechDataSize( array, tile ) )
@@ -39,7 +39,7 @@ bool DMO64_get( ScriptArray* array, uint tile, uint16& hs, uint16& val, uint16& 
     return true;
 }
 
-/*bool DMO64_get(ScriptArray* array, uint tile, uint16& hs, uint16& val)
+/*bool DMO64_get(CScriptArray* array, uint tile, uint16& hs, uint16& val)
    {
         if(!DMO64_ChechDataSize(array, tile)) return false;
 
@@ -54,7 +54,7 @@ bool DMO64_get( ScriptArray* array, uint tile, uint16& hs, uint16& val, uint16& 
         return true;
    }*/
 
-/*bool DMO64_getTileFromData(ScriptArray* array, uint tile, uint16& hs)
+/*bool DMO64_getTileFromData(CScriptArray* array, uint tile, uint16& hs)
    {
         if(!DMO64_ChechDataSize(array, tile)) return false;
 
@@ -63,7 +63,7 @@ bool DMO64_get( ScriptArray* array, uint tile, uint16& hs, uint16& val, uint16& 
         return true;
    }
 
-   uint DMO64_getHSFromData(ScriptArray* array, uint tile)
+   uint DMO64_getHSFromData(CScriptArray* array, uint tile)
    {
         if(!DMO64_ChechDataSize(array, tile)) return 0;
 
@@ -72,20 +72,20 @@ bool DMO64_get( ScriptArray* array, uint tile, uint16& hs, uint16& val, uint16& 
         return hs;
    }
 
-   bool DMO64_checkTileData(ScriptArray* array)
+   bool DMO64_checkTileData(CScriptArray* array)
    {
         uint hs = DMO64_getHSFromData(array, 0);
         return (hs!=0);
    }
 
-   bool DMO64_checkTileData(ScriptArray* array, uint tile)
+   bool DMO64_checkTileData(CScriptArray* array, uint tile)
    {
         uint hs = DMO64_getHSFromData(array, tile);
         return (hs!=0);
    }
  */
 
-bool DMO64_insertLast( ScriptArray* array, uint16 hs, uint16 val, uint hex )
+bool DMO64_insertLast( CScriptArray* array, uint16 hs, uint16 val, uint hex )
 {
     // if(!checkTileData(hs_1, hs_2, hexX, hexY)) return false;
 
@@ -110,7 +110,7 @@ bool DMO64_insertLast( ScriptArray* array, uint16 hs, uint16 val, uint hex )
     return true;
 }
 
-bool DMO64_insertLast( ScriptArray* array, ScriptArray* from_array )
+bool DMO64_insertLast( CScriptArray* array, CScriptArray* from_array )
 {
     uint len = array->GetSize() * array->GetElementSize();
     uint len2 = from_array->GetSize() * from_array->GetElementSize();
@@ -125,7 +125,7 @@ bool DMO64_insertLast( ScriptArray* array, ScriptArray* from_array )
     return true;
 }
 
-/*bool DMO64_copyTileData(ScriptArray* array, ScriptArray* from_array, uint tile)
+/*bool DMO64_copyTileData(CScriptArray* array, CScriptArray* from_array, uint tile)
    {
         //if(!DMO64_ChechDataSize(from_array, tile)) return false;
 
@@ -141,7 +141,7 @@ bool DMO64_insertLast( ScriptArray* array, ScriptArray* from_array )
         return true;
    }*/
 
-/*bool DMO64_setData(ScriptArray* array, uint tile, uint16 hs, uint16 val, uint hex)
+/*bool DMO64_setData(CScriptArray* array, uint tile, uint16 hs, uint16 val, uint hex)
    {
         //if(!DMO64_ChechDataSize(array, tile)) return false;
         uint len=array->GetSize()*array->GetElementSize();
@@ -197,7 +197,7 @@ uint DMO64_makeHex( uint16 hexX, uint16 hexY, uint8 layer )
     return t;
 }
 
-int DMO64_search( ScriptArray* array, uint hex )
+int DMO64_search( CScriptArray* array, uint hex )
 {
     uint* p = (uint*) ( array->GetBuffer() + 4 );
 
@@ -210,7 +210,7 @@ int DMO64_search( ScriptArray* array, uint hex )
     return -1;
 }
 
-int DMO64_search( ScriptArray* array, uint hex, uint begin, uint end )
+int DMO64_search( CScriptArray* array, uint hex, uint begin, uint end )
 {
     uint* p = (uint*) ( array->GetBuffer() + begin * 8 + 4 );
 
@@ -223,7 +223,7 @@ int DMO64_search( ScriptArray* array, uint hex, uint begin, uint end )
     return -1;
 }
 
-bool DMO64_set( ScriptArray* array, uint16 hs, uint16 val, uint hex, bool rewrite )
+bool DMO64_set( CScriptArray* array, uint16 hs, uint16 val, uint hex, bool rewrite )
 {
     if( array->GetElementSize() > 8 ||
         hex == 0 )
@@ -255,7 +255,7 @@ bool DMO64_set( ScriptArray* array, uint16 hs, uint16 val, uint hex, bool rewrit
     return true;
 }
 
-bool DMO64_add( ScriptArray* array, ScriptArray* from_array, bool rewrite )
+bool DMO64_add( CScriptArray* array, CScriptArray* from_array, bool rewrite )
 {
     if( array->GetElementSize() > 8 || from_array->GetElementSize() > 8 )
         return false;
@@ -318,7 +318,7 @@ bool DMO64_add( ScriptArray* array, ScriptArray* from_array, bool rewrite )
     return true;
 }
 
-uint DMO64_getHashNum( ScriptArray* array, uint hex )
+uint DMO64_getHashNum( CScriptArray* array, uint hex )
 {
     int tile = DMO64_search( array, hex );
     if( tile == -1 )
@@ -332,13 +332,13 @@ void RegisterQmapTools( asIScriptEngine* engine, bool compiler )
 
     r = engine->RegisterGlobalFunction( "bool DMO64_get(int[]&, uint, uint16&, uint16&, uint16&, uint16&, uint8&)", asFUNCTION( DMO64_get ), asCALL_CDECL );
 
-    r = engine->RegisterGlobalFunction( "bool DMO64_insertLast(int[]&, int[]&)", asFUNCTIONPR( DMO64_insertLast, ( ScriptArray *, ScriptArray* ), bool ), asCALL_CDECL );
+    r = engine->RegisterGlobalFunction( "bool DMO64_insertLast(int[]&, int[]&)", asFUNCTIONPR( DMO64_insertLast, ( CScriptArray *, CScriptArray* ), bool ), asCALL_CDECL );
 
     r = engine->RegisterGlobalFunction( "uint DMO64_makeHex(uint16, uint16, uint8)", asFUNCTION( DMO64_makeHex ), asCALL_CDECL );
     r = engine->RegisterGlobalFunction( "int uint16ToInt(uint16, uint16)", asFUNCTION( uint16ToInt ), asCALL_CDECL );
 
-    r = engine->RegisterGlobalFunction( "bool DMO64_set(int[]&, uint16, uint16, uint, bool)", asFUNCTIONPR( DMO64_set, ( ScriptArray *, uint16, uint16, uint, bool ), bool ), asCALL_CDECL );
-    r = engine->RegisterGlobalFunction( "bool DMO64_add(int[]&, int[]&, bool)", asFUNCTIONPR( DMO64_add, ( ScriptArray *, ScriptArray *, bool ), bool ), asCALL_CDECL );
+    r = engine->RegisterGlobalFunction( "bool DMO64_set(int[]&, uint16, uint16, uint, bool)", asFUNCTIONPR( DMO64_set, ( CScriptArray *, uint16, uint16, uint, bool ), bool ), asCALL_CDECL );
+    r = engine->RegisterGlobalFunction( "bool DMO64_add(int[]&, int[]&, bool)", asFUNCTIONPR( DMO64_add, ( CScriptArray *, CScriptArray *, bool ), bool ), asCALL_CDECL );
 
     r = engine->RegisterGlobalFunction( "uint DMO64_getHashNum(int[]&, uint)", asFUNCTION( DMO64_getHashNum ), asCALL_CDECL );
 

@@ -47,7 +47,7 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 	if( pid == PID_WORKBENCH_TOKEN || pid == PID_FIREPLACE_TOKEN )
 	{
         DeleteItem( item );
-		return true;
+		return false;
 	}
 
 	if( cr.Stat[ ST_BODY_TYPE ] == BT_DOG )
@@ -211,19 +211,22 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 		{
             return false;
         }
+		
 		if( item.Proto.Slot != SLOT_INV )
 		{
             return false;
 		}
-		uint16 pid = item.GetProtoId();
+
 		uint16 skin = cr.Stat[ ST_BASE_CRTYPE ];
 		if( skin == 0 )
 		{
 			skin = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
-		}			
-		bool isMutePlayer = skin_supermute.find( skin ) != -1,
-			 isRoboPlayer = skin_robot.find( skin ) != -1,
-			 isMuteArmor = armor_supermute_pids.find( pid ) != -1;
+		}
+		
+		bool isMutePlayer = skin_supermute.find( skin ) != -1;
+		bool isRoboPlayer = skin_robot.find( skin ) != -1;
+		bool isMuteArmor = armor_supermute_pids.find( pid ) != -1;
+			 
 		if( isRoboPlayer || isMutePlayer != isMuteArmor || ( cr.Stat[ ST_BODY_TYPE ] != BT_DOG && pid == PID_DOG_ARMOR ) )
 		{
 			#ifdef __CLIENT
@@ -256,12 +259,11 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 
 void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 {
-	ChangeRunningAP( cr, false );
+	ChangeRunningAP( cr );
 	uint8 toSlot = item.CritSlot;
 	
 	if( toSlot == SLOT_HEAD || fromSlot == SLOT_HEAD )
 	{	
-		ArmorEffects( cr, 1 );
 		int signH = ( toSlot == SLOT_HEAD ? int(1) : -1 );
 		switch( item.Proto.HeadItem_Perk )
         {
@@ -315,7 +317,7 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 		{
 			UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_FACE_MASK );
 		}
-		ArmorEffects( cr, 1 );
+		ArmorEffects( cr, item );
 	}	
 		
 	if( cr.ParamBase[ CR_IS_WINDUPED ] != 0 && fromSlot == SLOT_HAND1 && item.GetType() == ITEM_TYPE_WEAPON )
@@ -358,7 +360,7 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 						{
 							if( skin_armor.find( armor_skin ) > skin_armor.find( cr.Stat[ ST_BASE_CRTYPE ] ) )
 							{
-								crType = armor_skin; //Armor is equiped based on armor array position in comparison to skin
+								crType = ArmorSkin( cr, armor_skin ); //Armor is equiped based on armor array position in comparison to skin
 							}
 							else
 							{
@@ -424,11 +426,6 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 					crType = 150;
 				}
 				
-				if( ExoCheck( cr ) )
-				{
-					ChangeRunningAP( cr, true );
-				}
-
 				//Power armor features
 				if( item.Proto.Item_Subtype == ITEM_SUBTYPE_ARMOR_AC45 || item.Proto.Item_Subtype == ITEM_SUBTYPE_ARMOR_AC50 )
 				{
@@ -440,10 +437,12 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 				{
 					SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HOOD );
 				}
+				
 				if( HidefaceArmor.find( pid ) != -1 )
 				{
 					SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_SUIT );
 				}
+				
 				if( ArmorHelmets.find( pid ) != -1 )
 				{
 					SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HELMET );
@@ -455,19 +454,21 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 				{
 					UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HOOD );
 				}
+				
 				if( HidefaceArmor.find( pid ) != -1 )
 				{
 					UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_SUIT );
 				}
+				
 				if( ArmorHelmets.find( pid ) != -1 )
 				{
 					UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HELMET );
 				}
 			}
-			ArmorEffects( cr, 1 );
+			ArmorEffects( cr, item );
 		}
 		
-		if( cr.CrType != crType ) 
+		if( cr.CrType != crType && !hasItems( cr, ArmorHelmets, SLOT_ARMOR ) ) 
 		{
 			cr.ChangeCrType( crType );
 			ChangeCritterSpeed( cr );
@@ -598,43 +599,48 @@ uint cte_PAAuthFail( Critter& cr, int identifier, uint& rate )
 // #                                            Hide Face                                             #
 // ####################################################################################################
 
-void ArmorEffects( Critter& cr, int8 sign )
+void ArmorEffects( Critter& cr, Item@ item )
 {
-	bool hidename = B_Showname( cr );
-	int QST = cr.Param[ QST_MEDIUM ];
 	bool update = false;
-
-	if( sign == 1 && hidename )
+	
+	if( B_HideName( cr ) )
 	{
-		if( ABS( QST ) != 2 )
+		if( ABS( cr.Param[ QST_MEDIUM ] ) != 2 )
 		{
-			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_HIDE_FACE );
+			if( valid( item ) && HidefaceArmor.find( item.GetProtoId() ) == -1 )
+			{
+				cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_HIDE_FACE );
+			}
+			
 			cr.ParamBase[ QST_MEDIUM ] = 2;
 			update = true;
 		}
 	}
 	else
 	{
-		if( QST == 2 )
+		if( cr.Param[ QST_MEDIUM ] == 2 )
 		{
-			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_SHOW_FACE );
+			if( valid( item ) && HidefaceArmor.find( item.GetProtoId() ) == -1 )
+			{
+				cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_SHOW_FACE );
+			}
+			
 			cr.ParamBase[ QST_MEDIUM ] = 0;
 			update = true;
 		}
 	}
 
-	Item@ item = cr.GetItem( 0, SLOT_ARMOR );
 	if( valid( item ) )
 	{
-		uint PID = item.GetProtoId();
-		if( PID == PID_POWERED_ARMOR || PID == PID_POWERED_ARMOR_NEVADA || PID == PID_HYENA_PA || PID == PID_HYENA_PA_MK2 )
+		uint armorPid = item.GetProtoId();
+		if( armorPid == PID_POWERED_ARMOR || armorPid == PID_POWERED_ARMOR_NEVADA || armorPid == PID_HYENA_PA || armorPid == PID_HYENA_PA_MK2 )
 		{
-			cr.ChangeCrType( ArmorSkin( cr, CRTYPE_PA ) ); 
+			cr.ChangeCrType( ArmorSkin( cr, B_HideName( cr ) ? CRTYPE_PA : CRTYPE_PA_HEADLESS ) ); 
 		}
 		
-		if( PID == PID_HARDENED_POWER_ARMOR )
-		{ 
-			cr.ChangeCrType( ArmorSkin( cr, CRTYPE_PA_HARDY ) ); 
+		if( armorPid == PID_HARDENED_POWER_ARMOR )
+		{
+			cr.ChangeCrType( ArmorSkin( cr, B_HideName( cr ) ? CRTYPE_PA_HARDY : CRTYPE_PA_HARDY_HEADLESS ) ); 
 		}
 	}
 
@@ -649,17 +655,17 @@ void ArmorEffects( Critter& cr, int8 sign )
 	}
 }
 
-bool B_Showname( Critter& cr )
+bool B_HideName( Critter& cr )
 {
 	int param = cr.ParamBase[ CR_HIDEFACE_ITM ];
 	
-	if( FLAG( param, ITM_FACE_MASK ) )
+	if( FLAG( param, ITM_FACE_MASK ) || FLAG( param, ITM_ARMOR_SUIT ) )
 	{
 		return true;
 	}
 	else if( FLAG( cr.Param[ PLAYER_FLAGS ], PLAYER_FLAG_HIDE_FACE ) )
 	{
-		if( FLAG( param, ITM_ARMOR_HOOD ) || FLAG( param, ITM_ARMOR_SUIT ) )
+		if( FLAG( param, ITM_ARMOR_HOOD ) || FLAG( param, ITM_ARMOR_HELMET ) )
 		{
 			return true;
 		}
@@ -669,24 +675,23 @@ bool B_Showname( Critter& cr )
 
 uint ArmorSkin( Critter& cr, uint skin )
 {
-	if( !B_Showname( cr ) )
+	if( skin == CRTYPE_PA || skin == CRTYPE_PA_HEADLESS )
 	{
-		if( skin == CRTYPE_PA )
+		if( cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_SULIK_TRIBAL )
 		{
-			if( cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_SULIK_TRIBAL )
-			{
-				skin = CRTYPE_SULIK_PA;
-			}
-			else
-			{
-				skin = CRTYPE_PA_HEADLESS; 
-			}
+			skin = CRTYPE_SULIK_PA;
 		}
-		else if( skin == CRTYPE_PA_HARDY )
-		{ 
-			skin = CRTYPE_PA_HARDY_HEADLESS; 
+		else
+		{
+			skin = B_HideName( cr ) ? CRTYPE_PA : CRTYPE_PA_HEADLESS;
+			//Log( "Skin: " + skin + " B_HideName: " + B_HideName( cr ) );
 		}
 	}
+	else if( skin == CRTYPE_PA_HARDY || skin == CRTYPE_PA_HARDY_HEADLESS )
+	{
+		skin = B_HideName( cr ) ? CRTYPE_PA_HARDY : CRTYPE_PA_HARDY_HEADLESS;
+	}
+	
 	return skin;
 }
 
@@ -937,11 +942,12 @@ void TryToTakeArmor( Critter& cr, Critter& targetCr )
 }
 
 //weight check for running AP calculations
-void ChangeRunningAP( Critter& cr, bool Powered )
+void ChangeRunningAP( Critter& cr )
 {
-	float weight_penalty = 5.0f * ItemsWeight( cr ) / ( cr.Stat[ ST_CARRY_WEIGHT ] * 0.7f );
-	cr.ParamBase[ QST_AP_COST_RUN ] = Powered ? 100 : 100 * ( 1 + weight_penalty );
-	//Log( "AP cost for running: " + cr.ParamBase[ QST_AP_COST_RUN ] + " " + Powered );
+	float weight_penalty = ( 5.0f * ItemsWeight( cr ) ) / ( cr.Stat[ ST_CARRY_WEIGHT ] * 0.7f );
+	cr.ParamBase[ QST_AP_COST_RUN ] = ExoCheck( cr ) ? 100 : int( 100 * ( 1 + weight_penalty ) );
+	//Log( "AP cost for running: " + cr.ParamBase[ QST_AP_COST_RUN ] + " " + ExoCheck( cr ) );
+
 }
 
 bool ExoCheck( Critter& cr )
@@ -957,6 +963,8 @@ bool ExoCheck( Critter& cr )
 			case( ARMOR_PERK_ECZO ):
 			case( ARMOR_PERK_ECZO_2 ):
 				return true;
+			default:
+				return false;
 		}
 	}
 	return false;

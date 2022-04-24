@@ -62,3 +62,5 @@ link.exe /nologo /dll /incremental:no /machine:X86 cwalk.obj fofmodlock.obj fofm
 @del ".\bin\fofmod_client.exp"
 @del ".\bin\fofmod_client.lib"
 @del ".\bin\fofmod_client.idb"
+
+@pause

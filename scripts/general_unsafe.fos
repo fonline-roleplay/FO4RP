@@ -101,7 +101,7 @@ void unsafe_OpenDoor( Critter& player, int param0, int param1, int param2, strin
 
 			Critter@[] critters;
 			uint8 crs = map.GetCrittersHex( door.HexX, door.HexY, 30, FIND_ALL | FIND_ONLY_PLAYERS, critters );
-			for( uint8 i = 0, l = critters.length(); i < l; i++ ) { critters[ i ].RunClientScript( "client_main@SoundDoor", critters[ i ].Id, door.Id, 0, null, null ); }
+			for( uint8 j = 0, l = critters.length(); j < l; j++ ) { critters[ j ].RunClientScript( "client_main@SoundDoor", critters[ j ].Id, door.Id, 0, null, null ); }
 			break;
 		}
 	}
@@ -210,7 +210,7 @@ void unsafe_log_2(Critter& cr, int locX, int locY, int type, string@ message, in
 }
 
 //Digits input for ingame items
-void unsafe_inputDigits( Critter& player, int itemId, int digits, int param2, string@ param3, int[] @ param4 )
+void unsafe_inputDigits( Critter& player, int itemId, int digits, int type, string@ param3, int[] @ param4 )
 {
     Item@ item = GetItem( itemId );
 	if( valid( item ) )
@@ -218,7 +218,15 @@ void unsafe_inputDigits( Critter& player, int itemId, int digits, int param2, st
 		uint16 Pid = item.GetProtoId();
 		if( vending_machines.find( Pid ) != -1 )
 		{
-			item.Val6 = digits;
+			if( type == 0 )
+			{
+				item.Val6 = digits;
+			}
+			else
+			{
+				item.Val3 = digits;
+			}
+			
 			StartMenuVendingMachine( player, item );
 		}
 		else if( Pid == PID_TERMINAL )
@@ -310,13 +318,23 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 		return;
 	}
 	
-	cr.ParamBase[ CR_IS_RELAXING ] = 0;
+	if( !cr.IsLife() )
+	{
+		return;
+	}
+	
+	if( cr.Param[ CR_IS_RELAXING ] != 5 )
+	{
+		cr.ParamBase[ CR_IS_RELAXING ] = 0;
+	}
+	
     Map@ map = cr.GetMap();
 
-    if( map is null )
+    if( !valid( map ) )
 	{
         return;
 	}
+	
 	Item@ hand = _CritGetItemHand(cr);
     uint8 mode = 0;
 	
@@ -347,7 +365,7 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
     int dist = GetDistantion( cr.HexX,  cr.HexY, hexX, hexY );
 	
     map.GetHexCoord( cr.HexX,  cr.HexY, toHx, toHy,  0.0f, dist );
-    if( ( hexX != toHx ) || ( hexY != toHy ) )
+    if( ( uint(hexX) != toHx ) || ( uint(hexY) != toHy ) )
     {
         cr.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, 104 );
         return;
@@ -439,8 +457,8 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 		
 		if( cr.ParamBase[CR_AUTO_AIM] != HIT_LOCATION_NONE )
 		{
-			int delta = int( _WeaponApCost( weapon, weaponMode ) ) * 0.2;
-			needAP += delta; // + 20% AP for aim attacks
+			float delta = _WeaponApCost( weapon, weaponMode ) * 0.2;
+			needAP += int(delta); // + 20% AP for aim attacks
 		}
 	}
 	
@@ -742,6 +760,8 @@ void unsafe_relax( Critter& player, int param0, int param1, int param2, string@ 
 				time = 300;
 				break;
 			case( 5 ):
+				player.StatBase[ ST_CURRENT_AP ] -= 2000;
+				CheckCover( player );
 			case( 6 ):
 			case( 7 ):
 				//player.Animate( 0, ANIM2_KNEEL_BEGIN, null, false, true );
@@ -822,6 +842,7 @@ uint cte_unsafe_relax( Critter& player, int identifier, uint& rate )
 	if( MovementState( player ) > 0 || rate == 0 || player.Param[ CR_IS_WINDUPED ] != 0 )
 	{
 		player.ParamBase[ CR_IS_RELAXING ] = 0;
+		player.ParamBase[ CR_IN_COVER ] = 0;
 		if( player.Param[ CR_IS_WINDUPED ] == 0 )
 		{
 			player.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
@@ -830,6 +851,133 @@ uint cte_unsafe_relax( Critter& player, int identifier, uint& rate )
 	}
 	
 	return REAL_MS( 500 );
+}
+
+void CheckCover( Critter& player )
+{
+	Map@ map = player.GetMap();
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	for( uint16 i = 0; i < 6; i++ )
+	{
+		uint16 hx = player.HexX, hy = player.HexY;
+		map.MoveHexByDir( hx, hy, i, 1 );
+		{
+			uint coverType = 0;
+			if( !map.IsHexPassed( hx, hy ) )
+			{
+                FindData@[] allData;
+                GetHexProtos( map, hx, hy, allData );
+				
+				if( allData.length() > 0 )
+				{
+					for( uint j = 0; j < allData.length(); j++ )
+					{
+						ProtoItem@ protoItem = allData[0].Proto;
+
+						if( FLAG( protoItem.Flags, ITEM_NO_BLOCK ) )
+						{
+							continue;
+						}
+						
+						switch( protoItem.Material )
+						{
+							case( MATERIAL_WOOD ):
+							{
+								if( coverType < 2 )
+								{
+									coverType = 2;
+								}
+								break;
+							}
+							case( MATERIAL_METAL ):
+							{
+								if( coverType < 3 )
+								{
+									coverType = 3;
+								}
+								break;
+							}
+							case( MATERIAL_STONE ):
+							case( MATERIAL_CEMENT ):
+							{
+								if( coverType < 4 )
+								{
+									coverType = 4;
+								}
+								break;
+							}
+							default:
+							{
+								if( coverType < 1 )
+								{
+									coverType = 1;
+								}
+								break;
+							}
+								break;
+						}
+						
+						if( coverType == 4 )
+						{
+							break;
+						}
+					}
+				}
+			}
+			player.ParamBase[ CR_IN_COVER ] = SET_COVER_TYPE( coverType, i, player.ParamBase[ CR_IN_COVER ] );
+		}
+	}
+}
+
+//Proto array collector
+class FindData
+{
+	FindData( uint16 protoid )
+	{
+		@Proto = GetProtoItem( protoid );
+	}
+	ProtoItem@ Proto;
+}
+
+class FindDataSceneryClient : FindData
+{
+	FindDataSceneryClient( SceneryClient@ val )
+	{
+		super( val.ProtoId );
+	}
+}
+
+class FindDataItem : FindData
+{
+	FindDataItem( Item@ val )
+	{
+		super( val.Proto.ProtoId );
+	}
+}
+
+void GetHexProtos( Map@ map, uint16 hexX, uint16 hexY, FindData@[]& array )
+{
+	SceneryClient@[] sceneries;
+	uint iend = map.GetWalls( hexX, hexY, sceneries );
+
+	iend += map.GetSceneryClients( hexX, hexY, sceneries );
+
+	for( uint i = 0; i < iend; i++ )
+	{
+		array.insertLast( FindDataSceneryClient( sceneries[i] ) );
+	}
+	Item@[] items;
+	iend = map.GetItems( hexX, hexY, items );
+
+	for( uint i = 0; i < iend; i++ )
+	{
+		array.insertLast( FindDataItem( items [i] ) );
+	}
+
 }
 
 void unsafe_itemhit2( Critter& player, int itemId, int x, int y, string@ param3, int[] @ param4 )
@@ -918,7 +1066,7 @@ void unsafe_itemhit( Critter& player, int id, int itemId, int param2, string@ pa
 		{
 			uint16 weight = weapon.Proto.Weight;
 			weight = CLAMP( weight, 2000, 8000 );
-			uint8  ap = weight * 0.001;
+			int  ap = int( weight * 0.001 );
 			ap = CLAMP( ap, 20, 80 );
 			
 			if( ap <= player.Stat[ ST_CURRENT_AP ] )
@@ -928,14 +1076,14 @@ void unsafe_itemhit( Critter& player, int id, int itemId, int param2, string@ pa
 				player.Wait ( 1000 );
 				player.StatBase[ ST_CURRENT_AP ] -= ap * 100;
 				
-				if ( player.Skill[ SK_MELEE_WEAPONS ] - target.Stat[ ST_ARMOR_CLASS ] - ( weight * 0.002 ) < Random( 0, 100) )
+				if ( player.Skill[ SK_MELEE_WEAPONS ] - target.Stat[ ST_ARMOR_CLASS ] - int( weight * 0.002 ) < Random( 0, 100) )
 				{
 					player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MISS_KNOCK );
 					return;
 				}
 				uint8 strBonus = ( player.Stat[ ST_STRENGTH ] > 6 ? player.Stat[ ST_STRENGTH ] - 6 : 1 );
-				int damage = strBonus + player.StatBase[ ST_MELEE_DAMAGE ] + Random( 0, weight * 0.002 );
-				InjureCritter( target, damage, DAMAGE_NORMAL, target.Dir, player.Id );
+				int damage = strBonus + player.StatBase[ ST_MELEE_DAMAGE ] + Random( 0, int( weight * 0.002 ) );
+				InjureCritter( target, damage, DAMAGE_NORMAL, target.Dir, player.Id, HIT_LOCATION_NONE, false );
 				
 				player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
 				player.TimeoutBase[ TO_AGGRESSOR ] = __FullSecond + REAL_MINUTE( 1 );
@@ -963,7 +1111,7 @@ void unsafe_itemhit( Critter& player, int id, int itemId, int param2, string@ pa
 			}
 			uint8 strBonus = ( player.Stat[ ST_STRENGTH ] > 6 ? player.Stat[ ST_STRENGTH ] - 6 : 1 );
 			int damage = Random( strBonus, strBonus + player.StatBase[ ST_MELEE_DAMAGE ] + 1 );           // every 500g 1dmg point
-			InjureCritter( target, damage, DAMAGE_NORMAL, target.Dir, player.Id );
+			InjureCritter( target, damage, DAMAGE_NORMAL, target.Dir, player.Id, HIT_LOCATION_NONE, false );
 			
 			player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
 			player.TimeoutBase[ TO_AGGRESSOR ] = __FullSecond + REAL_MINUTE( 1 );
@@ -1572,4 +1720,5 @@ void unsafe_InitDevourState( Critter& player, int param0, int param1, int param2
 {
 	player.ParamBase[ CR_INIT_DEVOUR ] = 1;
 }
+
 #endif // GENERAL_UNSAFE

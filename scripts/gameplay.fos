@@ -18,6 +18,7 @@
 #include "time_h.fos"
 #include "globalmap_group_h.fos"
 #include "weather_h.fos"
+#include "entire_h.fos"
 
 bool SwitchGameMode( Critter& cr, int mode )
 {
@@ -116,6 +117,13 @@ class Gameplay : iManagerModule, iManager_loop,
 	
     bool global_critter_idle( Critter& cr )
     {
+		Map@ map = cr.GetMap();
+		if( !valid( map ) )
+		{
+			return true;
+		}
+		
+		uint16 mapPid = map.GetProtoId();
 		if( cr.IsPlayer() )
 		{
 			if( cr.ParamBase[ QST_GAMEMODE ] == GAME_TEST )
@@ -125,8 +133,7 @@ class Gameplay : iManagerModule, iManager_loop,
 			
 			if( cr.ParamBase[ QST_GAMEMODE ] == GAME_START )
 			{
-				Map@ map = cr.GetMap();
-				if( !valid( map ) || map.GetProtoId() != MAP_UTILITY_START )
+				if( !valid( map ) || ( mapPid != MAP_UTILITY_START && mapPid != MAP_TLJ_ARENA1 && mapPid != MAP_TLJ_ARENA2 ) )
 				{
 					cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_NO_ACTIVATION );
 					cr.ParamBase[ QST_GAMEMODE ] = GAME_SURVIVAL;
@@ -138,24 +145,32 @@ class Gameplay : iManagerModule, iManager_loop,
 		
 		if( cr.IsDead() && cr.IsPlayer() )
 		{
-			Map @map = cr.GetMap();
-			if( valid(map) && map.GetProtoId() == MAP_HELL )
+			if( valid( map ) )
 			{
-				GameVar@ canPray = GetGlobalVar( GVAR_Pray_Battleground );
-				if( canPray.GetValue() != 0 )
+				switch( mapPid )
 				{
-					Location@ location = GetLocationByPid( LOCATION_Deadloc, 0 );
-					if( valid( location ) )
+					case( MAP_HELL ):	
 					{
-						@map = location.GetMapByIndex( 0 );
-						if( valid( map ) )
+						GameVar@ canPray = GetGlobalVar( GVAR_Pray_Battleground );
+						if( canPray.GetValue() != 0 )
 						{
-							cr.TransitToMap( map.Id, 241 );
+							Location@ location = GetLocationByPid( LOCATION_Deadloc, 0 );
+							if( valid( location ) )
+							{
+								@map = location.GetMapByIndex( 0 );
+								if( valid( map ) )
+								{
+									cr.TransitToMap( map.Id, 241 );
+								}
+							}
+							cr.ToLife();
+							FullHeal( cr );
+							return true;
 						}
+						break;
 					}
-					cr.ToLife();
-					FullHeal( cr );
-					return true;
+					default:
+						break;
 				}
 			}
 		}
@@ -233,7 +248,14 @@ class Gameplay : iManagerModule, iManager_loop,
 
 		if( cr.IsPlayer() )
 		{
-			cr.TimeoutBase[ TO_REPLICATION ] = __FullSecond + replTime;
+			if( map.GetProtoId() == MAP_TLJ_ARENA1 || map.GetProtoId() == MAP_TLJ_ARENA2 )
+			{
+				cr.TimeoutBase[ TO_REPLICATION ] = __FullSecond + REAL_MINUTE( 1 );
+			}
+			else
+			{
+				cr.TimeoutBase[ TO_REPLICATION ] = __FullSecond + replTime;
+			}
 		}
 		
 		if( cr.IsNpc() )
@@ -295,7 +317,7 @@ class Gameplay : iManagerModule, iManager_loop,
     }
 	
     void AfterLogin( Critter& cr )
-    {
+	{
 		if( !cr.IsPlayer() )
 		{
 			return;
@@ -321,8 +343,7 @@ class Gameplay : iManagerModule, iManager_loop,
 		
 		if( cr.StatBase[ST_CARRY_WEIGHT_EXT] != 0 )
 		{
-			LogInfoTime( "logs\\debug.txt", crInfo( cr ) + " extra waight bonus is 0: " 
-				+ cr.StatBase[ST_CARRY_WEIGHT_EXT] + " / " +  cr.Stat[ST_CARRY_WEIGHT] + "." );
+			LogInfoTime( "logs\\debug.txt", crInfo( cr ) + " extra waight bonus is 0: " + cr.StatBase[ST_CARRY_WEIGHT_EXT] + " / " +  cr.Stat[ST_CARRY_WEIGHT] + "." );
 			cr.StatBase[ST_CARRY_WEIGHT_EXT] = 0;
 		}
 
@@ -395,7 +416,12 @@ class Gameplay : iManagerModule, iManager_loop,
 			
 			if (cr.StatBase [ ST_GLOBAL_OVERDOSE ] > 0 && cr.GetTimeEvents( CTE_GLOBAL_OVERDOSE, null, null, null ) < 1 )
 			{
-				cr.AddTimeEvent ( "cte_Global_Overdose", REAL_SECOND( cr.Param[ CR_GLOBAL_OVERDOSE_SPEED ]), CTE_GLOBAL_OVERDOSE, 0);
+				cr.AddTimeEvent ( "cte_Global_Overdose", REAL_SECOND( cr.Param[ CR_GLOBAL_OVERDOSE_SPEED ] ), CTE_GLOBAL_OVERDOSE, 0);
+			}
+			//Jet-type drugs
+			if( cr.GetTimeEvents( DrugsIdentifiers.find( PID_JET ), null, null, null ) < 1 && cr.GetTimeEvents( DrugsIdentifiers.find( PID_TREB ), null, null, null ) < 1 && cr.GetTimeEvents( DrugsIdentifiers.find( PID_VINT ), null, null, null ) < 1 )
+			{
+				cr.ParamBase[ CR_JETTED ] = 0;
 			}
 		}		
 		
@@ -455,10 +481,10 @@ class Gameplay : iManagerModule, iManager_loop,
 								applyWetness( crs[j] );
 
 								/* Rain washes away dirtiness */
-								if( crs[j].Param[ CR_DIRTINESS ] > 0 )
+								if( crs[j].Param[ CR_DIRTINESS ] >= 30 )
 								{
 									uint8 dirt = crs[j].Param[ CR_DIRTINESS ];
-									crs[j].ParamBase[ CR_DIRTINESS ] -= MIN( (rainIntensity / 17), dirt );
+									crs[j].ParamBase[ CR_DIRTINESS ] -= MIN( ( rainIntensity / 17 ), dirt );
 								}
 							}					
 						}
@@ -553,12 +579,38 @@ bool _RespawnCritter( Critter& cr )
 		return false;
 	}
 	
+	if( dieMap.GetProtoId() == MAP_TLJ_ARENA1 || dieMap.GetProtoId() == MAP_TLJ_ARENA2 )
+	{
+		int entires = dieMap.CountEntire( ARENA_PLAYER_SPAWN );
+		if( entires <= 0 )
+		{
+			return false;
+		}
+		else
+		{
+			uint16 hx = 0, hy = 0;
+			dieMap.GetEntireCoords( ARENA_PLAYER_SPAWN, Random( 0, entires - 1 ), hx, hy );
+			cr.TransitToHex( hx, hy, cr.Dir );
+			cr.ToLife();
+			FullHeal( cr );
+			ChangeCritterSpeed( cr );
+			cr.RunClientScript( "client_main@__ChosenRefreshMap", 0, 0, 0, null, null );
+			if( !cr.IsNpc() && cr.Stat[ ST_LEVEL ] != 12 )
+			{
+				cr.StatBase[ ST_EXPERIENCE ] += 100000;
+			}
+			cr.ParamBase[ CR_DEATH_STAGE ] = 0;
+			RefreshClientsMap( dieMap );
+			return true;
+		}
+	}
+	
 	int GM = cr.Param[ QST_GAMEMODE ];
 
 	uint16 hx0 = cr.HexX, hy0 = cr.HexY, hx = 0, hy = 0;
-	uint8  condition = cr.Anim2Dead;
+	uint8 condition = cr.Anim2Dead;
 	uint dir = condition == ANIM2_DEAD_FRONT ? ( cr.Dir + 3 ) % 6 : cr.Dir;
-	Map@   map = null;
+	Map@ map = null;
 	
 	if( GM == GAME_SURVIVAL || GM == GAME_ADVENTURE )
 	{
@@ -597,7 +649,7 @@ bool _RespawnCritter( Critter& cr )
 		hy = cr.HexY;
 		if( not map.IsHexPassed( hx, hy ) )
 		{
-			bool founded = false;
+			bool found = false;
 			for( int x = -1; x <= 1; x++ )
 			{
 				for( int y = -1; y <= 1; y++ )
@@ -619,17 +671,17 @@ bool _RespawnCritter( Critter& cr )
 					{
 						hx += x;
 						hy += y;
-						founded = true;
+						found = true;
 						break;
 					}
 				}
-				if( founded )
+				if( found )
 				{
 					break;
 				}
 			}
 
-			if( not founded )
+			if( not found )
 			{
 				// Continue dead
 				cr.TimeoutBase[ TO_REPLICATION ] = __FullSecond + REAL_MINUTE( 1 );

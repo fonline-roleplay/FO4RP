@@ -1,6 +1,10 @@
+#ifndef TRAPS_MODULE
+#define TRAPS_MODULE
+
 // Traps by Jonathan Joestar for FO4RP
 
 #include "_utils.fos"
+#include "traps_h.fos"
 #include "scripting_object.fos"
 #include "combat_h.fos"
 
@@ -16,9 +20,9 @@ void registerTraps()
 class DeactivatedTrap : GenericObject
 {
 
-	bool itemUse(Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scenery@ onScenery)	
+	bool itemUse( Item& item, Critter& crit, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )	
 	{
-		Item@ handItem = _CritGetItemHand(crit);
+		Item@ handItem = _CritGetItemHand( crit );
 		if( item.Accessory == ACCESSORY_CRITTER && item.CritSlot != SLOT_HAND1 )
 		{
 			crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HOLD_SNARE );
@@ -27,64 +31,72 @@ class DeactivatedTrap : GenericObject
 		
 		Map@ map = crit.GetMap();
 		
-		if(!valid(map))
+		if( !valid( map ) )
 		{
 			return true;
 		}
 		
-		if(valid(map.GetItem(crit.HexX, crit.HexY, PID_TRAP_ACTIVE)))
+		if( valid( map.GetItem( crit.HexX, crit.HexY, PID_TRAP_ACTIVE ) ) )
 		{
 			crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SNARE_HEX_BUSY );
 			return true;
 		}
 		
-		int roll = Random(0, 100);
-		int skill = crit.Param[SK_TRAPS];
+		int roll = Random( 0, 100 );
+		int skill = crit.Param[ SK_TRAPS ];
 		int hardness = 0;
 		crit.StatBase[ ST_CURRENT_AP ] -= 7000;
 		
-		if(skill <= 100)
+		if( skill <= 100 )
 		{
-			if(roll > skill)
+			if( roll > skill )
 			{
-				CriticallyInjureCritter( crit, Random(30, 60), DAMAGE_NORMAL, crit.Dir, 0, Random(0, 1) == 0 ? HIT_LOCATION_LEFT_ARM : HIT_LOCATION_RIGHT_ARM);
+				InjureCritter( crit, Random( item.Proto.Weapon_DmgMin_0, item.Proto.Weapon_DmgMax_0 ), item.Proto.Weapon_DmgType_0, crit.Dir, crit.Id, Random( 0, 1 ) == 0 ? HIT_LOCATION_LEFT_ARM : HIT_LOCATION_RIGHT_ARM, false );
 				crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SNARE_FAILED );
-				this.playTrapSound(map, crit.HexX, crit.HexY);
+				this.playTrapSound( map, crit.HexX, crit.HexY );
 				
 				return true;
 			}
 		}
-		else if(skill <= 200)
+		else if( skill <= 200 )
 		{
-			if(roll < skill - 100)
+			if( roll < skill - 100 )
 			{
-				hardness = Random(10, 20);
+				hardness = Random( 10, 20 );
 			}
 		}
 		else
 		{
-			if(roll < skill - 200)
+			if( roll < skill - 200 )
 			{
-				hardness = Random(30, 60);
+				hardness = Random( 30, 60 );
 			}
 			else
 			{
-				hardness = Random(10, 20);
+				hardness = Random( 10, 20 );
 			}
 		}
-			if( item.IsStackable() )
+		
+		if( item.IsStackable() )
+		{
+			if( item.GetCount() > 1 )
 			{
-				if( item.GetCount()>1 )
-					item.SetCount( item.GetCount()-1 );
-				else
-					DeleteItem(item);
+				item.SetCount( item.GetCount()-1 );
 			}
-			item.Update();
+			else
+			{
+				DeleteItem(item);
+			}
+		}
+		item.Update();
 		
-		Item@ activeTrap = map.AddItem( crit.HexX, crit.HexY, PID_TRAP_ACTIVE, 1);
+		Item@ activeTrap = map.AddItem( crit.HexX, crit.HexY, PID_TRAP_ACTIVE, 1 );
 		
-		activeTrap.Val0 = hardness;	
-		activeTrap.Val1 = skill;
+		activeTrap.TRAP_HARDNESS = hardness;	
+		activeTrap.TRAP_SKILL = skill;
+		activeTrap.TRAP_OWNER = crit.Id;
+		activeTrap.TRAP_CRITICAL_CHANCE = crit.Stat[ ST_CRITICAL_CHANCE ];
+        activeTrap.TrapValue = skill;
 		
 		crit.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_SET_UP_SNARE );
 		this.playTrapSetup( map, crit.HexX, crit.HexY );
@@ -130,10 +142,9 @@ class ActiveTrap : GenericObject
 		{
 			crit.Wait(0);
 			
-			int hardness = item.Val0;
-			int skill = item.Val1;
-			
-			if( Random( 0, 100 + ( crit.Param[ST_PERCEPTION] * 10 ) ) > Random(0, 100 + (skill / 3) ) )
+			int hardness = item.TRAP_HARDNESS;
+
+			if( ( crit.Param[ ST_LUCK ] * 2 ) > Random( 0, 100 ) )
 			{
 				crit.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SNARE_LUCKY );
 				return;
@@ -141,8 +152,9 @@ class ActiveTrap : GenericObject
 			
 			crit.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_STEP_SNARE );
 			Map@ map = crit.GetMap();
-
-			CriticallyInjureCritter( crit, Random( 30, 60 ), DAMAGE_NORMAL, dir, 0, Random( 0, 1 ) == 0 ? HIT_LOCATION_LEFT_LEG : HIT_LOCATION_RIGHT_LEG );
+			
+			bool isCritical = TrapCritRoll( item, crit );
+			InjureCritter( crit, Random( item.Proto.Weapon_DmgMin_0, item.Proto.Weapon_DmgMax_0 ), item.Proto.Weapon_DmgType_0, dir, item.TRAP_OWNER, Random( 0, 1 ) == 0 ? HIT_LOCATION_LEFT_LEG : HIT_LOCATION_RIGHT_LEG, isCritical );
 			
 			if( hardness > 0 )
 			{
@@ -210,3 +222,31 @@ class Camouflage : GenericObject
 		return protoIds;
 	}
 }
+
+bool TrapCritRoll( Item& trap, Critter& target )
+{
+	bool isCritical = false;
+	
+	float critBase = trap.TRAP_CRITICAL_CHANCE; 
+	
+	float critArmor = target.Stat[ ST_LUCK ] + target.Stat[ ST_ARMOR_CLASS ];
+	float critMult = ( 100 - critArmor ) * 0.01;
+	float roll = Random( 1, 100 );
+	
+	float critResult = critBase * critMult;
+	isCritical = critResult >= roll;
+	
+	if( target.Param[ QST_GAMEMODE ] == GAME_TEST )
+	{
+		target.Say( SAY_NETMSG, boolValue( isCritical, "|0xFFFF00 Critroll ", "|0x00FFFF SUCCEED", "|0xFFFF00 FAILED" ) + "\n"
+			+ StyledText( "|", "Base: ", critBase )
+			+ StyledText( "|", "Armor: ", critArmor )
+			+ StyledText( "\n", "Mult: ", critMult )
+			+ StyledText( "|", "Result: ", critResult )								
+			+ StyledText( "\n", "Roll: ", roll )
+		);
+	}
+	
+	return isCritical;
+}
+#endif // TRAPS_MODULE

@@ -2,36 +2,24 @@
 #define CLIENT_GUI
 
 #include "client_gui_h.fos"
-#include "_defines.fos"
+#include "_utils.fos"
 #include "_client_defines.fos"
 #include "sprite.fos"
-#include "_colors.fos"
-#include "_msgstr.fos"
 #include "fofmod_h.fos"
+#include "critter_item_movement_h.fos"
 
 #define IS_COLLISION    # ( x1, y1, x2, y2, w, h )( ( x1 ) >= ( x2 ) && ( x1 ) <= ( x2 ) + ( w ) && ( y1 ) >= ( y2 ) && ( y1 ) <= ( y2 ) + ( h ) )
 
-#define valid                        # (ptr) ( @ptr != null )
-
-// @pm menu
 import void ShowContScreen( uint8 screenType, uint8 actionType ) from "client_screen_contmenu";
-import void GetActiveLayer( IGUIElementOpt@[] @ activeBtnLayer ) from "client_screen_fastpanel";
-import int8 ChangeLayer( int8 layer ) from "client_screen_fastpanel";
-import void HidePanel( bool show ) from "client_screen_fastpanel";
-import void GetPanelButtons( IGUIElementOpt@[] @ panelBtns ) from "client_screen_fastpanel";
+
 import void InputBoxKeyPressed( uint8 key, uint8 kbData ) from "client_screen_inputbox";
 import void InputBoxClipboardInsert()  from "client_screen_inputbox";
-import bool isGM( CritterCl@ cr ) from "client_main";
-// #pm menu
+
 import void critter_action( bool localCall, CritterCl& cr, int action, int actionExt, ItemCl@ item ) from "client_main";
-// binyan - Hotkeys
-import void SetHotkeysUse( bool use ) from "hotkeys";
-import bool ProcessCommand( uint8 curKey, uint8 prevKey, bool[] KeysPressed, uint8 mainScreen, uint8 curScreen ) from "hotkeys";
-import bool IsScreenAllowed( string screen ) from "hotkeys";
-uint8 previews = 0;
 
 import int to_hit_hex( bool anyway ) from "client_main";
-// /////////////////////////////////
+
+uint8 previews = 0;
 
 void _PlaySound( int pos, int repeat, int, string@ soundName, int[] @ )
 {
@@ -65,7 +53,7 @@ KeybData@[] KbData;
 IGUIScreenOpt@  LastScreenOpt = null;
 IGUIElementOpt@ LastElementOpt = null;
 
-class           KeybData
+class KeybData
 {
     KeybData( int8 r, int8 rs, int8 e, int8 es )
     {
@@ -155,10 +143,15 @@ class GUIElement : IGUIElementOpt
         uint8 letter = 0;
         bool  result = ProcessKey( key, Label, letter );
         if( Label.length() > InputMaxLen )
+		{
             Label.resize( InputMaxLen );
-        if( valid( KeyPressCallback ) )
+		}
+		
+		if( valid( KeyPressCallback ) )
+		{
             KeyPressCallback.OnKeyPress( key, letter );
-        return result;
+        }
+		return result;
     }
 
     void InputLost()
@@ -455,8 +448,11 @@ class GUIScreen : IGUIScreenOpt
     GUIScreen( string@ sprName, int path )
     {
         if( @sprName != null )
+		{
             Surface.Load( sprName, path );
-        Index = 0;
+        }
+		
+		Index = 0;
 
         IsCanMove = true;
         IsModal = true;
@@ -486,7 +482,7 @@ class GUIScreen : IGUIScreenOpt
 		{
             DrawSprite( Surface.Id, -1, PosX, PosY, 0 );
         }
-		
+
 		for( uint i = 0, j = Elements.length(); i < j; i++ )
 		{
             Elements[ i ].Draw( PosX, PosY );
@@ -541,32 +537,104 @@ class GUIScreen : IGUIScreenOpt
             overdoseProc = chosen.StatBase[ST_GLOBAL_OVERDOSE],
             wetnessProc = chosen.StatBase[ ST_WETNESS ];
 			
-			//Show blast radius
-			ItemCl@ weapon = chosen.GetItem( 0, SLOT_HAND1 );
-			if( valid( weapon ) )
+			//Cover indicators for chosen
+			if( chosen.Param[ CR_IS_RELAXING ] == 5 )
 			{
-				uint8 blastRadius = weapon.Proto.Blast_Radius;
-				bool isGrenade = blastRadius > 0;
-				bool isRocket = false;
-				bool usesAmmo = weapon.Proto.Weapon_MaxAmmoCount > 0;
-				if( usesAmmo )
+				int coverType;
+				for( uint i = 0; i < 6 ; i++ )
 				{
-					ProtoItem@ ammo = GetProtoItem( weapon.AmmoPid );
-					if( valid( ammo ) && ammo.Blast_Radius > 0 )
+					uint color = 0;
+					coverType = GET_COVER_TYPE( i, chosen.Param[ CR_IN_COVER ] );
+					if( coverType > 0 )
 					{
-						blastRadius = ammo.Blast_Radius;
-						isRocket = true;
+						switch( coverType )
+						{
+							case( 1 ):
+								color = COLOR_GREEN;
+								break;
+							case( 2 ):
+								color = COLOR_YELLOW;
+								break;
+							case( 3 ):
+								color = COLOR_ORANGE;
+								break;
+							case( 4 ):
+								color = COLOR_RED;
+								break;
+							default:
+								color = COLOR_GREEN;
+						}
+						uint16 cx = chosen.HexX, cy = chosen.HexY;
+						MoveHexByDir( cx, cy, i, 1 );
+						int hx = 0, hy = 0;
+						GetHexPos( cx, cy, hx, hy );
+						DrawText( "О", hx - 7, hy - 9, 13, 13, color, FONT_FALLOUT, 150 );
 					}
 				}
-				
-				uint8 mode = weapon.Mode;
-				uint8 ammoRound = ( mode ) == 0 ? weapon.Proto.Weapon_Round_0 : ( ( mode ) == 1 ? weapon.Proto.Weapon_Round_1 : ( ( mode ) == 2 ? weapon.Proto.Weapon_Round_2 : 0 ) );
-				bool isBurst = ammoRound > 1;
-				
-				if( GetCurrentCursor() == CURSOR_USE_WEAPON )
+			}
+			
+			//Combat UI
+			if( GetCurrentCursor() == CURSOR_USE_WEAPON )
+			{
+				ItemCl@ weapon = chosen.GetItem( 0, SLOT_HAND1 );
+				if( valid( weapon ) )
 				{
+					uint8 blastRadius = weapon.Proto.Blast_Radius;
+					bool isGrenade = blastRadius > 0;
+					bool isRocket = false;
+					bool usesAmmo = weapon.Proto.Weapon_MaxAmmoCount > 0;
+					if( usesAmmo )
+					{
+						ProtoItem@ ammo = GetProtoItem( weapon.AmmoPid );
+						if( valid( ammo ) )
+						{
+							if( ammo.Blast_Radius > 0 )
+							{
+								blastRadius = ammo.Blast_Radius;
+								isRocket = true;
+							}
+						}
+					}
+					
+					uint8 mode = weapon.Mode;
+					uint8 ammoRound = ( mode ) == 0 ? weapon.Proto.Weapon_Round_0 : ( ( mode ) == 1 ? weapon.Proto.Weapon_Round_1 : ( ( mode ) == 2 ? weapon.Proto.Weapon_Round_2 : 0 ) );
+					bool isBurst = ammoRound > 1;
+					
 					uint16 x = 0, y = 0, hxX = 0, hxY = 0;
 					GetMonitorHex( x, y, hxX, hxY );
+					CritterCl@ target = GetMonitorCritter( __MouseX, __MouseY );
+					if( valid( target ) && target.Id != chosen.Id )
+					{
+						if( target.Param[ CR_IS_RELAXING ] == 5 )
+						{
+							uint color = 0;
+							uint16 hx = chosen.HexX, hy = chosen.HexY;
+							uint8 dir = GetDirection( target.HexX, target.HexY, hx, hy );
+							int coverType = GET_COVER_TYPE( dir, target.Param[ CR_IN_COVER ] );
+							if( coverType > 0 )
+							{
+								switch( coverType )
+								{
+									case( 1 ):
+										color = COLOR_GREEN;
+										break;
+									case( 2 ):
+										color = COLOR_YELLOW;
+										break;
+									case( 3 ):
+										color = COLOR_ORANGE;
+										break;
+									case( 4 ):
+										color = COLOR_RED;
+										break;
+									default:
+										color = COLOR_GREEN;
+								}
+								DrawText( "О", __MouseX - 22, __MouseY - 3, 13, 13, color, FONT_FALLOUT, 0 );
+							}
+						}
+					}
+					
 					/*uint8 dir = GetDirection( chosen.HexX, chosen.HexY, hxX, hxY );
 					int xAdjust = 0, yAdjust = -24;
 					switch( dir )
@@ -612,15 +680,42 @@ class GUIScreen : IGUIScreenOpt
 							drawData.insertLast( COLOR_RGBA( r0, g0, b0, 20 ) );
 						}
 						DrawPrimitive( DRAW_PRIMITIVE_TRIANGLEFAN, drawData );
-
-						drawData.insertLast( drawData[0] );
-						drawData.insertLast( drawData[1] );
-						drawData.insertLast( COLOR_RGBA( r0, g0, b0, 150 ) );
-						for( uint j = 2; j < drawData.length() - 3; j+= 3 ) 
+						
+						if( weapon.Proto.ProtoId == PID_MOLOTOV_COCKTAIL || weapon.Proto.ProtoId == PID_GRNMLTV || weapon.Proto.ProtoId == PID_FLASH_GRENADE || weapon.Proto.Item_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER )
 						{
-							drawData[ j ] = COLOR_RGBA( r0, g0, b0, 150 );
+							drawData.insertLast( drawData[0] );
+							drawData.insertLast( drawData[1] );
+							drawData.insertLast( COLOR_RGBA( r0, g0, b0, 150 ) );
+							for( uint j = 2; j < drawData.length() - 3; j+= 3 ) 
+							{
+								drawData[ j ] = COLOR_RGBA( r0, g0, b0, 150 );
+							}
+							DrawPrimitive( DRAW_PRIMITIVE_LINESTRIP, drawData );
 						}
-						DrawPrimitive( DRAW_PRIMITIVE_LINESTRIP, drawData );
+						else
+						{
+							int[] drawData2;
+							for( uint8 i = 0; i < 6; i++ )
+							{
+								uint16 tx = hxX, ty = hxY;
+								MoveHexByDir( tx, ty, i, int( blastRadius * 2.5 ) );
+								int hx = 0, hy = 0;
+								GetHexPos( tx, ty, hx, hy );
+								drawData2.insertLast( hx );
+								drawData2.insertLast( hy );
+								drawData2.insertLast( COLOR_RGBA( r0, g0, b0, 20 ) );
+							}
+							DrawPrimitive( DRAW_PRIMITIVE_TRIANGLEFAN, drawData2 );
+								
+							drawData2.insertLast( drawData2[0] );
+							drawData2.insertLast( drawData2[1] );
+							drawData2.insertLast( COLOR_RGBA( r0, g0, b0, 150 ) );
+							for( uint j = 2; j < drawData2.length() - 3; j+= 3 ) 
+							{
+								drawData2[ j ] = COLOR_RGBA( r0, g0, b0, 150 );
+							}
+							DrawPrimitive( DRAW_PRIMITIVE_LINESTRIP, drawData2 );
+						}
 					}
 					
 					/*if( usesAmmo ) { //WIP FOR WEAPON ARCS ETC
@@ -644,7 +739,250 @@ class GUIScreen : IGUIScreenOpt
 						//data.insertLast( COLOR_RGBA( r0, g0, b0, 100 ) );
 						DrawPrimitive( DRAW_PRIMITIVE_LINELIST, data );
 					}*/
-				} 
+				}
+			}
+			
+			// Smart Target Assist
+			if( CheckSTA( chosen ) )
+			{
+				if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_STA ) )
+				{
+					CritterCl@[] targets;
+					uint CrSpriteId = 0;
+					
+					GetCritters( 0, FIND_LIFE_AND_KO|FIND_ALL, targets );
+					for( uint i = 0; i < targets.length(); i ++ )
+					{
+						CritterCl@ target = targets[i];
+						if( !valid( target ) )
+						{
+							continue;
+						}
+						
+						if( target.IsDead() )
+						{
+							continue;
+						}
+						
+						if( target.Id == chosen.Id )
+						{
+							continue;
+						}
+						
+						string cr_sprite_name = GetCritterTypeName( target.CrType ) + "aa.frm";
+						CrSpriteId = LoadSprite( cr_sprite_name, int( PT_ART_CRITTERS ) );
+						
+						if( CrSpriteId == 0 )
+						{
+							continue;
+						}
+						
+						int[] targeter_data = GetTargetingData( target );
+						int bt_W_mod = targeter_data[0];
+						int bt_H_mod = targeter_data[1];
+						int bt_X_mod = targeter_data[2];
+						int bt_Y_mod = targeter_data[3];
+						
+						bt_X_mod = int( bt_X_mod / __SpritesZoom );
+						bt_Y_mod = int( bt_Y_mod / __SpritesZoom );
+						
+						int crWidth = int( ( GetSpriteWidth( CrSpriteId, 0 ) + bt_W_mod ) / __SpritesZoom );
+						int crHeight = int( ( GetSpriteHeight( CrSpriteId, 0 ) + bt_H_mod ) / __SpritesZoom );
+						int step20 = int( 20 / __SpritesZoom );
+						int step19 = int( 19 / __SpritesZoom );
+						int step18 = int( 18 / __SpritesZoom );
+						int step12 = int( 12 / __SpritesZoom );
+						int step11 = int( 11 / __SpritesZoom );
+						int step10 = int( 10 / __SpritesZoom );
+						int step8 = int( 8 / __SpritesZoom );
+						int step7 = int( 7 / __SpritesZoom );
+						int step5 = int( 5 / __SpritesZoom );
+						int step3 = int( 3 / __SpritesZoom );
+						int step2 = int( 2 / __SpritesZoom );
+						int step1 = int( 1 / __SpritesZoom );
+						
+						uint8 r0 = 0xFF, g0 = 0x00, b0 = 0x00;
+						uint8 r1 = 0x00, g1 = 0x00, b1 = 0x00;
+						
+						uint8 coloured = 255;
+						uint8 transparent = 0;
+						
+						if( SameFaction( chosen, target ) )
+						{
+							r0 = 0x3C; 
+							g0 = 0xF8;
+							b0 = 0x00;
+						}
+						
+						int hx = 0, hy = 0;
+						GetHexPos( targets[i].HexX, targets[i].HexY, hx, hy );
+						
+						array<int> drawData( 116 );
+						//reference: https://imgur.com/a/ABNAPuE
+						//0
+						drawData.insertAt( 0, hx + bt_X_mod - step10 );
+						drawData.insertAt( 1, hy - crHeight );
+						drawData.insertAt( 2, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//1
+						drawData.insertAt( 3, hx + bt_X_mod - step20 );
+						drawData.insertAt( 4, hy - crHeight );
+						drawData.insertAt( 5, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//2
+						drawData.insertAt( 6, hx + bt_X_mod - step20 );
+						drawData.insertAt( 7, hy - crHeight + step10 );
+						drawData.insertAt( 8, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//3
+						drawData.insertAt( 9, hx + bt_X_mod - step20 );
+						drawData.insertAt( 10, hy - crHeight + step10 );
+						drawData.insertAt( 11, COLOR_RGBA( r0, g0, b0, transparent ) );
+						//4
+						drawData.insertAt( 12, hx+ bt_X_mod - step19 );
+						drawData.insertAt( 13, hy - crHeight + step8 );
+						drawData.insertAt( 14, COLOR_RGBA( r0, g0, b0, transparent ) );
+						//5
+						drawData.insertAt( 15, hx + bt_X_mod - step19 );
+						drawData.insertAt( 16, hy - crHeight + step8 );
+						drawData.insertAt( 17, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//6
+						drawData.insertAt( 18, hx + bt_X_mod - step19 );
+						drawData.insertAt( 19, hy - crHeight + step1 );
+						drawData.insertAt( 20, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//7
+						drawData.insertAt( 21, hx + bt_X_mod - step12 );
+						drawData.insertAt( 22, hy - crHeight + step1 );
+						drawData.insertAt( 23, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//8
+						drawData.insertAt( 24, hx + bt_X_mod - step12 );
+						drawData.insertAt( 25, hy - crHeight + step1 );
+						drawData.insertAt( 26, COLOR_RGBA( r1, g1, b1, transparent ) );
+						//9
+						drawData.insertAt( 27, hx + crWidth - step18 );
+						drawData.insertAt( 28, hy - crHeight + step1 );
+						drawData.insertAt( 29, COLOR_RGBA( r1, g1, b1, transparent ) );
+						//10
+						drawData.insertAt( 30, hx + crWidth - step18 );
+						drawData.insertAt( 31, hy - crHeight + step1 );
+						drawData.insertAt( 32, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//11
+						drawData.insertAt( 33, hx + crWidth - step11 );
+						drawData.insertAt( 34, hy - crHeight + step1 );
+						drawData.insertAt( 35, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//12
+						drawData.insertAt( 36, hx + crWidth - step11 );
+						drawData.insertAt( 37, hy - crHeight + step8 );
+						drawData.insertAt( 38, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//13
+						drawData.insertAt( 39, hx + crWidth - step11 );
+						drawData.insertAt( 40, hy - crHeight + step8 );
+						drawData.insertAt( 41, COLOR_RGBA( r0, g0, b0, transparent ) );
+						//14
+						drawData.insertAt( 42, hx + crWidth - step10 );
+						drawData.insertAt( 43, hy - crHeight + step10 );
+						drawData.insertAt( 44, COLOR_RGBA( r0, g0, b0, transparent ) );
+						//15
+						drawData.insertAt( 45, hx + crWidth - step10 );
+						drawData.insertAt( 46, hy - crHeight + step10 );
+						drawData.insertAt( 47, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//16
+						drawData.insertAt( 48, hx + crWidth - step10 );
+						drawData.insertAt( 49, hy - crHeight );
+						drawData.insertAt( 50, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//17
+						drawData.insertAt( 51, hx + crWidth - step20 );
+						drawData.insertAt( 52, hy - crHeight );
+						drawData.insertAt( 53, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//18
+						drawData.insertAt( 54, hx + crWidth - step20 );
+						drawData.insertAt( 55, hy - crHeight );
+						drawData.insertAt( 56, COLOR_RGBA( r1, g1, b1, transparent ) );
+						//19
+						drawData.insertAt( 57, hx + crWidth - step18 );
+						drawData.insertAt( 58, hy + bt_Y_mod + step2 );
+						drawData.insertAt( 59, COLOR_RGBA( r1, g1, b1, transparent ) );
+						//20
+						drawData.insertAt( 60, hx + crWidth - step18 );
+						drawData.insertAt( 61, hy + bt_Y_mod + step2 );
+						drawData.insertAt( 62, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//21
+						drawData.insertAt( 63, hx + crWidth - step11 );
+						drawData.insertAt( 64, hy + bt_Y_mod + step2 );
+						drawData.insertAt( 65, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//22
+						drawData.insertAt( 66, hx + crWidth - step11 );
+						drawData.insertAt( 67, hy + bt_Y_mod - step5 );
+						drawData.insertAt( 68, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//23
+						drawData.insertAt( 69, hx + crWidth - step11 );
+						drawData.insertAt( 70, hy + bt_Y_mod - step5 );
+						drawData.insertAt( 71, COLOR_RGBA( r0, g0, b0, transparent ) );
+						//24
+						drawData.insertAt( 72, hx + crWidth - step10 );
+						drawData.insertAt( 73, hy + bt_Y_mod - step7 );
+						drawData.insertAt( 74, COLOR_RGBA( r0, g0, b0, transparent ) );
+						//25
+						drawData.insertAt( 75, hx + crWidth - step10 );
+						drawData.insertAt( 76, hy + bt_Y_mod - step7 );
+						drawData.insertAt( 77, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//26
+						drawData.insertAt( 78, hx + crWidth - step10 );
+						drawData.insertAt( 79, hy + bt_Y_mod + step3 );
+						drawData.insertAt( 80, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//27
+						drawData.insertAt( 81, hx + crWidth - step20 );
+						drawData.insertAt( 82, hy + bt_Y_mod + step3 );
+						drawData.insertAt( 83, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//28
+						drawData.insertAt( 84, hx + crWidth - step20 );
+						drawData.insertAt( 85, hy + bt_Y_mod + step3 );
+						drawData.insertAt( 86, COLOR_RGBA( r0, g0, b0, transparent ) );
+						//29
+						drawData.insertAt( 87, hx + bt_X_mod - step10 );
+						drawData.insertAt( 88, hy + bt_Y_mod + step3 );
+						drawData.insertAt( 89, COLOR_RGBA( r0, g0, b0, transparent ) );
+						//30
+						drawData.insertAt( 90, hx + bt_X_mod - step10 );
+						drawData.insertAt( 91, hy + bt_Y_mod + step3 );
+						drawData.insertAt( 92, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//31
+						drawData.insertAt( 93, hx + bt_X_mod - step20 );
+						drawData.insertAt( 94, hy + bt_Y_mod + step3 );
+						drawData.insertAt( 95, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//32
+						drawData.insertAt( 96, hx + bt_X_mod - step20 );
+						drawData.insertAt( 97, hy + bt_Y_mod - step7 );
+						drawData.insertAt( 98, COLOR_RGBA( r0, g0, b0, coloured ) );
+						//33
+						drawData.insertAt( 99, hx + bt_X_mod - step20 );
+						drawData.insertAt( 100, hy + bt_Y_mod - step7 );
+						drawData.insertAt( 101, COLOR_RGBA( r1, g1, b1, transparent ) );
+						//34
+						drawData.insertAt( 99, hx + bt_X_mod - step19 );
+						drawData.insertAt( 100, hy + bt_Y_mod - step5 );
+						drawData.insertAt( 101, COLOR_RGBA( r1, g1, b1, transparent ) );
+						//35
+						drawData.insertAt( 102, hx + bt_X_mod - step19 );
+						drawData.insertAt( 103, hy + bt_Y_mod - step5 );
+						drawData.insertAt( 104, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//36
+						drawData.insertAt( 105, hx + bt_X_mod - step19 );
+						drawData.insertAt( 106, hy + bt_Y_mod + step2 );
+						drawData.insertAt( 107, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//37
+						drawData.insertAt( 108, hx + bt_X_mod - step12 );
+						drawData.insertAt( 109, hy + bt_Y_mod + step2 );
+						drawData.insertAt( 110, COLOR_RGBA( r1, g1, b1, coloured ) );
+						//38
+						drawData.insertAt( 111, hx + bt_X_mod - step12 );
+						drawData.insertAt( 112, hy + bt_Y_mod + step2 );
+						drawData.insertAt( 113, COLOR_RGBA( r0, g0, b0, transparent ) );
+						//39
+						drawData.insertAt( 114, hx + bt_X_mod - step10 );
+						drawData.insertAt( 115, hy - crHeight );
+						drawData.insertAt( 116, COLOR_RGBA( r0, g0, b0, transparent ) );
+
+						DrawPrimitive( DRAW_PRIMITIVE_LINESTRIP, drawData );
+					}
+				}
 			}
         }
     }
@@ -653,9 +991,9 @@ class GUIScreen : IGUIScreenOpt
     {
         if( IsHardcoded && Index == CLIENT_MAIN_SCREEN_GAME && click == MOUSE_CLICK_RIGHT )
 		{
-            __mouse2Pressed = true;                                                                                        // pm added
+            __mouse2Pressed = true;
 		}
-		
+
         if( IsHardcoded && Index == CLIENT_MAIN_SCREEN_GAME )
         {
             if( __waiting )
@@ -754,9 +1092,9 @@ class GUIScreen : IGUIScreenOpt
 			{
                 if( __mobhotkeys )
                 {
-                    uint16    x = __MouseX, y = __MouseY;
-                    CritterCl @cr = GetMonitorCritter( x, y );
-                    ItemCl    @it = GetMonitorItem( x, y );
+                    uint16 cx = __MouseX, cy = __MouseY;
+                    CritterCl @cr = GetMonitorCritter( cx, cy );
+                    ItemCl @it = GetMonitorItem( cx, cy );
                     if( @cr != null )
 					{
                         if( cr.IsPlayer() )
@@ -777,7 +1115,7 @@ class GUIScreen : IGUIScreenOpt
 					else
 					{
                         uint16 hexX = 0, hexY = 0;
-                        GetMonitorHex( x, y, hexX, hexY );
+                        GetMonitorHex( cx, cy, hexX, hexY );
                         RunServerScriptUnsafe( "gm@unsafe_GM_PANNEL_HEX", hexX, hexY, 0, null, null );				// Hex gm pannel
                         return true;
                     }
@@ -787,9 +1125,9 @@ class GUIScreen : IGUIScreenOpt
 			{
 				if( __mobhotkeys )
 				{
-                    uint16 x = __MouseX, y = __MouseY;
+                    uint16 cx = __MouseX, cy = __MouseY;
 					uint16 hexX = 0, hexY = 0;
-					GetMonitorHex( x, y, hexX, hexY );
+					GetMonitorHex( cx, cy, hexX, hexY );
 					RunServerScriptUnsafe( "gm@unsafe_GM_PANNEL_HEX", hexX, hexY, 0, null, null );					// Hex gm pannel
 					return true;
                 }
@@ -824,14 +1162,13 @@ class GUIScreen : IGUIScreenOpt
             }
         }
 
-        // pm add new context menu
         if( Index == CLIENT_SCREEN_CONTMENU && click > MOUSE_CLICK_LEFT )
         {
             IGUIElementOpt @ eDesc;
-            uint8 elemCount = Elements.length() - 1;           // from 0
-            uint8 temp = 0;
-            uint8 count = this.LastElementNum;
-            uint8 countExt = 0;
+            int elemCount = Elements.length() - 1;
+            int temp = 0;
+            int count = this.LastElementNum;
+            int countExt = 0;
 
             if( click == MOUSE_CLICK_WHEEL_UP )
             {
@@ -856,8 +1193,8 @@ class GUIScreen : IGUIScreenOpt
                     this.LastElementNum > 1 ? this.LastElementNum -- : this.LastElementNum = elemCount;
                 }
 
-            }
-            else if( click == MOUSE_CLICK_WHEEL_DOWN )
+			}
+			else if( click == MOUSE_CLICK_WHEEL_DOWN )
             {
                 temp = this.LastElementNum;
                 if( !( this.LastElementNum == elemCount ? Elements[ 1 ].GetVisible() : Elements[ this.LastElementNum + 1 ].GetVisible() ) )
@@ -880,7 +1217,7 @@ class GUIScreen : IGUIScreenOpt
                     this.LastElementNum < elemCount ? this.LastElementNum++ : this.LastElementNum = 1;
                 }
             }
-            else if( click == MOUSE_CLICK_MIDDLE )
+			else if( click == MOUSE_CLICK_MIDDLE )
             {
                 if( Elements[ this.LastElementNum ].GetVisible() )
                 {
@@ -890,13 +1227,12 @@ class GUIScreen : IGUIScreenOpt
                     return true;
                 }
             }
+			
             Elements[ 0 ].Text( "" + Elements[ this.LastElementNum ].GetDescription(), FONT_FALLOUT, COLOR_GREEN, COLOR_GREEN, FT_CENTERX | FT_CENTERY );
             Elements[ this.LastElementNum ].Switch( true );
             Elements[ temp ].Switch( false );
             return true;
         }
-        // end
-// #pm menu
 
         for( uint i = 0, j = Elements.length(); i < j; i++ )
 		{
@@ -1021,11 +1357,14 @@ class GUIScreen : IGUIScreenOpt
     bool KeyPress( uint8 key )
     {
 		int screen_type = GUI_GetActiveScreen();
-		
-		if( screen_type == 11 )
+
+		if( screen_type == CLIENT_SCREEN_PICKUP )
 		{
 			CritterCl@ chosen = GetChosen();			
-			if( !isGM( chosen ) ) return false;
+			if( !isGM( chosen ) )
+			{
+				return false;
+			}
 			
 			if( GM_store_type != -1 && key == DIK_ESCAPE )
 			{
@@ -1036,7 +1375,7 @@ class GUIScreen : IGUIScreenOpt
 			}			
 		}
 
-		if( screen_type == 11 || screen_type == 10 )
+		if( screen_type == CLIENT_SCREEN_PICKUP || screen_type == CLIENT_SCREEN_INVENTORY )
 		{
 			if( KeyPressed[ DIK_LSHIFT ] && key == DIK_Q )
 			{
@@ -1059,42 +1398,45 @@ class GUIScreen : IGUIScreenOpt
 			return false;
 		}
 		
+		if( key == DIK_F7 )
+        {
+			RunServerScriptUnsafe( "player_menu@unsafe_SwapItemVisor", 0, 0, 0, null, null );
+			return false;
+        }
+
 		if( !__ConsoleActive )
 		{
-			if( KeyPressed[ DIK_LSHIFT ] )
+			if( KeyPressed[ DIK_LSHIFT ] || KeyPressed[ DIK_RSHIFT ] )
 			{
-				if( key == DIK_MINUS )
+				if( key == DIK_MINUS || key == DIK_SUBTRACT )
 				{
 					IncrementMusicVolume( -1 );
 					return false;
 				}
 				else
-				if( key == DIK_EQUALS )
+				if( key == DIK_EQUALS || key == DIK_ADD )
 				{
 					IncrementMusicVolume( 1 );
 					return false;
 				}
 			}
-			else
-			if( KeyPressed[ DIK_LCONTROL ] )
+			else if( KeyPressed[ DIK_LCONTROL ] || KeyPressed[ DIK_RCONTROL ] )
 			{
-				if( key == DIK_MINUS )
+				if( key == DIK_MINUS || key == DIK_SUBTRACT )
 				{
 					IncrementSoundsVolume( -1 );
 					return false;
 				}
-				else
-				if( key == DIK_EQUALS )
+				else if( key == DIK_EQUALS || key == DIK_ADD )
 				{
 					IncrementSoundsVolume( 1 );
 					return false;
 				}
 			}
 		}	
-
+		
         if( Index == CLIENT_MAIN_SCREEN_GAME || Index == CLIENT_MAIN_SCREEN_GLOBAL_MAP )
         {
-			
 			//GM stelth.
 			if( key == DIK_0 && !__ConsoleActive && !KeyPressed[ DIK_LCONTROL ] )
 			{
@@ -1108,10 +1450,12 @@ class GUIScreen : IGUIScreenOpt
 				RunServerScriptUnsafe( "general_unsafe@unsafe_OpenDoor", 0, 0, 0, "", null );
 				return true;
 			}
+			
 			// Autoaim
 			if( !__ConsoleActive && !KeyPressed[ DIK_LCONTROL ] && !KeyPressed[ DIK_LMENU ] )
 			{
-				int[][] keybinds = {
+				int[][] keybinds =
+				{
 					{ DIK_NUMPAD0, HIT_LOCATION_NONE },
 					{ DIK_NUMPAD9, HIT_LOCATION_NONE },
 					{ DIK_NUMPAD7, HIT_LOCATION_EYES },
@@ -1123,9 +1467,10 @@ class GUIScreen : IGUIScreenOpt
 					{ DIK_NUMPAD2, HIT_LOCATION_GROIN },
 					{ DIK_NUMPAD3, HIT_LOCATION_RIGHT_LEG }
 				};
+				
 				for( uint i = 0; i < keybinds.length(); i++ )
 				{
-					if( keybinds[i][0] == key ) 
+					if( keybinds[i][0] == int( key ) ) 
 					{
 						RunServerScriptUnsafe( "main@unsafe_set_aim", keybinds[i][1], 0, 0, null, null );
 						return false;
@@ -1145,12 +1490,13 @@ class GUIScreen : IGUIScreenOpt
 					{ DIK_V, ACTION_FIDGET },
 					{ DIK_X, ACTION_WINDUP }
 				};
+				
 				for( uint i = 0; i < keybinds.length(); i++ )
 				{
-					if( keybinds[i][0] == key ) 
+					if( keybinds[i][0] == int( key ) ) 
 					{
-						CritterCl @cr = GetMonitorCritter( __MouseX, __MouseY );
-						RunServerScriptUnsafe( "general_unsafe@unsafe_animation", keybinds[i][1], ( keybinds[i].length() > 2 ? keybinds[i][2] : 0 ), valid(cr) ? cr.Id : 0, null, null );
+						CritterCl@ cr = GetMonitorCritter( __MouseX, __MouseY );
+						RunServerScriptUnsafe( "general_unsafe@unsafe_animation", keybinds[i][1], ( keybinds[i].length() > 2 ? keybinds[i][2] : 0 ), valid( cr ) ? cr.Id : 0, null, null );
 						return true;
 					}
 				}
@@ -1160,7 +1506,7 @@ class GUIScreen : IGUIScreenOpt
             if( key == DIK_H && GetCurrentCursor() == CURSOR_DEFAULT && !__ConsoleActive && !KeyPressed[ DIK_LCONTROL ] )
             {
                 CritterCl @cr = GetMonitorCritter( __MouseX, __MouseY );
-                ItemCl    @it = GetMonitorItem( __MouseX, __MouseY );
+                ItemCl @it = GetMonitorItem( __MouseX, __MouseY );
 				
 				if( @cr != null )
 				{
@@ -1170,9 +1516,10 @@ class GUIScreen : IGUIScreenOpt
 				{
 					RunServerScriptUnsafe( "general_unsafe@unsafe_itemhit2", 0, it.HexX, it.HexY, null, null );
 				}
+				
 				ChangeCursor( CURSOR_DEFAULT );
+				
                 return true;
-
             }
 			
 			//Item throw.
@@ -1183,8 +1530,9 @@ class GUIScreen : IGUIScreenOpt
             	GetMonitorHex (x, y, hexX, hexY);
 				if( !choo.IsBusy() )
 				{
-					RunServerScriptUnsafe ("general_unsafe@unsafe_itemthrow", hexX, hexY, 0, null, null);
+					RunServerScriptUnsafe ( "general_unsafe@unsafe_itemthrow", hexX, hexY, 0, null, null );
 				}
+				
 				return true;
             }
 			
@@ -1214,7 +1562,7 @@ class GUIScreen : IGUIScreenOpt
 			//Use on hotkey
             if( key == DIK_A && !__ConsoleActive && !KeyPressed[ DIK_LCONTROL ] && !KeyPressed[ DIK_LSHIFT ] )
 			{
-				CritterCl @ choo = GetChosen();
+				CritterCl@ choo = GetChosen();
 				ItemCl@ tool = choo.GetItem( 0, SLOT_HAND1 );
 				if( tool !is null )
 				{
@@ -1236,7 +1584,15 @@ class GUIScreen : IGUIScreenOpt
 				}
             }
 
-			//alt
+			//Go to cover
+			if( key == DIK_SPACE && !__ConsoleActive && !KeyPressed[ DIK_LCONTROL ] && !KeyPressed[ DIK_LSHIFT ] )
+			{
+				CritterCl@ choo = GetChosen();
+				RunServerScriptUnsafe( "general_unsafe@unsafe_relax", choo.Param[ CR_IS_RELAXING ] == 0 ? 5 : 0, 0, 0, null, null );
+				return true;
+			}
+
+			//alt + hotkey
 			if( KeyPressed[ DIK_LMENU ] || KeyPressed[ DIK_RMENU ] )
 			{
 				if( key == DIK_F && KeyPressed[ DIK_LSHIFT ] )
@@ -1280,12 +1636,6 @@ class GUIScreen : IGUIScreenOpt
 					case( DIK_M ):
 						RunServerScriptUnsafe( "player_menu@unsafe_StartPlayerMenu", 0, 0, 0, null, null );
 						return true;
-					case( DIK_X ):
-					{
-						CritterCl @ choo = GetChosen();
-						RunServerScriptUnsafe( "general_unsafe@unsafe_relax", 5, 0, 0, null, null );
-						return true;
-					}
 				}
 			}
 
@@ -1553,8 +1903,7 @@ class GUIScreen : IGUIScreenOpt
             }
         }
 		
-		//ќбработчик индивидуальных хоткеев у всплывающих окон, чать 1
-        if( ( __IsHotkeysUse ) && IsScreenAllowed( "" + Index + "" ) )
+        if( ( __IsHotkeysUse ) )
         {
             if( ( Index == CLIENT_SCREEN_PIP_BOY ) && ( key == DIK_P ) )
 			{
@@ -1569,17 +1918,8 @@ class GUIScreen : IGUIScreenOpt
                     break;
                 }
             }
-            if( mainScr != 0 )
-			{
-                return ProcessCommand( key, previews, KeyPressed, mainScr, Index );
-            }
-			else
-			{
-                return false;
-			}
 		}
 		
-		//ќбработчик индивидуальных хоткеев у всплывающих окон, чать 2
         for( uint i = 0, j = Elements.length(); i < j; i++ )
         {
             GUIElement@ e = Elements[ i ];
@@ -1629,9 +1969,8 @@ class GUIScreen : IGUIScreenOpt
             Surface.Height = Surface.Height;
         }
         return this;
-    } // @pm
+    }
 
-    // Options
     IGUIScreenOpt@ CallbackShow( IGUIScreenCallbackShow@ callback )
     {
         @ShowCallback = callback;
@@ -1689,40 +2028,55 @@ class GUIScreen : IGUIScreenOpt
     {
         LastElementNum = ElementCount;
         return this;
-    } // @pm menu
+    }
 
     // Info
-    int GetPosX() { return PosX; }
-    int GetPosY() { return PosY; }
-// @pm menu
-    uint8           GetLastElement()           { return LastElementNum; }    // pm add
-    uint16          GetElementsLength()        { return Elements.length(); } // pm add
-    IGUIElementOpt@ GetElement( uint16 index ) { return Elements[ index ]; }
-// #pm menu
+    int GetPosX()
+	{
+		return PosX;
+	}
+	
+    int GetPosY()
+	{
+		return PosY;
+	}
 
-    // Data
+    uint8 GetLastElement()
+	{
+		return LastElementNum;
+	}
+	
+    uint16 GetElementsLength()
+	{
+		return Elements.length();
+	}
+	
+    IGUIElementOpt@ GetElement( uint16 index )
+	{
+		return Elements[ index ];
+	}
 
-    int8                    LastElementNum; // @pm menu
+    int8 LastElementNum;
 
-    int                     Index;
-    int                     PosX;
-    int                     PosY;
-    int                     LastX;
-    int                     LastY;
-    Sprite                  Surface;
+    int Index;
+    int PosX;
+    int PosY;
+    int LastX;
+    int LastY;
+    Sprite Surface;
 
-    bool                    IsCanMove;
-    bool                    IsModal;
-    bool                    IsMultiinstance;
-    bool                    IsIgnoreBorders;
-    bool                    IsCloseOnMiss;
-    bool                    IsAutoCursor;
+    bool IsCanMove;
+    bool IsModal;
+    bool IsMultiinstance;
+    bool IsIgnoreBorders;
+    bool IsCloseOnMiss;
+    bool IsAutoCursor;
 
-    int                     AutoCursorType;
-    int                     AutoCursorPrev;
+    int AutoCursorType;
+    int AutoCursorPrev;
 
-    bool                    IsHardcoded;
-    bool                    IsLMouseDown;
+    bool IsHardcoded;
+    bool IsLMouseDown;
     IGUIScreenCallbackShow@ ShowCallback;
     IGUIScreenCallbackHide@ HideCallback;
     IGUIScreenCallbackMove@ MoveCallback;
@@ -1737,16 +2091,17 @@ class GUIScreen : IGUIScreenOpt
 IGUIScreenOpt@ GUI_CreateScreen( int screenIndex, string@ sprName )
 {
     if( screenIndex == 0 )
+	{
         return null;
-    DeleteScreen( screenIndex );
+    }
+	DeleteScreen( screenIndex );
     return CreateScreen( screenIndex, sprName );
 }
 
 // Create new screen ini
 IGUIScreenOpt@ GUI_CreateScreenIni( int screenIndex, string@ iniKey )
 {
-	return GUI_CreateScreen( screenIndex, GetIfaceIniStr( iniKey + "MainPic" ) )
-		.Position( GetIniValue( iniKey + "MainX", 0 ), GetIniValue( iniKey + "MainY", 0 ) );
+	return GUI_CreateScreen( screenIndex, GetIfaceIniStr( iniKey + "MainPic" ) ).Position( GetIniValue( iniKey + "MainX", 0 ), GetIniValue( iniKey + "MainY", 0 ) );
 }
 
 // @pm menu
@@ -1784,15 +2139,23 @@ IGUIElementOpt@ GUI_AddScreenElement( int screenIndex, string@ sprName, int x, i
     return @element;
 }
 
-int GetIniValue( string@ iniKey, int def )
+int GetIniValue( string@ iniKey, int dflt )
 {
-	string@ str = GetIfaceIniStr( iniKey );
-	if( @str is null || str == "" )
-		return def;
-	int value = def;
-	if( !StrToInt( str, value ) )
-		return def;
-	return value;
+    string@ str = GetIfaceIniStr( iniKey );
+	
+    if( @str is null || str == "" )
+	{
+        return dflt;
+    }
+	
+	int res = dflt;
+	
+    if( !StrToInt( str, res ) )
+	{
+        return dflt;
+    }
+	
+	return res;
 }
 
 IGUIElementOpt@ GUI_AddScreenElementIni( int screenIndex, string@ ini, int defx, int defy )
@@ -1832,7 +2195,6 @@ IGUIElementOpt@ GUI_GetElementOptions()
 
 void GUI_Init()
 {
-    SetHotkeysUse( false ); // binyan -Hotkeys
     AllScreens.resize( 0 );
     ActiveScreens.resize( 0 );
     KeyPressed.resize( 0x100 );
@@ -2080,12 +2442,14 @@ bool GUI_MouseDown( int click, int x, int y )
     if( len != 0 )
     {
         GUIScreen@ screen = ActiveScreens[ len - 1 ];
-        bool       result = screen.MouseDown( click, x, y );
+        bool result = screen.MouseDown( click, x, y );
         if( result )
         {
             if( click == MOUSE_CLICK_WHEEL_UP || click == MOUSE_CLICK_WHEEL_DOWN )
+			{
                 return GUI_MouseUp( click, x, y );
-            return true;
+            }
+			return true;
         }
 
         if( len > 1 && not screen.IsHardcoded && not screen.IsModal && click == MOUSE_CLICK_LEFT &&
@@ -2330,7 +2694,7 @@ int[] getControlledGroups( int id )
 	return result;
 }
 
-bool isControlled( int id ) 
+bool isControlled( int id )
 { 
 	return isControlled( id, -1 );
 }
@@ -2361,7 +2725,7 @@ void SetControlCritters( int Id )
         {
 			RunServerScriptUnsafe( "raiders@unsafe_FreeMob", current_group, i, 0, null, controlled );
 			
-            Message( "—н€т контроль с криттера " + Id );
+            Message( "Critter control disabled: " + Id );
             Ex = i - current_group * 10 + 10;
         }
 		
@@ -2385,7 +2749,7 @@ void SetControlCritters( int Id )
             if( controlled[ i ] == 0 )
             {
                 controlled[ i ] = Id;
-                Message( "¬з€т под контроль криттер " + Id );
+                Message( "Critter controlled: " + Id );
                 CritterCl@ Cont = GetCritter( controlled[ i ] );
                 if( Cont.IsPlayer() )
                 {
@@ -2680,6 +3044,296 @@ class RtsSelection
 			selectedIds.insertLast( cr.Id );
 		}
 	}
+}
+
+//Support func for STA
+// STA module validation
+bool CheckSTA( CritterCl& chosen )
+{
+	ItemCl@ armor = chosen.GetItem( 0, SLOT_ARMOR );
+	if( valid( armor ) )
+	{
+		if( HidefaceArmor.find( armor.GetProtoId() ) != -1 || ( ArmorHelmets.find( armor.GetProtoId() ) != -1 && FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_HIDE_FACE ) ) )
+		{
+			return true;
+		}
+	}
+	
+	ItemCl@ visor = chosen.GetItem( 0, SLOT_HEAD );
+	if( valid( visor ) )
+	{
+		if( visor.GetProtoId() == PID_STA_VISOR )
+		{
+			return true;
+		}
+	}
+	
+	return false;
+}
+
+// Target Grid Contour Offsets
+int[] GetTargetingData( CritterCl& target )
+{
+	int bodyType = target.ParamBase[ ST_BODY_TYPE ];
+	int crType = target.CrType;
+
+	int bt_W_mod = 0;
+	int bt_H_mod = 0;
+	int bt_X_mod = 0;
+	int bt_Y_mod = 0;
+
+	switch( bodyType )
+	{
+		case( BT_WOMEN ):
+			bt_W_mod += 10;
+			bt_X_mod += 5;
+			break;
+		case( BT_CHILDREN ):
+			bt_W_mod += 8;
+			bt_X_mod += 8;
+			bt_Y_mod += 2;
+			break;
+		case( BT_SUPER_MUTANT ):
+			break;
+		case( BT_GHOUL ):
+			bt_W_mod += 10;
+			bt_X_mod += 5;
+			break;
+		case( BT_BRAHMIN ):
+			bt_W_mod -= 5;
+			bt_H_mod -= 10;
+			bt_X_mod -= 10;
+			bt_Y_mod += 5;
+			break;
+		case( BT_RADSCORPION ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_RADSCORPION_SMALL ):
+					bt_W_mod -= 5;
+					bt_H_mod -= 10;
+					bt_X_mod -= 5;
+					bt_Y_mod += 5;
+					break;
+				case( CRTYPE_RADSCORPION ):
+					bt_W_mod -= 15;
+					bt_H_mod -= 15;
+					bt_X_mod -= 10;
+					bt_Y_mod += 10;
+					break;
+				default:
+					bt_W_mod -= 30;
+					bt_H_mod -= 25;
+					bt_X_mod -= 30;
+					bt_Y_mod += 10;
+					break;
+			}
+			break;
+		}
+		case( BT_RAT ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_RAT ):
+					bt_W_mod += 5;
+					bt_H_mod -= 5;
+					break;
+				case( CRTYPE_RAT_PIGRAT ):
+					bt_H_mod -= 2;
+					bt_Y_mod += 3;
+					break;
+				default:
+					bt_W_mod -= 15;
+					bt_H_mod -= 10;
+					bt_X_mod -= 10;
+					bt_Y_mod += 10;
+					break;
+			}
+			break;
+		}
+		case( BT_FLOATER ):
+			bt_H_mod -= 15;
+			bt_X_mod -= 10;
+			break;
+		case( BT_CENTAUR ):
+			bt_W_mod -= 65;
+			bt_H_mod -= 45;
+			bt_X_mod -= 25;
+			bt_Y_mod += 15;
+			break;
+		case( BT_ROBOT ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_TURRET_MINIGUN ):
+					bt_X_mod -= 5;
+					break;
+				case( CRTYPE_TURRET_PLASMA ):
+					bt_W_mod -= 20;
+					bt_H_mod -= 5;
+					bt_X_mod -= 15;
+					bt_Y_mod += 10;
+					break;
+				case( CRTYPE_TURRET_LASER_TOWER ):
+					bt_W_mod -= 25;
+					bt_H_mod -= 30;
+					bt_X_mod -= 30;
+					bt_Y_mod += 15;
+					break;
+				case( CRTYPE_TURRET_LASER ):
+					bt_W_mod -= 25;
+					bt_H_mod -= 10;
+					bt_X_mod -= 20;
+					bt_Y_mod += 15;
+					break;
+				case( CRTYPE_ROBOT_HANDY ):
+					bt_W_mod -= 20;
+					bt_H_mod -= 15;
+					bt_X_mod -= 15;
+					bt_Y_mod += 15;
+					break;
+				case( CRTYPE_ROBOT_PROTECTRON ):	
+				case( CRTYPE_ROBOT_PROTECTRON2 ):
+
+					break;	
+				case( CRTYPE_ROBOBRAIN ):
+					bt_W_mod -= 10;
+					bt_H_mod -= 8;
+					bt_X_mod -= 15;
+					bt_Y_mod += 10;
+					break;
+				case( CRTYPE_ROBODOG ):
+
+					break;
+				case( CRTYPE_ROBOT ):	
+				case( CRTYPE_ROBOT_BLUE ):
+					bt_W_mod -= 15;
+					bt_H_mod -= 5;
+					bt_X_mod -= 15;
+					bt_Y_mod += 5;
+					break;
+				default:
+					break;
+			}
+			break;
+		}
+		case( BT_DOG ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_DOG_SMALL ):
+					bt_W_mod += 15;
+					bt_H_mod -= 3;
+					bt_X_mod += 5;
+					bt_Y_mod += 5;
+					break;
+				default:
+					bt_W_mod += 10;
+					bt_H_mod -= 5;
+					bt_Y_mod += 5;
+					break;
+			}
+			break;
+		}
+		case( BT_MANTI ):
+			bt_W_mod += 10;
+			bt_H_mod -= 5;
+			break;
+		case( BT_DEATHCLAW ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_DEADCLAW_SMALL ):
+					bt_H_mod -= 5;
+					bt_Y_mod += 5;
+					break;
+				case( CRTYPE_DEADCLAW ):
+					bt_W_mod -= 15;
+					bt_H_mod -= 15;
+					bt_Y_mod += 10;
+					break;
+				default:
+					bt_W_mod -= 10;
+					bt_H_mod -= 10;
+					bt_Y_mod += 10;
+					break;
+			}
+			break;
+		}
+		case( BT_PLANT ):
+			bt_W_mod -= 10;
+			bt_H_mod -= 10;
+			bt_Y_mod += 6;
+			break;
+		case( BT_GECKO ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_GECKO_SILV ):
+				case( CRTYPE_GECKO_GOLD_SMALL ):
+					bt_H_mod -= 15;
+					bt_Y_mod += 5;
+					break;
+				default:
+					bt_H_mod -= 15;
+					bt_X_mod -= 5;
+					bt_Y_mod += 5;
+					break;
+				}
+			break;
+		}
+		case( BT_ALIEN ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_ALIEN_EGG ):
+					bt_W_mod += 10;
+					bt_H_mod += 5;
+					break;
+				default:
+					bt_W_mod -= 10;
+					bt_H_mod -= 7;
+					break;
+			}
+			break;
+		}
+		case( BT_GIANT_ANT ):
+			bt_W_mod -= 10;
+			bt_H_mod -= 10;
+			break;
+		case( BT_BIG_BAD_BOSS ):
+			bt_W_mod -= 15;
+			bt_H_mod -= 5;
+			bt_X_mod -= 20;
+			bt_Y_mod += 10;
+			break;
+		case( BT_GIANT_BEETLE ):
+			bt_H_mod -= 5;
+			break;
+		case( BT_GIANT_WASP ):
+			bt_H_mod -= 15;
+			bt_Y_mod -= 60;
+			break;
+		case( BT_YAO ):
+			bt_W_mod -= 15;
+			bt_H_mod -= 25;
+			bt_X_mod -= 20;
+			bt_Y_mod += 10;
+			break;
+		case( BT_SWAMP_LURKER ):
+			bt_W_mod -= 25;
+			bt_H_mod -= 10;
+			bt_X_mod -= 10;
+			break;
+		case( BT_CROCS ):
+			break;
+		default:
+			break;
+	}
+	
+	int[] data = { bt_W_mod, bt_H_mod, bt_X_mod, bt_Y_mod };
+	
+	return data;
 }
 
 #endif //CLIENT_GUI

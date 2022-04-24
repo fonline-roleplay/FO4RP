@@ -23,7 +23,7 @@ float Linear_Interpolate( float a, float b, float x )
 
 float Cosine_Interpolate( float a, float b, float x )
 {
-    float ft = x * 3.1415927,
+    float ft = x * 3.1415927f,
           f = ( 1.0f - cos( ft ) ) * 0.5f;
 
     return a * ( 1.0f - f ) + b * f;
@@ -146,7 +146,7 @@ void fillNoiseBuffer( float* buffer, uint8 size )
     {
         for( int x = 0; x < size; x++ )
         {
-            buffer[ y0 + x ] = PerlinNoise2D( x, y );
+            buffer[ y0 + x ] = PerlinNoise2D( (float)x, (float)y );
         }
         y0 += size;
     }
@@ -161,7 +161,7 @@ void fillNoiseBuffer( float* buffer, uint8 size )
     center  =  Noise2d(x, y) / 4;
    }
  */
-void GenerateDesert( ScriptArray* array, uint size )
+void GenerateDesert( CScriptArray* array, uint size )
 {
     if( array->GetElementSize() != sizeof( float ) )
     {

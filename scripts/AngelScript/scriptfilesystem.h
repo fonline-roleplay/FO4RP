@@ -38,10 +38,10 @@ public:
 	asINT64 GetSize(const ScriptString &path) const;
 
 	// Returns a list of the files in the current path
-	unsigned int ScriptFileSystem::GetFiles( ScriptString& outStr ) const;
+	unsigned int GetFiles( ScriptString& outStr, ScriptString& separator ) const;
 
 	// Returns a list of the directories in the current path
-	ScriptArray *GetDirs() const;
+	CScriptArray *GetDirs() const;
 
 	// Creates a new directory. Returns 0 on success
 	int MakeDir(const ScriptString &path);
@@ -50,10 +50,10 @@ public:
 	int RemoveDir(const ScriptString &path);
 
 	// Deletes a file. Returns 0 on success
-	int DeleteFile(const ScriptString &path);
+	int FileDelete(const ScriptString &path);
 
 	// Copies a file. Returns 0 on success
-	int CopyFile(const ScriptString &source, const ScriptString &target);
+	int FileCopy(const ScriptString &source, const ScriptString &target);
 
 	// Moves or renames a file or directory. Returns 0 on success
 	int Move(const ScriptString &source, const ScriptString &target);
