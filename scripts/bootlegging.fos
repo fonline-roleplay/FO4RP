@@ -768,7 +768,8 @@ bool start_spirit_out( Critter& cr, Item& still )
 		}
 		
 		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = CalcSequence( cr, still );
 		
 		PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
 		
@@ -776,17 +777,44 @@ bool start_spirit_out( Critter& cr, Item& still )
 		
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
 		
-		StartProcess( cr, LTP_SPIRIT_OUT, 0, 0, still.Id, action_pause );
+		StartProcess( cr, LTP_SPIRIT_OUT, 0, 0, still.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		return true;
 	}
 	return false;
 }
 
+int CalcSequence( Critter& cr, Item& still )
+{
+	int sequence = 0;
+
+	int bottlesCount = cr.CountItem( PID_BOTTLE_GLASS );
+	ProtoItem@ bottleProto = GetProtoItem( PID_BOTTLE_GLASS );
+	sequence += bottlesCount * 5; // constant val for glass bottles, need rewamp with entire bottle code
+	
+	if( hasItem( cr, PID_SPIRIT_PRT ) )
+	{
+		Item@[] inventory;
+		cr.GetItems( -1, inventory );
+		for( uint j = 0; j < inventory.length(); j++ )
+		{
+			if( valid( inventory[j] ) && int( inventory[j].GetProtoId() ) == PID_SPIRIT_PRT )
+			{
+				sequence += inventory[j].Proto.Partial_Item - inventory[j].REMAINING_USES;
+			}
+		}
+	}
+	
+	if( sequence > still.CURRENT_PRODUCT )
+	{
+		sequence = still.CURRENT_PRODUCT;
+	}
+	return sequence;
+}
+
 uint process_spirit_out( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_SPIRIT_OUT )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
   	Item@ still = GetItem( param2 );
 	
   	if( valid( still ) )
@@ -830,7 +858,7 @@ uint process_spirit_out( Critter@ cr, int& param0, int& param1, int& param2 )
 
 			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true );
 			
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
 		else
 		{
@@ -849,7 +877,7 @@ uint process_spirit_out( Critter@ cr, int& param0, int& param1, int& param2 )
 			spiritPrt.Update();
 		}
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);
-		return action_pause;
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
     }
 	
 	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
@@ -871,7 +899,10 @@ bool start_stillRepair( Critter& cr, Item& still, uint difficulty )
 	}
 	
 	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	int install_rate = ( cr.Skill[SK_REPAIR] ) + ( cr.Stat[ST_AGILITY] * 10 ) + ( cr.Stat[ST_INTELLECT] * 10 ) + OBJECT_DPA_BASE; 
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( difficulty / ( CLAMP( install_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+	
 	uint[] values = { cr.Id };
 	
 	CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "repair@e_RepairSound", values, true);
@@ -879,26 +910,21 @@ bool start_stillRepair( Critter& cr, Item& still, uint difficulty )
 
 	_CritAnimateUse( cr );
 	
-	StartProcess( cr, LTP_STILL_REPAIR, 0, still.Id, difficulty, action_pause );
+	StartProcess( cr, LTP_STILL_REPAIR, 0, still.Id, difficulty, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 	return true;
 }
 
 uint process_stillRepair( Critter@ cr, int& param0, int& param1, int& param2 )
 {
 	LTPROCESS( cr, param0, LTP_STILL_REPAIR )
-	
-	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
   	Item@ still = GetItem( param1 );
 	int difficulty = param2 ;
 	if( valid( still ) )
     {
 		param0++;
 		
-		int install_rate = ( cr.Skill[SK_REPAIR] ) + ( cr.Stat[ST_AGILITY] * 10 ) + ( cr.Stat[ST_INTELLECT] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = int( ceil( float( difficulty / ( CLAMP( install_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
-		
-		if( param0 > sequence_length )
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
 			if( difficulty >= 10000 )
 			{
@@ -947,7 +973,7 @@ uint process_stillRepair( Critter@ cr, int& param0, int& param1, int& param2 )
 
 		_CritAnimateUse( cr );
 		
-		return action_pause;
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 	}
 	return 0;
 }
