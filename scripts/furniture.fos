@@ -7,6 +7,7 @@
 #include "plants_h.fos"
 #include "item_h.fos"
 #include "furnace_h.fos"
+#include "smithing_h.fos"
 
 import bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param ) from "main";
 
@@ -112,7 +113,7 @@ class MenuFuriture: CenteredMenuHandler
 		{
 			if( furniture.LockerId != 0 )
 			{
-				if( menu.Button( FLAG( furniture.LockerCondition, LOCKER_LOCKED ) ? "Lock" : "Unlock" ) )
+				if( menu.Button( locked_in_place( furniture ) ? "Lock" : "Unlock" ) )
 				{
 					if( !IsKeyAviable( cr, furniture.LockerId ) )
 					{
@@ -183,6 +184,23 @@ class MenuFuriture: CenteredMenuHandler
 			return false;
 		}
 		
+		if( furniture.GetProtoId() == PID_CRUSHER_3000 && menu.Button( "Crusher Interface" ) )
+		{
+			if( isDragging )
+			{ 
+				StopDragging( cr, furniture );
+			}
+			
+			if( FLAG( furniture.Flags, ITEM_CAN_PICKUP ) )
+			{
+				SwitchLootability( cr, furniture );
+			}
+			
+			furniture.SetScript( "gm@_DeleteScript" );
+			StartMenuCrusher( cr, furniture );
+			return false;
+		}
+		
 		if( FLAG( furniture.Flags, ITEM_CAN_PICKUP ) && menu.Button( "Turn" ) )
 		{
 			FurnitureSound( map, furniture );
@@ -206,7 +224,8 @@ class MenuFuriture: CenteredMenuHandler
 				{ 
 					StopDragging( cr, furniture );
 				}
-				Pickup( cr, furniture );
+				
+				PickItem( cr, furniture );
 				FurnitureSound( map, furniture );
 				return false;
 			}
@@ -341,7 +360,13 @@ bool _Skill( Item& furniture, Critter& cr, int skill )
 	switch( skill )
 	{
 		case( SK_REPAIR ):
+		{
+			if( furniture.GetProtoId() >= PID_MUSHBED_EMPTY && furniture.GetProtoId() <= PID_MUSHBED_MUT && furniture.Val0 != 0 )
+			{
+				break;
+			}
 			return SwitchLootability( cr, furniture );
+		}
 		case( SKILL_PICK_ON_GROUND ):
 		{
 			if( growing_plants.find( furniture.GetProtoId() ) != -1 )
@@ -384,117 +409,9 @@ bool canPickup( Critter& cr, Item& furniture )
 	return isPickingUp;
 }
 
-//return false to pick up regular engine way
-bool Pickup( Critter& cr, Item& furniture ) 
-{
-	bool DoorOrContainer = ( isContainer( furniture ) || furniture.GetType() == ITEM_TYPE_DOOR );
-	bool isPickingUp = true;
-
-	if( !isGM(cr) && ( !FLAG( furniture.Flags, ITEM_CAN_PICKUP ) || furniture.Durability > 0 ) )
-	{
-		if( DoorOrContainer )
-		{
-			isPickingUp = false;
-		}
-		else
-		{
-			LogItemMovement( cr, furniture, "can't pick up stationary furniture" ); 
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DISMANTLING_REQUIRED );
-			return true;
-		}
-	}
-	
-	if( DoorOrContainer && !isPickingUp )
-	{
-		if( furniture.Proto.Container_Changeble )
-		{
-			if( FLAG( furniture.LockerCondition, LOCKER_JAMMED ) || FLAG( furniture.LockerCondition, LOCKER_BROKEN ) || FLAG( furniture.LockerCondition, LOCKER_NOOPEN ) )
-			{
-				LogItemMovement( cr, furniture, "can't pick up locked furniture" ); 
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DID_NOTHING );
-				return true;
-			}
-			
-			if( FLAG( furniture.LockerCondition, LOCKER_ISOPEN ) )
-			{
-				LogItemMovement( cr, furniture, "closes furniture-container" ); 
-				furniture.LockerClose();
-				return true;
-			}
-			
-			if( FLAG( furniture.LockerCondition, LOCKER_ELECTRO ) )
-			{
-				LogCrimeMovement( cr, furniture, "inputs furniture lock security password" ); 
-				cr.RunClientScript( "client_screen_codedoor@ShowScreen", furniture.Id, furniture.Val1, 0, "¬ведите код", null );
-				return true;
-			}
-
-			if( FLAG( furniture.LockerCondition, LOCKER_LOCKED ) )
-			{
-				if( !IsKeyAviable( cr, furniture.LockerId ) )
-				{
-					LogCrimeMovement( cr, furniture, "can't open without key" ); 
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CONTAINER_LOCKED );
-					LockerBudge( furniture );
-					return true;
-				}
-			}
-		}
-		
-		if( !furniture.Proto.Container_Changeble || !FLAG( furniture.LockerCondition, LOCKER_ISOPEN ) )
-		{
-			if( furniture.Proto.Container_Changeble )
-			{
-				furniture.LockerOpen();
-			}
-			
-			ShowContainer( cr, furniture, furniture.Proto.GroundLevel ? TRANSFER_HEX_CONT_DOWN : TRANSFER_HEX_CONT_UP );
-			LogItemMovement( cr, furniture, "looks inside" ); 
-			return true;
-		}
-		
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SOMETHING_WENT_WRONG );
-		LogItemMovement( cr, furniture, "unsuccessfully interacts with" ); 			
-		return true;
-	}
-	
-	if( DoorOrContainer && furniture.Proto.Container_Changeble )
-	{
-		LogItemMovement( cr, furniture, "closes furniture" );
-		furniture.LockerClose();
-	}
-
-	int freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] - ItemsWeight( cr ),
-		contWeight = ItemsWeight( furniture );
-		
-	if( !isGM(cr) && freeWeight < contWeight )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_OBJECT_TOO_HEAVY );
-		LogItemMovement( cr, furniture, "can't pick up heavy furniture" );
-		return true;
-	}
-
-	int freeVolume = CRITTER_MAX_VOLUME - cr.ItemsVolume();
-	if( !isGM( cr ) && freeVolume < int( furniture.Proto.Volume * furniture.GetCount() ) )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_FREE_VOLUME );
-		return true;
-	}
-	
-	if( DoorOrContainer )
-	{
-		UNSETFLAG( furniture.Flags, ITEM_CAN_USE );
-	}
-	
-	MoveItem( furniture, 1, cr );
-	LogItemMovement( cr, furniture, "picks up furniture (" + cr.HexX + ", " + cr.HexY + ")" );
-	return true;
-}
-
-
 bool canSwitchLootability( Critter& cr, Item& furniture )
 {
-	if( !isGM(cr) && furniture.Durability > 0 )
+	if( !isGM( cr ) && furniture.Durability > 0 )
 	{
 		return false;
 	}
@@ -503,7 +420,7 @@ bool canSwitchLootability( Critter& cr, Item& furniture )
 
 bool SwitchLootability( Critter& cr, Item& furniture )
 {
-	if( !isGM(cr) && FLAG( furniture.LockerCondition, LOCKER_LOCKED ) )
+	if( !isGM( cr ) && FLAG( furniture.LockerCondition, LOCKER_LOCKED ) )
 	{
 		LogCrimeMovement( cr, furniture, "can't move furniture that is locked" );
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_OPEN_LOCK_FIRST );	
@@ -525,6 +442,22 @@ bool SwitchLootability( Critter& cr, Item& furniture )
 		UNSETFLAG( furniture.Flags, ITEM_CAN_PICKUP );
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_IMMOVABLE_FURNITURE );
 	}		
+	
+	if( !FLAG( furniture.Flags, ITEM_CAN_PICKUP ) )
+	{
+		switch( furniture.GetProtoId() )
+		{
+			case( PID_CRUSHER_3000 ):
+				BlockCrusher( furniture );
+				break;
+			default:
+				break;
+		}
+	}
+	else
+	{
+		_DeleteBlockers( furniture, true );
+	}
 	
 	LogItemMovement( cr, furniture, "changes furniture state" );
 	return true;
@@ -643,9 +576,13 @@ void DraggingSound( Map& map, Item& furniture, uint x, uint y )
 	{	
 		PlayGenericSound( map, x, y, _GetOneRandom( CartSoundNames ), 10 );
 	}
-	else
+	else if( furniture.Proto.Material != MATERIAL_METAL )
 	{
 		PlayGenericSound( map, x, y, _GetOneRandom( DraggingSoundNames ), 20 );
+	}
+	else
+	{
+		PlayGenericSound( map, x, y, _GetOneRandom( MetalSoundNames ), 20 );
 	}
 }
 
@@ -1199,4 +1136,34 @@ void InitFurniture( Map& map )
 	}
 }
 
+void _DeleteBlockers( Item& item, bool deleted )
+{
+	if( deleted )
+	{
+		int item_id = item.Id;
+		Item@[] blockers;
+		Item@[] delete;
+		
+		for( uint16 i = PID_NO_SHOOT_WOOD_BLOCKER; i < PID_STONE_BLOCKER; i ++ )
+		{
+			GetAllItems( i, blockers );
+		}
+
+		if( blockers.length() > 0 )
+		{
+			for( uint i = 0; i < blockers.length(); i ++ )
+			{
+				if( blockers[i].PARENT_ITM_ID == item_id )
+				{
+					delete.insertLast( blockers[i] );
+				}
+			}
+			
+			if( delete.length() > 0 )
+			{
+				DeleteItems( delete );
+			}
+		}
+	}
+}
 #endif //FURNITURE

@@ -229,19 +229,19 @@ bool Extinguish( Critter& cr, Item& item, Item& target )
 			ProtoItem@ proto = GetProtoItem( PID_COAL_POWERGEN );
 			target.PicMap = proto.PicMap;
 			
-			Item@[] waterpumps;
-			map.GetItems( PID_OBJECT_WATERPUMP, waterpumps );
+			Item@[] electrics;
+			map.GetItems( PID_OBJECT_WATERPUMP, electrics );
+			map.GetItems( PID_CRUSHER_3000, electrics );
 
-			if( waterpumps.length() > 0 )
+			if( electrics.length() > 0 )
 			{
-				Item@ waterpump = waterpumps[ 0 ];
-				if( valid( waterpump ) )
+				Item@ electric = electrics[ 0 ];
+				if( valid( electric ) )
 				{
-					waterpump.STATE = STATE_OFF;
-					setAnimState( waterpump );					
+					electric.STATE = STATE_OFF;
+					setAnimState( electric );				
 				}
 			}
-			
 		}
 		else if( target.GetProtoId() == PID_FURNACE_SMALL )
 		{
@@ -264,11 +264,7 @@ bool Extinguish( Critter& cr, Item& item, Item& target )
 		EraseTimeEvent( target.EVENT );
 		target.EVENT = 0;
 		setAnimState( target );
-		
-		Item@ fireFX = map.AddItem( target.HexX, target.HexY, PID_STEAM, 1 );
-		
-		uint[] values = {fireFX.Id};
-		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", values, true );
+		map.RunEffect( PID_EFFECT_STEAM, target.HexX, target.HexY, 0 );
 	}
 	return true;
 }
@@ -335,17 +331,35 @@ uint e_Burn( uint[]@ values )
 		target.PicMap = proto.PicMap;
 		setAnimState( target );
 		target.Update();
-	}
-	return 0;
-}
+		
+		if( target.GetProtoId() == PID_COAL_POWERGEN )
+		{
+			target.PicMap = target.Proto.PicMap;
+			
+			Item@[] electrics;
+			map.GetItems( PID_OBJECT_WATERPUMP, electrics );
+			map.GetItems( PID_CRUSHER_3000, electrics );
 
-uint e_fireFX( uint[]@ values )
-{
-	uint itemId = values[0];
-	Item@ e_fireFX = GetItem( itemId );
-	if( valid( e_fireFX ) )
-	{
-		DeleteItem( e_fireFX );
+			if( electrics.length() > 0 )
+			{
+				Item@ electric = electrics[ 0 ];
+				if( valid( electric ) )
+				{
+					electric.STATE = STATE_OFF;
+					EraseTimeEvent( electric.EVENT );
+					electric.EVENT = 0;
+					SETFLAG( electric.Flags, ITEM_SHOW_ANIM_EXT );
+					UNSETFLAG( electric.Flags, ITEM_LIGHT );
+					
+					if( electric.GetProtoId() == PID_CRUSHER_3000 )
+					{
+						electric.PicMap = electric.Proto.PicMap;
+					}
+					
+					electric.Update();			
+				}
+			}
+		}
 	}
 	return 0;
 }
@@ -445,8 +459,7 @@ uint e_Explosives( uint[]@ values )
 		Map @map = target.GetMapPosition( hexX, hexY );
 		ExplodeEx( map, hexX, hexY, PID_EXPLODE_MISSILE2, 0, Random( 70, 150 ), DAMAGE_EXPLODE, 3, 0 );
 		map.AddItem( hexX, hexY, Ashes[ Random( 0, Ashes.length() - 1 ) ], 1 );
-		Item@ fireFX = map.AddItem( hexX, hexY, PID_SMOKE, 1 );
-		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", array<uint> = { fireFX.Id }, true );
+		map.RunEffect( PID_EFFECT_SMOKE, hexX, hexY, 0 );
 		if( target.GetProtoId() == PID_FIREBARREL || target.GetProtoId() == PID_BRAZIER || target.GetProtoId() == PID_COAL_POWERGEN )
 		{
 			uint randomDebree = Random( 2,5 );
@@ -868,15 +881,12 @@ uint e_FireBurn( uint[]@ values )
 				if( valid( heated[i] ) )
 				{
 					FireUp( heated[i], WildFires[ Random( 0, WildFires.length() - 1 ) ], 1 );
+					PlayGenericSound( map, hx, hy, "forest_fire2.ogg", 10 );
 				}
 			}
 		}
 		
-		uint16 hx = fire.HexX, hy = fire.HexY;
-		Item@ fireFX = map.AddItem( hx, hy, PID_SMOKE, 1 );
-		PlayGenericSound( map, hx, hy, "forest_fire2.ogg", 10 );
-		
-		fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ),"e_fireFX", array<uint> = {fireFX.Id}, true );
+		map.RunEffect( PID_EFFECT_SMOKE, fire.HexX, fire.HexY, 0 );
 
 		Critter@[] targetCR;
 		uint count = map.GetCrittersHex( fire.HexX, fire.HexY, 0, FIND_LIFE_AND_KO, targetCR );
@@ -936,15 +946,17 @@ class MenuFireBarrel: CenteredMenuHandler
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
         Map@ map = GetMap( map_id );
-        Item@ firebarrel = GetItem( firebarrel_id );
-	
-		bool locked_in_place = !FLAG( firebarrel.Flags, ITEM_CAN_PICKUP );
-	
-        if( map is null || firebarrel is null )
+        if( !valid( map ) )
 		{
             return false;
         }
 
+        Item@ firebarrel = GetItem( firebarrel_id );
+        if( !valid( firebarrel ) )
+		{
+            return false;
+        }
+		
 		if( firebarrel.STATE > STATE_EXTINGUISHED )
 		{
 			if( FireLightSource.find( firebarrel.GetProtoId() ) == -1 )
@@ -986,7 +998,7 @@ class MenuFireBarrel: CenteredMenuHandler
 		}
 		else
 		{
-			if( locked_in_place )
+			if( locked_in_place( firebarrel ) )
 			{
 				if( menu.Button( "Ignite" ) )
 				{
