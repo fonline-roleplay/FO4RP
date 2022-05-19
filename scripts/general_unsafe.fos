@@ -18,6 +18,7 @@
 #include "windup_h.fos"
 #include "handcuffs_h.fos"
 #include "plants_h.fos"
+#include "gathering_h.fos"
 
 import void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo ) from "main";
 import bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param ) from "main";
@@ -25,13 +26,7 @@ import void ShowInputBoxScreen( Critter& cr, string funcName, uint16 textLength,
 
 import void Actions( Critter& cr, uint8 actionType, uint16 pickType ) from "context_callback";
 
-import void TryGetSand( Critter& cr, Item& shovel, int hexX, int hexY ) from "digging";
-
 import void DragAndDrop( Critter& cr, Critter@ target ) from "gameplay";
-
-import Item@ getPopup( Critter& player ) from "popups";
-import bool changePopup( Critter& player, string description ) from "popups";
-import bool delPopup( Critter& player ) from "popups";
 
 import bool e_UseAutoCloseDoor( Item& door, Critter& cr, int skill ) from "item";
 
@@ -74,7 +69,7 @@ bool Action( Critter& player, Critter@ targetCr, Item@ targetItem, Scenery@ targ
 
 void unsafe_OpenDoor( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
 {
-	if( player.IsDead() || player.IsKnockout() || player.IsBusy() || player.Timeout[ TO_SK_STEAL ] > 0 )
+	if( player.IsDead() || player.IsKnockout() || player.IsBusy() || IsAnimal( player ) || IsMonster( player ) || IsInsect( player ) || player.Timeout[ TO_SK_STEAL ] > 0 )
 	{
 		return;
 	}
@@ -95,13 +90,10 @@ void unsafe_OpenDoor( Critter& player, int param0, int param1, int param2, strin
 			{
 				break;
 			}
+			
 			player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
 			UseSkillOnLocker( player, door, SKILL_PICK_ON_GROUND );
 			e_UseAutoCloseDoor( door, player, -1 );
-
-			Critter@[] critters;
-			uint8 crs = map.GetCrittersHex( door.HexX, door.HexY, 30, FIND_ALL | FIND_ONLY_PLAYERS, critters );
-			for( uint8 j = 0, l = critters.length(); j < l; j++ ) { critters[ j ].RunClientScript( "client_main@SoundDoor", critters[ j ].Id, door.Id, 0, null, null ); }
 			break;
 		}
 	}
@@ -196,10 +188,11 @@ void unsafe_log(Critter& cr, int locX, int locY, int type, string@ message, int[
         f.writeString( __Day + "." + __Month + "." + __Year + " " + MakeTime( __FullSecond ) + message + "\n" );
         f.close();
     }
+	DiscordSendMessage( "gm_commands", "```" + message + "```" );
 }
 
 //Log GM panel actions
-void unsafe_log_2(Critter& cr, int locX, int locY, int type, string@ message, int[] @ p4 )
+void unsafe_log_2( Critter& cr, int locX, int locY, int type, string@ message, int[] @ p4 )
 {
     file f;
     if( f.open( "logs\\gm_panel.txt", "a" ) >= 0 )
@@ -207,6 +200,7 @@ void unsafe_log_2(Critter& cr, int locX, int locY, int type, string@ message, in
         f.writeString( __Day + "." + __Month + "." + __Year + " " + MakeTime( __FullSecond ) + message + "\n" );
         f.close();
     }
+	DiscordSendMessage( "gm_panel", "```" + message + "```" );
 }
 
 //Digits input for ingame items
@@ -247,6 +241,19 @@ void unsafe_inputDigits( Critter& player, int itemId, int digits, int type, stri
 			}
 			StartMenuTerminal( player, item );
 		}
+		else if( Pid == PID_TNT_PACK_ACTIVE || Pid == PID_REMOTE_DETONATOR )
+		{
+			item.Val4 = digits;
+			item.SetLexems( "$frequency" + digits );
+			item.Val2 = player.Id;
+			player.Say( SAY_NETMSG, "You have set radio frequency to: |0xFFFF00 " + digits );
+		}
+		else if( Pid == PID_SLAVE_COLLAR || Pid == PID_SLAVE_COLLAR_SWITCH )
+		{
+			item.Val5 = digits;
+			item.SetLexems( "$frequency" + digits );
+			player.Say( SAY_NETMSG, "You have set radio frequency to: |0xFFFF00 " + digits );
+		}
 		else if( Pid == PID_JUKEBOX1 || Pid == PID_JUKEBOX2 || Pid == PID_JUKEBOX3 || Pid == PID_JUKEBOX4 )
 		{
 			item.Val6 = digits;
@@ -254,6 +261,7 @@ void unsafe_inputDigits( Critter& player, int itemId, int digits, int type, stri
 		}
 		player.RunClientScript( "client_screen_numberpad@HideScreen", 0, 0, 0, "", null );
 	}
+	return;
 }
 
 void unsafe_openCodeDoor( Critter& player, int itemId, int code, int param2, string@ param3, int[] @ param4 )
@@ -318,13 +326,25 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 		return;
 	}
 	
-	cr.ParamBase[ CR_IS_RELAXING ] = 0;
+	if( !cr.IsLife() )
+	{
+		return;
+	}
+	
+	if( cr.Param[ CR_IS_RELAXING ] != 5 )
+	{
+		cr.ParamBase[ CR_IS_RELAXING ] = 0;
+	}
+	
+	cr.ParamBase[ CR_IS_RELOADING ] = 0;
+	
     Map@ map = cr.GetMap();
 
-    if( map is null )
+    if( !valid( map ) )
 	{
         return;
 	}
+	
 	Item@ hand = _CritGetItemHand(cr);
     uint8 mode = 0;
 	
@@ -409,11 +429,11 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 	
 	if( weapon.Weapon_MaxAmmoCount > 0 )
 	{
-		if( hand.AmmoCount == 0 )
+		if( hand.AmmoCount == 0 || hand.Deterioration == 10000 )
 		{
 			uint8 dir = GetDirection( cr.HexX, cr.HexY, toHx, toHy );
 			cr.SetDir( dir );
-			
+
 			if( weaponSubtype == WS_GUN )
 			{
 				cr.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid( hand ) ? hand : null );
@@ -1265,75 +1285,6 @@ void unsafe_selfLex( Critter& player, int param0, int param1, int param2, string
 		player.SetLexems( text );
 	}
 	player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CHANGE_LEX_SELF );
-}
-
-void unsafe_newPopup( Critter& player, int x, int y, int, string@ text, int[]@ )
-{
-	if( player.ParamBase[ QST_GAMEMODE ] == GAME_START ) return;
-	
-	Item@ popup = getPopup( player );
-	if( valid( popup ) && ( popup.Val0 == 0 ) && !isGM( player ) )
-	{
-		return;
-	}
-	
-	if( isGM( player) && x != 0 && y != 0 )
-	{
-		player.ParamBase[CR_VAL0] = x;
-		player.ParamBase[CR_VAL1] = y;
-	}
-	
-	if( !valid(text) || text == "" )
-	{
-		player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_MAKE_DESC );
-		ShowInputBoxScreen( player, "general_unsafe@unsafe_PopupDescInput#Description:", 0, INPUTBOX_CLOSE_ON_ENTER );
-	}
-	
-	else
-	{
-		popupDescInput( player, substring( text, 1, text.length() - 1 ) );
-	}
-}
-
-void unsafe_PopupDescInput( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
-{
-	popupDescInput( player, param3 );
-}
-
-void PopupDescInput( Critter& player, uint answerI, string& answerS )
-{
-	popupDescInput( player, answerS );
-}
-
-void popupDescInput( Critter& player, string @answerS = null )
-{
-    if( !valid(player) )
-	{
-		return;
-	}
-	
-    if( valid( answerS ) && answerS.length() > 0 )
-	{
-        if( changePopup( player, answerS ) )
-		{
-            player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NOTICE_DESC );
-        }
-		else
-		{
-            player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FAILED_DESC );
-        }
-    }
-	else
-	{
-        if( delPopup( player ) )
-		{
-            player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REMOVED_DESC );
-        }
-		else
-		{
-            player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FAILED_REMOVE_DESC );
-        }
-    }
 }
 
 void unsafe_pushing( Critter& player, int type, int param1, int param2, string@ param3, int[] @ param4 )

@@ -7,6 +7,7 @@
 #include "critter_skills_h.fos"
 #include "critter_status_h.fos"
 #include "combat_h.fos"
+#include "repair_h.fos"
 
 bool ltp_devour_inited = false;
 void ltp_devour_init()
@@ -25,12 +26,15 @@ bool start_devour( Critter& cr, Critter@ target )
 	if( valid( target ) )
 	{	
 		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint object_dpa = ( cr.Skill[ SK_HUNTING ] ) + ( cr.Stat[ ST_AGILITY ] * 10 ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = uint( ceil( float( target.Stat[ ST_MAX_LIFE ] * 15 / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		
 		uint[] values = { cr.Id };
 		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_SkinningSound", values, false );
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);
 		cr.Animate( 0, ANIM2_DODGE_FRONT, null, true, true );
-		StartProcess( cr, LTP_DEVOUR, 0, 0, target.Id, action_pause );
+		StartProcess( cr, LTP_DEVOUR, 0, 0, target.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 	}
 	return true;
 }
@@ -38,16 +42,14 @@ bool start_devour( Critter& cr, Critter@ target )
 uint process_devour( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_DEVOUR )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
   	Critter@ target = GetCritter( param2 );
   	if( valid( target ) )
 	{
       	param0++;
-		uint object_dpa = ( cr.Skill[ SK_HUNTING ] ) + ( cr.Stat[ ST_AGILITY ] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = uint( ceil( float( target.Stat[ ST_MAX_LIFE ] * 15 / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+
 		cr.Animate( 0, ANIM2_DODGE_FRONT, null, true, true );
-		if( param0 > sequence_length )
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
 			Item@ tool = null;
 			Profit( cr, tool, target );
@@ -65,7 +67,7 @@ uint process_devour( Critter@ cr, int& param0, int& param1, int& param2 )
 				map.MoveHexByDir( hx, hy, Random( 0, 5 ), 1 );
 				CheckBlood( map, hx, hy );
 			}
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
     }
 	return 0;
@@ -127,6 +129,12 @@ bool PrepareSkinning( Critter& cr, Item@ tool, Critter@ target )
 		return false;
 	}
 
+	if( _ItemIsBroken( tool ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOOL_BROKEN );
+		return true;
+	}
+
 	if( IsTired( cr ) )
 	{
 		return false;
@@ -136,6 +144,12 @@ bool PrepareSkinning( Critter& cr, Item@ tool, Critter@ target )
 	{ 
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_CANT_WORK );
 		return false; 
+	}
+
+	if( tool.IsDeteriorable() )
+	{
+		uint det = GetDeteriorationProcent( tool );
+		SetDeterioration( tool, det + 1 );
 	}
 
 	start_skinning( cr, tool, target );
@@ -152,12 +166,15 @@ bool start_skinning( Critter& cr, Item& tool, Critter@ target )
 	if( valid( tool ) && valid( target ) )
 	{	
 		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint object_dpa = cr.Skill[ SK_HUNTING ] + ( cr.Stat[ ST_AGILITY ] * 10 ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = uint( ceil( float( target.Stat[ ST_MAX_LIFE ] * 15 / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		
 		uint[] values = { cr.Id };
 		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_SkinningSound", values, false );
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);
 		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
-		StartProcess( cr, LTP_SKINNING, 0, tool.Id, target.Id, action_pause );
+		StartProcess( cr, LTP_SKINNING, 0, tool.Id, target.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 	}
 	return true;
 }
@@ -165,18 +182,14 @@ bool start_skinning( Critter& cr, Item& tool, Critter@ target )
 uint process_skinning( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_SKINNING )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
     Item@ tool = GetItem( param1 );
   	Critter@ target = GetCritter( param2 );
   	if( valid( tool ) && valid( target ) )
 	{
       	param0++;
-		
-		uint object_dpa = cr.Skill[ SK_HUNTING ] + ( cr.Stat[ ST_AGILITY ] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = uint( ceil( float( target.Stat[ ST_MAX_LIFE ] * 15 / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
 
-		if( param0 > sequence_length )
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
 			Profit( cr, tool, target );
 			int skillNum = SK_HUNTING;
@@ -185,6 +198,7 @@ uint process_skinning( Critter@ cr, int& param0, int& param1, int& param2 )
 			{
 				cr.ParamBase[ CR_DIRTINESS ] += Random( 0, 3 );
 			}
+			SayLog( cr, crInfo( cr ) + " has skinned a critter." );
 		}
 		else
 		{
@@ -206,7 +220,7 @@ uint process_skinning( Critter@ cr, int& param0, int& param1, int& param2 )
 				InjureCritter( cr, damage, DAMAGE_UNCALLED, cr.Dir, cr.Id, HIT_LOCATION_NONE, false );
 			}
 			
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
     }
 	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
@@ -320,9 +334,9 @@ bool Profit(  Critter& cr, Item@ tool, Critter& target )
 		}
 		else
 		{
-			uint huntMod = cr.Stat[ SK_HUNTING ] / 30;
-			cr.StatBase[ ST_HUNGER ] += 10 + huntMod;
-			cr.StatBase[ ST_THIRST ] += 10 + huntMod;
+			uint huntMod = cr.Stat[ SK_HUNTING ] * 10 / 30;
+			cr.StatBase[ ST_HUNGER ] += 100 + huntMod;
+			cr.StatBase[ ST_THIRST ] += 100 + huntMod;
 		}
 	}
 	if( target.Param[ CR_DEATH_STAGE ] >= int( skinnable.loot.length() - 2 ) )
@@ -482,6 +496,20 @@ SkinnableCrCollection@ skinnableCrits = SkinnableCrCollection()
         .loot( PID_PELT3 )
 		.loot( PID_GECKO_MEAT )
 		.loot( PID_GECKO_MEAT )
+	.skinnable( BT_DOG, CRTYPE_COYOTE, 25 )
+		.loot( PID_CRAFT_L_HIDE )
+        .loot( PID_WOLF_FUR )
+		.loot( PID_WOLF_FUR )
+       	.loot( PID_RAD_MEAT )
+		.loot( PID_RAD_MEAT )
+        .loot( PID_KLK )
+	.skinnable( BT_DOG, CRTYPE_WOLF, 25 )
+		.loot( PID_CRAFT_L_HIDE )
+        .loot( PID_WOLF_FUR )
+		.loot( PID_WOLF_FUR )
+       	.loot( PID_RAD_MEAT )
+		.loot( PID_RAD_MEAT )
+        .loot( PID_KLK )			
     .skinnable( BT_DOG, CRTYPE_DOG, 15 )
 		.loot( PID_CRAFT_L_HIDE )
         .loot( PID_WOLF_FUR )
@@ -512,25 +540,23 @@ SkinnableCrCollection@ skinnableCrits = SkinnableCrCollection()
     .skinnable( BT_RADSCORPION, CRTYPE_RADSCORPION_SMALL, 15 )
         .loot( PID_SHIT_SMALL )
         .loot( PID_SCORPION_SMALL_TAIL )
-		.loot( PID_MANTIS_SHELL )
+		.loot( PID_RADSCORPION_PINCERS )
         .loot( PID_RAD_MEAT )
     .skinnable( BT_RADSCORPION, CRTYPE_RADSCORPION, 20 )
         .loot( PID_SHIT_SMALL )
         .loot( PID_SCORPION_SMALL_TAIL )
-		.loot( PID_MANTIS_SHELL )
+		.loot( PID_RADSCORPION_PINCERS )
         .loot( PID_RAD_MEAT )
     .skinnable( BT_RADSCORPION, CRTYPE_RADSCORPION_HUGE, 25 )
         .loot( PID_SHIT_SMALL )
         .loot( PID_SCORPION_TAIL )
-		.loot( PID_MANTIS_SHELL )
-		.loot( PID_MANTIS_SHELL )
+		.loot( PID_RADSCORPION_PINCERS )
         .loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
     .skinnable( BT_RADSCORPION, CRTYPE_RADSCORPION_BLC_HUGE, 30 )
         .loot( PID_SHIT_SMALL )
         .loot( PID_SCORPION_TAIL )
-		.loot( PID_MANTIS_SHELL )
-		.loot( PID_MANTIS_SHELL )
+		.loot( PID_RADSCORPION_PINCERS )
         .loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
     .skinnable( BT_YAO, CRTYPE_YAO, 50 )
@@ -545,8 +571,7 @@ SkinnableCrCollection@ skinnableCrits = SkinnableCrCollection()
     .skinnable( BT_RADSCORPION, CRTYPE_RADSCORPION_CAVE, 35 )
         .loot( PID_SHIT_SMALL )
         .loot( PID_SCORPION_TAIL )
-		.loot( PID_MANTIS_SHELL )
-		.loot( PID_MANTIS_SHELL )
+		.loot( PID_RADSCORPION_PINCERS )
         .loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
     .skinnable( BT_BRAHMIN, CRTYPE_BRAHMIN, 30 )
@@ -647,8 +672,25 @@ SkinnableCrCollection@ skinnableCrits = SkinnableCrCollection()
     .skinnable( BT_GIANT_BEETLE, CRTYPE_GIANT_BEETLE, 0 )
         .loot( PID_SHIT_SMALL )
         .loot( PID_MANTIS_SHELL )
-        .loot( PID_ROACH );
-	
+        .loot( PID_ROACH )
+    .skinnable( BT_LAVASH, CRTYPE_LAVASH, 40 )
+        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_BRAHMIN_SKIN )
+        .loot( PID_MEAT )
+		.loot( PID_MEAT )
+		.loot( PID_MEAT )
+		.loot( PID_LAVASH_GUTS )
+    .skinnable( BT_SPIDER, CRTYPE_SPIDER, 0 )
+        .loot( PID_SHIT_SMALL )
+        .loot( PID_MANTIS_SHELL )
+        .loot( PID_RAD_MEAT )
+	.skinnable( BT_MILLEPEDE, CRTYPE_MILLEPEDE, 20 )
+        .loot( PID_MANTIS_SHELL )
+        .loot( PID_MIRELUK_SHELL )
+        .loot( PID_RAD_MEAT )
+		.loot( PID_RAD_MEAT )
+	;
+
 SkinnableCr@ getSkinnableCr( Critter@ target ) 
 {
 	int crBodyType = target.Stat[ ST_BODY_TYPE ];

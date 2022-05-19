@@ -6,6 +6,7 @@
 #include "gathering_h.fos"
 #include "critter_skills_h.fos"
 #include "combat_h.fos"
+#include "repair_h.fos"
 
 bool ltp_chopping_inited = false;
 void ltp_chopping_init()
@@ -44,13 +45,19 @@ bool PrepareChopping( Critter& cr, Item@ tool, Item@ tree )
 		return false;
 	}
 	
-	if( tree.Proto.Item_Subtype == ITEM_SUBTYPE_TREE_SLUMP )
+	if( tree.Proto.Item_Subtype != ITEM_SUBTYPE_TREE_SLUMP )
 	{
-		if( toolPid == PID_SHOVEL )
+		if( toolPid == PID_SHOVEL || toolPid == PID_SPADE )
 		{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WRONG_INSTRUMENT );
-			return false;
+			return true;
 		}
+	}
+	
+	if( _ItemIsBroken( tool ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOOL_BROKEN );
+		return true;
 	}
 	
 	if( IsTired( cr ) )
@@ -62,6 +69,12 @@ bool PrepareChopping( Critter& cr, Item@ tool, Item@ tree )
 	{ 
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_CANT_WORK );
 		return false; 
+	}
+	
+	if( tool.IsDeteriorable() )
+	{
+		uint det = GetDeteriorationProcent( tool );
+		SetDeterioration( tool, det + 1 );
 	}
 	
 	start_chopping( cr, tool, tree );
@@ -78,8 +91,10 @@ bool start_chopping( Critter& cr, Item& tool, Item& tree )
 	if( valid( tool ) && valid( tree ) )
 	{	
 		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
-		StartProcess( cr, LTP_CHOPPING, 0, tool.Id, tree.Id, action_pause );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint object_dpa = ( cr.Skill[SK_CHOPPING] ) + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		StartProcess( cr, LTP_CHOPPING, 0, tool.Id, tree.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ChoppingSound", cr.Id, false);
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);
 		return true;
@@ -91,21 +106,18 @@ uint process_chopping( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_CHOPPING )
 
-	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
     Item@ tool = GetItem( param1 );
   	Item@ tree = GetItem( param2 );
   	if( valid( tool ) && valid( tree ) )
     {
       	param0++;
-  		uint object_dpa = ( cr.Skill[SK_CHOPPING] ) + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = int( ceil( float( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
-		if( param0 > sequence_length )
+		if( param0 > cr.Param[ ST_LTP_SEQUENCE ] )
 		{
 			if( tree.Proto.Item_Subtype == ITEM_SUBTYPE_TREE )
 			{
 				if( tree.RESOURCE_CAPACITY <= OBJECT_HP_BASE )
 				{	
+					SayLog( cr, crInfo( cr ) + " has chopped a tree!" );
 					CutTree( cr, tree );
 				}
 				else
@@ -119,20 +131,25 @@ uint process_chopping( Critter@ cr, int& param0, int& param1, int& param2 )
 					{
 						ChangeFrame( tree, 2 );
 					}
+					
+					SayLog( cr, crInfo( cr ) + " has cut a tree!" );
+					
 				}
 			}
 			else if( tree.Proto.Item_Subtype == ITEM_SUBTYPE_TREE_SLUMP )
 			{
-				if( tool.GetProtoId() != PID_SHOVEL )
+				if( tool.GetProtoId() != PID_SHOVEL && tool.GetProtoId() != PID_SPADE )
 				{
 					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_USE_SHOWEL );
 					return 0;
 				}
+				
 				if( tree.RESOURCE_CAPACITY == 0 )
 				{
 					EraseTimeEvent( tree.EVENT );
 					tree.EVENT = 0;
 					DeleteItem( tree );
+					SayLog( cr, crInfo( cr ) + " has uprooted a tree!" );
 				}
 			}
 			else
@@ -147,7 +164,7 @@ uint process_chopping( Critter@ cr, int& param0, int& param1, int& param2 )
 		else
 		{
 			_CritAnimateSwing( cr );
-			
+
 			CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ChoppingSound", cr.Id, false );
 			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true );
 			
@@ -156,7 +173,7 @@ uint process_chopping( Critter@ cr, int& param0, int& param1, int& param2 )
 				uint damage = INJURED_HP_DAMAGE - cr.Stat[ ST_ENDURANCE ];
 				InjureCritter( cr, damage, DAMAGE_UNCALLED, cr.Dir, cr.Id, HIT_LOCATION_NONE, false );
 			}
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
     }
 	return 0;
@@ -260,8 +277,13 @@ uint e_TreeRegrow( uint[]@ values )
 }
 
 //Loot
-bool Profit( Critter& cr, Item@ tool, Item@ tree )
+bool Profit( Critter& cr, Item& tool, Item@ tree )
 {
+	if( !valid( tool ) )
+	{
+		return false;
+	}
+	
 	int amount = 0;
 	uint toolMod = tool.GetProtoId();
 	switch( toolMod )
@@ -290,10 +312,14 @@ bool Profit( Critter& cr, Item@ tool, Item@ tree )
 		
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_GATHERED, "$proto@msg item " + ( PID_FIREWOOD * 100 ) + "@$amount" + amount );
 		
-		cr.StatBase[ST_EXPERIENCE] += 25;
+		cr.StatBase[ ST_EXPERIENCE ] += 25;
 		
-		tree.RESOURCE_CAPACITY = tree.RESOURCE_CAPACITY - OBJECT_HP_BASE;		
+		if( valid( tree ) )
+		{
+			tree.RESOURCE_CAPACITY = tree.RESOURCE_CAPACITY - OBJECT_HP_BASE;
+		}
 	}
+	
 	return true;
 }
 
@@ -412,14 +438,17 @@ bool start_chop_item( Critter& cr, Item& tool, Item& target )
 	if( valid( tool ) && valid( target ) )
 	{	
 		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint smithing_rate = ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( 3000.0f / ( CLAMP( smithing_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		
 		uint[] values = { cr.Id };
 		
 		_CritAnimateSwing( cr );
 		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ChoppingSound", values, false);
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
 
-		StartProcess( cr, LTP_CHOP_ITEM, 0, target.Id, 0, action_pause );
+		StartProcess( cr, LTP_CHOP_ITEM, 0, target.Id, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		return true;
 	}
 	return false;
@@ -428,17 +457,13 @@ bool start_chop_item( Critter& cr, Item& tool, Item& target )
 uint process_chop_item( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_CHOP_ITEM )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
     Item@ target = GetItem( param1 );
   	if( valid( target ) )
     {
 		param0++;
 		
-		uint smithing_rate = ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE ) + OBJECT_DPA_BASE; 
-		int sequence_length = int( ceil( float( 3000.0f / ( CLAMP( smithing_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
-		
-		if( param0 > sequence_length )
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
 			ChopItem( target );
 			return 0;
@@ -450,7 +475,7 @@ uint process_chop_item( Critter@ cr, int& param0, int& param1, int& param2 )
 
 		_CritAnimateSwing( cr );
 		
-		return action_pause;
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 	}
 	return 0;
 }
@@ -466,15 +491,14 @@ void ChopItem( Item& target )
 	map.AddItem( target.HexX, target.HexY, PID_CHOPPED_FIREWOOD, 1 );
 	_SubItem( target, 1 );
 }
-
-/* Code requires update if ever needed to be used again!!!
+/*
 //ONE-TIME LIVE SERVER TREE UPGRADE
 void _TreeUpgrade( Critter& player, int param0, int param1, int param2 )
 {
 	for( int ii = 0, jj = TreeList[1].length() ; ii < jj; ii++)
 	{
 		array<Item@> worldTrees = array<Item@>();
-		int count = GetAllItems(TreeList[1][ii], @worldTrees);
+		int count = GetAllItems( TreeList[1][ii], @worldTrees );
 		for( int treeIndex = 0; treeIndex < count; treeIndex++ )
 		{
 			Item@ tree = worldTrees[treeIndex];

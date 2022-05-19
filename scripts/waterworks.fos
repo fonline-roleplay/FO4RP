@@ -9,6 +9,7 @@
 #include "flask_h.fos"
 #include "drugs_h.fos"
 #include "radiation_h.fos"
+#include "firestarter_h.fos"
 
 class MenuWell: CenteredMenuHandler
 {
@@ -217,7 +218,10 @@ bool start_waterwell( Critter& cr, Item& well )
 	
 	if( valid( well ) )
 	{
-		StartProcess( cr, LTP_WATERWELL, 0, 0, well.Id, 0 );
+		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = well.BUCKET_POSITION;
+		StartProcess( cr, LTP_WATERWELL, 0, 0, well.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		return true;
 	}
 	return false;
@@ -226,8 +230,7 @@ bool start_waterwell( Critter& cr, Item& well )
 uint process_waterwell( Critter@ cr, int& param0, int& param1, int& param2 )
 {
  	LTPROCESS( cr, param0, LTP_WATERWELL )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
 	Item@ well = GetItem( param2 );
 	Map@ map = cr.GetMap();
 	
@@ -250,7 +253,7 @@ uint process_waterwell( Critter@ cr, int& param0, int& param1, int& param2 )
 		
 		if ( well.BUCKET_POSITION != 0 )
 		{
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
 		else if( well.BUCKET_POSITION < 0 )
 		{
@@ -400,14 +403,14 @@ class MenuWaterPump: CenteredMenuHandler
         Map@ map = GetMap(map_id);
         Item@ waterPump = GetItem(waterPump_id);
 	
-        if( map is null || waterPump is null )
+        if( !valid( map ) || !valid( waterPump ) )
 		{
             return false;
         }
 		
 		if( isGM( cr ) )
 		{
-			string type = _GetProtoName( waterPump.WATERSOURCE_DNA );
+			string type = GetMsgStr( 1, TEXTMSG_ITEM, waterPump.WATERSOURCE_DNA * 100 );
 			if( menu.Button( type ) )
 			{
 				if( waterPump.WATERSOURCE_DNA == PID_GLASS_BOTTLE_DIRTY_FULL_PRT )
@@ -440,16 +443,16 @@ class MenuWaterPump: CenteredMenuHandler
 				UNSETFLAG( waterPump.BROKEN, BROKEN_FILTER );
 				waterPump.WATERSOURCE_DNA = PID_GLASS_BOTTLE_FULL_PRT;
 			}
-			return true;
 		}
 		
 		if( !FLAG( waterPump.BROKEN, BROKEN_MECHANICS ) )
 		{
-			if( waterPump.STATE > 0 )
+			if( waterPump.STATE > STATE_OFF )
 			{
 				if( menu.Button( "Switch off" ) )
 				{
-					waterPump.STATE = 0;
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					waterPump.STATE = STATE_OFF;
 					setAnimState( waterPump );
 					return true;
 				}
@@ -482,7 +485,24 @@ class MenuWaterPump: CenteredMenuHandler
 			}
 			else if( menu.Button( "Switch on" ) )
 			{
-				waterPump.STATE = 1;
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				Item@[] generators;
+				map.GetItems( PID_COAL_POWERGEN, generators );
+
+				if( generators.length() > 0 )
+				{
+					Item@ generator = generators[0];
+					if( valid( generator ) )
+					{
+						if( generator.STATE != STATE_BURNING )
+						{
+							cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_POWER_IS_OFF );
+							return true;
+						}
+					}
+				}
+				
+				waterPump.STATE = STATE_ON;
 				setAnimState( waterPump );
 				return true;
 			}
@@ -493,9 +513,10 @@ class MenuWaterPump: CenteredMenuHandler
     string@ Description( Critter& cr )
 	{
 		Item@ waterPump = GetItem( waterPump_id );
+		Map@ map = GetMap( map_id );
 
-		string info = "Waterpump ¹ ";
-		info += "|0xFFFF00 " + waterPump.Id + "\n";
+		string info = "Waterpump ¹ " += "|0xFFFF00 " + waterPump.Id;
+		info += "\n|0x3CF800 Status: [ " + ( waterPump.STATE == STATE_ON ? "|0xFFFF00 Online " : "|0xFF0000 Offline" ) + "|0x3CF800  ]\n";
 		
 		info += "|0x3CF800 The water is";
 		if( waterPump.WATERSOURCE_DNA == PID_GLASS_BOTTLE_DIRTY_FULL_PRT )
@@ -522,7 +543,19 @@ class MenuWaterPump: CenteredMenuHandler
 		float maxAmount = maxCharge / 10.0f;
 		info += "|0xFFFF00 " + maxAmount;
 		info += "|0x3CF800  l.";
+		
+		Item@[] generators;
+		map.GetItems( PID_COAL_POWERGEN, generators );
 
+		if( generators.length() > 0 )
+		{
+			Item@ generator = generators[ 0 ];
+			if( valid( generator ) )
+			{
+				info += "\nConnected to power generator.\nGenerator status: [ " + ( generator.STATE == STATE_BURNING ? "|0xFFFF00 Online " : "|0xFF0000 Offline" ) + "|0x3CF800  ]"; 
+			}
+		}
+		
         return info;
     }
 	
@@ -567,7 +600,7 @@ bool start_gathering_water( Critter& cr, Item& waterPump )
 			return false;
 		}
 	
-		if( waterPump.STATE < 1 )
+		if( waterPump.STATE < STATE_ON )
 		{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUMP_OFFLINE );
 			return false;
@@ -580,33 +613,58 @@ bool start_gathering_water( Critter& cr, Item& waterPump )
 			return false;
 		}
 
-		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
-		PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
-
+		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = CalcSequence( cr, waterPump );
 		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
-		
-		StartProcess( cr, LTP_GATHER_WATER, 0, 0, waterPump.Id, action_pause );
+		StartProcess( cr, LTP_GATHER_WATER, 0, 0, waterPump.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+		PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
 		return true;
 	}
 	return false;
 }
 
+int CalcSequence( Critter& cr, Item& waterPump )
+{
+	int sequence = 0;
+	
+	if( isFlask( cr, waterPump ) )
+	{
+		Item@ flask = _CritGetItemHand( cr );
+		sequence = waterPump.REMAINING_CHARGE > ( flask.Proto.Partial_Item - flask.REMAINING_USES ) ? ( flask.Proto.Partial_Item - flask.REMAINING_USES ) : waterPump.REMAINING_CHARGE;
+	}
+	else
+	{
+		int bottlesCount = cr.CountItem( PID_BOTTLE_GLASS );
+		ProtoItem@ bottleProto = GetProtoItem( PID_BOTTLE_GLASS );
+		sequence += bottlesCount * 5; // constant val for glass bottles, need rewamp with entire bottle code
+		if( sequence > waterPump.REMAINING_CHARGE )
+		{
+			sequence = waterPump.REMAINING_CHARGE;
+		}
+	}
+	return sequence;
+}
+
 uint process_gather_water( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_GATHER_WATER )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
   	Item@ waterPump = GetItem( param2 );
 	
   	if( valid( waterPump ) )
 	{
       	if( ( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, waterPump.WATERSOURCE_DNA ) && !isFlask( cr, waterPump ) ) || waterPump.REMAINING_CHARGE < 1 )
 		{
-			uint TXT = ( !hasItem( cr, PID_BOTTLE_GLASS ) || !hasItem( cr, waterPump.WATERSOURCE_DNA ) ) ? STR_NO_MORE_BOTTLES : STR_NO_MORE_WATER_LEFT;
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, TXT );
+			uint warningMsg = ( !hasItem( cr, PID_BOTTLE_GLASS ) || !hasItem( cr, waterPump.WATERSOURCE_DNA ) ) ? STR_NO_MORE_BOTTLES : STR_NO_MORE_WATER_LEFT;
+			if( isFlask( cr, waterPump ) )
+			{
+				Item@ flask = _CritGetItemHand( cr );
+				warningMsg = waterPump.REMAINING_CHARGE > flask.REMAINING_USES ? STR_FILLED_TARE : STR_NO_MORE_WATER_LEFT;
+			}
 			
-			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, warningMsg );
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 			return 0;
 		}
 		
@@ -619,7 +677,7 @@ uint process_gather_water( Critter@ cr, int& param0, int& param1, int& param2 )
 		if( hasItem( cr, waterPump.WATERSOURCE_DNA ) )
 		{
 			Item@ waterBottlePrt = getItem( cr, waterPump.WATERSOURCE_DNA );
-			if( waterBottlePrt.REMAINING_USES < int(waterBottlePrt.Proto.Partial_Item) )
+			if( waterBottlePrt.REMAINING_USES < int( waterBottlePrt.Proto.Partial_Item ) )
 			{
 				waterPump.REMAINING_CHARGE --;
 				waterBottlePrt.REMAINING_USES ++;
@@ -645,7 +703,7 @@ uint process_gather_water( Critter@ cr, int& param0, int& param1, int& param2 )
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FILLED_BOTTLE );
 				waterBottle.Update();
 			}
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
 		else if( isFlask( cr, waterPump ) )
 		{
@@ -701,7 +759,7 @@ uint process_gather_water( Critter@ cr, int& param0, int& param1, int& param2 )
 
 			waterBottlePrt.Update();
 		}
-		return action_pause;
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
     }
 	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 	return 0;
@@ -709,7 +767,7 @@ uint process_gather_water( Critter@ cr, int& param0, int& param1, int& param2 )
 
 void setAnimState( Item& item )
 {
-	if( item.STATE == 1 )
+	if( item.STATE == STATE_ON )
 	{	
 		SETFLAG( item.Flags, ITEM_SHOW_ANIM );
 		UNSETFLAG( item.Flags, ITEM_SHOW_ANIM_EXT );
@@ -820,29 +878,53 @@ void ltp_washing_init()
     ltp_washing_inited = true;
 }
 
-void start_washing( Critter& player, bool handsOnly )
+void start_washing( Critter& cr, bool handsOnly )
 {
     if( !ltp_washing_inited )
 	{
         ltp_washing_init();
 	}
 	
-	StartProcess( player, LTP_WASHING, handsOnly ? 1 : 0, 1000 );
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = 2000;
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = CalcWashingIterations( cr.ParamBase[ CR_DIRTINESS ] );
+	
+	uint strMsg = handsOnly ? STR_EMOTE_WASH_HANDS : STR_EMOTE_WASH_SELF;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, strMsg );
+	
+	StartProcess( cr, LTP_WASHING, 0, handsOnly ? 0 : 1, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+}
+
+int CalcWashingIterations( int param )
+{
+    int amount = 0;
+    while( param > 0)
+    {
+		param -= int( 1 + param / 10 );
+		amount++;
+    }
+    return amount - 1;
 }
 
 uint process_washing( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESSD( LTP_WASHING )
-	uint strMsg = param0 == 1 ? STR_EMOTE_WASH_HANDS : STR_EMOTE_WASH_SELF;
-	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, strMsg );
-	cr.ParamBase[ CR_DIRTINESS ] -= 1 + Random( 0, int( cr.ParamBase[ CR_DIRTINESS ] * 0.2 ) );
+
+	cr.ParamBase[ CR_DIRTINESS ] -= ( 1 + cr.ParamBase[ CR_DIRTINESS ] / 10 );
 	
 	if( cr.ParamBase[ CR_DIRTINESS ] <= 0 )
 	{
+		cr.ParamBase[ CR_DIRTINESS ] = 0;
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WASH_SELF );
 		return 0;
 	}
-    return 2000;
+	
+	if( Random( 1, 10 ) == 10 )
+	{
+		uint strMsg = param1 == 0 ? STR_EMOTE_WASH_HANDS : STR_EMOTE_WASH_SELF;
+		cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, strMsg );
+	}
+	
+    return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 }
 
 bool useWater( Critter& cr )

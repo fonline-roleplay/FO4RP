@@ -2,16 +2,29 @@
 #define DEFIB
 
 #include "_utils.fos"
+#include "defib_h.fos"
 #include "_ltp.fos"
 
-void _itemInit( Item& item, bool FirstTime )
+bool TryReanimate( Critter& cr, Critter& targetCr, Item& item )
 {
-    item.SetEvent( ITEM_EVENT_USE, "_reanimate" );
-}
-
-bool _reanimate( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-	if( onCritter.ParamBase[ CR_DEATH_STAGE ] >= 50)
+	if( !valid( targetCr ) )
+	{
+		return false;
+	}
+	
+	if( !targetCr.IsDead() )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_PATIENT_ALIVE );
+		return false;
+	}
+	
+	if( item.CritSlot != SLOT_HAND1 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_HOLD_DEFIB );
+		return false;
+	}
+	
+	if( targetCr.ParamBase[ CR_DEATH_STAGE ] >= 50 )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_TARGET_CRIT_DEATH );
 		return false;
@@ -23,80 +36,112 @@ bool _reanimate( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scen
         return true;
 	}
 	
-    if( onCritter.IsDead() )
+	if( item.ITEM_CHARGE < 1 )
 	{
-		if( cr.CountItem( PID_SMALL_ENERGY_CELL ) >= 3 )
-		{
-			cr.DeleteItem( PID_SMALL_ENERGY_CELL, 3 );
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_RECHARGE_DEFIB );
-		}
-		else
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_REQUIRE_CELLS );
-			return true;
-		}
-
-		if( !ltp_defib_inited )
-		{
-            ltp_defib_init();
-		}
-		
-        uint16 rndTime = 15000 - ( cr.Skill[ SK_DOCTOR ] * 40 );
-        StartProcess( cr, LTP_DEFIB, onCritter.Id, 0, 0, rndTime );
-        cr.SayMsg( SAY_EMOTE, TEXTMSG_GAME, STR_EMOTE_RECHARGE_DEFIB );
-        return true;
-    }
-    return false;
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_REQUIRE_CELLS );
+		return false;
+	}
+	
+	StartDefib( cr, targetCr, item );
+	return true;
 }
 
 bool ltp_defib_inited = false;
-
 void ltp_defib_init()
 {
     LTPREG( LTP_DEFIB, process_defib )
     ltp_defib_inited = true;
 }
 
+bool StartDefib( Critter& cr, Critter& targetCr, Item& item )
+{
+	if( !ltp_defib_inited )
+	{
+		ltp_defib_init();
+	}
+
+	if( !valid( item ) )
+	{
+		return false;
+	}
+	
+	if( !valid( targetCr ) )
+	{
+		return false;
+	}
+	
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = 15000 - ( cr.Skill[ SK_DOCTOR ] * 40 );
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = 1;
+	
+	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+	
+	StartProcess( cr, LTP_DEFIB, 0, targetCr.Id, item.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+
+	cr.SayMsg( SAY_EMOTE, TEXTMSG_GAME, STR_EMOTE_ENGAGE_DEFIB );
+	return true;
+}
+
 uint process_defib( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESSD( LTP_DEFIB )
 
-    Critter @ onCritter = GetCritter( param0 );
-    if( @onCritter == null )
+    Critter@ targetCr = GetCritter( param1 );
+	Item@ item = GetItem( param2 );
+    if( !valid( targetCr ) || !valid( item ) )
 	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
         return 0;
 	}
 	
-    if( onCritter.Anim2Dead <= ANIM2_DEAD_BACK && onCritter.Stat[ST_MAX_LIFE] > 100 )
+	Map@ map = targetCr.GetMap();
+	if( !valid( map ) )
 	{
-        Map@ map = onCritter.GetMap();
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+		return 0;
+	}
+	
+	if( param0 == 0 )
+	{
+		param0 ++;
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+	}
+	else if( targetCr.Anim2Dead <= ANIM2_DEAD_BACK && targetCr.Stat[ ST_MAX_LIFE ] > 100 )
+	{
+
 		for( int dx = -1; dx < 2; dx++ )
 		{
 			for( int dy = -1; dy < 2; dy++ )
 			{
-				if( map.IsHexPassed( onCritter.HexX + dx, onCritter.HexY + dy ) )
+				if( map.IsHexPassed( targetCr.HexX + dx, targetCr.HexY + dy ) )
 				{
-					onCritter.TransitToHex( onCritter.HexX + dx, onCritter.HexY + dy, onCritter.Dir );
+					targetCr.TransitToHex( targetCr.HexX + dx, targetCr.HexY + dy, targetCr.Dir );
 					break;
 				}
 			}
 		}
 				
-		onCritter.ToLife();
-		onCritter.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 1000, onCritter.HexX, onCritter.HexY );
+		targetCr.ToLife();
+		targetCr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 1000, targetCr.HexX, targetCr.HexY );
 
-		onCritter.StatBase[ST_MAX_LIFE] -= 10;
+		targetCr.StatBase[ ST_MAX_LIFE ] -= 10;
 	
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_APLIED_DEFIB );
-        if( onCritter.IsNpc() )
+        if( targetCr.IsNpc() )
 		{
-            onCritter.EraseEnemyFromStack( cr.Id );
+            targetCr.EraseEnemyFromStack( cr.Id );
 		}
+		
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+		item.ITEM_CHARGE = 0;
+		PlayGenericSound( map, cr.HexX, cr.HexY, "WAY1XXX2.mp3", 10 ); 
         return 0;
     }
 	else
 	{
         cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_TARGET_CRIT_DEATH );
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+		item.ITEM_CHARGE = 0;
+		PlayGenericSound( map, cr.HexX, cr.HexY, "Pulse_explode.mp3", 10 ); 
         return 0;
     }
 }

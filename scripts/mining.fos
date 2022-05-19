@@ -70,6 +70,12 @@ bool PrepareMining( Critter& cr, Item@ tool, Item@ target )
 		return false;
 	}
 
+	if( _ItemIsBroken( tool ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOOL_BROKEN );
+		return true;
+	}
+
 	if( IsTired( cr ) ) 
 	{ 
 		return false;
@@ -81,22 +87,26 @@ bool PrepareMining( Critter& cr, Item@ tool, Item@ target )
 		return false; 
 	}
 	
-	if( toolPid == PID_DRILL )
+	if( tool.IsDeteriorable() )
 	{
-		if( tool.AmmoCount < 1 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_DRILL_CHARGE );
-			return false;
-		}
-		
-		uint det = GetDeteriorationProcent(tool);
-		if( det >= 95 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DRILL_DAMAGED );
-			return false;
-		}
+		uint det = GetDeteriorationProcent( tool );
 		SetDeterioration( tool, det + 1 );
+		if( toolPid == PID_DRILL )
+		{
+			if( tool.AmmoCount < 1 )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_DRILL_CHARGE );
+				return false;
+			}
+			
+			if( det >= 95 )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DRILL_DAMAGED );
+				return false;
+			}
+		}
 	}
+	
 	start_mining( cr, tool, target );
 	return true;
 }
@@ -110,11 +120,15 @@ bool start_mining( Critter& cr, Item& tool, Item& target )
 	
 	if( valid( tool ) && valid( target ) )
 	{	
-		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint object_dpa = cr.Skill[ SK_MINING ] + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
+		
 		if( tool.GetProtoId() == PID_DRILL )
 		{
-			action_pause = 700;
+			cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = 700;
+			cr.ParamBase[ ST_LTP_SEQUENCE ] = 10;
 			Map@ map = cr.GetMap();
 			PlayGenericSound( map, cr.HexX, cr.HexY, "drill_mine.ogg", 100 );
 		}
@@ -124,7 +138,7 @@ bool start_mining( Critter& cr, Item& tool, Item& target )
 			CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_MiningSound", values, false);
 			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
 		}
-		StartProcess( cr, LTP_MINING, 0, tool.Id, target.Id, action_pause );
+		StartProcess( cr, LTP_MINING, 0, tool.Id, target.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		return true;
 	}
 	return false;
@@ -133,34 +147,25 @@ bool start_mining( Critter& cr, Item& tool, Item& target )
 uint process_mining( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_MINING )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
     Item@ tool = GetItem( param1 );
   	Item@ target = GetItem( param2 );
   	if( valid( tool ) && valid( target ) )
     {
       	param0++;
 		
-		uint object_dpa = cr.Skill[ SK_MINING ] + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = uint( ceil( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
-		
-		if ( tool.GetProtoId() == PID_DRILL )
-		{
-			sequence_length = 10;
-		}
-		
-		if( param0 > sequence_length )
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
 			Profit( cr, tool, target );
 			int skillNum = SK_MINING;
 			Accident( cr, skillNum );
+			SayLog( cr, crInfo( cr ) + " has mined an ore node." );
 		}
 		else
 		{
 			if( tool.GetProtoId() == PID_DRILL )
 			{
 				_CritAnimateBrust( cr );
-				action_pause = 700;
 			}
 			else
 			{
@@ -177,7 +182,7 @@ uint process_mining( Critter@ cr, int& param0, int& param1, int& param2 )
 				InjureCritter( cr, damage, DAMAGE_UNCALLED, cr.Dir, cr.Id, HIT_LOCATION_NONE, false );
 			}
 			
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
     }
 	return 0;
@@ -273,7 +278,7 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 		uint16 lootPid = 0;
 		switch( target.ORE_TYPE )
 		{
-			case(0):
+			case( ORE_TYPE_STONE ):
 			{	
 				if( Random( 1, 3 ) != 3 )
 				{
@@ -287,25 +292,25 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 				}
 				break;
 			}
-			case(1):
+			case( ORE_TYPE_COPPER ):
 				lootPid = PID_COPPER_ORE;
 				break;
-			case(2):
+			case( ORE_TYPE_LEAD ):
 				lootPid = PID_LEAD_ORE;
 				break;
-			case(3):
+			case( ORE_TYPE_MINERAL ):
 				lootPid = PID_MINERAL;
 				break;
-			case(4):
+			case( ORE_TYPE_COAL ):
 				lootPid = PID_COAL;
 				break;
-			case(5):
+			case( ORE_TYPE_GOLD ):
 				lootPid = PID_GOLD_ORE;
 				break;
-			case(6):
+			case( ORE_TYPE_METAL ):
 				lootPid = PID_METAL_ORE;
 				break;
-			case(7):
+			case( ORE_TYPE_URANIUM ):
 				lootPid = PID_URANIUM_ORE;
 				break;
 		}
@@ -327,7 +332,7 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 			target.RESOURCE_CAPACITY = target.RESOURCE_CAPACITY - OBJECT_HP_BASE;
 		}
 		
-		if( target.RESOURCE_CAPACITY <= 0 && ( target.ORE_TYPE == 0 && target.RESOURCE_DNA != 0 ) )
+		if( target.RESOURCE_CAPACITY <= 0 && ( target.ORE_TYPE == ORE_TYPE_STONE && target.RESOURCE_DNA != 0 ) )
 		{
 			Map@ map = GetMap( target.MapId );
 			uint16 hx = target.HexX, hy = target.HexY;
@@ -400,7 +405,7 @@ uint e_SpawnOres( int[] @ values )
 	SpawnOre( map );
 
 	EraseTimeEvent( map.GetData( MAP_ORE_SPAWN_TE ) );
-	map.SetData( MAP_ORE_SPAWN_TE, CreateTimeEvent( AFTER( DELAY_FOR_HARVESTABLE_LOOT_RESPAWN ), "e_SpawnOres", values, true ) );
+	map.SetData( MAP_ORE_SPAWN_TE, CreateTimeEvent( AFTER( DELAY_FOR_ORE_RESPAWN  ), "e_SpawnOres", values, true ) );
 	return 0;
 }
 
