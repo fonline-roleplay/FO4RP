@@ -1,0 +1,136 @@
+#ifndef GASSES
+#define GASSES
+
+#include "_utils.fos"
+#include "gasses_h.fos"
+#include "repair_h.fos"
+
+import uint CountMapPlayers( Map@ map ) from "manager";
+
+void GasHex( Critter& cr, int mapID, int hx, int hy, int gas_strength, int gas_time, int gas_radius )
+{
+	if( gas_strength < 0 || gas_time < 0 || gas_radius < 0 )
+	{
+		return;
+	}
+	
+	Map@ map = GetMap( mapID );
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	Item@ gasMarker = map.AddItem( hx, hy, PID_GAS_MARKER, 1 );
+	if( valid( gasMarker ) )
+	{
+		gasMarker.GAS_STRENGTH = gas_strength;
+		gasMarker.GAS_TICK = gas_time;
+		gasMarker.GAS_DISTANCE = gas_radius;
+		gasMarker.Update();
+		
+		uint[] values = { gasMarker.Id };
+		gasMarker.GAS_EVENT = CreateTimeEvent( __FullSecond, "gasses@e_gasFlow", values, true );
+		cr.Say( SAY_NETMSG, "Gas source set at X: " + hx + " Y: " + hy + " , strength: "+ gas_strength + " , tick: "+ gas_time + " minutes, radius: " + gas_radius + " hex " );
+	}
+}
+
+uint e_gasFlow( uint[]@ values )
+{
+    Item@ gasMarker = GetItem( values[0] );
+
+    if( !valid( gasMarker ) )
+	{
+		return 0;
+	}
+	
+	Map@ map = GetMap( gasMarker.MapId );
+    if( !valid( map ) )
+	{
+		DeleteItem( gasMarker );
+		return 0;
+	}
+	
+	if( CountMapPlayers( map ) == 0 )
+	{
+		return REAL_SECOND( gasMarker.GAS_TICK );
+	}
+	
+	Critter@[] critters;
+    uint count = map.GetCrittersHex( gasMarker.HexX, gasMarker.HexY, gasMarker.GAS_DISTANCE, FIND_LIFE_AND_KO | FIND_ONLY_PLAYERS, critters );
+	if( count > 0 )
+	{
+		for( uint i = 0; i < count; i++ )
+		{
+			DypsneaCr( critters[i], gasMarker.GAS_STRENGTH );
+		}
+	}
+	
+	return REAL_SECOND( gasMarker.GAS_TICK );
+}
+
+void DypsneaCr( Critter& cr, uint rate )
+{
+	uint[] indexes;
+	uint[] durations;
+	if( cr.GetTimeEvents( CTE_DYSPNEA, indexes, durations, null ) > 0 )
+	{
+		if( rate > 0 )
+		{
+			if( CheckGasMask( cr ) )
+			{		
+				return;
+			}
+			cr.ChangeTimeEvent( indexes[0], 0, rate );
+		}
+	}
+	else
+	{
+		cr.AddTimeEvent( "gasses@cte_Dyspnea", 0, CTE_DYSPNEA, rate );
+	}
+}
+
+uint cte_Dyspnea( Critter& cr, int identifier, uint& rate )
+{
+	if( rate <= 0 || CheckGasMask( cr ) )
+	{		
+		cr.StatBase[ ST_DYSPNEA ] += cr.Stat[ ST_ENDURANCE ] * 10;
+		rate = 0;
+		if ( cr.StatBase[ ST_DYSPNEA ] >= 1000 ) 
+		{
+			return 0;
+		}
+		return REAL_SECOND( 10 );
+	}
+	
+	cr.StatBase[ ST_DYSPNEA ] -= rate;
+	rate = 0;
+    return REAL_SECOND( 10 );
+}
+
+bool CheckGasMask( Critter& cr )
+{
+	uint det = 0;
+	Item@ respirator = _CritGetItemHead( cr );
+	if( valid( respirator ) )
+	{
+		det = GetDeteriorationProcent( respirator );
+		if( det < 5 && Respirators.find( respirator.GetProtoId() ) != -1 )
+		{
+			return true;
+		}
+	}
+	
+	Item@ armor = _CritGetItemArmor( cr );
+	if( valid( armor ) )
+	{
+		det = GetDeteriorationProcent( armor );
+		if( det < 5 && Enviromental.find( armor.GetProtoId() ) != -1 )
+		{
+			return true;			
+		}
+	}
+	
+	return false;
+}
+
+#endif // GASSES
