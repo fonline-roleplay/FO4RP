@@ -33,6 +33,9 @@ namespace FOFMOD
 		{
 			if ( !subject->GetRefcount() )
 			{
+				FOFMOD::System* chSystem;
+				subject->GetSystem(&chSystem);
+				chSystem->OnChannelDelete(subject);
 				delete subject;
 				FOFMOD_DEBUG_LOG( "core channel release delete \n" );
 			}
@@ -239,12 +242,6 @@ namespace FOFMOD
 		}
 	}
 
-	
-	FOFMOD::System* Channel::GetSystem()
-	{
-		return this->system;
-	}
-	
 	void Channel::Invalidate()
 	{
 		if( this->handle )

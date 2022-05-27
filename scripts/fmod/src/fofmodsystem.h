@@ -133,6 +133,7 @@ namespace FOFMOD
 			
 			// Callbacks
 			void OnChannelEnd( FOFMOD::Channel* channel );
+			void OnChannelDelete( FOFMOD::Channel* channel );
 			///////////////////////////////////
 
 			// Playback and controls

@@ -732,6 +732,11 @@ namespace FOFMOD
 	{
 		
 	}
+	
+	void System::OnChannelDelete( FOFMOD::Channel* channel )
+	{
+		
+	}
 
 	void System::SetMusicVolume( float volume )
 	{

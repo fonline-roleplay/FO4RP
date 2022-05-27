@@ -9,6 +9,8 @@
 
 namespace FOFMOD
 {
+	class System;
+	
 	typedef std::list<FOFMOD::DSP*> DspPtrList;
 	
 	class ChannelControl // base class for channelControl core interface implementors
@@ -16,13 +18,14 @@ namespace FOFMOD
 		
 		protected:
 			ChannelControl();
+			FOFMOD::System* system;
 			FMOD::ChannelControl* cchandle;
 			DspPtrList activeEffects;
 			void SetHandle( FMOD::ChannelControl* handle );
 			
 		public:
 			virtual ~ChannelControl();
-			
+			void GetSystem(FOFMOD::System** ptr);
 			void GetPitch( float* value );
 			void SetPitch(float pitch);
 			void IsValid( bool* value );

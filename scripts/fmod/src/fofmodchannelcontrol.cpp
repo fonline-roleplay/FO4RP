@@ -8,6 +8,7 @@
 namespace FOFMOD
 {
 	
+
 	ChannelControl::ChannelControl()
 	{
 		this->activeEffects.clear();
@@ -16,6 +17,11 @@ namespace FOFMOD
 	ChannelControl::~ChannelControl()
 	{
 		this->DropAllEffects();
+	}
+	
+	void ChannelControl::GetSystem(FOFMOD::System** ptr )
+	{
+		*ptr = this->system;
 	}
 	
 	void ChannelControl::SetHandle( FMOD::ChannelControl* handle )

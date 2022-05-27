@@ -6,12 +6,14 @@
 #include "refcount.h"
 #include "fofmodsound.h"
 #include "fofmodchannelcontrol.h"
+#include "fofmodid.h"
 
 namespace FOFMOD
 {
 	class Sound;
 	class System;
 	class DSP;
+	class Identifier;
 	
 	class ScriptChannelRefcounter;
 	
@@ -35,9 +37,9 @@ namespace FOFMOD
 			Channel();
 		
 		protected:
-			FOFMOD::System* system;
 			FMOD::Channel* handle;
 			FOFMOD::Sound* sound;
+			FOFMOD::Identifier id;
 
 		public:
 			CoreChannelRefcounter* coreRefcounter;
@@ -67,7 +69,6 @@ namespace FOFMOD
 			
 			void Stop() override;
 			
-			FOFMOD::System* GetSystem();
 			void Invalidate(); // for external signal processing, fmod doesnt invalidate my handle
 	};
 	
