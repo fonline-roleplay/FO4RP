@@ -7,9 +7,9 @@
 #define SETFLAG(x,flag)     ( x |= flag )
 #define UNSETFLAG(x, flag ) ( x &= (~flag) )
 
-#define MIN(x, min) ( x < min ? x : min )
-#define MAX(x, max) ( x > max ? x : max )
-#define CLAMPA(x, min, max) ( MIN(MAX(x, max ), min ) )
+#define MIN(a, b)(((a) < (b)) ? (a) : (b))
+#define MAX(a, b)(((a) > (b)) ? (a) : (b))
+#define CLAMPA(x, low, high)(((x) > (high)) ? (high) : (((x) < (low)) ? (low) : (x)))
 
 #define MALLOC_NEW(type, name)  type* name = (type*)malloc(sizeof(type)); \
 							 if( name ) \

@@ -14,6 +14,7 @@
 #include "memory.h"
 #include "cachedata.h"
 
+
 typedef enum SOUND_TYPE : int
 {
 	SOUND,
