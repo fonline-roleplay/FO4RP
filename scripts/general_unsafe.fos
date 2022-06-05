@@ -19,6 +19,7 @@
 #include "handcuffs_h.fos"
 #include "plants_h.fos"
 #include "gathering_h.fos"
+#include "trap_h.fos"
 
 import void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo ) from "main";
 import bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param ) from "main";
@@ -538,29 +539,94 @@ uint e_emptySFX( uint[]@ values )
 
 void unsafe_hex_useItem( Critter& cr, int hexX, int hexY, int itm_pid, string@ command, int[] @ param4 )
 {
-	Item@ usedItem = _CritGetItemHand( cr );
-	uint16 usedItemPid = usedItem.GetProtoId();
-	
-	if( usedItemPid == PID_ROD_STRING_HOOK )
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
 	{
-		uint8 throwDir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
-		cr.SetDir( throwDir );
-		PrepareFishing( cr, usedItem, hexX, hexY );
+		return;
 	}
 	
+	Item@ usedItem = _CritGetItemHand( cr );	
+	if( valid( usedItem ) )
+	{
+		uint16 usedItemPid = usedItem.GetProtoId();
+		uint8 dir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
+		cr.SetDir( dir );
+		
+		if( usedItemPid == PID_ROD_STRING_HOOK )
+		{
+			PrepareFishing( cr, usedItem, hexX, hexY );
+		}
+		
+		uint distance = GetDistantion( cr.HexX, cr.HexY, hexX, hexY );
+		if( distance > 1 )
+		{
+			MoveToHex( cr, map, usedItem, hexX, hexY );
+			return;
+		}
+		
+		if( usedItemPid == PID_SHOVEL || usedItemPid == PID_SPADE )
+		{
+			TryGetSand( cr, usedItem, hexX, hexY );
+		}
+		
+		if( farm_seeds.find( usedItemPid ) != -1 )
+		{
+			TryPlantSeed( cr, usedItem, hexX, hexY, null );
+		}
+		
+		if( usedItem.GetType() == ITEM_TYPE_TRAP && usedItem.Proto.Item_Subtype == ITEM_SUBTYPE_MINE )
+		{
+			TryPlantMine( cr, usedItem, hexX, hexY );
+		}
+	}
+}
+
+void MoveToHex( Critter& cr, Map& map, Item& usedItem, uint16 hexX, uint16 hexY )
+{
+	uint16 hx = hexX, hy = hexY;
+	uint8 revDir = GetDirection( hx, hy, cr.HexX, cr.HexY );
+	map.MoveHexByDir( hx, hy, revDir, 1 );
+	cr.RunClientScript( "client_main@__ChosenMoveAction", hx, hy, 2, null, null );
+	uint[] values = { cr.Id, usedItem.Id, hexX, hexY };
+	CreateTimeEvent( AFTER( REAL_MS( 500 ) ), "general_unsafe@e_WaitForIt", values, true );
+}
+
+uint e_WaitForIt( uint[] @ values ) 
+{
+	Critter@ cr = GetCritter( values[0] );
+	if( MovementState( cr ) > 0 )
+	{
+		return REAL_MS( 300 );
+	}
+	
+	Item@ usedItem = GetItem( values[1] );
+	if( !valid( usedItem ) )
+	{
+		return 0;
+	}
+	
+	uint16 hexX = values[2];
+	uint16 hexY = values[3];
+	
+	uint8 dir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
+	cr.SetDir( dir );
+	uint16 usedItemPid = usedItem.GetProtoId();
 	if( usedItemPid == PID_SHOVEL || usedItemPid == PID_SPADE )
 	{
-		uint8 digDir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
-		cr.SetDir( digDir );
 		TryGetSand( cr, usedItem, hexX, hexY );
 	}
 	
 	if( farm_seeds.find( usedItemPid ) != -1 )
 	{
-		uint8 digDir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
-		cr.SetDir( digDir );
 		TryPlantSeed( cr, usedItem, hexX, hexY, null );
 	}
+	
+	if( usedItem.GetType() == ITEM_TYPE_TRAP && usedItem.Proto.Item_Subtype == ITEM_SUBTYPE_MINE )
+	{
+		TryPlantMine( cr, usedItem, hexX, hexY );
+	}
+	
+    return 0;
 }
 
 void unsafe_stopMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
