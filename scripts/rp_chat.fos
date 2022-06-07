@@ -8,30 +8,6 @@ bool sinfFLAG( Critter& player, uint flag )
 	return FLAG( player.Param[ CR_SINF_MODE ], flag );
 }
 
-//Follow indicator for critters (arrows on head)
-bool unbound( Critter& owner, int targetID )
-{
-	return bound( owner, targetID, false );
-}
-
-bool bound( Critter& owner, int targetID, bool set = true )
-{
-	//Empty call
-	if( targetID == 0 )
-	{
-		return true;
-	}
-	
-	Critter@ target;
-	if( !Find( target, targetID ) || !valid( target ) )
-	{
-		return testInfo( owner, "Invalid target id: " + targetID );
-	}
-	
-	target.StatBase[ ST_FOLLOW_CRIT ] = ( set ? int( owner.Id ) : 0 );
-	return true;
-}
-
 ///core module logic
 
 void unsafe_SetChatTarget( Critter& cr, int id, int, int, string@, int[]@ )
@@ -49,26 +25,35 @@ void unsafe_SayRemote( Critter& cr, int sayType, int, int, string@ message, int[
 }
 
 //Enables talk through owned NPC or any critter if you are GM
-bool SetChatTarget( Critter& cr, uint id )
+bool SetChatTarget( Critter& cr, int id )
 {	
-	cr.ParamBase[ CR_TALKING_TARGET_ID ] = id;
-	
-	if( isGM( cr ) && cr.Id != id )
+	if( !isGM( cr ) || int( cr.Id ) == id || id == 0 )
 	{
-		//Disables link with cr
-		unbound( cr, cr.StatBase[ ST_FOLLOW_CRIT ] );
-
-		//Creates link with cr
-		bound( cr, cr.ParamBase[ CR_TALKING_TARGET_ID ] );
+		return false;
 	}
 
-	//Visual arrow on head
-	cr.StatBase[ ST_FOLLOW_CRIT ] = cr.ParamBase[ CR_TALKING_TARGET_ID ];
+	Critter@ target = GetCritter( id );
+	if( !valid( target ) )
+	{
+		return testInfo( cr, "Invalid target id: " + id );
+	}
+	
+	int ownerId = int( cr.Id );
+	if( target.StatBase[ ST_FOLLOW_CRIT ] != ownerId || target.ParamBase[ CR_TALKING_TARGET_ID ] != ownerId )
+	{
+		target.StatBase[ ST_FOLLOW_CRIT ] = ownerId;
+		target.ParamBase[ CR_TALKING_TARGET_ID ] = ownerId;
+	}
+	else
+	{
+		target.StatBase[ ST_FOLLOW_CRIT ] = 0;
+		target.ParamBase[ CR_TALKING_TARGET_ID ] = 0;
+	}
 	
 	return true;
 }
 
-void unsafe_SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message, int[]@ )
+void unsafe_SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message, int[]@ IDs )
 {
 	if( cr.IsDead() && sayType != SAY_NARATIVE )
 	{
@@ -76,10 +61,34 @@ void unsafe_SayChatMessage( Critter& cr, int sayType, int x, int y, string@ mess
 		return;
 	}
 
-	if( !SayChatMessage( cr, sayType, x, y, message ) )
+	int[] _default = { 0 };
+	if( !valid( IDs ) )
 	{
-		testInfo( cr, "Failed to say chat message: " + cr.Id + " " + sayType + " " + x + " " + y + " '" + message + "'" );
+		@IDs = _default;
 	}
+	
+	bool even_once = false;
+	int last_target_id = cr.ParamBase[ CR_TALKING_TARGET_ID ];
+	for( uint i = 0, l = IDs.length(); i < l; i++ )
+	{
+		cr.ParamBase[ CR_TALKING_TARGET_ID ] = IDs[i];
+		if( !SayChatMessage( cr, sayType, x, y, message ) )
+		{
+			testInfo( cr, "Failed to say chat message: " + cr.Id + " " + cr.ParamBase[ CR_TALKING_TARGET_ID ] + " " + sayType + " " + x + " " + y + " '" + message + "'" );
+		}
+		else
+		{
+			even_once = true;
+		}
+	}
+	
+	if( !even_once )
+	{
+		cr.ParamBase[ CR_TALKING_TARGET_ID ] = 0;
+		SayChatMessage( cr, sayType, x, y, message );//Просто говорим в чат, если ни за кого из подконтрольных не удалось сказать.
+	}
+	
+	cr.ParamBase[ CR_TALKING_TARGET_ID ] = last_target_id;
 }
 
 bool SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message )
@@ -87,19 +96,19 @@ bool SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message )
 	if( cr.IsDead() && sayType != SAY_NARATIVE )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DEAD_CANT_TALK );
-		return false;
+		return true;
 	}
 	
 	bool isNear = GetDistantion( x, y, cr.HexX, cr.HexY ) < 6;
 
-	if( sayType != SAY_NARATIVE && ( cr.StatBase[ ST_FOLLOW_CRIT ] == 0 || cr.StatBase[ ST_FOLLOW_CRIT ] != cr.ParamBase[ CR_TALKING_TARGET_ID ] ) )
+	if( sayType != SAY_NARATIVE && ( cr.ParamBase[ CR_TALKING_TARGET_ID ] == 0 ) )
 	{	//in case of error speak normal
 		cr.Say( sayType, message );
 		SayLog( cr, sayType, message );
-		return false;
+		return true;
 	}
 	
-	if( sayType == SAY_NARATIVE || cr.StatBase[ ST_FOLLOW_CRIT ] == int( cr.Id ) ) //gray text
+	if( sayType == SAY_NARATIVE ) //gray text
 	{
 		if( !isGM( cr ) )
 		{
@@ -129,20 +138,25 @@ bool SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message )
 	else
 	{
 		Critter@ target;
-		if( !Find( target, cr.StatBase[ ST_FOLLOW_CRIT ] ) || target.IsDead() || target.StatBase[ ST_FOLLOW_CRIT ] != int( cr.Id ) || ( !isGM( cr ) && target.IsPlayer() ) ) 
+		if( !Find( target, cr.ParamBase[ CR_TALKING_TARGET_ID ] ) || target.IsDead() || target.ParamBase[ CR_TALKING_TARGET_ID ] != int( cr.Id ) || ( !isGM( cr ) && target.IsPlayer() ) ) 
 		{ 
-			cr.Say( sayType, message );
-			SayLog( cr, sayType, message );
+			if( !isGM( cr ) )
+			{
+				cr.Say( sayType, message );
+				SayLog( cr, sayType, message );
+			}
 			return false;
 		}		
 		
+		Map@ crMap = cr.GetMap();
+		Map@ map = target.GetMap();
+		if( !valid( map ) || !valid( crMap ) || map.Id != crMap.Id )
+		{
+			return false;
+		}
+
 		if( target.Stat[ ST_CURRENT_HP ] < 0 || target.IsKnockout() )
 		{
-			Map@ map = target.GetMap();
-			if( !valid( map ) )
-			{
-				return false;
-			}
 			map.SetText( target.HexX, target.HexY, COLOR_TEXT, "|0xf9fa94 " + message );
 		}
 		else
@@ -171,6 +185,7 @@ bool SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message )
 			SayLog( target, sayType, message, "[ " + crInfo( cr ) + " ] " );
 		}
 	}
+	
 	return true;
 }
 
