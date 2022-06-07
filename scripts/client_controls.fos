@@ -40,16 +40,19 @@ class Controlled
 
 class ControlGroup 
 {	
+	uint id;
 	string name;
 	Controlled@[] list;
 	
 	ControlGroup( uint id ) 
 	{
-		this.name = ReplaceText( GetMsgStr( TEXTMSG_TEXT, STR_CONTRL_GROUP_NAME ), "ID", ( id + 1 ) );
+		this.id = id + 1;
+		this.name = ReplaceText( GetMsgStr( TEXTMSG_TEXT, STR_CONTRL_GROUP_NAME ), "ID", this.id );
 	}
 	
 	ControlGroup( string name ) 
 	{
+		this.id = 0;//GetStrHash( name );
 		this.name = name;
 	}
 	
@@ -84,11 +87,17 @@ class ControlGroup
 	
 	ControlGroup@ add( Controlled@ elem ) 
 	{
+		RunServerScriptUnsafe( "raiders@unsafe_setControl", elem.id, this.id, 0, null, null );
 		list.insertLast( @elem );
 		return this;
 	}
 	
 	ControlGroup@ remove( uint id ) 
+	{
+		return remove( id, false );
+	}
+	
+	ControlGroup@ remove( uint id, bool silent ) 
 	{		
 		int l = list.length();
 		bool replacing = false;
@@ -96,7 +105,10 @@ class ControlGroup
 		{
 			if( list[i].id == id )
 			{
-				RunServerScriptUnsafe( "raiders@unsafe_FreeMobById", id, 0, 0, null, null );
+				if( !silent )
+				{
+					RunServerScriptUnsafe( "raiders@unsafe_FreeMobById", id, this.id, 0, null, null );
+				}
 				replacing = true;
 			}
 			
@@ -140,11 +152,19 @@ class ControlGroup
 		return false;
 	}
 
-	void clear() 
+	void clear()
 	{
-		for( int i = 0, l = list.length(); i < l; i++ )
+		clear( false );
+	}
+	
+	void clear( bool silent ) 
+	{
+		if( !silent )
 		{
-			RunServerScriptUnsafe( "raiders@unsafe_FreeMobById", list[i].id, 0, 0, null, null );
+			for( int i = 0, l = list.length(); i < l; i++ )
+			{
+				RunServerScriptUnsafe( "raiders@unsafe_FreeMobById", list[i].id, this.id, 0, null, null );
+			}
 		}
 		
 		list.resize(0);
@@ -192,6 +212,7 @@ class ControlGroup
 	}
 }
 
+int[] shiftGroup;
 ControlPanel@ controlpanel;
 class ControlPanel 
 {
@@ -203,8 +224,8 @@ class ControlPanel
 	{
 		@selection = ControlGroup( "Selection" );
 		
-		@current = selection;		
-		
+		@current = selection;	
+
 		for( uint i = 0; i < size; i++ )
 		{
 			groups.insertLast( ControlGroup( i ) );
@@ -259,10 +280,15 @@ class ControlPanel
 	
 	void removeFromAllGroups( uint id ) 
 	{
-		selection.remove( id );
+		removeFromAllGroups( id, false );
+	}
+	
+	void removeFromAllGroups( uint id, bool silent ) 
+	{
+		selection.remove( id, silent );
 
 		for( uint i = 0, l = groups.length(); i < l; i++ )
-			groups[i].remove( id );		
+			groups[i].remove( id, silent );		
 	}
 	
 	bool HotkeyCommand( uint8 key ) 
@@ -379,7 +405,23 @@ class ControlPanel
 	}
 }
 
-int[] shiftGroup;
+void initControlPanel()
+{
+	if( valid( controlpanel ) )
+	{
+		for( uint i = 0; i < 9; i++ )
+		{
+			controlpanel.groups[i].clear( true );
+		}
+		
+		controlpanel.selection.clear( true );
+		@controlpanel.current = controlpanel.selection;
+	}
+	else
+	{
+		@controlpanel = ControlPanel(9);
+	}
+}
 
 void checkSelectionBar() 
 {
@@ -446,7 +488,10 @@ void checkSelectionBar()
 					CritterCl@ target2 = GetCritter( ID );
 					if( valid( target2 ) && ( targets.find( target2.Id ) == -1  ) )
 					{
-						targets.insertLast( target2.Id );
+						if( target2.IsLife() || ( y2 - y1 < dx && x2 - x1 < dx ) )
+						{
+							targets.insertLast( target2.Id );
+						}
 					}
 				}
 			}
@@ -556,6 +601,11 @@ int[] getControlledGroups( int id )
 	return controlpanel.contains( id );
 }
 
+bool isControlled( CritterCl& cr ) 
+{
+	return( cr.Param[ MERC_MASTER_ID ] == int( GetChosen().Id ) );
+}
+
 bool isControlled( int id )
 { 
 	return controlpanel.contains( id ).length() != 0;
@@ -569,6 +619,11 @@ bool isControlled( int id, int groupN )
 bool isSelected( int id )
 {
 	return controlpanel.current.contains( id );
+}
+
+void _LostCritterControl( int id, int, int, string@, int[]@ )
+{
+    controlpanel.removeFromAllGroups( id, true );
 }
 
 void SetControlCritters( int id )
@@ -588,4 +643,45 @@ void SetControlCritters( int id )
 int[] control()
 {
     return controlpanel.current.getIDs();
+}
+
+int[] getControlledGroups( CritterCl& cr )
+{
+	int[] result;
+	int groups = cr.ParamBase[ CR_CONTROLLED_GROUP ];
+	for( uint i = 0; i < 10; i++ )
+	{
+		int flag = ( 1 << i );
+		if( ( groups & flag ) == flag )
+		{
+			result.insertLast( i - 1 );
+		}
+	}
+	
+	return result;
+}
+
+void checkCritterControl( CritterCl@ cr )
+{
+	if( !valid( cr ) )
+	{
+		return;
+	}
+	
+	CritterCl@ ch = GetChosen();
+	if( cr.Param[MERC_MASTER_ID] == int( ch.Id ) )
+	{
+		int[] IDs = getControlledGroups( cr );
+		for( uint i = 0, l = IDs.length(); i < l; i++ )
+		{
+			if( IDs[i] == -1 )
+			{
+				controlpanel.selection.add( cr.Id );
+			}
+			else
+			{
+				controlpanel.groups[IDs[i]].add( cr.Id );				
+			}
+		}
+	}
 }
