@@ -4,6 +4,8 @@
 #include "fofmodthread.h"
 #include <cstring>
 #include "macros.h"
+#include "_defines.fos"
+#include "fonline.h"
 
 namespace FOFMOD
 {
@@ -95,6 +97,7 @@ namespace FOFMOD
 		this->Stop();
 		if( func )
 		{
+			Log("Starting new thread %s\n", this->GetName.c_str());
 			InternalThreadData* itd = this->tdata.GetInternalData();
 			
 			itd->locker.Lock();
@@ -145,10 +148,27 @@ namespace FOFMOD
 	void ExecutionThread::Stop()
 	{
 		this->locker.Lock();
+		if( !this->isStopping )
+		{
+			InternalThreadData* itd = this->tdata.GetInternalData();
+			if( itd )
+			{
+				UNSETFLAG(  itd->flags, FOFMOD_EXECTHREAD_FLAG::TERMINATE );
+			}
+			this->isStopping = true;
+		}
+		this->locker.Unlock();
+	}
+	
+	void ExecutionThread::Finish()
+	{
+		this->locker.Lock();
 		if( this->isRunning )
 		{
 			#ifdef __WINDOWS__
 		
+				this->isRunning = false;
+				
 				if( this->sysThreadId )
 				{
 					this->sysThreadId = -1;
@@ -168,24 +188,81 @@ namespace FOFMOD
 				
 			#endif
 			
-			InternalThreadData* itd = this->tdata.GetInternalData();
-			if( itd )
-			{
-				delete itd;
-			}
-			this->tdata.SetInternalData( NULL );
-			this->tdata.SetUserData( NULL );
-			this->isRunning = false;
+			this->isFinished = true;
+
 		}
 		this->locker.Unlock();
 	}
 	
+	void ExecutionThread::Suspend()
+	{
+		InternalThreadData* itd = this->tdata.GetInternalData();
+		if( itd )
+		{
+			itd->locker.Lock();
+			UNSETFLAG(  itd->flags, FOFMOD_EXECTHREAD_FLAG::SUSPEND );
+			itd->locker.Unlock();
+		}
+		
+	}
+	
+	void ExecutionThread::Join()
+	{
+		while(true)
+		{
+			bool isFin = false;
+			this->locker.Lock();
+			isFin = this->isFinished();
+			this->locker.Unlock();
+			if(isFin)
+				break;
+		}
+	}
+	
+	void ExecutionThread::Terminate()
+	{
+		InternalThreadData* itd = this->tdata.GetInternalData();
+		if( itd )
+		{
+			itd->locker.Lock();
+			UNSETFLAG(  itd->flags, FOFMOD_EXECTHREAD_FLAG::TERMINATE );
+			itd->locker.Unlock();
+		}
+	}
 	
 	bool ExecutionThread::IsRunning()
 	{
 		bool result = true;
 		this->locker.Lock();
 		result = this->isRunning;
+		this->locker.Unlock();
+		return result;
+	}
+	
+	bool ExecutionThread::IsStopping()
+	{
+		bool result = true;
+		this->locker.Lock();
+		result = this->isStopping;
+		this->locker.Unlock();
+		return result;
+	}
+	
+	
+	bool ExecutionThread::IsFinished()
+	{
+		bool result = true;
+		this->locker.Lock();
+		result=this->isFinished;
+		this->locker.Unlock();
+		return result;
+	}
+	
+	bool ExecutionThread::IsSuspended()
+	{
+		bool result = true;
+		this->locker.Lock();
+		result = this->isSuspended;
 		this->locker.Unlock();
 		return result;
 	}
@@ -213,7 +290,7 @@ namespace FOFMOD
 		void* result = NULL;
 		#endif // __WINDOWS__ || __LINUX__
 		
-		int fresult = 0; // 
+		int fresult = 0; //
 		
 		if( data )
 		{
@@ -250,6 +327,9 @@ namespace FOFMOD
 					
 					work = !ISFLAG( flags, FOFMOD_EXECTHREAD_FLAG::TERMINATE );
 					
+					if(!work)
+						break;
+					
 					fresult = func( userData );
 					switch( fresult )
 					{
@@ -262,17 +342,24 @@ namespace FOFMOD
 							work = false;
 							break;
 						}
+						case( EXECTHREAD_RESULT::RES_REPEAT):
+						{
+							break;
+						}
+						
 						default:
 							break;
 					}
 				}
 			}
 			
-			ThreadEventData* ted = ThreadEventData_New();
-			ted->result = FOFMOD_EXECTHREAD_EVENT::TERMINATED;
-			host->OnThreadEvent( fresult, ted );
-			ThreadEventData_Delete( ted );
+
 		}
+		
+		ThreadEventData* ted = ThreadEventData_New();
+		ted->result = FOFMOD_EXECTHREAD_EVENT::TERMINATED;
+		host->OnThreadEvent( fresult, ted );
+		ThreadEventData_Delete( ted );
 		return result;
 	}
 	
@@ -282,12 +369,12 @@ namespace FOFMOD
 		{
 			case ( FOFMOD_EXECTHREAD_EVENT::FINISHED ):
 			{
-				this->Stop();
+				this->Finish();
 				break;
 			}
 			case ( FOFMOD_EXECTHREAD_EVENT::TERMINATED ):
 			{
-				this->Stop();
+				this->Finish();
 				break;
 			}
 			default:

@@ -16,7 +16,7 @@
 typedef enum EXECTHREAD_FLAG : unsigned int
 {
 	SUSPEND = 0x00000001,
-	TERMINATE = 0x00000002
+	TERMINATE = 0x00000002,
 
 } FOFMOD_EXECTHREAD_FLAG;
 
@@ -28,7 +28,8 @@ typedef enum EXECTHREAD_EVENT : unsigned int
 
 typedef enum EXECTHREAD_RESULT : unsigned int
 {	
-	RES_FINISH = 0
+	RES_FINISH = 0,
+	RES_REPEAT = 1
 } FOFMOD_EXECTHREAD_RESULT;
 
 namespace FOFMOD
@@ -90,7 +91,11 @@ namespace FOFMOD
 		#endif // __WINDOWS__ || __LINUX__
 			std::string name;
 			bool isRunning;
+			bool isStopping;
+			bool isFinished;
+			bool isSuspended;
 			ExecutionThreadData tdata;
+			void Finish();
 			
 		public:
 			ExecutionThread();
@@ -98,7 +103,13 @@ namespace FOFMOD
 			bool Init();
 			bool Start( generic_thread_handler func, void* data );
 			void Stop();
+			void Suspend();
+			void Join();
+			void Terminate();
+			bool IsSuspended();
 			bool IsRunning();
+			bool IsStopping();
+			bool IsFinished();
 			void SetName( std::string& newName );
 			std::string& GetName();
 			void OnThreadEvent( int eventType, void* eventData );

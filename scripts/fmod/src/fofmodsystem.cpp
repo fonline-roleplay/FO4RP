@@ -21,6 +21,13 @@
 #undef true
 #undef false
 
+#ifdef FOFMOD_MT
+
+#pragma message ("Compiling MT solution")
+
+#endif
+
+
 namespace FOFMOD
 {	
 	const int fileExtNum = 4;
@@ -44,6 +51,16 @@ namespace FOFMOD
 			}	
 		}
 		return result;
+	}
+
+	System::LogicThreadData::LogicThreadData()
+	{
+		this->system = NULL;
+	}
+	
+	System::LogicThreadData::~LogicThreadData()
+	{
+		
 	}
 
 	System::IndexedArchiveFile::IndexedArchiveFile() {} // ban
@@ -98,6 +115,7 @@ namespace FOFMOD
 				chn->Release();
 				
 				delete cbdata;
+				
 				FOFMOD_DEBUG_LOG("Channel <%u> play end \n", channel);
 			}
 		}
@@ -107,6 +125,11 @@ namespace FOFMOD
 
 	System::System()
 	{
+		
+		#ifdef FOFMOD_MT
+		this->logicThread.SetName(std::string("fofmod Logic"));
+		#endif
+	
 		this->initialized = false;
 		this->FSystem = NULL;
 		this->soundChannelGroup = NULL;
@@ -114,10 +137,19 @@ namespace FOFMOD
 		this->indexedArchives.clear();
 		this->soundNames.clear();
 		this->musicNames.clear();
+		this->playingSounds.clear();
+		
+
+		
 	}
 
 	System::~System()
 	{
+		
+		#ifdef FOFMOD_MT
+		this->logicThread.Stop();
+		#endif
+		
 		if( this->soundChannelGroup )
 		{
 			delete( this->soundChannelGroup );
@@ -139,7 +171,11 @@ namespace FOFMOD
 		this->indexedArchives.clear();
 		this->soundNames.clear();
 		this->musicNames.clear();
+		this->playingSounds.clear();
 		this->initialized = false;
+		
+
+		
 	}
 
 	void System::Update()
@@ -220,8 +256,12 @@ namespace FOFMOD
 										delete pluginName;
 									}
 								}
-
+			
+								
 								#endif // FOFMOD_DEBUG
+								
+								
+
 							}
 						}
 					}
@@ -231,11 +271,44 @@ namespace FOFMOD
 		else
 			result = FMOD_OK;
 		
+		
 		if( result == FMOD_OK )
+		{
+			
+			#ifdef FOFMOD_MT
+			FOFMOD::System::LogicThreadData* ltd = new FOFMOD::System::LogicThreadData();
+			ltd->system = this;
+			this->logicThread.Start(fofmod_logic, (void*)ltd);
+			#endif 
 			this->initialized = true;
+		}
+			
 
 		return result;
 	}
+	
+	#ifdef FOFMOD_MT
+	
+	FOFMOD_EXECTHREAD_RESULT System::fofmod_logic(void* data) // it's static
+	{
+		static int loopCount = 0;
+		Log("Fmod logic frame %d\n", loopCount);
+		loopCount++;
+		
+		FOFMOD::System::LogicThreadData* ltd = (FOFMOD::System::LogicThreadData*)data;
+		
+		FOFMOD_EXECTHREAD_RESULT res = ltd->system->thread_logic_handler();
+		
+		return res; 
+	}
+	
+	FOFMOD_EXECTHREAD_RESULT System::thread_logic_handler()
+	{
+
+		return EXECTHREAD_RESULT::RES_REPEAT;
+	}
+	
+	#endif // FOFMOD_MT
 
 	bool System::TouchArchive( const std::string& filename )
 	{
@@ -346,7 +419,15 @@ namespace FOFMOD
 			FMOD_RESULT result = this->PlaySound( snd, group, paused, *chn );
 			if( result == FMOD_OK )
 			{
-
+				#ifdef FOFMOD_MT
+				this->playingSoundsLocker.Lock();
+				#endif // FOFMOD_MT
+				
+				this->playingSounds.push_back(*chn);
+				
+				#ifdef FOFMOD_MT
+				this->playingSoundsLocker.Unlock();
+				#endif // FOFMOD_MT
 			}
 			else
 			{
@@ -731,7 +812,22 @@ namespace FOFMOD
 	
 	void System::OnChannelEnd( FOFMOD::Channel* channel )
 	{
+		#ifdef FOFMOD_MT
+			this->playingSoundsLocker.Lock();
+		#endif 
 		
+		for( ChannelVec::iterator it = this->playingSounds.begin(), et = this->playingSounds.end(); it < et; it ++ )
+		{
+			if( *it == channel )
+			{
+				this->playingSounds.erase(it);
+				break;
+			}
+		}
+			
+		#ifdef FOFMOD_MT
+			this->playingSoundsLocker.Unlock();
+		#endif
 	}
 	
 	void System::OnChannelDelete( FOFMOD::Channel* channel )

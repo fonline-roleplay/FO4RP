@@ -50,6 +50,7 @@ namespace FOFMOD
 	{
 		this->handle = NULL;
 		this->sound = NULL;
+		this->isReady = false;
 		this->system = system;
 		this->coreRefcounter   = new CoreChannelRefcounter( this );
 		this->scriptRefcounter = new ScriptChannelRefcounter( this );
@@ -138,7 +139,17 @@ namespace FOFMOD
 		}
 	}
 	
-
+	
+	#ifdef FOFMOD_MT
+	bool Channel::IsReady()
+	{
+		bool result = true;
+		this->locker.Lock();
+		result = this->isReady;
+		this->Locker.Unlock();
+		return result;
+	}
+	#endif
 
 	void Channel::SetPlaybackPosition( unsigned int positionMs )
 	{

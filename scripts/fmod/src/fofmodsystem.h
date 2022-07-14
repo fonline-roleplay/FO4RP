@@ -13,6 +13,8 @@
 #include "zipfile.h"
 #include "memory.h"
 #include "cachedata.h"
+#include "fofmodthread.h"
+
 
 
 typedef enum SOUND_TYPE : int
@@ -46,8 +48,26 @@ namespace FOFMOD
 	class System
 	{
 
+		#ifdef FOFMOD_MT
+		
+			class LogicThreadData
+			{
+				class System;
+				
+				public:
+					FOFMOD::System* system;
+					LogicThreadData();
+					~LogicThreadData();
+			};
+			// logic thread function
+			protected:
+				static FOFMOD_EXECTHREAD_RESULT fofmod_logic(void* data);
+			
+		#endif //FOFMOD_MT 
+		
 		typedef std::map< std::string, FOFMOD::Sound* > SoundMap;
 		typedef std::vector< FOFMOD::Sound* > SoundVec;
+		typedef std::vector< FOFMOD::Channel* > ChannelVec;
 
 
 		// for archives sound mapping
@@ -101,6 +121,14 @@ namespace FOFMOD
 			std::map< std::string, SoundAlias > soundNames;
 			std::map< std::string, SoundAlias > musicNames;
 			
+			#ifdef FOFMOD_MT
+			FOFMOD::AtomicLock playingSoundsLocker;
+			FOFMOD::ExecutionThread logicThread;
+			
+			#endif // FOFMOD_MT
+			
+			ChannelVec playingSounds;
+			
 			// streamed sounds cannot be reused between different plays, so each new sound be generating own stream, but the prototype data is same.
 			FOFMOD::CachedDataMap 	 cachedSoundsData;
 
@@ -115,6 +143,8 @@ namespace FOFMOD
 			void Play( const std::string& soundName, FOFMOD_SOUND_TYPE type,  FOFMOD::ChannelGroup* group, FOFMOD::Channel** chn, bool paused );
 			FMOD_RESULT PlaySound( FOFMOD::Sound* snd, FOFMOD::ChannelGroup* group, bool paused, FOFMOD::Channel* chn );
 			void MapArchive( unsigned int index );
+			
+			
 			
 
 		public:
@@ -136,6 +166,10 @@ namespace FOFMOD
 			void OnChannelEnd( FOFMOD::Channel* channel );
 			void OnChannelDelete( FOFMOD::Channel* channel );
 			///////////////////////////////////
+			
+			#ifdef FOFMOD_MT
+			FOFMOD_EXECTHREAD_RESULT thread_logic_handler( );
+			#endif
 
 			// Playback and controls
 			FOFMOD::Channel* PlaySound(  const std::string& soundName, bool paused );

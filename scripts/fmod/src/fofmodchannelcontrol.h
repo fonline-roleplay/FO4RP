@@ -6,15 +6,40 @@
 #include "fofmoddsp.h"
 #include <list>
 
+#ifdef FOFMOD_MT
+#include <deque>
+#endif
 
 namespace FOFMOD
 {
 	class System;
 	
+	#ifdef FOFMOD_MT
+		class APICall;
+	#endif
+	
 	typedef std::list<FOFMOD::DSP*> DspPtrList;
+	
+
+
 	
 	class ChannelControl // base class for channelControl core interface implementors
 	{
+		
+		#ifdef FOFMOD_MT
+		typedef std::deque<FOFMOD::ChannelControl::APICall*> APICallDeque;
+		#endif
+	
+		#ifdef FOFMOD_MT
+		public:
+		class APICall
+		{
+			public:
+				APICall();
+				~APICall();
+				
+		};
+		#endif
 		
 		protected:
 			ChannelControl();
@@ -22,6 +47,10 @@ namespace FOFMOD
 			FMOD::ChannelControl* cchandle;
 			DspPtrList activeEffects;
 			void SetHandle( FMOD::ChannelControl* handle );
+			
+			#ifdef FOFMOD_MT
+			APICallDeque apiCalls;
+			#endif
 			
 		public:
 			virtual ~ChannelControl();
@@ -47,6 +76,10 @@ namespace FOFMOD
 			void Get3DLevel( float* value );
 			
 			virtual void Stop();
+			
+		#ifdef FOFMOD_MT
+		
+		#endif
 	};
 }
 

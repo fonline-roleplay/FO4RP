@@ -7,6 +7,7 @@
 #include "fofmodsound.h"
 #include "fofmodchannelcontrol.h"
 #include "fofmodid.h"
+#include "fofmodlock.h"
 
 namespace FOFMOD
 {
@@ -40,10 +41,19 @@ namespace FOFMOD
 			FMOD::Channel* handle;
 			FOFMOD::Sound* sound;
 			FOFMOD::Identifier id;
+			#ifdef FOFMOD_MT
+			FOFMOD::AtomicLock locker;
+			#endif
 
 		public:
 			CoreChannelRefcounter* coreRefcounter;
 			ScriptChannelRefcounter* scriptRefcounter;
+			
+			#ifdef FOFMOD_MT
+			bool isReady;
+			bool IsReady();
+			#endif
+			
 			Channel( FOFMOD::System* system );
 			~Channel();
 			void Addref() override;
@@ -54,6 +64,7 @@ namespace FOFMOD
 			void SetSound( FOFMOD::Sound* snd );
 			void GetSound( FOFMOD::Sound** value );
 			void IsValid( bool* value );
+			
 			
 			// Channel core
 			void SetPlaybackPosition( unsigned int positionMs );
