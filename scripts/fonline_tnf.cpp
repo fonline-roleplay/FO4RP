@@ -39,8 +39,8 @@ EXPORT int getParam_DamageResistance( CritterMutual& cr, uint index );
 EXPORT int getParam_DamageThreshold( CritterMutual& cr, uint index );
 EXPORT int getParam_RadiationResist( CritterMutual & cr, uint );
 EXPORT int getParam_PoisonResist( CritterMutual & cr, uint );
-EXPORT int  getParam_Timeout( CritterMutual& cr, uint index );
-EXPORT int  getParam_Reputation( CritterMutual& cr, uint index );
+EXPORT int getParam_Timeout( CritterMutual& cr, uint index );
+EXPORT int getParam_Reputation( CritterMutual& cr, uint index );
 EXPORT void changedParam_Reputation( CritterMutual& cr, uint index, int oldValue );
 
 // Extended methods
@@ -380,7 +380,12 @@ EXPORT int getParam_Hp( CritterMutual& cr, uint )
 
 EXPORT int getParam_MaxLife( CritterMutual& cr, uint )
 {
-    int val = cr.Params[ ST_MAX_LIFE ] + cr.Params[ ST_MAX_LIFE_EXT ] + cr.Params[ ST_STRENGTH ] * 3 + cr.Params[ ST_ENDURANCE ] * 5; 
+    int val = cr.Params[ ST_MAX_LIFE ] + cr.Params[ ST_MAX_LIFE_EXT ] + cr.Params[ ST_STRENGTH ] * 3 + cr.Params[ ST_ENDURANCE ] * 5;
+	if( cr.Params[ TRAIT_SEX_APPEAL ] )
+	{
+		val -= 50;
+	}
+	
     return CLAMP( val, 1, 9999 );
 }
 
@@ -399,14 +404,22 @@ EXPORT int getParam_Ap( CritterMutual& cr, uint )
 
 EXPORT int getParam_RegenAp( CritterMutual& cr, uint )
 {
-    if( cr.Params[CR_SLEEPING_STATE] > 0 )
+    if( cr.Params[ CR_SLEEPING_STATE ] > 0 )
     {
         return 0;
     }
+	
     int val = APREGEN_BASE + cr.Params[ ST_APREGEN ] + cr.Params[ ST_APREGEN_EXT ];
-    val += ( cr.Params[ ST_AGILITY ] + cr.Params[ ST_AGILITY_EXT ] )* APREGEN_PER_AGI;
-    val += ( cr.Params[ ST_ENDURANCE ] + cr.Params[ ST_ENDURANCE_EXT ] ) * APREGEN_PER_END;
+    val += getParam_Agility( cr, 0 ) * APREGEN_PER_AGI;
+    val += getParam_Endurance( cr, 0 ) * APREGEN_PER_END;
+	
+	if( cr.Params[ TRAIT_KAMIKAZE ] )
+	{
+		val += cr.Params[ ST_AGILITY ] * KAMIKAZE_AP_REGEN_BONUS;
+	}
+	
 	val -= CLAMP( cr.Params[ ST_POISONING_LEVEL ] * 3, 0, 900 );
+	
     return CLAMP( val, 0, APREGEN_MAX );
 }
 
@@ -500,11 +513,14 @@ EXPORT int getParam_MaxCritical( CritterMutual& cr, uint )
 
 EXPORT int getParam_Ac( CritterMutual& cr, uint )
 {
-    int         val = cr.Params[ ST_ARMOR_CLASS ] + cr.Params[ ST_ARMOR_CLASS_EXT ] + ( getParam_Agility( cr, 0 ) * 5 ) + cr.Params[ ST_TURN_BASED_AC ];
+    int val = cr.Params[ TRAIT_KAMIKAZE ] ? 0 : getParam_Agility( cr, 0 ) * 5;
     const Item* armor = cr.ItemSlotArmor;
     if( armor->GetId() && armor->IsArmor() )
+	{
         val -= armor->Proto->Armor_AC;
-    return CLAMP( val, 0, 90 );
+    }
+
+	return val;
 }
 
 EXPORT int getParam_DamageResistance( CritterMutual& cr, uint index )
