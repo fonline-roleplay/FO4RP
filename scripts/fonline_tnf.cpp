@@ -418,6 +418,11 @@ EXPORT int getParam_RegenAp( CritterMutual& cr, uint )
 		val += cr.Params[ ST_AGILITY ] * KAMIKAZE_AP_REGEN_BONUS;
 	}
 	
+	if( cr.Params[ CR_STUNNED ] )
+	{
+		val /= STUNNED_AP_REGEN_MALUS;
+	}
+	
 	val -= CLAMP( cr.Params[ ST_POISONING_LEVEL ] * 3, 0, 900 );
 	
     return CLAMP( val, 0, APREGEN_MAX );
@@ -514,6 +519,11 @@ EXPORT int getParam_MaxCritical( CritterMutual& cr, uint )
 EXPORT int getParam_Ac( CritterMutual& cr, uint )
 {
     int val = cr.Params[ TRAIT_KAMIKAZE ] ? 0 : getParam_Agility( cr, 0 ) * 5;
+	if( cr.Params[ CR_DAZED ] )
+	{
+		val -= DAZED_AC_MALUS;
+	}
+	
     const Item* armor = cr.ItemSlotArmor;
     if( armor->GetId() && armor->IsArmor() )
 	{
@@ -766,39 +776,47 @@ uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode )
     uint8 aim = mode >> 4;
 	uint apCost = 1;
 
-	if(use == USE_USE)
+	if( use == USE_USE )
 	{
-		apCost = (item.Proto->Item_UseAp == 0 ? FOnline->RtApCostUseItem : item.Proto->Item_UseAp);
+		apCost = ( item.Proto -> Item_UseAp == 0 ? FOnline -> RtApCostUseItem : item.Proto -> Item_UseAp );
 	}
-	else if(use == USE_RELOAD)
+	else if( use == USE_RELOAD )
 	{
-		apCost = (item.Proto->Weapon_ReloadAp == 0 ? FOnline->RtApCostReloadWeapon : item.Proto->Weapon_ReloadAp);
+		apCost = ( item.Proto -> Weapon_ReloadAp == 0 ? FOnline -> RtApCostReloadWeapon : item.Proto -> Weapon_ReloadAp );
 	}
-	else if(use >= USE_PRIMARY && use <= USE_THIRD && item.IsWeapon())
+	else if( use >= USE_PRIMARY && use <= USE_THIRD && item.IsWeapon() )
 	{
-		int skill = item.Proto->Weapon_Skill[use];
-		bool hthAttack = Item_Weapon_IsHtHAttack(item, mode);
-		bool rangedAttack = Item_Weapon_IsRangedAttack(item, mode);
-		bool isBurst = (item.Proto->Weapon_Round[use] > 1);
+		int skill = item.Proto -> Weapon_Skill[ use ];
+		bool hthAttack = Item_Weapon_IsHtHAttack( item, mode );
+		bool rangedAttack = Item_Weapon_IsRangedAttack( item, mode );
+		bool isBurst = ( item.Proto->Weapon_Round[ use ] > 1 );
 
-		apCost = item.Proto->Weapon_ApCost[use];
+		apCost = item.Proto -> Weapon_ApCost[ use ];
 
-		if(aim)
+		if( aim )
 		{
-			apCost += (apCost*GetAimApCost(aim))/100;
+			apCost += ( apCost * GetAimApCost( aim ) ) / 100;
 		}
 
-		if(rangedAttack)
+		if( rangedAttack )
 		{
-
-			if(cr.Params[TRAIT_FAST_SHOT] && !hthAttack) 
+			if( cr.Params[ TRAIT_FAST_SHOT ] && !hthAttack ) 
 			{
-					apCost = apCost * FAST_SHOT_AP_MUL / 100;
+				apCost = apCost * FAST_SHOT_AP_MUL / 100;
 			}
 		}
+		
+		if( cr.Params[ TRAIT_ONE_HANDER ] )
+		{
+			apCost = apCost * ONE_HANDER_AP_MUL / 100;
+		}
 	}
 
-	if(apCost < 1) apCost = 1;
+	if( apCost < 1 )
+	{
+		apCost = 1;
+	}
+	
 	return apCost;
 }
 
