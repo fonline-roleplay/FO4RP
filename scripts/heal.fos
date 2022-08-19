@@ -1659,8 +1659,8 @@ class HealingItemCollection
 
 HealingItemCollection@ healingItems = HealingItemCollection()
 //					    Pid         instant_heal,	value_heal,		value_overdose,	 			msg, 			 ResurectItem,			SoundName
-	.healingItem( PID_TRAUMATIN,		100,			60,				75,				STR_EMOTE_INJECT_TRAUMATIN,	true,	 		 "Stimpack.ogg" 	)
-	.healingItem( PID_SUPER_STIMPAK,	60,				100,			75,				STR_EMOTE_INJECT_SS, 		true,	 		 "Stimpack.ogg" 	)
+	.healingItem( PID_TRAUMATIN,		100,			60,				60,				STR_EMOTE_INJECT_TRAUMATIN,	true,	 		 "Stimpack.ogg" 	)
+	.healingItem( PID_SUPER_STIMPAK,	60,				100,			60,				STR_EMOTE_INJECT_SS, 		true,	 		 "Stimpack.ogg" 	)
 	.healingItem( PID_STIMPAK,			30,				50,				30,				STR_EMOTE_INJECT_STIM, 		true,			 "Stimpack.ogg" 	)
 	.healingItem( PID_HEALING_POWDER,	20,				30,				40,				STR_EMOTE_APPLY_HP, 	   	false,	  		 "powder_use.ogg"	);
 	
@@ -1936,11 +1936,153 @@ class MenuFirstAid: CenteredMenuHandler
 	}
 }
 
+const uint16[] medPids = {
+	//From weakest to strongest ones:
+	PID_HEALING_POWDER,
+	PID_STIMPAK,
+	PID_SUPER_STIMPAK,
+	PID_TRAUMATIN
+};
+
+HealingItem[] getMeds( Critter& cr )
+{
+	HealingItem[] meds;
+
+	Item@[] items = getItems( cr, medPids );
+	if( items.length() == 0 )
+	{
+		return meds;
+	}
+	
+	for( uint i = 0, l = items.length(); i < l; i++ )
+	{
+		meds.insertLast( GetHealingItem( items[i] ) );
+	}
+
+	return meds;
+}
+
+bool UseBestHealingItemAvailable( Critter& cr )
+{
+	HealingItem[] meds = getMeds( cr );
+	if( meds.length() == 0 )
+	{
+		return false;
+	}
+	
+	int currentOverdose = cr.ParamBase[ ST_GLOBAL_OVERDOSE ];
+	int requestedHeal = cr.Stat[ ST_MAX_LIFE ] - cr.Stat[ ST_CURRENT_HP ];
+	if( currentOverdose > 100 )
+	{
+		cr.Say( SAY_EMOTE_ON_HEAD, "overdosed with meds" );
+		return false;
+	}
+	
+	float traitMul = 10.0f;
+	float traitMul2 = 10.0f;
+	float traitDiv = 10.0f;
+	
+	if( cr.Trait[ TRAIT_CHEM_RELIANT ] != 0 )
+	{
+		traitMul = 13.0f;
+	}
+	
+	if( cr.Trait[ TRAIT_CHEM_RESISTANT ] != 0 )
+	{
+		traitMul = 7.0f;
+	}
+
+	if( cr.Trait[TRAIT_FAST_METABOLISM] != 0 )
+	{
+		traitMul2 = traitMul * 1.3f;
+	}
+	else
+	{
+		traitMul2 = traitMul;
+	}
+
+	if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
+		cr.Say( SAY_NORM, requestedHeal + "H " + currentOverdose + "% " + traitMul + "(" + traitMul2 + ") / " + traitDiv );//DEBUG, temporary for tests
+	
+	int selection = -1;
+	float topPriority = 0.0f;
+	for( uint i = 0, l = meds.length(); i < l; i++ )
+	{
+		int summarOverdose = currentOverdose + int( meds[i].value_overdose * ( traitMul2 / traitDiv ) );
+		float potentialHeal = ( meds[i].instant_heal / 1.0f ) + ( meds[i].value_heal / 2.0f );
+		potentialHeal *= traitMul / traitDiv;
+		
+		float efficiency;
+		if( potentialHeal <= requestedHeal )
+		{ //Если хилять надо много - то смотрим, какой % нехватающих ХП будет восстановлен:
+			efficiency = potentialHeal / requestedHeal * 100.0f;
+		}
+		else
+		{ //Если хилять надо мало - то смотрим, какой % от потенциала медикамена будет использован:
+			efficiency = requestedHeal / potentialHeal * 100.0f;
+		}
+		
+		float priority = efficiency / summarOverdose * 100.0f;
+
+		if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
+			cr.Say( SAY_NORM, 
+				i + ") "
+				+ meds[i].instant_heal + "H "
+				+ meds[i].value_heal + "h "
+				+ meds[i].value_overdose + " # "
+				+ summarOverdose + "& "
+				+ potentialHeal + " # "
+				+ efficiency + "% "
+				+ priority + "% "
+				); //DEBUG, temporary for tests
+		
+		//Если хилево неэффективное, и захиляешь меньше % хп чем выйдет % передоза - то скипает медикамент.
+		if( ( efficiency < 45.0f ) && ( requestedHeal / cr.Stat[ ST_MAX_LIFE ] < summarOverdose / 250.0f ) )
+		{
+			priority = 0.0f;
+		}
+		
+		if( priority > topPriority )
+		{
+			selection = i;
+			topPriority = priority;
+		}
+	}
+	
+	if( selection != -1 )
+	{
+		HealingItemApplied( cr, cr, getItem( cr, meds[selection].pid ) );	
+	}
+	
+	return true;
+}
+
 void HealingItemApplied( Critter& cr, Critter& targetCr, Item& item )
 {
 	cr.Action( ACTION_USE_ITEM, 2, item );
 	UseHealingItem( cr, targetCr, item );
 	cr.ParamBase[ ST_CURRENT_AP ] -= 20 * 100;
+}
+
+bool AttemptBandaging( Critter& cr )
+{
+	int max_heal = cr.Stat[ ST_CURRENT_HP ] >= 0 ? cr.Stat[ ST_MAX_LIFE ] - cr.Stat[ ST_CURRENT_HP ] : cr.Stat[ ST_MAX_LIFE ];
+	
+	if( cr.Stat[ ST_BLEED ] != 0 || max_heal <= cr.Param[ CR_BANDAGE_HEAL ] || max_heal <= cr.Stat[ ST_HEALING_RATE ] )
+	{ //Если нет кровотечения, а раны уже все перебинованы, либо сами заживут за 1 тик регена.
+		return false;
+	}
+	
+	for( uint i = 0, l = bandage_items.length(); i < l; i++ )
+	{//Сначала ищет бинты, потом уже тряпки.
+		Item@ bandage = getItem( cr, bandage_items[i] );
+		if( valid( bandage ) )
+		{
+			BandageItemApplied( cr, cr, bandage );
+			return true;
+		}
+	}
+	return false;
 }
 
 void BandageItemApplied( Critter& cr, Critter& targetCr, Item& item )
