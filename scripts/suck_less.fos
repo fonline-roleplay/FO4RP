@@ -41,6 +41,7 @@ class Menu: iDialogBox {
         m_page = 0;
         @m_handler = handler;
         m_press_handled = false;
+		m_delay_redraw = false;
         @m_child = null;
         m_is_root = true;
         @m_say_return = null;
@@ -49,6 +50,8 @@ class Menu: iDialogBox {
     // Public Interface:
 	
 	string name() { return m_name; }
+
+	string fullName() { return "'" + name() + "'" + ( valid( m_child ) ? " : " + m_child.fullName() : "" ); }
 
     bool OpenChild(string& name, iMenuHandler& handler) {
         Menu@ menu = Menu(name, m_cr_id, handler);
@@ -59,15 +62,11 @@ class Menu: iDialogBox {
 
 	bool ButtonCheck( Critter& cr, int PID )
 	{
-		if( hasItem( cr, PID ) )
-		{
-			if( ButtonMsg( STR_ITEMNAME, "$description" + STR_INSERT_ITEM_LINE( PID * 100 ) ) )
-			{
+		if( hasItem( cr, PID ) ) {
+			if( ButtonMsg( STR_ITEMNAME, "$description" + STR_INSERT_ITEM_LINE( PID * 100 ) ) ) {
 				return true;
 			}
-		}
-		else
-		{ 
+		} else { 
 			ButtonMsg( STR_HAVENT, "$description" + STR_INSERT_ITEM_LINE( PID * 100 ) );
 		}
 		return false;
@@ -115,16 +114,14 @@ class Menu: iDialogBox {
 	
     bool ButtonExtSay( string& text, int file, int line, string@ ext, string@ say, int say_line ) 
 	{        
-		if( text.length() == 0 )
-		{
-			if( !valid( ext ) )
+		if( text.length() == 0 ) {
+			if( !valid( ext ) ) {
 				@ext = "";
-			
+			}			
 			text = "[ " + file + ":" + line + ":" + say_line + " " + ext + " ]";
 		}
 
-		if( m_state == uint(-1) ) 
-		{			
+		if( m_state == uint(-1) ) {			
             m_buttons.insertLast(text);
             m_buttons_ext.insertLast(ext);
             m_buttons_say.insertLast(say);
@@ -134,8 +131,7 @@ class Menu: iDialogBox {
             return false;
         }
 		
-		if( m_buttons[m_state] == text) 
-		{
+		if( m_buttons[m_state] == text) {
 			m_press_handled = true;
 			return true;
 		}
@@ -174,8 +170,15 @@ class Menu: iDialogBox {
     }
     bool Draw() {
         if( m_child !is null ) {
+			if( !m_delay_redraw && m_child.m_delay_redraw ) {
+				m_child.m_delay_redraw = false;
+			}
             return m_child.Draw();
         }
+		
+		if( m_delay_redraw ) {
+			return true;
+		}
 
         Critter@ cr = GetCritter(m_cr_id);
         if(cr is null || cr.IsNpc()) {
@@ -261,7 +264,7 @@ class Menu: iDialogBox {
             return false;
         }
 
-        if( this_multipage  ) {
+        if( this_multipage ) {
             if( answerI >= this_page_count ) {
                 if( answerI == this_page_count ) {
                     m_page += 1;
@@ -278,13 +281,10 @@ class Menu: iDialogBox {
         }
 
         if( m_buttons_say[m_state] !is null || m_buttons_msg_say_line[m_state] != 0 ) {
-            cr.ShowScreen( SCREEN_SAY, 0, "answer_say");
-			if( m_buttons_msg_say_line[m_state] != 0 && m_handler.getDescriptionFile() != TEXTMSG_NONE )
-			{
+            cr.ShowScreen( SCREEN_SAY, 0, "answer_say" );
+			if( m_buttons_msg_say_line[m_state] != 0 && m_handler.getDescriptionFile() != TEXTMSG_NONE ) {
 				cr.SayMsg( SAY_SAY_TITLE, m_handler.getDescriptionFile(), m_buttons_msg_say_line[m_state], "" + ( valid( m_buttons_say[m_state] ) ? m_buttons_say[m_state] : "" ) );
-			}
-			else
-			{
+			} else {
 				cr.Say( SAY_SAY_TITLE, valid( m_buttons_say[m_state]) ? m_buttons_say[m_state] : "!valid text" );
 			}
             return true;
@@ -292,7 +292,8 @@ class Menu: iDialogBox {
 
         return Update(cr);
     }
-    bool UpdateSay(string& answerS) {
+    
+	bool UpdateSay(string& answerS) {
         if( m_child !is null ) {
             if( !m_child.UpdateSay(answerS) ) {
                 @m_child = null;
@@ -309,7 +310,20 @@ class Menu: iDialogBox {
         @m_say_return = answerS;
         return Update(cr);
     }
-    bool Update(Critter& cr) {
+    
+	bool m_delay_redraw;
+	
+	bool DelayRedraw() {
+		m_delay_redraw = true;
+		return true;
+	}
+	
+	bool Update(Critter& cr) 
+	{		
+		if( m_delay_redraw ) {
+			m_delay_redraw = false;
+		}
+
         m_press_handled = false;
 
         bool keep_open = m_handler.MenuUpdate(cr, this);
@@ -320,7 +334,7 @@ class Menu: iDialogBox {
         }
 
         if( keep_open ) {
-            Draw();
+			Draw();
         } else if (m_is_root) {
             Forget();
         } else {
@@ -378,16 +392,32 @@ string _debug_menu(Menu& menu) {
     }    
 }
 
+void Restore( Critter& player, int param0, int param1, int param2 ) {
+    if( RestoreMenu(player) ) {
+        player.Say(SAY_NETMSG, "Меню восстановлено.");
+    } else {
+        player.Say(SAY_NETMSG, "Меню не найдено.");
+    }
+}
+
+void enlistKeys( Critter& cr ) {
+	string@[] keys;
+	uint l = menus.keys( keys );
+	for( uint i = 0; i < l; i++ ) {
+		cr.Say( SAY_NETMSG, i + ") " + keys[i] );
+	}
+}
+
 //export
-bool RestoreMenu(Critter& cr, string@ name) {
+bool RestoreMenu(Critter& cr) {
     string@ key = ""+cr.Id;
     Menu@ menu = null;
     menus.get(key, @menu);
-    if(menu !is null) {
-        if(name is null || menu.ChildName() == name) {
-            menu.Draw();
-            return true;
-        }
+	
+    if( valid( menu ) ) {
+		menu.m_delay_redraw = false;
+		menu.Draw();
+		return true;
     }
     return false;
 }
@@ -444,8 +474,7 @@ string DebugMenu(Critter& cr) {
 }
 
 // движковый колбэк
-void answer_dialog_box( Critter& cr, uint answerI, string& answerS )
-{
+void answer_dialog_box( Critter& cr, uint answerI, string& answerS ) {
     Menu@ menu = null;
     string@ key = ""+cr.Id;
     if( menus.get(key, @menu) ) {
