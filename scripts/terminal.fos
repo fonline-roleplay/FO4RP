@@ -15,11 +15,85 @@ import void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2,
 
 const uint16[] TurretPids = { NPC_PID_LAS_TURRET, NPC_PID_LAS_TURRET2, NPC_PID_PLAS_TURRET, NPC_PID_MG_TURRET };
 
-Critter@[] getCritters(Map@ map, uint pid, uint find)
+Critter@[] getCritters( Map@ map, uint pid, uint find )
 {	
 	Critter@[] crs;
 	int countCr = map.GetCritters( pid, find, crs );
 	return crs;	
+}
+
+Critter@[] getTurrets( Map& map )
+{
+	Critter@[] result;
+	
+	for( uint j = 0; j < TurretPids.length(); j ++ ) 
+	{
+		uint16 turretPid = TurretPids[j];
+		map.GetCritters( turretPid, FIND_LIFE_AND_KO, result );
+	}
+	
+	return result;
+}
+
+Item@[] getEmitters( Map& map )
+{
+	Item@[] result;
+	
+	for( uint j = 0; j < emitterPids.length(); j ++ ) 
+	{
+		map.GetItems( emitterPids[j], result );
+	}
+	
+	return result;
+}
+
+uint[] getFenceEntires( Map& map )
+{
+	uint[] result;	
+	
+	for( uint i = ENTIRE_LASER_FENCE_BEGIN; i < ENTIRE_LASER_FENCE_END; i++ )
+	{
+		int entireId = i;
+		int entires = map.CountEntire( entireId );
+		if( entires != 0 )
+		{
+			result.insertLast( entireId );
+		}
+		else
+		{
+			continue;
+		}
+	}
+	
+	return result;
+}
+
+Item@[] getTerminals( Map& map )
+{
+	Item@[] result;
+	for( uint j = 0; j < TerminalPids.length(); j ++ ) 
+	{
+		map.GetItems( TerminalPids[j], result );
+	}
+	
+	return result;
+}
+
+Item@[] getAutodoors( Map& map )
+{
+	Item@[] doors;
+	map.GetItemsByType( ITEM_TYPE_DOOR, doors );
+	
+	Item@[] result;
+	for( uint i = 0; i < doors.length(); i ++ ) 
+	{
+		if( doors[i].Proto.Item_Subtype == ITEM_SUBTYPE_AUTODOOR )
+		{
+			result.insertLast( doors[i] );
+		}
+	}
+	
+	return result;
 }
 
 bool checkLaserFence( Item& terminal, Map& map )
@@ -46,35 +120,37 @@ void StartMenuTerminal( Critter& cr, Item& terminal )
     iDialogBox@ menu = OpenMenu( cr, "Terminal", handler );
 }
 
+bool MenuReady( Map@ map, Item@ terminal )
+{
+	if( !valid( map ) || !valid( terminal ) )
+	{
+		return false;
+	}
+	
+	return true;
+}
+
 class MenuTerminal: CenteredMenuHandler
 {
-
-    uint terminal_id;
-    uint map_id;
+	Item@ terminal;
+	Map@ map;
+	
 	uint level;
 		
 	MenuTerminal( Item& terminal, Map& map )
 	{
-		terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 0;
 	}
 
 	bool MenuUpdate( Critter& cr, iDialogBox& menu ) 
 	{
-		Map@ map = GetMap(map_id);
-		if( !valid( map ) )
+		if( !MenuReady( map, terminal ) || MovementState( cr ) > 0 )
 		{
 			return false;
 		}
-		
-		if( MovementState( cr ) > 0  )
-		{
-			return false;
-		}
-		
-        Item@ terminal = GetItem( terminal_id );
-        
+
 		if( isGM( cr ) && menu.ButtonMsg( STR_TERMINAL_MENU_GM_SUBMENU ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
@@ -82,7 +158,6 @@ class MenuTerminal: CenteredMenuHandler
 			menu_terminalGM.level = level + 1;
 			return menu.OpenChild( "level " + menu_terminalGM.level, menu_terminalGM );
 		}
-		bool LaserOn = checkLaserFence( terminal, map );
 		
 		if( terminal.TERMINAL_POWERED > 0 )
 		{
@@ -92,7 +167,7 @@ class MenuTerminal: CenteredMenuHandler
 				{
 					if( terminal.FENCE_GROUP != 0 && map.CountEntire( terminal.FENCE_GROUP ) > 0 )
 					{
-						string lex = "$state" + STR_INSERT_TEXT_LINE( LaserOn ? STR_DEVICE_ENABLED : STR_DEVICE_DISABLED );
+						string lex = "$state" + STR_INSERT_TEXT_LINE( checkLaserFence( terminal, map ) ? STR_DEVICE_ENABLED : STR_DEVICE_DISABLED );
 						if( menu.ButtonMsg( STR_TERMINAL_MENU_LASER_FENCE, lex ) )
 						{
 							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
@@ -101,13 +176,12 @@ class MenuTerminal: CenteredMenuHandler
 						}
 					}
 					
-					if( menu.ButtonMsg( STR_TERMINAL_MENU_ASSIGN_FENCE) )
+					if( menu.ButtonMsg( STR_TERMINAL_MENU_ASSIGN_FENCE ) )
 					{
 						MenuSelectFence@ select_fence = MenuSelectFence( terminal, map );
 						select_fence.level = level + 1;
 						return menu.OpenChild( "Level " + select_fence.level, select_fence );
-					}
-					
+					}					
 				}
 				
 				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_DOORS ) )
@@ -245,7 +319,12 @@ class MenuTerminal: CenteredMenuHandler
 				{
 					if( menu.ButtonMsg( STR_TERMINAL_MENU_CONNECT_TO_TERMINAL ) )
 					{
-						Item@ terminal_slave = GetItem( terminal.TERMINAL_SLAVE );
+						Item@ terminal_slave;
+						if( terminal.TERMINAL_SLAVE != 0 )
+						{
+							@terminal_slave = GetItem( terminal.TERMINAL_SLAVE );
+						}
+						
 						if( !valid( terminal_slave ) )
 						{
 							cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_CONNECTION_FAILED ); 
@@ -295,8 +374,6 @@ class MenuTerminal: CenteredMenuHandler
 
 	int getDescriptionLine()
 	{
-		Item@ terminal = GetItem( terminal_id );
-		
 		if( terminal.TERMINAL_POWERED == 0 ) 
 		{
 			return STR_TERMINAL_MENU_NO_POWER;
@@ -312,9 +389,6 @@ class MenuTerminal: CenteredMenuHandler
 	
 	string@ Description( Critter& cr ) 
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-
 		if( terminal.TERMINAL_POWERED == 0 )
 		{
 			return null;
@@ -336,17 +410,10 @@ class MenuTerminal: CenteredMenuHandler
 		}
 		
 		info += "$turrets";
-		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) && ( FindTurrets( map ) ) )
+		Critter@[] turrets = getTurrets( map );
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) && ( turrets.length() > 0 ) )
 		{ 
 			uint amount = 0;
-			Critter@[] turrets;
-			
-			for( uint j = 0; j < TurretPids.length(); j ++ ) 
-			{
-				uint16 turretPid = TurretPids[j];
-				map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
-			}
-			
 			for( uint i = 0; i < turrets.length(); i ++ )
 			{
 				Critter@ turret = turrets[i];
@@ -389,9 +456,7 @@ class MenuTerminal: CenteredMenuHandler
 	
 	bool ShouldRedraw( Critter& cr )
 	{
-		Item@ terminal = GetItem( terminal_id );
-
-		if( !valid( terminal ) || GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
 		{
 			return false;
 		}
@@ -402,31 +467,25 @@ class MenuTerminal: CenteredMenuHandler
 
 class MenuTerminalMusic: DefaultMenuHandler
 {
-	uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuTerminalMusic( Item& terminal, Map& map )
+	uint level;
+		
+	MenuTerminalMusic( Item& terminal, Map& map )
 	{
-		terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
 	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        if( !valid( map ) )
-		{
-            return false;
-        }
-
-        Item@ terminal = GetItem( terminal_id );
-		if( !valid( terminal ) )
+		if( !MenuReady( map, terminal ) )
 		{
 			return false;
 		}
-		
+
 		if( menu.ButtonMsg( STR_TERMINAL_MENU_SET_FREQUENCY ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
@@ -447,8 +506,7 @@ class MenuTerminalMusic: DefaultMenuHandler
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
-		}
-		
+		}	
 
 		return true;
     }
@@ -460,16 +518,11 @@ class MenuTerminalMusic: DefaultMenuHandler
 
 	int getDescriptionLine()
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
 		return STR_TERMINAL_MENU_MUSIC_MAIN;
 	}
 
     string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-		
 		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
 			+ "$ID" + terminal.Id;
 					
@@ -478,27 +531,32 @@ class MenuTerminalMusic: DefaultMenuHandler
 		{
 			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_FREQUENCY ) + "|0xFFFF00 " + terminal.TERMINAL_FREQUENCY  + "|0x3CF800 .";
 		}
+		
 		return info;
     }
 }
 
 class MenuTerminalMusicJukebox: DefaultMenuHandler
 {
-	uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuTerminalMusicJukebox( Item& terminal, Map& map )
+	uint level;
+		
+	MenuTerminalMusicJukebox( Item& terminal, Map& map )
 	{
-		terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 2;
 	}
 
-    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
+		if( !MenuReady( map, terminal ) )
+		{
+			return false;
+		}
+		
 		if( menu.ButtonMsg( STR_RETURN ) )
 		{
 			return false;
@@ -513,6 +571,7 @@ class MenuTerminalMusicJukebox: DefaultMenuHandler
 				return false;
 			}
 		}
+		
 		return true;
     }
 	
@@ -523,16 +582,11 @@ class MenuTerminalMusicJukebox: DefaultMenuHandler
 
 	int getDescriptionLine()
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
 		return STR_TERMINAL_MENU_MUSIC_MAIN;
 	}
 
     string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-		
 		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
 			+ "$ID" + terminal.Id;
 					
@@ -541,6 +595,7 @@ class MenuTerminalMusicJukebox: DefaultMenuHandler
 		{
 			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_FREQUENCY ) + "|0xFFFF00 " + terminal.TERMINAL_FREQUENCY  + "|0x3CF800 .";
 		}
+
 		return info;
     }
 }
@@ -584,16 +639,18 @@ bool TransferFromTerminal( Critter& cr, Item& targetItem, Item& cont )
 //Child menu for card selection
 class MenuSelectCard: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
+	Item@ terminal;
+	Map@ map;
+
 	uint level;
 	int selectorPos;
 	uint arrayPos;
 	
     MenuSelectCard( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+        @this.terminal = terminal;
+        @this.map = map;
+		
 		level = 1;
 		selectorPos = 0;
 		arrayPos = 0;
@@ -601,18 +658,11 @@ class MenuSelectCard: CenteredMenuHandler
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        if( !valid( map ) )
-		{
-            return false;
-        }
-
-        Item@ terminal = GetItem( terminal_id );
-		if( !valid( terminal ) )
+		if( !MenuReady( map, terminal ) )
 		{
 			return false;
 		}
-			
+
 		Item@[] cardItm;
 		terminal.GetItems( uint( -1 ), cardItm );
 		
@@ -734,8 +784,6 @@ class MenuSelectCard: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		
 		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
 					+ "$ID" + terminal.Id
 					+ "$card";
@@ -758,61 +806,48 @@ class MenuSelectCard: CenteredMenuHandler
 //Select Force Fields
 class MenuSelectFF: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuSelectFF( Item& terminal, Map& map )
+	uint level;
+		
+	MenuSelectFF( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
-    }
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        if( !valid( map ) )
-		{
-            return false;
-        }
-
-        Item@ terminal = GetItem( terminal_id );
-		if( !valid( terminal ) )
+		if( !MenuReady( map, terminal ) )
 		{
 			return false;
 		}
-
-		if( FindEmitters( map ) )
+		
+		Item@[] emitters = getEmitters( map );
+		
+		for( uint i = 0; i < emitters.length(); i ++ )
 		{
-			Item@[] emitters;
-			for( uint j = 0; j < emitterPids.length(); j ++ ) 
+			if( valid( emitters[i] ) && ( emitters[i].ITM_PARENT_TERMINAL == 0 || emitters[i].ITM_PARENT_TERMINAL == int( terminal.Id ) ) )
 			{
-				map.GetItems( emitterPids[j], emitters );
-			}
-			
-			for( uint i = 0; i < emitters.length(); i ++ )
-			{
-				if( valid( emitters[i] ) && ( emitters[i].ITM_PARENT_TERMINAL == 0 || emitters[i].ITM_PARENT_TERMINAL == int( terminal.Id ) ) )
+				int state = emitters[i].ITM_PARENT_TERMINAL == 0 ? STR_DEVICE_DISABLED : STR_DEVICE_ASSIGNED;
+				
+				string emitterId = emitters[i].Id;
+				string@ lexem = Item_GetLexems( emitters[i] );					
+				if( valid( lexem ) )
 				{
-					int state = emitters[i].ITM_PARENT_TERMINAL == 0 ? STR_DEVICE_DISABLED : STR_DEVICE_ASSIGNED;
-					
-					string emitterId = emitters[i].Id;
-					string@ lexem = Item_GetLexems( emitters[i] );					
-					if( valid( lexem ) )
-					{
-						emitterId = lexem;
-					}
-					
-					string lex  = "$name" + emitterId
-								+ "$state" + STR_INSERT_TEXT_LINE( state );
-					
-					if( menu.ButtonMsg( STR_TERMINAL_MENU_EMITTER_BTN, lex ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						emitters[i].ITM_PARENT_TERMINAL == 0 ? emitters[i].ITM_PARENT_TERMINAL = int( terminal.Id ) : emitters[i].ITM_PARENT_TERMINAL = 0;
-						return true;
-					}
+					emitterId = lexem;
+				}
+				
+				string lex  = "$name" + emitterId
+							+ "$state" + STR_INSERT_TEXT_LINE( state );
+				
+				if( menu.ButtonMsg( STR_TERMINAL_MENU_EMITTER_BTN, lex ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					emitters[i].ITM_PARENT_TERMINAL == 0 ? emitters[i].ITM_PARENT_TERMINAL = int( terminal.Id ) : emitters[i].ITM_PARENT_TERMINAL = 0;
+					return true;
 				}
 			}
 		}
@@ -837,22 +872,15 @@ class MenuSelectFF: CenteredMenuHandler
 
 	string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-
 		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
 					+ "$ID" + terminal.Id;
 					
-		int emitters_state = FindEmitters( map ) ? STR_TERMINAL_MENU_GOT_EMITTERS : STR_TERMINAL_MENU_NO_EMITTERS;
+		Item@[] emitters = getEmitters( map );
+		
+		int emitters_state = emitters.length() > 0 ? STR_TERMINAL_MENU_GOT_EMITTERS : STR_TERMINAL_MENU_NO_EMITTERS;
 		info += "$emitters" + STR_INSERT_TEXT_LINE( emitters_state );
 		
-		Item@[] emitters;
 		uint num = 0;
-		for( uint i = 0; i < emitterPids.length(); i ++ ) 
-		{
-			map.GetItems( emitterPids[i], emitters );
-		}
-		
 		if( emitters.length() > 0 )
 		{
 			for( uint i = 0; i < emitters.length(); i ++ )
@@ -873,39 +901,29 @@ class MenuSelectFF: CenteredMenuHandler
 //Force Fields Control
 class MenuControlFF: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuControlFF( Item& terminal, Map& map )
-	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
-		level = 1;
-    }
-
-    bool MenuUpdate( Critter& cr, iDialogBox& menu )
-	{
-        Map@ map = GetMap( map_id );
-        if( !valid( map ) )
-		{
-            return false;
-        }
-
-        Item@ terminal = GetItem( terminal_id );
-        if( !valid( terminal ) )
-		{
-            return false;
-        }
+	uint level;
 		
-		if( FindEmitters( map ) )
+	MenuControlFF( Item& terminal, Map& map )
+	{
+		@this.terminal = @terminal;
+        @this.map = @map;
+		level = 1;
+	}
+
+     bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+		if( !MenuReady( map, terminal ) )
 		{
-			Item@[] emitters;
-			for( uint j = 0; j < emitterPids.length(); j ++ ) 
-			{
-				map.GetItems( emitterPids[j], emitters );
-			}
-			
+			return false;
+		}
+		
+		Item@[] emitters = getEmitters( map );
+		
+		if( emitters.length() > 0 )
+		{
 			for( uint i = 0; i < emitters.length(); i ++ )
 			{
 				if( valid( emitters[i] ) && emitters[i].ITM_PARENT_TERMINAL == int( terminal.Id ) )
@@ -982,23 +1000,17 @@ class MenuControlFF: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-
 		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
 					+ "$ID" + terminal.Id;
-					
-		int emitters_state = FindEmitters( map ) ? STR_TERMINAL_MENU_GOT_EMITTERS : STR_TERMINAL_MENU_NO_EMITTERS;
+		
+		Item@[] emitters = getEmitters( map );
+
+		int emitters_state = emitters.length() > 0 ? STR_TERMINAL_MENU_GOT_EMITTERS : STR_TERMINAL_MENU_NO_EMITTERS;
 		info += "$emitters" + STR_INSERT_TEXT_LINE( emitters_state );
 		
 		uint enabled = 0;
 		uint assigned = 0;
-		Item@[] emitters;
 		int type = STR_TERMINAL_MENU_FIELD_UNDEFINED;
-		for( uint i = 0; i < emitterPids.length(); i ++ ) 
-		{
-			map.GetItems( emitterPids[i], emitters );
-		}
 		
 		if( emitters.length() > 0 )
 		{
@@ -1029,61 +1041,48 @@ class MenuControlFF: CenteredMenuHandler
 //Select Terminals
 class MenuSelectTerminals: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuSelectTerminals( Item& terminal, Map& map )
+	uint level;
+		
+	MenuSelectTerminals( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
-    }
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        if( !valid( map ) )
-		{
-            return false;
-        }
-		
-		Item@ terminal = GetItem( terminal_id );
-		if( !valid( terminal )  )
+		if( !MenuReady( map, terminal ) )
 		{
 			return false;
 		}
 		
-		if( FindTerminals( map ) )//Нафиг не надо!
+		Item@[] terminals = getTerminals( map );
+		
+		for( uint j = 0; j < terminals.length(); j ++ ) 
 		{
-			Item@[] terminals;
-			for( uint j = 0; j < TerminalPids.length(); j ++ ) 
+			if( !FLAG( terminals[j].TERMINAL_FLAG, TERMINAL_MASTER ) )
 			{
-				map.GetItems( TerminalPids[j], terminals );
-			}
-			
-			for( uint j = 0; j < terminals.length(); j ++ ) 
-			{
-				if( !FLAG( terminals[j].TERMINAL_FLAG, TERMINAL_MASTER ) )
+				int state = ( terminal.TERMINAL_SLAVE != int(terminals[j].Id) ) ? STR_DEVICE_DISABLED : STR_DEVICE_CONTROLLED;
+				
+				string name = terminals[j].Id;
+				string@ lexem = Item_GetLexems( terminals[j] );
+				if( valid( lexem ) )
 				{
-					int state = ( terminal.TERMINAL_SLAVE != int(terminals[j].Id) ) ? STR_DEVICE_DISABLED : STR_DEVICE_CONTROLLED;
-					
-					string name = terminals[j].Id;
-					string@ lexem = Item_GetLexems( terminals[j] );
-					if( valid( lexem ) )
-					{
-						name = lexem;
-					}
-					
-					string lex = "$name" + name
-							   + "$state" + STR_INSERT_TEXT_LINE( state );
-					
-					if( menu.ButtonMsg( STR_TERMINAL_MENU_DOOR_BTN, lex ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						terminal.TERMINAL_SLAVE = ( terminal.TERMINAL_SLAVE == int(terminals[j].Id) ) ? 0 : terminals[j].Id;
-						return true;
-					}
+					name = lexem;
+				}
+				
+				string lex = "$name" + name
+						   + "$state" + STR_INSERT_TEXT_LINE( state );
+				
+				if( menu.ButtonMsg( STR_TERMINAL_MENU_DOOR_BTN, lex ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					terminal.TERMINAL_SLAVE = ( terminal.TERMINAL_SLAVE == int(terminals[j].Id) ) ? 0 : terminals[j].Id;
+					return true;
 				}
 			}
 		}
@@ -1109,25 +1108,18 @@ class MenuSelectTerminals: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-
 		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
 					+ "$ID" + terminal.Id;
 		
 		uint num = 0;
 		info += "$terminals";
-		if( FindTerminals( map ) )
+		
+		Item@[] terminals = getTerminals( map );
+		
+		if( terminals.length() > 0 )
 		{
-			Item@[] terminals;
-			for( uint j = 0; j < TerminalPids.length(); j ++ ) 
-			{
-				map.GetItems( TerminalPids[j], terminals );
-			}
-			
 			for( uint i = 0; i < terminals.length(); i ++ )
 			{
-				Item@ autodoor = terminals[i];
 				if( !FLAG( terminals[i].TERMINAL_FLAG, TERMINAL_MASTER ) )
 				{
 					num++;
@@ -1149,57 +1141,47 @@ class MenuSelectTerminals: CenteredMenuHandler
 //Select Doors
 class MenuSelectDoors: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuSelectDoors( Item& terminal, Map& map )
+	uint level;
+		
+	MenuSelectDoors( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
-    }
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        if( !valid( map ) )
-		{
-            return false;
-        }
-		
-		Item@ terminal = GetItem( terminal_id );
-		if( !valid( terminal )  )
+		if( !MenuReady( map, terminal ) )
 		{
 			return false;
 		}
-		
-		if( FindAutodoors( map ) )
+	
+		Item@[] doors = getAutodoors( map );	
+		for( uint j = 0; j < doors.length(); j ++ ) 
 		{
-			Item@[] doors;
-			map.GetItemsByType( ITEM_TYPE_DOOR, doors );
-			for( uint j = 0; j < doors.length(); j ++ ) 
+			if( doors[j].AUTODOOR_PARENT_TERMINAL == 0 || doors[j].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
 			{
-				if( doors[j].Proto.Item_Subtype == ITEM_SUBTYPE_AUTODOOR && ( doors[j].AUTODOOR_PARENT_TERMINAL == 0 || doors[j].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) ) )
+				int state = doors[j].AUTODOOR_PARENT_TERMINAL == 0 ? STR_DEVICE_DISABLED : STR_DEVICE_CONTROLLED;
+				
+				string autodorId = doors[j].Id;
+				string@ lexem = Item_GetLexems( doors[j] );
+				if( valid( lexem ) )
 				{
-					int state = doors[j].AUTODOOR_PARENT_TERMINAL == 0 ? STR_DEVICE_DISABLED : STR_DEVICE_CONTROLLED;
-					
-					string autodorId = doors[j].Id;
-					string@ lexem = Item_GetLexems( doors[j] );
-					if( valid( lexem ) )
-					{
-						autodorId = lexem;
-					}
-					
-					string lex = "$name" + autodorId
-							   + "$state" + STR_INSERT_TEXT_LINE( state );
-					
-					if( menu.ButtonMsg( STR_TERMINAL_MENU_DOOR_BTN, lex ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						doors[j].AUTODOOR_PARENT_TERMINAL == 0 ? doors[j].AUTODOOR_PARENT_TERMINAL = int( terminal.Id ) : doors[j].AUTODOOR_PARENT_TERMINAL = 0;
-						return true;
-					}
+					autodorId = lexem;
+				}
+				
+				string lex = "$name" + autodorId
+						   + "$state" + STR_INSERT_TEXT_LINE( state );
+				
+				if( menu.ButtonMsg( STR_TERMINAL_MENU_DOOR_BTN, lex ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					doors[j].AUTODOOR_PARENT_TERMINAL == 0 ? doors[j].AUTODOOR_PARENT_TERMINAL = int( terminal.Id ) : doors[j].AUTODOOR_PARENT_TERMINAL = 0;
+					return true;
 				}
 			}
 		}
@@ -1225,9 +1207,6 @@ class MenuSelectDoors: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-
 		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
 					+ "$ID" + terminal.Id;
 		
@@ -1235,30 +1214,20 @@ class MenuSelectDoors: CenteredMenuHandler
 		
 		uint num = 0;
 		info += "$doors";
-		if( FindAutodoors( map ) )
-		{
-			Item@[] doors;
-			map.GetItemsByType( ITEM_TYPE_DOOR, doors );
-			Item@[] autodoors;
-			for( uint j = 0; j < doors.length(); j ++ ) 
+		
+		Item@[] doors = getAutodoors( map );
+		if( doors.length() > 0 )
+		{			
+			for( uint i = 0; i < doors.length(); i ++ )
 			{
-				if( doors[j].Proto.Item_Subtype == ITEM_SUBTYPE_AUTODOOR )
-				{
-					autodoors.insertLast( doors[j] );
-				}
-			}
-			
-			for( uint i = 0; i < autodoors.length(); i ++ )
-			{
-				Item@ autodoor = autodoors[i];
-				if( autodoor.AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
+				if( doors[i].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
 				{
 					num ++;
 				}
 			}
 			
 			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DOOR_DOORS_COUNT )
-				 + "$amount" + autodoors.length();
+				 + "$amount" + doors.length();
 		}
 		else
 		{
@@ -1274,53 +1243,44 @@ class MenuSelectDoors: CenteredMenuHandler
 // Menu Doors control
 class MenuDoorsCtrl: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
+	Item@ terminal;
+	Map@ map;
+	
 	uint level;
-
-    MenuDoorsCtrl( Item& terminal, Map& map )
+		
+	MenuDoorsCtrl( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
 	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        if( !valid( map ) )
+		if( !MenuReady( map, terminal ) )
 		{
-            return false;
-        }
-		
-        Item@ terminal = GetItem( terminal_id );
-        if( !valid( terminal ) )
-		{
-            return false;
-        }
+			return false;
+		}
 
-		if( FindAutodoors( map ) )
+		Item@[] doors = getAutodoors( map );
+		
+		for( uint j = 0; j < doors.length(); j ++ ) 
 		{
-			Item@[] doors;
-			map.GetItemsByType( ITEM_TYPE_DOOR, doors );
-			for( uint j = 0; j < doors.length(); j ++ ) 
+			if( doors[j].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
 			{
-				if( doors[j].Proto.Item_Subtype == ITEM_SUBTYPE_AUTODOOR && doors[j].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
+				string autodorId = doors[j].Id;
+				string@ lexem = Item_GetLexems( doors[j] );
+				if( valid( lexem ) )
 				{
-					string autodorId = doors[j].Id;
-					string@ lexem = Item_GetLexems( doors[j] );
-					if( valid( lexem ) )
-					{
-						autodorId = lexem;
-					}
-					
-					if( menu.ButtonMsg( STR_LEX_NAME, "$name" + autodorId ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						MenuSingleDoorCtrl@ menu_single_door_ctrl = MenuSingleDoorCtrl( terminal, map, doors[j] );
-						menu_single_door_ctrl.level = level + 1;
-						return menu.OpenChild( "Level " + menu_single_door_ctrl.level, menu_single_door_ctrl );
-					}
+					autodorId = lexem;
+				}
+				
+				if( menu.ButtonMsg( STR_LEX_NAME, "$name" + autodorId ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					MenuSingleDoorCtrl@ menu_single_door_ctrl = MenuSingleDoorCtrl( terminal, map, doors[j] );
+					menu_single_door_ctrl.level = level + 1;
+					return menu.OpenChild( "Level " + menu_single_door_ctrl.level, menu_single_door_ctrl );
 				}
 			}
 		}
@@ -1346,24 +1306,17 @@ class MenuDoorsCtrl: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-
 		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
 					+ "$ID" + terminal.Id;
 
 		uint num = 0;
-		if( FindAutodoors( map ) )
+		Item@[] doors = getAutodoors( map );
+		
+		for( uint i = 0; i < doors.length(); i ++ )
 		{
-			Item@[] doors;
-			map.GetItemsByType( ITEM_TYPE_DOOR, doors );
-			
-			for( uint i = 0; i < doors.length(); i ++ )
+			if( doors[i].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
 			{
-				if( doors[i].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
-				{
-					num ++;
-				}
+				num ++;
 			}
 		}
 		
@@ -1376,34 +1329,27 @@ class MenuDoorsCtrl: CenteredMenuHandler
 // Menu single Door control
 class MenuSingleDoorCtrl: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint autodoor_id;
+    Item@ terminal;
+    Item@ autodoor;
+	Map@ map;
+
 	uint level;
 	
     MenuSingleDoorCtrl( Item& terminal, Map& map, Item& autodoor )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
-		autodoor_id = autodoor.Id;
+        @this.terminal = @terminal;
+        @this.map = @map;
+		@this.autodoor = @autodoor;
 		level = 2;
     }
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-		if( !valid( map ) )
+		if( !MenuReady( map, terminal ) )
 		{
-            return false;
-        }
-		
-		Item@ terminal = GetItem( terminal_id );
-		if( !valid( terminal ) )
-		{
-            return false;
-        }
-		
-		Item@ autodoor = GetItem( autodoor_id );
+			return false;
+		}
+
 		if( valid( autodoor ) && autodoor.AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
 		{
 			int status = FLAG( autodoor.LockerCondition, LOCKER_ISOPEN ) ? STR_FURNITURE_MENU_OPENED : STR_FURNITURE_MENU_CLOSED;
@@ -1454,10 +1400,6 @@ class MenuSingleDoorCtrl: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-		Item@ autodoor = GetItem( autodoor_id );
-
 		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
 					+ "$ID" + terminal.Id;
 
@@ -1483,58 +1425,43 @@ class MenuSingleDoorCtrl: CenteredMenuHandler
 //Child menu for turret control assigment
 class MenuTurrets: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuTurrets( Item& terminal, Map& map )
+	uint level;
+		
+	MenuTurrets( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
-    }
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-		if( !valid( map ) )
+		if( !MenuReady( map, terminal ) )
 		{
-            return false;
-        }
-		
-		Item@ terminal = GetItem( terminal_id );
-		if( !valid( terminal ) )
+			return false;
+		}
+
+		Critter@[] turrets = getTurrets( map );
+		for( uint i = 0; i < turrets.length(); i ++ )
 		{
-            return false;
-        }
-		
-		if( FindTurrets( map ) )
-		{
-			Critter@[] turrets;
-			for( uint j = 0; j < TurretPids.length(); j ++ ) 
+			Critter@ turret = turrets[i];
+			if( valid( turret ) && ( turret.PARENT_TERMINAL == 0 || turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ) )
 			{
-				uint16 turretPid = TurretPids[j];
-				map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
+				int state = turret.PARENT_TERMINAL == 0 ? STR_TERMINAL_MENU_TURRET_UNAUTHORISED : STR_DEVICE_CONTROLLED;
+				string lex = "$name" + turret.Id + "$state" + STR_INSERT_TEXT_LINE( state );
+				if( menu.ButtonMsg( STR_TERMINAL_MENU_STATE_BTN, lex ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					turret.PARENT_TERMINAL == 0 ? turret.PARENT_TERMINAL = int( terminal.Id ) : turret.PARENT_TERMINAL = 0;
+					return true;
+				}
 			}
-			
-			for( uint i = 0; i < turrets.length(); i ++ )
+			else
 			{
-				Critter@ turret = turrets[i];
-				if( valid( turret ) && ( turret.PARENT_TERMINAL == 0 || turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ) )
-				{
-					int state = turret.PARENT_TERMINAL == 0 ? STR_TERMINAL_MENU_TURRET_UNAUTHORISED : STR_DEVICE_CONTROLLED;
-					string lex = "$name" + turret.Id + "$state" + STR_INSERT_TEXT_LINE( state );
-					if( menu.ButtonMsg( STR_TERMINAL_MENU_STATE_BTN, lex ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						turret.PARENT_TERMINAL == 0 ? turret.PARENT_TERMINAL = int( terminal.Id ) : turret.PARENT_TERMINAL = 0;
-						return true;
-					}
-				}
-				else
-				{
-					continue;
-				}
+				continue;
 			}
 		}
 		
@@ -1559,45 +1486,33 @@ class MenuTurrets: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
 		cr.RunClientScript( "client_screen_test@ShowScreen", 0, 0, 0, "", null );
 		string info = "$turretsList";
-		if( FindTurrets( map ) )
+		
+		Critter@[] turrets = getTurrets( map );
+		for( uint i = 0; i < turrets.length(); i ++ )
 		{
-			Critter@[] turrets;
-			for( uint j = 0; j < TurretPids.length(); j ++ ) 
+			Critter@ turret = turrets[i];
+			if( valid( turret ) )
 			{
-				uint16 turretPid = TurretPids[j];
-				map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
+				info += "№ |0xFFFF00 " + turret.Id + "|0x3CF800  - ";
+				
+				int state = turret.ParamBase[ TURRET_TERMINAL_ID ] == 0 ? STR_TERMINAL_MENU_TURRET_UNAUTHORISED : ( turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ? STR_TERMINAL_MENU_TURRET_AUTHORISED : STR_TERMINAL_MENU_TURRET_BUSY );
+				
+				info += "|0xFFFF00 " + STR_INSERT_TEXT_LINE( state ) + "|0x3CF800 \n";
 			}
-			
-			for( uint i = 0; i < turrets.length(); i ++ )
+			else
 			{
-				Critter@ turret = turrets[i];
-				if( valid( turret ) )
-				{
-					info += "№ |0xFFFF00 " + turret.Id + "|0x3CF800  - ";
-					
-					int state = turret.ParamBase[ TURRET_TERMINAL_ID ] == 0 ? STR_TERMINAL_MENU_TURRET_UNAUTHORISED : ( turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ? STR_TERMINAL_MENU_TURRET_AUTHORISED : STR_TERMINAL_MENU_TURRET_BUSY );
-					
-					info += "|0xFFFF00 " + STR_INSERT_TEXT_LINE( state ) + "|0x3CF800 \n";
-				}
-				else
-				{
-					continue;
-				}
+				continue;
 			}
-			turrets.resize( 0 );
-		}		
+		}
+		
 		return info;
 	}
 		
 	bool ShouldRedraw( Critter& cr )
 	{
-		Item@ terminal = GetItem( terminal_id );
-
-		if( !valid( terminal ) || GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
 		{
 			return false;
 		}
@@ -1606,118 +1521,52 @@ class MenuTurrets: CenteredMenuHandler
     }
 }
 
-bool FindTerminals( Map& map )
-{
-	Item@[] terminals;
-	for( uint j = 0; j < TerminalPids.length(); j ++ ) 
-	{
-		map.GetItems( TerminalPids[j], terminals );
-	}
-	
-	bool isPresent = terminals.length() > 0;
-	return isPresent;
-}
-
-bool FindAutodoors( Map& map )
-{
-	Item@[] doors;
-	map.GetItemsByType( ITEM_TYPE_DOOR, doors );
-	for( uint i = 0; i < doors.length(); i ++ ) 
-	{
-		if( doors[i].Proto.Item_Subtype == ITEM_SUBTYPE_AUTODOOR )
-		{
-			return true;
-		}
-	}
-	return false;
-}
-
-bool FindEmitters( Map& map )
-{
-	Item@[] emitters;
-	for( uint j = 0; j < emitterPids.length(); j ++ ) 
-	{
-		map.GetItems( emitterPids[j], emitters );
-	}
-	
-	bool emittersPresent = emitters.length() > 0;
-	return emittersPresent;
-}
-
-bool FindTurrets( Map& map )
-{
-	Critter@[] turrets;
-	for( uint j = 0; j < TurretPids.length(); j ++ ) 
-	{
-		uint16 turretPid = TurretPids[j];
-		map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
-	}
-	
-	bool turretsPresent = turrets.length() > 0;
-	return turretsPresent;
-}
-
 //Child menu for turret control
 class MenuTurretsCtrl: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuTurretsCtrl( Item& terminal, Map& map )
+	uint level;
+		
+	MenuTurretsCtrl( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 2;
-    }
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        if( !valid( map ) )
+		if( !MenuReady( map, terminal ) )
 		{
-            return false;
-        }
-		
-		Item@ terminal = GetItem( terminal_id );
-		if( !valid( terminal ) )
+			return false;
+		}
+
+		Critter@[] turrets = getTurrets( map );
+		for( uint i = 0; i < turrets.length(); i ++ )
 		{
-            return false;
-        }
-		
-		if( FindTurrets( map ) )
-		{
-			Critter@[] turrets;
-			for( uint j = 0; j < TurretPids.length(); j ++ ) 
+			Critter@ turret = turrets[i];
+			if( valid( turret ) && ( turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ) )
 			{
-				uint16 turretPid = TurretPids[j];
-				map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
-			}
-			
-			for( uint i = 0; i < turrets.length(); i ++ )
-			{
-				Critter@ turret = turrets[i];
-				if( valid( turret ) && ( turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ) )
+				int state = turret.IsKnockout() ? STR_OFF : STR_ON;
+				string lex = "$name" + turret.Id
+						   + "$state" + STR_INSERT_TEXT_LINE( state );
+				if( menu.ButtonMsg( STR_TERMINAL_MENU_STATE_BTN, lex ) )
 				{
-					int state = turret.IsKnockout() ? STR_OFF : STR_ON;
-					string lex = "$name" + turret.Id
-							   + "$state" + STR_INSERT_TEXT_LINE( state );
-					if( menu.ButtonMsg( STR_TERMINAL_MENU_STATE_BTN, lex ) )
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					int action = turret.IsKnockout() ? 0 : 1;
+					unsafe_sleep( turret, 0, 1, action, null, null );
+					if( action == 0 )
 					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						int action = turret.IsKnockout() ? 0 : 1;
-						unsafe_sleep( turret, 0, 1, action, null, null );
-						if( action == 0 )
-						{
-							turret.SetEvent( CRITTER_EVENT_ATTACKED, "mob@_Attacked" );
-						}
-						return true;
+						turret.SetEvent( CRITTER_EVENT_ATTACKED, "mob@_Attacked" );
 					}
+					return true;
 				}
-				else
-				{
-					continue;
-				}
+			}
+			else
+			{
+				continue;
 			}
 		}
 		
@@ -1742,48 +1591,37 @@ class MenuTurretsCtrl: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
 		string info = "$turretsList";
-		if( FindTurrets( map ) )
+		
+		Critter@[] turrets = getTurrets( map );
+		for( uint i = 0; i < turrets.length(); i ++ )
 		{
-			Critter@[] turrets;
-			for( uint j = 0; j < TurretPids.length(); j ++ ) 
+			Critter@ turret = turrets[i];
+			if( valid( turret ) && ( turret.PARENT_TERMINAL == int( terminal.Id ) ) )
 			{
-				uint16 turretPid = TurretPids[j];
-				map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
-			}
-			
-			for( uint i = 0; i < turrets.length(); i ++ )
-			{
-				Critter@ turret = turrets[i];
-				if( valid( turret ) && ( turret.PARENT_TERMINAL == int( terminal.Id ) ) )
+				info += "|0x3CF800 № |0xFFFF00 " + turret.Id + " |0x3CF800 ";
+				
+				int status = turret.Stat[ ST_CURRENT_HP ] * 100 / turret.Stat[ ST_MAX_LIFE ];
+				info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_TURRETS_STATUS ) 
+					 + " |0xFFFF00 " + status + "|0x3CF800  % - ";
+				
+				int state = turret.IsKnockout() ? STR_DEVICE_DISABLED : STR_DEVICE_ACTIVE;
+				info += "|0xFFFF00 " + STR_INSERT_TEXT_LINE( state ) + " |0x3CF800 \n";
+				
+				if( turret.SECURITY_ACCESS_CARD != 0 )
 				{
-					info += "|0x3CF800 № |0xFFFF00 " + turret.Id + " |0x3CF800 ";
-					
-					int status = turret.Stat[ ST_CURRENT_HP ] * 100 / turret.Stat[ ST_MAX_LIFE ];
-					info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_TURRETS_STATUS ) 
-						 + " |0xFFFF00 " + status + "|0x3CF800  % - ";
-					
-					int state = turret.IsKnockout() ? STR_DEVICE_DISABLED : STR_DEVICE_ACTIVE;
-					info += "|0xFFFF00 " + STR_INSERT_TEXT_LINE( state ) + " |0x3CF800 \n";
-					
-					if( turret.SECURITY_ACCESS_CARD != 0 )
-					{
-						info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_TURRETS_ACCESS_BY ) 
-							 + " |0xFFFF00 " + STR_INSERT_ITEM_LINE( turret.SECURITY_ACCESS_CARD * 100 ) + "|0x3CF800 \n";
-					}
-					else
-					{
-						continue;
-					}
+					info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_TURRETS_ACCESS_BY ) 
+						 + " |0xFFFF00 " + STR_INSERT_ITEM_LINE( turret.SECURITY_ACCESS_CARD * 100 ) + "|0x3CF800 \n";
 				}
 				else
 				{
 					continue;
 				}
 			}
-			turrets.resize( 0 );
+			else
+			{
+				continue;
+			}
 		}
 		
 		return info;
@@ -1791,9 +1629,7 @@ class MenuTurretsCtrl: CenteredMenuHandler
 		
 	bool ShouldRedraw( Critter& cr )
 	{
-		Item@ terminal = GetItem( terminal_id );
-
-		if( !valid( terminal ) || GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
 		{
 			return false;
 		}
@@ -1805,31 +1641,31 @@ class MenuTurretsCtrl: CenteredMenuHandler
 //Child menu for GM Level commands
 class MenuTerminalGM: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Critter@ cr;
+	iDialogBox@ menu;
 	
-    MenuTerminalGM( Item& terminal, Map& map )
+	Item@ terminal;
+	Map@ map;
+	
+	uint level;
+		
+	MenuTerminalGM( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
-    }
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        if( !valid( map ) )
-		{
-            return false;
-        }
-		
-		Item@ terminal = GetItem( terminal_id );
-		if( !valid( terminal ) )
+		if( !MenuReady( map, terminal ) )
 		{
 			return false;
 		}
-				
+		
+		@this.menu = @menu;
+		@this.cr = @cr;
+
 		if( menu.ButtonMsg( STR_TERMINAL_MENU_STATE_BTN, 
 				"$name" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_GM_POWERED ) 
 				+ STR_CHECK_FLAG( "state", terminal.TERMINAL_POWERED == 1 ) ) )
@@ -1838,9 +1674,9 @@ class MenuTerminalGM: CenteredMenuHandler
 			terminal.TERMINAL_POWERED = terminal.TERMINAL_POWERED == 0 ?  1 : 0;
 		}
 		
-		if( SwitchButton( menu, terminal, cr, map, STR_TERMINAL_MENU_GM_FENCE_CONTROL, TERMINAL_LASER_FENCE ) )		return true;
-		if( SwitchButton( menu, terminal, cr, map, STR_TERMINAL_MENU_FORCE_FIELD_CONTROL, TERMINAL_FORCE_FIELD ) )	return true;
-		if( SwitchButton( menu, terminal, cr, map, STR_TERMINAL_MENU_GM_DOORS, TERMINAL_DOORS ) )					return true;
+		if( SwitchButton( STR_TERMINAL_MENU_GM_FENCE_CONTROL, TERMINAL_LASER_FENCE ) )		return true;
+		if( SwitchButton( STR_TERMINAL_MENU_FORCE_FIELD_CONTROL, TERMINAL_FORCE_FIELD ) )	return true;
+		if( SwitchButton( STR_TERMINAL_MENU_GM_DOORS, TERMINAL_DOORS ) )					return true;
 		
 		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_DOORS ) && menu.ButtonMsg( STR_TERMINAL_MENU_GM_ASSIGN_DOORS ) )
 		{
@@ -1850,12 +1686,12 @@ class MenuTerminalGM: CenteredMenuHandler
 			return menu.OpenChild( "Level " + select_doors.level, select_doors );
 		}
 		
-		if( SwitchButton( menu, terminal, cr, map, STR_TERMINAL_MENU_GM_TURRET_CONTROL, TERMINAL_TURRETS ) )		return true;
-		if( SwitchButton( menu, terminal, cr, map, STR_TERMINAL_MENU_GM_ACCESS_CARDS, TERMINAL_ACCESS_CARDS ) )		return true;
-		if( SwitchButton( menu, terminal, cr, map, STR_TERMINAL_MENU_GM_AUTODOC_CONTROL, TERMINAL_AUTODOC ) )		return true;
-		if( SwitchButton( menu, terminal, cr, map, STR_TERMINAL_MENU_GM_PASSWORD, TERMINAL_PASSWORD_PROTECTION ) )	return true;
-		if( SwitchButton( menu, terminal, cr, map, STR_TERMINAL_MENU_GM_MUSIC, TERMINAL_MUSIC ) )					return true;
-		if( SwitchButton( menu, terminal, cr, map, STR_TERMINAL_MENU_GM_MASTER_TERMINAL, TERMINAL_MASTER ) )		return true;
+		if( SwitchButton( STR_TERMINAL_MENU_GM_TURRET_CONTROL, TERMINAL_TURRETS ) )		return true;
+		if( SwitchButton( STR_TERMINAL_MENU_GM_ACCESS_CARDS, TERMINAL_ACCESS_CARDS ) )		return true;
+		if( SwitchButton( STR_TERMINAL_MENU_GM_AUTODOC_CONTROL, TERMINAL_AUTODOC ) )		return true;
+		if( SwitchButton( STR_TERMINAL_MENU_GM_PASSWORD, TERMINAL_PASSWORD_PROTECTION ) )	return true;
+		if( SwitchButton( STR_TERMINAL_MENU_GM_MUSIC, TERMINAL_MUSIC ) )					return true;
+		if( SwitchButton( STR_TERMINAL_MENU_GM_MASTER_TERMINAL, TERMINAL_MASTER ) )		return true;
 		
 		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_MASTER ) && menu.ButtonMsg( STR_TERMINAL_MENU_GM_ASSIGN_TERMINALS ) )
 		{
@@ -1875,7 +1711,7 @@ class MenuTerminalGM: CenteredMenuHandler
     }
 
 	//TODO: Нормально передавать данные из объекта.
-	bool SwitchButton( iDialogBox& menu, Item& terminal, Critter& cr, Map& map, uint STR_TERMINAL_MENU_TYPE, uint TERMINAL_FLAG_VALUE )
+	bool SwitchButton( uint STR_TERMINAL_MENU_TYPE, uint TERMINAL_FLAG_VALUE )
 	{
 		if( menu.ButtonMsg( STR_TERMINAL_MENU_STATE_BTN, 
 				"$name" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_TYPE ) 
@@ -1908,16 +1744,17 @@ class MenuTerminalGM: CenteredMenuHandler
 //Child menu for fence
 class MenuSelectFence: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
+    Item@ terminal;
+	Map@ map;
+
 	uint level;
 	int selectorPos;
 	uint arrayPos;
 	
     MenuSelectFence( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+        @this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
 		selectorPos = 0;
 		arrayPos = 0;
@@ -1925,32 +1762,12 @@ class MenuSelectFence: CenteredMenuHandler
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        if( !valid( map ) )
-		{
-            return false;
-        }
-
-        Item@ terminal = GetItem( terminal_id );
-		if( !valid( terminal ) )
+		if( !MenuReady( map, terminal ) )
 		{
 			return false;
 		}
-		
-		uint[] FenceEntires;	
-		for( int i = ENTIRE_LASER_FENCE_BEGIN; i < ENTIRE_LASER_FENCE_END; i++ )
-		{
-			int entireId = i;
-			int entires = map.CountEntire( entireId );
-			if( entires != 0 )
-			{
-				FenceEntires.insertLast( entireId );
-			}
-			else
-			{
-				continue;
-			}
-		}
+
+		uint[] FenceEntires = getFenceEntires( map );
 		
 		if( FenceEntires.length() != 0 )
 		{
@@ -2039,23 +1856,7 @@ class MenuSelectFence: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
-		
-		uint[] FenceEntires;	
-		for( uint i = ENTIRE_LASER_FENCE_BEGIN; i < ENTIRE_LASER_FENCE_END; i++ )
-		{
-			int entireId = i;
-			int entires = map.CountEntire( entireId );
-			if( entires != 0 )
-			{
-				FenceEntires.insertLast( entireId );
-			}
-			else
-			{
-				continue;
-			}
-		}
+		uint[] FenceEntires = getFenceEntires( map );	
 		
 		string info = "$info";
 		if( FenceEntires.length() != 0 )
@@ -2090,16 +1891,17 @@ class MenuSelectFence: CenteredMenuHandler
 //Child menu for autodoc assigment
 class MenuAutodoc: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
+    Item@ terminal;
+	Map@ map;
+
 	uint level;
 	int selectorPos;
 	uint arrayPos;
 	
     MenuAutodoc( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+        @this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
 		selectorPos = 0;
 		arrayPos = 0;
@@ -2107,19 +1909,11 @@ class MenuAutodoc: CenteredMenuHandler
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( !valid( map ) )
-		{
-            return false;
-        }
-
-		if( !valid( terminal ) )
+		if( !MenuReady( map, terminal ) )
 		{
 			return false;
 		}
-		
+
 		Item@[] Autodocs;
 		map.GetItems( PID_OBJECT_AUTODOC, Autodocs );
 		Item@ autodoc = null;
@@ -2162,7 +1956,11 @@ class MenuAutodoc: CenteredMenuHandler
 				return true;
 			}
 			
-			@autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+			if( terminal.ACTIVE_AUTODOC != 0 )
+			{
+				@autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+			}
+
 			if( valid( autodoc ) )
 			{
 				if( menu.ButtonMsg( STR_DEVICE_CONNECT ) )
@@ -2212,8 +2010,6 @@ class MenuAutodoc: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
 		cr.RunClientScript( "client_screen_test@ShowScreen", 0, 0, 0, "", null );
 		
 		string info = "$info";
@@ -2242,9 +2038,7 @@ class MenuAutodoc: CenteredMenuHandler
 		
 	bool ShouldRedraw( Critter& cr )
 	{
-		Item@ terminal = GetItem( terminal_id );
-
-		if( !valid( terminal ) || GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
 		{
 			return false;
 		}
@@ -2256,36 +2050,29 @@ class MenuAutodoc: CenteredMenuHandler
 //Child menu for autodoc control
 class MenuAutodocCtrl: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Item@ autodoc;
+	Map@ map;
 	
-    MenuAutodocCtrl( Item& terminal, Map& map )
+	uint level;
+		
+	MenuAutodocCtrl( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 2;
-    }
+
+		if( terminal.ACTIVE_AUTODOC != 0 )
+		{
+			@this.autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+		}
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( !valid( map ) )
-		{
-            return false;
-        }
-
-		if( !valid( terminal ) )
-		{
-			return false;
-		}
-		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
-		if( !valid( autodoc ) )
-		{
-			 return false;
+		if( !MenuReady( map, terminal ) || !valid( autodoc ) )
+		{ 
+			return false; 
 		}
 		
 		AutodocScan( map, terminal, autodoc );
@@ -2442,11 +2229,8 @@ class MenuAutodocCtrl: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
 		string info = "$info";
 		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
 		if( valid( autodoc ) )
 		{
 			info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_MAIN )
@@ -2467,9 +2251,7 @@ class MenuAutodocCtrl: CenteredMenuHandler
 	
 	bool ShouldRedraw( Critter& cr )
 	{
-		Item@ terminal = GetItem( terminal_id );
-
-		if( !valid( terminal ) || GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
 		{
 			return false;
 		}
@@ -2480,46 +2262,33 @@ class MenuAutodocCtrl: CenteredMenuHandler
 
 class MenuAutodocMend: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Item@ autodoc;
+	Map@ map;
 	
-    MenuAutodocMend( Item& terminal, Map& map )
+	uint level;
+		
+	MenuAutodocMend( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 3;
-    }
+		
+		if( terminal.ACTIVE_AUTODOC != 0 )
+		{
+			@this.autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+		}
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( !valid( map ) )
-		{
-            return false;
-        }
-
-		if( !valid( terminal ) )
-		{
-			return false;
-		}
-		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
-		if( !valid( autodoc ) )
-		{
-			 return false;
-		}
-
-		if( autodoc.AUTODOC_PATIENT == int( cr.Id ) )
+		if( !MenuReady( map, terminal ) || !valid( autodoc ) || autodoc.AUTODOC_PATIENT == int( cr.Id ) )
 		{ 
 			return false; 
 		}
 
 		if( autodoc.AUTODOC_ERROR == 0 && autodoc.AUTODOC_PATIENT != 0 && autodoc.AUTODOC_EVENT == 0 )
-		{
-			
+		{			
 			Critter@ patient = GetCritter( autodoc.AUTODOC_PATIENT );
 			if( valid( patient) )
 			{
@@ -2608,11 +2377,8 @@ class MenuAutodocMend: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
 		string info = "$info";
 		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
 		if( valid( autodoc ) )
 		{
 			info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_MAIN )
@@ -2633,9 +2399,7 @@ class MenuAutodocMend: CenteredMenuHandler
 		
 	bool ShouldRedraw( Critter& cr )
 	{
-		Item@ terminal = GetItem( terminal_id );
-
-		if( !valid( terminal ) || GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
 		{
 			return false;
 		}
@@ -2646,39 +2410,27 @@ class MenuAutodocMend: CenteredMenuHandler
 
 class MenuAutodocModd: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Item@ autodoc;
+	Map@ map;
 	
-    MenuAutodocModd( Item& terminal, Map& map )
+	uint level;
+		
+	MenuAutodocModd( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 3;
-    }
+		
+		if( terminal.ACTIVE_AUTODOC != 0 )
+		{
+			@this.autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+		}
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( !valid( map ) )
-		{
-            return false;
-        }
-
-		if( !valid( terminal ) )
-		{
-			return false;
-		}
-		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
-		if( !valid( autodoc ) )
-		{
-			 return false;
-		}
-
-		if( autodoc.AUTODOC_PATIENT == int( cr.Id ) )
+		if( !MenuReady( map, terminal ) || !valid( autodoc ) || autodoc.AUTODOC_PATIENT == int( cr.Id ) )
 		{ 
 			return false; 
 		}
@@ -2855,11 +2607,8 @@ class MenuAutodocModd: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
 		string info = "$info";
 		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
 		if( valid( autodoc ) )
 		{
 			info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_MAIN )
@@ -2880,9 +2629,7 @@ class MenuAutodocModd: CenteredMenuHandler
 		
 	bool ShouldRedraw( Critter& cr )
 	{
-		Item@ terminal = GetItem( terminal_id );
-
-		if( !valid( terminal ) || GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
 		{
 			return false;
 		}
