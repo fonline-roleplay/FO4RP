@@ -13,6 +13,21 @@
 
 import void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string@ param3, int[] @ param4 ) from "general_unsafe";
 
+int getPassword( Item@ item )
+{
+	if( getItemPID( item ) == PID_TERMINAL )
+	{
+		return item.PASSWORD;
+	}
+	
+	if( isDoorOrContainer( item ) )
+	{
+		return item.Val4; //locker.ENTERED_CODE
+	}
+	
+	return 0;
+}
+
 const uint16[] TurretPids = { NPC_PID_LAS_TURRET, NPC_PID_LAS_TURRET2, NPC_PID_PLAS_TURRET, NPC_PID_MG_TURRET };
 Critter@[] getTurrets( Map& map )
 {
@@ -93,9 +108,21 @@ Item@[] getAutodoors( Map& map )
 #define SKILL_EFFECIENCY_MIN	( 11.0f )
 #define SKILL_MAX_DIFFERENCE	( 300.0f )
 
+float skillbonus( Item& item, Critter& cr )
+{
+	int skill = ( getItemPID(item) == PID_TERMINAL ? cr.Skill[SK_SCIENCE] : cr.Skill[SK_LOCKPICK] );	
+	
+	if( getSlotItemPID( cr, SLOT_HAND1 ) ==  PID_ELEC_LOCKPICK_MKII )
+	{
+		skill += 50;
+	}
+	
+	return skillbonus( item.LockerComplexity, skill );
+}
+
 float skillbonus( int admin, int hacker )
 {
-	float hardness = float ( CLAMP( admin - hacker, -SKILL_MAX_DIFFERENCE, SKILL_MAX_DIFFERENCE ) ) / SKILL_MAX_DIFFERENCE; //[-300..300] range
+	float hardness = float ( CLAMP( hacker - admin, -SKILL_MAX_DIFFERENCE, SKILL_MAX_DIFFERENCE ) ) / SKILL_MAX_DIFFERENCE; //[-300..300] range
 
 	float maxDelta = 0;
 	
@@ -105,10 +132,9 @@ float skillbonus( int admin, int hacker )
 	}
 	else //if( hardness < 0 )
 	{
-		maxDelta = SKILL_EFFECIENCY_MIN - SKILL_EFFECIENCY_ZERO;
+		maxDelta = SKILL_EFFECIENCY_ZERO - SKILL_EFFECIENCY_MIN;
 	}
 		
-
 	return SKILL_EFFECIENCY_ZERO + hardness * maxDelta;
 }
 
@@ -134,6 +160,18 @@ void StartMenuTerminal( Critter& cr, Item& terminal )
 
     iMenuHandler@ handler = MenuTerminal( terminal, map );
     iDialogBox@ menu = OpenMenu( cr, "Terminal", handler );
+}
+
+void StartMenuHacking( Critter& cr, Item& terminal )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuHacking( terminal, map );
+    iDialogBox@ menu = OpenMenu( cr, "Hacking", handler );
 }
 
 bool MenuReady( Map@ map, Item@ terminal )
@@ -299,7 +337,7 @@ class MenuTerminal: CenteredMenuHandler
 					
 					if( menu.ButtonMsg( STR_TERMINAL_MENU_BLOCK_TERMINAL ) )
 					{
-						if( terminal.PASSWORD == 0 )
+						if( getPassword(terminal) == 0 )
 						{
 							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 							string passwordInfo = "Set new password";
@@ -357,7 +395,7 @@ class MenuTerminal: CenteredMenuHandler
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					string passwordInfo;
-					if( terminal.PASSWORD != 0 )
+					if( getPassword(terminal) != 0 )
 					{
 						passwordInfo = "Input password!";
 					}
@@ -379,12 +417,17 @@ class MenuTerminal: CenteredMenuHandler
 						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_MENU_CANT_HACK_THIS );
 						return true;
 					}
-					else
+					
+					if( !HasElectronicLockpicks( cr ) )
 					{
-						MenuTerminalHacking@ menu_terminal_hacking = MenuTerminalHacking( terminal, map );
-						menu_terminal_hacking.level = level + 1;
-						return menu.OpenChild( "Level " + menu_terminal_hacking.level, menu_terminal_hacking );					
+						LogItemMovement( cr, terminal, "can't hack terminal without electronic lockpick" );
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_E_LOCKPICK );
+						return true;
 					}
+					
+					MenuHacking@ menu_terminal_hacking = MenuHacking( terminal, map );
+					menu_terminal_hacking.level = level + 1;
+					return menu.OpenChild( "Level " + menu_terminal_hacking.level, menu_terminal_hacking );					
 				}
 			}
 		}
@@ -476,7 +519,7 @@ class MenuTerminal: CenteredMenuHandler
 		}
 		
 		info += "$noPassword";
-		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) && terminal.PASSWORD == 0 )
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) && getPassword(terminal) == 0 )
 		{
 			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_NO_PASSWORD );
 		}
@@ -501,7 +544,7 @@ class MenuTerminal: CenteredMenuHandler
     }
 }
 
-class MenuTerminalHacking: CenteredMenuHandler
+class MenuHacking: CenteredMenuHandler
 {
 	Item@ terminal;
 	Map@ map;
@@ -518,7 +561,7 @@ class MenuTerminalHacking: CenteredMenuHandler
 	
 	int[] datamess;
 		
-	MenuTerminalHacking( Item& terminal, Map& map )
+	MenuHacking( Item& terminal, Map& map )
 	{
 		@this.terminal = @terminal;
         @this.map = @map;
@@ -545,7 +588,7 @@ class MenuTerminalHacking: CenteredMenuHandler
 	{
 		if( hintingPercentage < 0 )
 		{
-			hintingPercentage = skillbonus( terminal.LockerComplexity, cr.Skill[SK_SCIENCE] );
+			hintingPercentage = skillbonus( terminal, cr );
 		}
 		
 		return hintingPercentage >= 0;
@@ -570,14 +613,14 @@ class MenuTerminalHacking: CenteredMenuHandler
 	
 	void refreshDataMess()
 	{
-		int number = digitValue( terminal.PASSWORD, digit );
+		int number = digitValue( getPassword(terminal), digit );
 		datamess = WeightedRandom( 100, number, hintingPercentage );		
 		resetHints();
 	}
 
 	bool selectionMenu( Critter& cr, iDialogBox& menu )
 	{
-		for( uint i = 1, l = intLength( terminal.PASSWORD ); i <= l; i++ )
+		for( uint i = 1, l = intLength( getPassword(terminal) ); i <= l; i++ )
 		{
 			if( menu.ButtonMsg( STR_TERMINAL_MENU_HACK_DIGIT, "$n" + i ) )
 			{
@@ -654,20 +697,29 @@ class MenuTerminalHacking: CenteredMenuHandler
 		string result;
 		
 		int lines = 0;
+		bool colored = false;
 		for( int i = 0, l = datamess.length(); i < l ; i++ )
 		{
 			if( lines >= hintedStage )
 			{
-				break;
-			}
-
-			if( datamess[i] == hinted )
-			{
-				result += "|0xFFFF00 " + datamess[i] + "|0x00FF00 ";
+				if( !colored )
+				{
+					result += "|0x888888 ";
+					colored = true;
+				}
+				
+				result += "?";
 			}
 			else
 			{
-				result += datamess[i];
+				if( datamess[i] == hinted )
+				{
+					result += "|0xFFFF00 " + datamess[i] + "|0xAAAAAA ";
+				}
+				else
+				{
+					result += datamess[i];
+				}
 			}
 			
 			if( ( i + 1 ) % 25 == 0 )
@@ -691,10 +743,10 @@ class MenuTerminalHacking: CenteredMenuHandler
 		string info = "$gminfo";		
 		if( isGM( cr ) )
 		{
-			float truncedPecentage = float( int( hintingPercentage * 100 ) / 100 );
+			float truncedPecentage = float( int( hintingPercentage * 100.0f ) / 100.0f );
 			
 			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_GM_INFO )
-				 + "$password" + terminal.PASSWORD
+				 + "$password" + getPassword(terminal)
 				 + "$percentage" + truncedPecentage;
 		}
 
