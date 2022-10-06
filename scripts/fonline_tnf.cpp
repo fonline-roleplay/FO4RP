@@ -493,8 +493,8 @@ EXPORT int getParam_Sequence( CritterMutual& cr, uint )
 EXPORT int getParam_MeleeDmg( CritterMutual& cr, uint )
 {
     int strength = getParam_Strength( cr, 0 );
-    int val = cr.Params[ ST_MELEE_DAMAGE ] + cr.Params[ ST_MELEE_DAMAGE_EXT ] + MELEE_DAMAGE_BASE + cr.Params[ ST_STRENGTH ] * MELEE_DAMAGE_PER_STR;
-    return CLAMP( val, 1, 9999 );
+    int val = cr.Params[ TRAIT_JINXED ] == 0 ? ( cr.Params[ ST_MELEE_DAMAGE ] + cr.Params[ ST_MELEE_DAMAGE_EXT ] + MELEE_DAMAGE_BASE + cr.Params[ ST_STRENGTH ] * MELEE_DAMAGE_PER_STR ) : 0;
+    return CLAMP( val, 0, 9999 );
 }
 
 EXPORT int getParam_HealingRate( CritterMutual& cr, uint )
