@@ -41,88 +41,61 @@ void ChangeStatus( Critter& cr, uint16 status, uint8 value, bool set )
 	}
 }
 
-void BleedTest( Critter& cr, int bleed, int p1, int p2 ) 
+void BleedCritter( Critter& cr, int bleedValue )
 {
-	Critter@ target = ( p1 == 0 ? null : GetCritter( p1 ) );
-	if( !valid( target ) ) 
-	{
-		@target = @cr;
-	}
-	
-	target.ParamBase[ QST_GAMEMODE ] = GAME_TEST;
-	BleedCritter( target, bleed );
-}
-
-void BleedCritter( Critter& cr, int8 bleedValue )
-{
-	uint[] indexes, durations, rates;
-    int eventCount = cr.GetTimeEvents( CTE_BLEED, indexes, durations, rates );
-	if( eventCount > 0 )
-	{
-		cr.EraseTimeEvents( CTE_BLEED );
-	}
-	
-	uint time = ( cr.Param[ QST_GAMEMODE ] == GAME_TEST ? 1 : 60 );
-
 	cr.StatBase[ ST_BLEED ] += bleedValue;
-	if( cr.StatBase[ ST_BLEED ] > 0 )
-	{
-		SETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLEED );
-	}
-	else
-	{
-		UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLEED );
-	}
-	
-    cr.AddTimeEvent( "cte_bleed", REAL_SECOND( time ), CTE_BLEED, 0 );
+    
+    uint[] indexes, durations, rates;
+    int eventCount = cr.GetTimeEvents( CTE_BLEED, indexes, durations, rates );
+    if( eventCount > 0 )
+    {
+        return;
+    }
+    
+    if( cr.StatBase[ ST_BLEED ] > 0 )
+    {
+        SETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLEED );
+    }
+    else
+    {
+        UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLEED );
+    }
+    
+    uint time = CLAMP( MAX_BLEED_TIME - cr.StatBase[ ST_BLEED ], MIN_BLEED_TIME, MAX_BLEED_TIME );
+    cr.AddTimeEvent( "cte_bleed", REAL_SECOND( MIN_BLEED_TIME ), CTE_BLEED, 0 );
 }
 
 uint cte_bleed( Critter& cr, int identifier, uint& rate )
 {
-	if( !valid( cr ) )
-	{
-		return 0;
-	}
-	
-	int maxHP = cr.Stat[ ST_MAX_LIFE ];
-
-    int bleed = CLAMP( cr.StatBase[ ST_BLEED ] * 70 / 100 - 1, 0, maxHP );
-	
-	if( bleed <= Random( 1, cr.Stat[ ST_ENDURANCE ] ) )
-	{
-		cr.StatBase[ ST_BLEED ] = 0;
-		return 0;
-	}
-	
-	cr.StatBase[ ST_BLEED ] = bleed;
-	if( cr.StatBase[ ST_CURRENT_HP ] + cr.Stat [ST_HEALING_RATE] > 0  )
-	{
-		cr.StatBase[ ST_CURRENT_HP ] -= bleed / 2;
-	}
-	else
-	{
-		bleed /= 2;
+    if( !valid( cr ) )
+    {
+        return 0;
     }
-	
-	uint16 hx = cr.HexX, hy = cr.HexY;
-	Map@ map = cr.GetMap();
-	if( valid( map ) )
+    
+	if( cr.IsDead() )
 	{
-		CheckBlood( map, hx, hy );
+		return 0;
 	}
 	
-	int time = 30;
-	if( cr.Param[ QST_GAMEMODE ] == GAME_TEST )
-	{
-		time = 3;
-	}
+    if( cr.Stat[ ST_BLEED ] <= 0 )
+    {
+        UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BLEED );
+        return 0;
+    }
+    
+    cr.StatBase[ ST_CURRENT_HP ] -= BLEED_RATE;
+    cr.StatBase[ ST_BLEED ] -= BLEED_RATE;
+    
+    uint16 hx = cr.HexX, hy = cr.HexY;
+    Map@ map = cr.GetMap();
+    if( valid( map ) )
+    {
+        CheckBlood( map, hx, hy );
+    }
+    
+    uint time = CLAMP( MAX_BLEED_TIME - cr.StatBase[ ST_BLEED ], MIN_BLEED_TIME , MAX_BLEED_TIME );
 	
-	if( cr.IsKnockout() || cr.IsNpc() )
-	{
-		time *= 2;
-	}
-	
-	return REAL_SECOND( time );
+    return REAL_SECOND( time );
 }
 
 void CheckBlood( Map& map, uint16 hx, uint16 hy )
@@ -139,14 +112,16 @@ void CheckBlood( Map& map, uint16 hx, uint16 hy )
 		{
 			continue;
 		}
+		
 		uint dirtPid = dirt.GetProtoId();
 		if( bloods[0].find( dirtPid ) != -1 )
 		{
 			dirt.BLOOD_AMOUNT++;
-			if( dirt.BLOOD_AMOUNT >= spoil_Val )
+			if( dirt.BLOOD_AMOUNT >= BLOOD_STACK_VAL )
 			{
 				dirt.ChangeProto( bloods[1][Random( 0, bloods[1].length() - 1 )] );
 			}
+			
 			wasBlooded = true;
 			break;
 		}
@@ -158,7 +133,8 @@ void CheckBlood( Map& map, uint16 hx, uint16 hy )
 			break;
 		}
 	}
-
+	
+	dirts.resize(0);
 	
 	if( !wasBlooded )
 	{
@@ -168,7 +144,7 @@ void CheckBlood( Map& map, uint16 hx, uint16 hy )
 
 void AddBlood( Map& map, uint16 hx, uint16 hy, uint size )
 {
-	uint pid = bloods[size][Random( 0, bloods[size].length() - 1)];
+	uint pid = bloods[ size ][ Random( 0, bloods[size].length() - 1) ];
 	map.AddItem( hx, hy, pid, 1 );
 	
 	Item@ blood = null;
@@ -179,6 +155,7 @@ void AddBlood( Map& map, uint16 hx, uint16 hy, uint size )
 	{
 		return;
 	}
+	
 	for( uint i = 0, len = ground.length(); i < len; i++ )
 	{
 		if( bloods[size].find( ground[i].GetProtoId() ) > -1 )
@@ -191,24 +168,28 @@ void AddBlood( Map& map, uint16 hx, uint16 hy, uint size )
 			break;
 		}
 	}
+	
+	ground.resize(0);
+	
 	if( valid( blood ) )
 	{
 		uint[] values = { blood.Id };
-		blood.Val1 = CreateTimeEvent( __FullSecond + REAL_MINUTE( 1 + 15 * blood.BLOOD_AMOUNT ), "e_dryup", values, true );
+		blood.BLOOD_TE = CreateTimeEvent( __FullSecond + REAL_MINUTE( BLOOD_DRY_TO ), "e_dryup", values, true );
 	}
 }
 
 uint e_dryup( uint[]@ values )
 {
-	if( !valid(values) )
-	{
-		return 0;
-	}
-	
 	Item@ blood = GetItem( values[0] );
 	if( !valid( blood ) )
 	{
 		return 0;
+	}
+	
+	if( blood.BLOOD_AMOUNT > 0 )
+	{
+		blood.BLOOD_AMOUNT --;
+		return REAL_MINUTE( BLOOD_DRY_TO );
 	}
 	
 	DeleteItem( blood );
