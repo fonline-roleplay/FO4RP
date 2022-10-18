@@ -128,7 +128,7 @@ void unsafe_radioHead( Critter& cr, int, int, int, string@ message, int[]@ )
 	Item@ radio = null;
 	if( cr.GetItems( -1, items ) > 0 )
 	{
-		for( uint i = 0, l = items.length; i < l; i++ )
+		for( uint i = 0, l = items.length(); i < l; i++ )
 		{
 			@ radio = items[i];
 			if( valid( radio ) )
@@ -561,7 +561,7 @@ uint e_emptySFX( uint[]@ values )
 	int hx = cr.HexX, hy = cr.HexY;
 	cr.GetMap().GetCrittersHex( hx, hy, radius, FIND_ALL | FIND_ONLY_PLAYERS, players );
 	int[] vals = { values[1], 4, radius };
-	for( uint i = 0; i < players.length(); i++ )
+	for( uint i = 0, len = players.length(); i < len; i++ )
 	{
 		Critter@ player = players[i];
 		if( valid( player ) )
@@ -569,6 +569,8 @@ uint e_emptySFX( uint[]@ values )
 			player.RunClientScript( "fofmod@__PlayWeaponSound", cr.Id, hx, hy, "LAUGHTE1.mp3", vals );
 		}
 	}
+	
+	players.resize(0);
 	return 0;
 }
 
@@ -835,7 +837,7 @@ uint cte_unsafe_relax( Critter& player, int identifier, uint& rate )
 			break;
 	}
 
-	if( MovementState( player ) > 0 || rate == 0 || player.Param[ CR_IS_WINDUPED ] != 0 )
+	if( ( player.Param[ CR_IS_RELAXING ] == 5 && ( MovementState( player ) == MOVE_STATE_RUN || !CheckCover( player ) ) ) || rate == 0 || player.Param[ CR_IS_WINDUPED ] != 0 )
 	{
 		player.ParamBase[ CR_IS_RELAXING ] = 0;
 		player.ParamBase[ CR_IN_COVER ] = 0;
@@ -843,98 +845,107 @@ uint cte_unsafe_relax( Critter& player, int identifier, uint& rate )
 		{
 			player.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 		}
+		
 		return 0;
 	}
 	
 	return REAL_MS( 500 );
 }
 
-void CheckCover( Critter& player )
+bool CheckCover( Critter& player )
 {
 	Map@ map = player.GetMap();
 	if( !valid( map ) )
 	{
-		return;
+		return false;
 	}
 	
+	uint count = 0;	
 	for( uint16 i = 0; i < 6; i++ )
 	{
 		uint16 hx = player.HexX, hy = player.HexY;
 		map.MoveHexByDir( hx, hy, i, 1 );
+		uint coverType = 0;
+		if( !map.IsHexPassed( hx, hy ) )
 		{
-			uint coverType = 0;
-			if( !map.IsHexPassed( hx, hy ) )
+			FindData@[] allData;
+			GetHexProtos( map, hx, hy, allData );
+			for( uint j = 0, len = allData.length(); j < len; j++ )
 			{
-                FindData@[] allData;
-                GetHexProtos( map, hx, hy, allData );
-				
-				if( allData.length() > 0 )
-				{
-					for( uint j = 0; j < allData.length(); j++ )
-					{
-						ProtoItem@ protoItem = allData[0].Proto;
+				ProtoItem@ protoItem = allData[0].Proto;
 
-						if( FLAG( protoItem.Flags, ITEM_NO_BLOCK ) )
+				if( FLAG( protoItem.Flags, ITEM_NO_BLOCK ) )
+				{
+					continue;
+				}
+				
+				switch( protoItem.Material )
+				{
+					case( MATERIAL_WOOD ):
+					{
+						if( coverType < 2 )
 						{
-							continue;
+							coverType = 2;
 						}
-						
-						switch( protoItem.Material )
-						{
-							case( MATERIAL_WOOD ):
-							{
-								if( coverType < 2 )
-								{
-									coverType = 2;
-								}
-								break;
-							}
-							case( MATERIAL_METAL ):
-							{
-								if( coverType < 3 )
-								{
-									coverType = 3;
-								}
-								break;
-							}
-							case( MATERIAL_STONE ):
-							case( MATERIAL_CEMENT ):
-							{
-								if( coverType < 4 )
-								{
-									coverType = 4;
-								}
-								break;
-							}
-							case( MATERIAL_DIRT ):
-							{
-								if( coverType > 0 )
-								{
-									coverType = 0;
-								}
-								break;
-							}
-							default:
-							{
-								if( coverType < 1 )
-								{
-									coverType = 1;
-								}
-								break;
-							}
-								break;
-						}
-						
-						if( coverType == 4 )
-						{
-							break;
-						}
+						break;
 					}
+					case( MATERIAL_METAL ):
+					{
+						if( coverType < 3 )
+						{
+							coverType = 3;
+						}
+						break;
+					}
+					case( MATERIAL_STONE ):
+					case( MATERIAL_CEMENT ):
+					{
+						if( coverType < 4 )
+						{
+							coverType = 4;
+						}
+						break;
+					}
+					case( MATERIAL_DIRT ):
+					{
+						if( coverType > 0 )
+						{
+							coverType = 0;
+						}
+						break;
+					}
+					default:
+					{
+						if( coverType < 1 )
+						{
+							coverType = 1;
+						}
+						break;
+					}
+						break;
+				}
+				
+				if( coverType == 4 )
+				{
+					break;
 				}
 			}
-			player.ParamBase[ CR_IN_COVER ] = SET_COVER_TYPE( coverType, i, player.ParamBase[ CR_IN_COVER ] );
+			
+			allData.resize(0);
+		}
+		player.ParamBase[ CR_IN_COVER ] = SET_COVER_TYPE( coverType, i, player.ParamBase[ CR_IN_COVER ] );
+		if( coverType != 0 )
+		{
+			count++;
 		}
 	}
+	
+	if( count == 0 )
+	{
+		return false;
+	}
+	
+	return true;
 }
 
 //Proto array collector
@@ -944,6 +955,7 @@ class FindData
 	{
 		@Proto = GetProtoItem( protoid );
 	}
+
 	ProtoItem@ Proto;
 }
 
@@ -1289,7 +1301,8 @@ void MakeDescLex( Critter& player, uint answerI, string& answerS )
     int accessory = player.Stat[ ST_LAST_CONT_ID ];
     Item@ target;
     Map@ map = player.GetMap();
-    switch( accessory ) {
+    switch( accessory )
+	{
         case( ACCESSORY_NONE ):
 			player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
 			break;
