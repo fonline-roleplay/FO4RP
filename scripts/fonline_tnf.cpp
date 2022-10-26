@@ -493,7 +493,7 @@ EXPORT int getParam_Sequence( CritterMutual& cr, uint )
 EXPORT int getParam_MeleeDmg( CritterMutual& cr, uint )
 {
     int strength = getParam_Strength( cr, 0 );
-    int val = cr.Params[ TRAIT_JINXED ] == 0 ? ( cr.Params[ ST_MELEE_DAMAGE ] + cr.Params[ ST_MELEE_DAMAGE_EXT ] + MELEE_DAMAGE_BASE + cr.Params[ ST_STRENGTH ] * MELEE_DAMAGE_PER_STR ) : 0;
+    int val = cr.Params[ TRAIT_NERD ] == 0 ? ( cr.Params[ ST_MELEE_DAMAGE ] + cr.Params[ ST_MELEE_DAMAGE_EXT ] + MELEE_DAMAGE_BASE + cr.Params[ ST_STRENGTH ] * MELEE_DAMAGE_PER_STR ) : 0;
     return CLAMP( val, 0, 9999 );
 }
 
@@ -734,7 +734,7 @@ EXPORT bool Item_Weapon_IsGunAttack( Item& item, uint8 mode )
     if( !item.IsWeapon() || !item.WeapIsUseAviable( mode & 7 ) )
         return false;
     int skill = SKILL_OFFSET( item.Proto->Weapon_Skill[ mode & 7 ] );
-    return skill == SK_SMALL_GUNS || skill == SK_BIG_GUNS || skill == SK_ENERGY_WEAPONS;
+    return skill == SK_SMALL_GUNS || skill == SK_MEDIUM_GUNS || skill == SK_BIG_GUNS;
 }
 
 EXPORT bool Item_Weapon_IsRangedAttack( Item& item, uint8 mode )
@@ -742,7 +742,7 @@ EXPORT bool Item_Weapon_IsRangedAttack( Item& item, uint8 mode )
     if( !item.IsWeapon() || !item.WeapIsUseAviable( mode & 7 ) )
         return false;
     int skill = SKILL_OFFSET( item.Proto->Weapon_Skill[ mode & 7 ] );
-    return skill == SK_SMALL_GUNS || skill == SK_BIG_GUNS || skill == SK_ENERGY_WEAPONS || skill == SK_THROWING;
+    return skill == SK_SMALL_GUNS || skill == SK_MEDIUM_GUNS || skill == SK_BIG_GUNS || skill == SK_THROWING;
 }
 
 EXPORT int ItemTransferCount( CritterMutual& cr )
@@ -806,7 +806,7 @@ uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode )
 			}
 		}
 		
-		if( cr.Params[ TRAIT_ONE_HANDER ] )
+		if( cr.Params[ TRAIT_SADIST ] )
 		{
 			apCost = apCost * ONE_HANDER_AP_MUL / 100;
 		}
