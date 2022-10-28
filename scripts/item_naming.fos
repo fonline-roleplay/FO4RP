@@ -1,0 +1,769 @@
+#ifndef ITEM_NAMING
+#define ITEM_NAMING
+
+#include "_utils.fos"
+#include "item_naming_h.fos"
+
+/* TODO LIST:
+	0) Critter lex + AFK modes;
+	1) Refactor, split file to lesser modules;
+	2) Rework GM-menu;
+	3) Optimise and reorder function calls;
+	4) Translation -> MSG;
+*/
+
+#ifdef __SERVER
+	import void ShowInputBoxScreen( Critter& cr, string funcName, uint16 textLength, uint8 flags ) from "main";
+	import void GM_ItemPanel( Critter& player, int itemId ) from "gm";
+#endif
+
+#ifndef __OVERRIDABLE_STRING
+	#define __OVERRIDABLE_STRING
+	
+	class OverridableString
+	{
+		string text;
+		uint type;
+		bool override;
+		
+		OverridableString()
+		{
+			type = LEXEM_SEPARATOR;
+			this.text = "";
+			this.override = false;
+		}
+
+		OverridableString( string text, bool override )
+		{
+			type = LEXEM_SEPARATOR;
+			this.text = FormatCut( text );
+			this.override = override;
+		}
+		
+		OverridableString( string text )
+		{
+			type = LEXEM_SEPARATOR;
+			this.text = FormatCut( text );
+			this.override = ( type == LEXEM_OVERRIDER );
+		}
+		
+		string FormatCut( string text )
+		{
+			uint i = 0;
+			while( i < text.length() )
+			{
+				if( text[i] == LEXEM_OVERRIDER || text[i] == LEXEM_SEPARATOR )
+				{
+					type = text[i];
+				}
+				else
+				{
+					break;
+				}
+				
+				i++;
+			}
+			
+			if( i >= text.length() )
+			{
+				return "";
+			}
+			
+			return substring( text, i, text.length() - i );
+		}
+		
+		string toString()
+		{
+			if( override )
+			{
+				return PREFIX_OVERRIDER + this.text;
+			}
+
+			return PREFIX_SEPARATOR + this.text;
+		}
+	}
+
+	OverridableString[] split( string line )
+	{
+		OverridableString[] result;
+		
+		uint last_i = 0;
+		for( uint i = 0, l = line.length(); i < l; i++ )
+		{
+			switch( line[i] )
+			{
+				case( LEXEM_OVERRIDER ):
+				case( LEXEM_SEPARATOR ):
+					if( last_i != i )
+					{
+						string sub = substring( line, last_i, i - last_i );
+						result.insertLast( OverridableString( sub ) );
+						last_i = i;
+					}
+			}
+		}
+		
+		string sub = substring( line, last_i, line.length() - last_i );
+		result.insertLast( OverridableString( sub ) );
+
+		return result;
+	}
+
+#endif
+
+class LexBuilder
+{
+	OverridableString[] parts;
+	
+	LexBuilder()
+	{
+		parts.insertLast( OverridableString() );//Name
+		parts.insertLast( OverridableString() );//PID
+		parts.insertLast( OverridableString() );//Description
+	}
+	
+	LexBuilder( string lex )
+	{
+		parts = split( lex );
+	}
+	
+	string get( uint index )
+	{
+		if( parts.length() <= index )
+		{
+			return "";
+		}
+		
+		return parts[index].text;
+	}
+	
+	OverridableString@ getRaw( uint index )
+	{
+		while( parts.length() <= index )
+		{
+			parts.insertLast( OverridableString() );
+		}
+		
+		return parts[index];
+	}
+	
+	string set( uint index, string value )
+	{
+		if( parts.length() <= index )
+		{
+			return "";
+		}
+		
+		parts[index].text = value;
+			
+		return parts[index].text;
+	}		
+
+	bool isOverriden( uint index )
+	{
+		if( parts.length() <= index ) 
+		{
+			return false;
+		}
+		
+		return parts[index].override;
+	}
+	
+	bool setOverriden( uint index, bool value )
+	{
+		if( parts.length() <= index ) 
+		{
+			return false;
+		}
+		
+		parts[index].override = value;
+		
+		return true;
+	}
+			
+	string toString()
+	{
+		string result;
+		
+		for( uint i = 0, l = parts.length(); i < l; i++ )
+		{
+			result += parts[i].toString();
+		}
+		
+		return result;
+	}
+	
+	bool writeTo( ItemMutual@ item )
+	{
+		if( !valid( item ) )
+		{
+			return false;
+		}
+		
+#ifdef __SERVER
+		item.SetLexems( this.toString() );
+		item.Update();
+#endif
+		
+		return true;
+	}
+}
+
+#ifndef __CRITTERLEX
+	#define __CRITTERLEX
+	
+	enum CritterLexParts
+	{
+		Description = 0,
+		AFK = 1
+	}
+
+	class CritterLex : LexBuilder
+	{
+		CritterLex( string lex )
+		{
+			super( lex );
+		}
+
+		string get( CritterLexParts part )
+		{
+			return get( uint( part ) );
+		}
+		
+		string set( CritterLexParts part, string value )
+		{
+			return set( uint( part ), value );
+		}
+		
+
+		string getDescription()
+		{
+			return get( CritterLexParts::Description );
+		}
+		
+		string setDescription( string value )
+		{
+			return set( CritterLexParts::Description, value );
+		}
+
+		string getAFK()
+		{
+			return get( CritterLexParts::AFK );
+		}
+		
+		string setAFK( string value )
+		{
+			return set( CritterLexParts::AFK, value );
+		}
+	}
+	
+#endif
+
+#ifndef __ITEMLEX
+	#define __ITEMLEX
+	
+	enum ItemLexParts
+	{
+		Name = 0,
+		PID = 1,
+		Description = 2
+	}
+
+	class ItemLex : LexBuilder
+	{
+		ItemLex()
+		{
+			super();
+		}
+		
+		ItemLex( string lex )
+		{
+			super( lex );
+		}
+		
+		string get( ItemLexParts part )
+		{
+			return get( uint( part ) );
+		}
+		
+		string set( ItemLexParts part, string value )
+		{
+			return set( uint( part ), value );
+		}
+		
+		bool isOverriden( ItemLexParts part )
+		{
+			return isOverriden( uint( part ) );
+		}
+
+		bool setOverriden( ItemLexParts part, bool value )
+		{
+			return setOverriden( uint( part ), value );
+		}
+
+		string getName()
+		{
+			return get( ItemLexParts::Name );
+		}
+		
+		OverridableString@ getRawName()
+		{
+			return getRaw( ItemLexParts::Name );
+		}
+		
+		string setName( string value )
+		{
+			return set( ItemLexParts::Name, value );
+		}
+		
+		bool overrideName()
+		{
+			return isOverriden( ItemLexParts::Name );
+		}
+		
+		string getPIDs()
+		{
+			return get( ItemLexParts::PID );
+		}
+
+		int getPID()
+		{
+			return strToInt( getPIDs() );
+		}
+
+		string setPIDs( string value )
+		{
+			return set( ItemLexParts::PID, value );
+		}
+
+		string setPID( int value )
+		{
+			return setPIDs( "" + value );
+		}
+
+		OverridableString@ getRawDescription()
+		{
+			return getRaw( ItemLexParts::Description );
+		}
+
+		string getDescription()
+		{
+			return get( ItemLexParts::Description );
+		}
+
+		string setDescription( string value )
+		{
+			return set( ItemLexParts::Description, value );
+		}
+		
+		bool overrideDesciption()
+		{
+			return isOverriden( ItemLexParts::Description );
+		}
+		
+	}
+
+#endif
+
+ItemLex@ proccessLex( ItemMutual@ item )
+{
+	if( !valid( item ) )
+	{
+		return null;
+	}
+	
+	string lex;
+#ifdef __SERVER
+	lex = checkNull( Item_GetLexems( item ), "" );
+#endif
+#ifdef __CLIENT
+	lex = "" + item.Lexems;
+#endif
+	
+	return proccessLex( lex );
+}
+
+ItemLex@ proccessLex( string@ lex )
+{
+	if( !valid( lex ) || lex.length() < 3 )
+	{
+		return ItemLex();
+	}
+
+	return ItemLex( lex );
+}
+
+#ifndef __ITEM_NAMING_EXPORTS
+	#define __ITEM_NAMING_EXPORTS
+	
+#ifdef __SERVER
+	#define GET_ITEM_MSG_STR	#( arg )		( GetItemMsgStr( arg ) )
+#endif
+#ifdef __CLIENT
+	#define GET_ITEM_MSG_STR	#( arg )		( GetMsgStr( TEXTMSG_ITEM, arg ) )
+#endif	
+
+	string itemText( ItemMutual@ item )
+	{
+		if( valid( item ) )
+		{
+			return itemText( item, 0 );
+		}
+		
+		return "[null]";
+	}
+
+	string itemText( ItemMutual@ item, int max_length )
+	{
+		if( !valid( item ) )
+		{
+			return "[null]";
+		}
+		
+		string result = TRIM_DOTS( getLexName( item ) );
+		if( max_length > 0 && pixelength( result ) > max_length )
+		{
+			result = substring( result, 0, MIN( uint( max_length / 7.5f ), result.length() ) ) + "..";
+		}
+		
+		return itemColor( item ) + result + COLOR_NETMSG;
+	}
+
+	string getItemTextName( string lexems )
+	{
+		string colorSuffix = lexems.length() > COLOR_NETMSG.length() && COLOR_NETMSG == substring(
+			lexems, 
+			lexems.length() - COLOR_NETMSG.length(), 
+			COLOR_NETMSG.length()
+		) ? COLOR_NETMSG : "";
+				
+		return substring( lexems, 0, findFirst( lexems, ". " ) ) + colorSuffix;
+	}
+
+	string getItemTextDescription(string lexems)
+	{
+		if( lexems.length() < 1 )
+		{
+			return "";
+		}
+		int pos = findFirst( lexems, ". " );
+		int off = lexems[ pos + 1 ] == ' ' ? 1 : 0;
+		return pos > 0 ? substring( lexems, pos + off + 1, lexems.length() - pos ) : "";
+	}
+
+	string getLexName( ItemCl@ item )
+	{
+		string info = checkNull( GET_ITEM_MSG_STR( STR_ITEM_INFO( item ) ) );
+		
+		ItemLex@ itemLex = proccessLex( item );
+		if( valid( itemLex ) )
+		{
+			int pid = itemLex.getPID();
+			if( pid != 0 )
+			{ //FakePID
+				info = checkNull( GET_ITEM_MSG_STR( pid * 100 + item.Info ) );
+			}
+			
+			OverridableString@ name = itemLex.getRawName();
+			if( valid( name ) && name.text.length() > 0 )
+			{
+				if( name.override )
+				{ //Name == lex
+					info = name.text;
+				}
+				else
+				{ //Name + lex
+					info += " " + name.text;
+				}
+			}
+		}
+		
+		return info;
+	}
+
+	string getLexDesc( ItemCl@ item )
+	{
+		string info = GET_ITEM_MSG_STR( STR_ITEM_INFO( item ) + 1 );
+		
+		ItemLex@ itemLex = proccessLex( item );
+		if( valid( itemLex ) )
+		{
+			int pid = itemLex.getPID();
+			if( pid != 0 )
+			{ //FakePID
+				info = GET_ITEM_MSG_STR( pid * 100 + 1 + item.Info );
+			}
+			
+			OverridableString@ description = itemLex.getRawDescription();
+			if( valid( description ) && description.text.length() > 0 )
+			{
+				if( description.override )
+				{ //Desc == lex
+					info = description.text;
+				}
+				else
+				{ //Desc + lex
+					info += " " + description.text;
+				}
+			}
+		}
+		
+		return info;
+	}
+
+	bool isOverridenName( ItemMutual@ item )
+	{
+		return proccessLex( item ).getRawName().override;
+	}
+
+	bool isOverridenDesc( ItemMutual@ item )
+	{
+		return proccessLex( item ).getRawDescription().override;
+	}
+
+	void switchOverridenName( ItemMutual@ item )
+	{
+		ItemLex@ itemLex = proccessLex( item );
+		OverridableString@ name = itemLex.getRawName();
+		name.override = !name.override;
+		itemLex.writeTo( item );
+	}
+
+	void setOverridenName( ItemMutual@ item, bool value )
+	{
+		ItemLex@ itemLex = proccessLex( item );
+		itemLex.getRawName().override = value;
+		itemLex.writeTo( item );
+	}
+
+	void switchOverridenDesc( ItemMutual@ item )
+	{
+		ItemLex@ itemLex = proccessLex( item );
+		OverridableString@ desc = itemLex.getRawDescription();
+		desc.override = !desc.override;
+		itemLex.writeTo( item );
+	}
+
+	void setOverridenDesc( ItemMutual@ item, bool value )
+	{
+		ItemLex@ itemLex = proccessLex( item );
+		itemLex.getRawDescription().override = value;
+		itemLex.writeTo( item );
+	}
+	
+#endif
+
+#ifdef __SERVER
+	#ifndef _ITEM_NAMING_EXTERNAL_CALLS
+		#define _ITEM_NAMING_EXTERNAL_CALLS		
+			
+		void unsafe_setNameLex( Critter& player, int, int, int, string@ line, int[]@ )
+		{
+			setNameLex( player, 0, line );
+		}
+
+		void setNameLex( Critter& player, uint answerI, string& answerS )
+		{
+			if( player.Stat[ ST_LAST_DOOR_ID ] == 0 )
+			{
+				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+				return;
+			}
+			
+			Item@ item = GetItem( player.Stat[ ST_LAST_DOOR_ID ] );
+			if( !valid( item ) )
+			{
+				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ITEM_NOT_FOUND );
+				return;
+			}
+			
+			ItemLex@ itemLex = proccessLex( item );
+			OverridableString@ name = itemLex.getRawName();
+
+			if( answerS.length() > 1 )
+			{
+				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DESCRIPTION_MADE );
+			}
+			else
+			{
+				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DESCRIPTION_REMOVED );
+				name.override = false;
+			}
+
+			itemLex.setName( answerS );
+			itemLex.writeTo( item );
+			
+			showFakingMenu( player );
+		}
+
+		void unsafe_setDescLex( Critter& player, int, int, int, string@ line, int[]@ )
+		{
+			setDescLex( player, 0, line );
+		}
+
+		void setDescLex( Critter& player, uint answerI, string& answerS )
+		{
+			if( player.Stat[ ST_LAST_DOOR_ID ] == 0 )
+			{
+				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
+				return;
+			}
+			
+			Item@ item = GetItem( player.Stat[ ST_LAST_DOOR_ID ] );
+			if( !valid( item ) )
+			{
+				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ITEM_NOT_FOUND );
+				return;
+			}
+			
+			ItemLex@ itemLex = proccessLex( item );
+			OverridableString@ desc = itemLex.getRawDescription();
+
+			if( answerS.length() > 1 )
+			{
+				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DESCRIPTION_MADE );
+			}
+			else
+			{
+				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DESCRIPTION_REMOVED );
+				desc.override = false;
+			}
+
+			itemLex.setDescription( answerS );
+			itemLex.writeTo( item );
+			
+			showFakingMenu( player );
+		}
+
+		void ask_FAKE_PID( Critter& player, uint answerI, string& answerS )
+		{
+			Item@ item = GetItem( player.StatBase[ ST_VAR0 ] );
+			if( !valid( item ) )
+			{
+				return;
+			}
+			
+			ItemLex@ itemLex = proccessLex( item );
+			itemLex.setPIDs( answerS );
+			itemLex.writeTo( item );
+			
+			showFakingMenu( player );
+		}
+
+		void showFakingMenu( Critter& cr )
+		{
+			Item@ item = GetItem( cr.StatBase[ ST_VAR0 ] );
+			if( !valid( item ) )
+			{
+				return;
+			}
+
+			cr.ShowScreen( SCREEN_DIALOGBOX, 9, "item_naming@answer_FakingMenu" );
+			cr.Say( SAY_DIALOGBOX_TEXT, itemName( item ) );
+			cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), Centering( "Change Pic" ) );
+			cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), Centering( "Fake PID" ) );
+			cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), Centering( "Set [Name-lex]" ) );
+			cr.Say( SAY_DIALOGBOX_BUTTON( 3 ), Centering( isOverridenName( item ) ? "Name == Lex" : "Name += Lex" ) );
+			cr.Say( SAY_DIALOGBOX_BUTTON( 4 ), Centering( "Set [Desc-lex]" ) );
+			cr.Say( SAY_DIALOGBOX_BUTTON( 5 ), Centering( isOverridenDesc( item ) ? "Desc == Lex" : "Desc += Lex" ) );
+			cr.Say( SAY_DIALOGBOX_BUTTON( 6 ), Centering( "Erase whole lex" ) );
+			cr.Say( SAY_DIALOGBOX_BUTTON( 7 ), Centering( "Restore pic" ) );
+			cr.Say( SAY_DIALOGBOX_BUTTON( 8 ), Centering( "[ Back ]" ) );
+		}
+		
+		void answer_FakingMenu( Critter& player, uint answerI, string& answerS )
+		{
+			Item@ item = GetItem( player.StatBase[ ST_VAR0 ] );
+			if( !valid( item ) )
+			{
+				return;
+			}
+			
+			switch( answerI )
+			{
+				case(0): { 
+						player.ShowScreen( SCREEN_SAY, 0, "item_naming@ask_setItemPicture" );
+						player.Say( SAY_SAY_TITLE, "Picture PID #:" );
+					break;}
+				case(1): { 
+						player.ShowScreen( SCREEN_SAY, 0, "item_naming@ask_FAKE_PID" );
+						player.Say( SAY_SAY_TITLE, "Fake PID#" );
+					break;}
+				case(2): { 
+						player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ITEM_DESC );
+						player.StatBase[ ST_LAST_DOOR_ID ] = item.Id;
+						ShowInputBoxScreen( player, "item_naming@unsafe_setNameLex#[Name-lex]:", 0, INPUTBOX_CLOSE_ON_ENTER );
+					break;}
+				case(3): { 
+						switchOverridenName( item );
+						showFakingMenu( player );
+					break;}
+				case(4): { 
+						player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ITEM_DESC );
+						player.StatBase[ ST_LAST_DOOR_ID ] = item.Id;
+						ShowInputBoxScreen( player, "item_naming@unsafe_setDescLex#[Desc-lex]:", 0, INPUTBOX_CLOSE_ON_ENTER );
+					break;}
+				case(5): { 
+						switchOverridenDesc( item );
+						showFakingMenu( player );
+					break;}
+				case(6): { 
+						item.SetLexems( null );
+						item.Update();
+						showFakingMenu( player );
+					break;}
+				case(7): { 
+						setItemPicture( player, item, item.GetProtoId() );
+						showFakingMenu( player );
+					break;}
+				case(8): { 
+						GM_ItemPanel( player, item.Id );
+					break;}
+			}
+		}
+		
+		void ask_setItemPicture( Critter& player, uint answerI, string& answerS )
+		{
+			Item@ item = GetItem( player.StatBase[ ST_VAR0 ] );
+			if( !valid( item ) )
+			{
+				return;
+			}
+			
+			int number = 0;
+			if( answerS.length() < 1 || !StrToInt( answerS, number ) || number <= 0 )
+			{
+				return;
+			}
+			
+			setItemPicture( player, item, number );
+			showFakingMenu( player );
+		}
+
+		void setItemPicture( Critter& player, Item& item, int number )
+		{	
+			uint mapHash = 0, invHash = 0;
+			ProtoItem@ proto = GetProtoItem( number );
+			if( @proto !is null )
+			{
+				mapHash = proto.PicMap;
+				invHash = proto.PicInv;
+			}
+				
+			
+			if( mapHash != 0 )
+			{
+				item.PicMap = mapHash;
+				item.PicInv = ( 0 == invHash || 1130487561 == invHash ) ? mapHash : invHash;
+				item.Update();
+			}
+			else
+			{
+				player.Say( SAY_NETMSG, "Object not found." );
+			}
+		}		
+
+	#endif
+#endif
+
+#endif
