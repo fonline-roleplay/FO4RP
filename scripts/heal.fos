@@ -1618,8 +1618,9 @@ class HealingItem
 	uint msg;
 	bool ResurectItem;
 	string SoundName;
+	uint16 ReturnPid;
 	
-	HealingItem( uint16 pid, uint8 instant_heal, uint8 value_heal, uint8 value_overdose, uint msg, bool ResurectItem, string SoundName )
+	HealingItem( uint16 pid, uint8 instant_heal, uint8 value_heal, uint8 value_overdose, uint msg, bool ResurectItem, string SoundName, uint16 ReturnPid )
 	{
         this.pid = pid;
 		this.instant_heal = instant_heal;
@@ -1628,6 +1629,7 @@ class HealingItem
 		this.msg = msg;
 		this.ResurectItem = ResurectItem;
 		this.SoundName = SoundName;
+		this.ReturnPid = ReturnPid;
 	}
 }
 
@@ -1638,9 +1640,9 @@ class HealingItemCollection
 	{
 	}
 	
-	HealingItemCollection@ healingItem( uint16 pid, uint8 instant_heal, uint8 value_heal, uint8 value_overdose, uint msg, bool ResurectItem, string SoundName ) 
+	HealingItemCollection@ healingItem( uint16 pid, uint8 instant_heal, uint8 value_heal, uint8 value_overdose, uint msg, bool ResurectItem, string SoundName, uint16 ReturnPid ) 
 	{
-		this.healingItems.insertLast( HealingItem( pid, instant_heal, value_heal, value_overdose, msg, ResurectItem, SoundName ) );
+		this.healingItems.insertLast( HealingItem( pid, instant_heal, value_heal, value_overdose, msg, ResurectItem, SoundName, ReturnPid ) );
 		return this;
 	}
 	
@@ -1658,11 +1660,13 @@ class HealingItemCollection
 }
 
 HealingItemCollection@ healingItems = HealingItemCollection()
-//					    Pid         instant_heal,	value_heal,		value_overdose,	 			msg, 			 ResurectItem,			SoundName
-	.healingItem( PID_TRAUMATIN,		100,			60,				60,				STR_EMOTE_INJECT_TRAUMATIN,	true,	 		 "Stimpack.ogg" 	)
-	.healingItem( PID_SUPER_STIMPAK,	60,				100,			60,				STR_EMOTE_INJECT_SS, 		true,	 		 "Stimpack.ogg" 	)
-	.healingItem( PID_STIMPAK,			30,				50,				30,				STR_EMOTE_INJECT_STIM, 		true,			 "Stimpack.ogg" 	)
-	.healingItem( PID_HEALING_POWDER,	20,				30,				40,				STR_EMOTE_APPLY_HP, 	   	false,	  		 "powder_use.ogg"	);
+//					    Pid				instant_heal,	value_heal,		value_overdose,		msg, 					 ResurectItem,		   SoundName,			ReturnPid
+	.healingItem( PID_TRAUMATIN		,		100 ,			60	,			60	,		STR_EMOTE_INJECT_TRAUMATIN	,	true		,	"Stimpack.ogg"	, 	PID_HYPODERMIC_NEEDLE	)
+	.healingItem( PID_SUPER_STIMPAK ,		60	,			100	,			60	,		STR_EMOTE_INJECT_SS			, 	true		,	"Stimpack.ogg"	,	PID_HYPODERMIC_NEEDLE	)
+	.healingItem( PID_STIMPAK		,		30	,			50	,			30	,		STR_EMOTE_INJECT_STIM		, 	true		,	"Stimpack.ogg"	,	PID_HYPODERMIC_NEEDLE	)
+	.healingItem( PID_HEALING_POWDER,		20	,			30	,			40	,		STR_EMOTE_APPLY_HP			,	false		,	"powder_use.ogg",	0						)
+	.healingItem( PID_ANTIDOTE		,		0	,			0	,			0	,		STR_EMOTE_APPLY_ANTIDOTE	,	false		,	""				,	PID_BOTTLE_GLASS		)
+	;
 	
 HealingItem@ GetHealingItem( Item@ item )
 {
@@ -1672,27 +1676,38 @@ HealingItem@ GetHealingItem( Item@ item )
 
 void UseHealingItem( Critter& cr, Critter& targetCr, Item& item )
 {
-	if( valid( item ) )
-	{
-		HealingItem@ usedItem = GetHealingItem( item );
-		
-		if( valid( usedItem ) )
-		{
-			if( targetCr.IsDead() && usedItem.ResurectItem )
-			{
-				TryResurect( cr, targetCr );
-			}
-			else
-			{
+    if( valid( item ) )
+    {
+        HealingItem@ usedItem = GetHealingItem( item );
+        
+        if( valid( usedItem ) )
+        {
+            if( targetCr.IsDead() && usedItem.ResurectItem )
+            {
+                TryResurect( cr, targetCr );
+            }
+            else if( usedItem.pid == PID_ANTIDOTE )
+            {
 				cr.TimeoutBase[ TO_SK_FIRST_AID ] = FIRST_AID_TIMEOUT( cr );
-				proccessHealItem( targetCr, usedItem );
-			}
+                targetCr.StatBase[ ST_POISONING_LEVEL ] -= 250;
+                if( targetCr.Param[ CR_ANTIDOTED ] == 0 )
+				{
+                     UseDrug( targetCr, item );
+				}
+            }
+            else
+            {
+                cr.TimeoutBase[ TO_SK_FIRST_AID ] = FIRST_AID_TIMEOUT( cr );
+                proccessHealItem( targetCr, usedItem );
+            }
+        }
+		
+		
+		if( usedItem.ReturnPid != 0 )
+		{
+			cr.AddItem( usedItem.ReturnPid, 1 );
 		}
 		
-		if( usedItem.pid != PID_HEALING_POWDER )
-		{
-			cr.AddItem( PID_HYPODERMIC_NEEDLE, 1 );
-		}
 		uint lineNumber = cr.Id == targetCr.Id ? usedItem.msg : usedItem.msg + 1;
 		
 		cr.SayMsg( SAY_EMOTE, TEXTMSG_COMBAT, lineNumber );
@@ -1883,18 +1898,10 @@ class MenuFirstAid: CenteredMenuHandler
 		if( menu.ButtonCheck( cr, PID_ANTIDOTE ) )
 		{
 			Item@ item = getItem( cr, PID_ANTIDOTE );
-			cr.Action( ACTION_USE_ITEM, 2, item );
-			if( targetCr_id == cr.Id )
+			if( valid( item ) )
 			{
-				cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_MED_ITEM_CONSUMED, "$proto@msg item " + ( item.Proto.ProtoId * 100 ) + "@" );
-				UseDrug( cr, item );
+				HealingItemApplied( cr, targetCr, item );
 			}
-			else
-			{
-				cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_MED_ITEM_USED_ON, "$proto@msg item " + ( item.Proto.ProtoId * 100 ) + "@" );
-				UseDrugOn( cr, targetCr, item );
-			}
-			cr.ParamBase[ ST_CURRENT_AP ] -= 20 * 100;
 			return false;
 		}
 		
