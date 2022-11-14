@@ -1,80 +1,103 @@
+#ifndef HITCHANCE_MODULE
 #define HITCHANCE_MODULE
 
 #include "_utils.fos"
-#include "combat_h.fos"
 #include "hitchance_h.fos"
-#include "mutual_h.fos"
 
-int client_to_hit( CritterMutual& cr, CritterMutual& target, ProtoItem@ weapon, uint8 weaponMode, ProtoItem@ ammo )
+// Melee only prototype for mutual hitchance
+int client_to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem@ weapon, uint8 weaponMode, ProtoItem@ ammo )
 {
-	return to_hit( cr, target, weapon, weaponMode, ammo );
+	return to_hit( attacker, target, weapon, weaponMode, ammo );
 }
 
-int to_hit( CritterMutual& cr, CritterMutual& target, ProtoItem@ weapon, uint8 weaponMode, ProtoItem@ ammo ) 
+int to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem@ weapon, uint8 weaponMode, ProtoItem@ ammo )
 {
-	uint8 use = _WeaponModeUse( weaponMode );
-    uint8 aim = _WeaponModeAim( weaponMode );
-    int wpnMaxDist = _WeaponMaxDist( weapon, use );
-    uint skillNum = _WeaponSkill ( weapon, use );
-    int skillVal = int( cr.Skill[ skillNum ] );       
-    int optimalDistance = wpnMaxDist * skillVal / MAX_SKILL * EFF_PERCENT / 100;
-	bool isHthAttack = ( skillNum == WS_MELEE || skillNum == WS_UNARMED );
-	
-	int dist = GetCrittersDistantion( cr, target );
-    if( dist > wpnMaxDist )
+	if( !valid( target ) )
 	{
-        return 0;
+		return 0;
+	}
+
+	uint8 use = _WeaponModeUse( weaponMode );
+	uint8 aim = _WeaponModeAim( weaponMode );
+	if( attacker.Param[ CR_AUTO_AIM ] != HIT_LOCATION_NONE && aim == HIT_LOCATION_NONE )
+	{
+		aim = attacker.Param[ CR_AUTO_AIM ];
 	}
 	
-    int hitChance = 0;
+	uint skillNum = _WeaponSkill ( weapon, use );
+	int skillVal = int( attacker.Skill[ skillNum ] );  
+	int acMod = target.Stat[ ST_ARMOR_CLASS ];
+	int wpnMaxDist = _WeaponMaxDist( weapon, use );
+	int reach = ( wpnMaxDist - 1 ) * REACH_BONUS;   
+	int injureMod = attacker.IsDmgEye() ? BLIND_PENALTY_HTH : 0;
 	
-    if( isHthAttack )
-    {
-        hitChance = MAX_HITCHANCE;
-        return hitChance;
-    }
-
-    if( dist <= optimalDistance )
-    {
-        hitChance = MAX_HITCHANCE;
-    }
-    else
-    {
-        int diffFromEff = dist - optimalDistance;
-        int falloff = wpnMaxDist * ( 100 - EFF_PERCENT ) / 100; 
-        if( diffFromEff > falloff )
-        {
-            hitChance = 0;
-        }
-        else
-        {
-            hitChance = MAX_HITCHANCE * CLAMP( ( falloff - diffFromEff ) / MAX( falloff, 1 ), 0, 1 );
-        }
-    }
-
-    return CLAMP( hitChance, 0, MAX_HITCHANCE );
-}
-
-#ifdef __CLIENT
-
-// Callback.
-uint8 CalcEffRange( CritterCl@ cr, ItemCl@ weapon )
-{
-	uint8 use = _WeaponModeUse( weapon.Mode );
-	int wpnMaxDist = _WeaponMaxDist( weapon.Proto, use );
-	uint skillNum = _WeaponSkill  ( weapon.Proto, use );
-	int skillVal = int( cr.Skill[ skillNum ] );
-	uint8 effRange = wpnMaxDist * skillVal * EFF_PERCENT / MAX_SKILL  / 100;
+	int a_dir = attacker.Dir;
+	int t_dir = target.Dir;
+	int dir_1, dir_2 = 0, dir_3 = 0;
+	REVERSE_DIRECTION( dir_1, a_dir );
+	GET_NEAR_DIRECTION( dir_1, dir_2, dir_3 );
+	if( t_dir == dir_1 || t_dir == dir_2 || t_dir == dir_3 )
+	{
+		acMod += target.Skill[ SK_UNARMED ] / SKILL_MOD;
+	}
 	
-	effRange = CLAMP( effRange, 1, uint( wpnMaxDist ) );
-	// Message(""+effRange);
-    return effRange;
+	if( valid( ammo ) )
+	{
+		acMod -= ammo.Ammo_AcMod;
+	}
+	
+	int toHitMod = 0;
+	int handlingStrength = attacker.Stat[ ST_STRENGTH ];
+	int reqStrength = weapon.Weapon_MinStrength;
+	if( handlingStrength < reqStrength )
+	{
+		toHitMod -= ( reqStrength - handlingStrength ) * STRENGTH_MALLUS;
+	}
+	
+	int weaponPerk = weapon.Weapon_Perk;
+	switch( weaponPerk )
+	{
+		case( WEAPON_PERK_ACCURATE ):
+			toHitMod += WEAPON_PERK_ACCURATE_BONUS;
+			break;
+		case( WEAPON_PERK_LONG_RANGE ):
+			break;
+		case( WEAPON_PERK_SCOPE_RANGE ):
+			break;
+		default:
+			break;
+	}
+		
+	int hitChance = skillVal - acMod - aimMod( aim ) - toHitMod + reach - injureMod;
+	
+	return CLAMP( hitChance, MIN_HITCHANCE, MAX_HITCHANCE );
 }
-// Getter. Возвращает указатель на функцию "CalcEffRange" типа "distCalcFunc".
-/*
-distCalcFunc@ GetCalcFunc()
+
+int aimMod( uint8 aim )
 {
-	return CalcEffRange;
+	int aimMod = 0;
+	switch( aim )
+	{
+		case( HIT_LOCATION_EYES ):
+			aimMod = AIM_MOD_EYES;
+			break;
+		case( HIT_LOCATION_HEAD ):
+			aimMod = AIM_MOD_HEAD;
+			break;
+		case( HIT_LOCATION_GROIN ):
+			aimMod = AIM_MOD_GROIN;
+			break;
+		case( HIT_LOCATION_LEFT_ARM ):
+		case( HIT_LOCATION_RIGHT_ARM ):
+			aimMod = AIM_MOD_ARMS;
+			break;
+		case( HIT_LOCATION_LEFT_LEG ):
+		case( HIT_LOCATION_RIGHT_LEG ):
+			aimMod = AIM_MOD_LEGS;
+			break;
+	}
+	
+	return aimMod;
 }
-*/
-#endif
+
+#endif // HITCHANCE_MODULE
