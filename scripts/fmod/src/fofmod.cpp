@@ -473,7 +473,7 @@ void RegisterASInterface()
 		r = ASEngine->RegisterGlobalFunction("void FMOD_Update()", 													asFUNCTION(FMOD_Update), 			asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_Update", r );
-		r = ASEngine->RegisterGlobalFunction("void FMOD_TouchArchive(string& filename)", 							asFUNCTION(FMOD_TouchArchive), 		asCALL_CDECL );
+		r = ASEngine->RegisterGlobalFunction("bool FMOD_TouchArchive(string& filename)", 							asFUNCTION(FMOD_TouchArchive), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_TouchArchive", r );
 		// r = ASEngine->RegisterGlobalFunction("void FMOD_PreloadSounds(string& dir)", 								asFUNCTION(FMOD_PreloadSounds), 	asCALL_CDECL );
