@@ -27,49 +27,26 @@ namespace FOFMOD
 		#ifdef __WINDOWS__
 			HANDLE h_curthread = GetCurrentThread();
 			DWORD  threadId = GetThreadId( h_curthread );
-			DWORD  curOwnerId = INTERLOCKED_EXCHANGE( &(this->ownerId), this->ownerId );
-			if( curOwnerId == ALOC_NOOWNER )
+			DWORD curOwnerId = INTERLOCKED_EXCHANGE( &(this->ownerId), this->ownerId );
+			if( curOwnerId == threadId )
 			{
-				// no owner
-				// set owner to current thread
-				INTERLOCKED_EXCHANGE( &(this->ownerId), threadId );
-				
-				if( this->sysThreadHandle != ALOC_NOHANDLE )
-				{
-					CloseHandle( this->sysThreadHandle );
-				}
-				
-				this->sysThreadHandle = h_curthread;
+				// same thread asking for lock
+				CloseHandle( h_curthread );
 				return;
 			}
 			else
 			{
-				if( curOwnerId == threadId )
+				while( true )
 				{
-					// same thread asking for lock
-					CloseHandle( h_curthread );
-					return;
-				}
-				else
-				{
-					while( true )
+					if( INTERLOCKED_COMPARE_AND_SWAP( &(this->ownerId), threadId, ALOC_NOOWNER ) )
 					{
-						// lock current thread to await unlocking
-						curOwnerId = INTERLOCKED_EXCHANGE( &(this->ownerId), this->ownerId ) ;
-						if( curOwnerId == ALOC_NOOWNER )
+						if( this->sysThreadHandle != ALOC_NOHANDLE )
 						{
-							// its free at last
-							// grab it as owner and come back to parent caller
-							INTERLOCKED_EXCHANGE( &(this->ownerId), threadId );
-							
-							if( this->sysThreadHandle != ALOC_NOHANDLE )
-							{
-								CloseHandle( this->sysThreadHandle );
-							}
-							
-							this->sysThreadHandle = h_curthread;
-							break;
+							CloseHandle( this->sysThreadHandle );
 						}
+						
+						this->sysThreadHandle = h_curthread;
+						break;
 					}
 				}
 			}
@@ -85,35 +62,38 @@ namespace FOFMOD
 			HANDLE h_curthread = GetCurrentThread();
 			DWORD  threadId = GetThreadId( h_curthread );
 			DWORD  curOwnerId = INTERLOCKED_EXCHANGE( &(this->ownerId), this->ownerId );
-			if( curOwnerId == ALOC_NOOWNER )
+			if( curOwnerId == threadId )
 			{
-				// no owner
-				// set owner to current thread
-				INTERLOCKED_EXCHANGE( &(this->ownerId), threadId );
-				
-				if( this->sysThreadHandle != ALOC_NOHANDLE )
-				{
-					CloseHandle( this->sysThreadHandle );
-				}
-				
-				this->sysThreadHandle =  h_curthread;
+				// same thread asking for lock
+				CloseHandle( h_curthread );
 				return true;
 			}
 			else
 			{
-				if( curOwnerId == threadId )
+				if( curOwnerId == ALOC_NOOWNER )
 				{
-					// same thread asking for lock
-					CloseHandle( h_curthread );
+					// no owner
+					// set owner to current thread
+					INTERLOCKED_EXCHANGE( &(this->ownerId), threadId );
+					
+					if( this->sysThreadHandle != ALOC_NOHANDLE )
+					{
+						CloseHandle( this->sysThreadHandle );
+					}
+					
+					this->sysThreadHandle =  h_curthread;
 					return true;
 				}
 				else
 				{
+
 					// already owned by someone else, just return false
 					CloseHandle( h_curthread );
 					return false;
+					
 				}
 			}
+			
 		#elif defined ( __LINUX__ ) 
 		
 		#endif
@@ -134,8 +114,9 @@ namespace FOFMOD
 				INTERLOCKED_EXCHANGE( &(this->ownerId), ALOC_NOOWNER );
 				CloseHandle( this->sysThreadHandle );
 				this->sysThreadHandle = ALOC_NOHANDLE;
-				CloseHandle( h_curthread );
+				
 			}
+			CloseHandle( h_curthread );
 			#elif defined ( __LINUX__ ) 
 			
 			#endif
