@@ -12,16 +12,19 @@
 #undef INTERLOCKED_INCREMENT	
 #undef INTERLOCKED_DECREMENT
 #undef INTERLOCKED_EXCHANGE
+#undef INTERLOCKED_COMPARE_AND_SWAP
 
 #if defined ( __GCC__ )
-	#define INTERLOCKED_INCREMENT __sync_add_and_fetch
-	#define INTERLOCKED_DECREMENT __sync_sub_and_fetch
-	#define INTERLOCKED_EXCHANGE  __sync_lock_test_and_set
+	#define INTERLOCKED_INCREMENT 			__sync_add_and_fetch
+	#define INTERLOCKED_DECREMENT			__sync_sub_and_fetch
+	#define INTERLOCKED_EXCHANGE  			__sync_lock_test_and_set
+	#define INTERLOCKED_COMPARE_AND_SWAP 	__sync_bool_compare_and_swap
 #elif defined ( __MSVC__ )
 	#if defined ( __WINDOWS__ )
-		#define INTERLOCKED_INCREMENT InterlockedIncrement
-		#define INTERLOCKED_DECREMENT InterlockedDecrement
-		#define INTERLOCKED_EXCHANGE  InterlockedExchange
+		#define INTERLOCKED_INCREMENT 			InterlockedIncrement
+		#define INTERLOCKED_DECREMENT 			InterlockedDecrement
+		#define INTERLOCKED_EXCHANGE  			InterlockedExchange
+		#define INTERLOCKED_COMPARE_AND_SWAP 	InterlockedCompareExchange 
 	#elif 
 		#error "__MSVC__ and not __WINDOWS__, Can't define INTERLOCKED." // __MSVC__ is compiler determined, and MSVC is not compiling for non windows ?
 	#endif
