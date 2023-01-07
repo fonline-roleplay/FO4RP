@@ -4,18 +4,14 @@
 #include "_utils.fos"
 #include "hitchance_h.fos"
 
-// Melee only prototype for mutual hitchance
-int client_to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem@ weapon, uint8 weaponMode, ProtoItem@ ammo )
+int to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem@ weapon, uint8 weaponMode, ProtoItem@ ammo, uint16 hexX, uint16 hexY )
 {
-	return to_hit( attacker, target, weapon, weaponMode, ammo );
-}
-
-int to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem@ weapon, uint8 weaponMode, ProtoItem@ ammo )
-{
-	if( !valid( target ) )
+	if( !valid( target ) && hexX == 0 && hexY == 0 )
 	{
 		return 0;
 	}
+
+	bool hexAttack = !valid( target ) && ( hexX != 0 && hexY != 0 );
 
 	uint8 use = _WeaponModeUse( weaponMode );
 	uint8 aim = _WeaponModeAim( weaponMode );
@@ -25,31 +21,67 @@ int to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem@ weapon, u
 	}
 	
 	uint skillNum = _WeaponSkill ( weapon, use );
-	int skillVal = int( attacker.Skill[ skillNum ] );  
-	int acMod = target.Stat[ ST_ARMOR_CLASS ];
+	int skillVal = attacker.Skill[ skillNum ];  
+	int acMod = 0;
 	int wpnMaxDist = _WeaponMaxDist( weapon, use );
-	int reach = ( wpnMaxDist - 1 ) * REACH_BONUS;   
+	int reach = 0;   
 	int injureMod = attacker.IsDmgEye() ? BLIND_PENALTY_HTH : 0;
+	int dist = 0;
 	
-	if( !target.IsKnockout() )
+	if( valid( target ) )
 	{
-		uint8 a_dir = GetDirection( attacker.HexX, attacker.HexY, target.HexX, target.HexY );
-		uint8 t_dir = target.Dir;
-		uint8 dir_1 = 0, dir_2 = 0, dir_3 = 0;
-		REVERSE_DIRECTION( dir_1, a_dir );
-		GET_NEAR_DIRECTION( dir_1, dir_2, dir_3 );
-		if( t_dir == dir_1 || t_dir == dir_2 || t_dir == dir_3 )
+		dist = GetCrittersDistantion( attacker, target );
+		acMod = target.Stat[ ST_ARMOR_CLASS ];
+		if( dist == 1 ) // Dodge from unarmed
 		{
-			acMod += target.Skill[ SK_UNARMED ] / SKILL_MOD;
+			if( !target.IsKnockout() )
+			{
+				uint8 a_dir = GetDirection( attacker.HexX, attacker.HexY, target.HexX, target.HexY );
+				uint8 t_dir = target.Dir;
+				uint8 dir_1 = 0, dir_2 = 0, dir_3 = 0;
+				REVERSE_DIRECTION( dir_1, a_dir );
+				GET_NEAR_DIRECTION( dir_1, dir_2, dir_3 );
+				if( t_dir == dir_1 || t_dir == dir_2 || t_dir == dir_3 )
+				{
+					acMod += target.Skill[ SK_UNARMED ] / SKILL_MOD;
+				}
+			}
+			
+			acMod -= target.Param[ ST_DRUNK ];
+		}
+		
+		if( valid( ammo ) )
+		{
+			acMod += ammo.Ammo_AcMod;
+		}
+		
+		if( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS )
+		{
+			reach = ( wpnMaxDist - 1 ) * REACH_BONUS;
 		}
 	}
-	
-	if( valid( ammo ) )
+	else
 	{
-		acMod -= ammo.Ammo_AcMod;
+		dist = GetDistantion( attacker.HexX, attacker.HexY, hexX, hexY );
+	}
+
+	if( skillNum == SK_THROWING ) 
+	{
+		wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), attacker.Stat[ ST_STRENGTH ] ) );
 	}
 	
-	acMod -= target.Param[ ST_DRUNK ];
+	int baseHitChance = skillVal;
+	
+	if( skillNum == SK_SMALL_GUNS || skillNum == SK_MEDIUM_GUNS || skillNum == SK_BIG_GUNS || skillNum == SK_THROWING )
+	{
+		int optimal = HitchanceOptimal( wpnMaxDist, skillVal );
+		int faloff = HitchanceFaloff( wpnMaxDist, skillVal );
+		baseHitChance = BaseHitChance( dist, optimal, faloff );
+		if( optimal <= wpnMaxDist && skillVal > MAX_SKILL_DISTANCE )
+		{
+			baseHitChance += skillVal - MAX_SKILL_DISTANCE;
+		}
+	}
 	
 	int toHitMod = 0;
 	int handlingStrength = attacker.Stat[ ST_STRENGTH ];
@@ -66,8 +98,15 @@ int to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem@ weapon, u
 	{
 		toHitMod += WEAPON_PERK_ACCURATE_BONUS;
 	}
-		
-	int hitChance = skillVal - acMod - aimMod( aim ) - toHitMod + reach - injureMod - attacker.Param[ ST_DRUNK ];
+	
+	#ifdef __CLIENT
+		Message( "baseHitChance " + baseHitChance );
+	#endif
+	int hitChance = baseHitChance - acMod - aimMod( aim ) + toHitMod + reach - injureMod - attacker.Param[ ST_DRUNK ];
+	
+	#ifdef __CLIENT
+		Message( "hitChance " + hitChance + " acMod " + acMod + " aimMod( aim ) " + aimMod( aim ) + " toHitMod " +toHitMod+ " reach " +reach+ " injureMod " +injureMod+ " attacker.Param[ ST_DRUNK ] " +attacker.Param[ ST_DRUNK ] );
+	#endif
 	
 	return CLAMP( hitChance, MIN_HITCHANCE, MAX_HITCHANCE );
 }
@@ -98,5 +137,42 @@ int aimMod( uint8 aim )
 	
 	return aimMod;
 }
+
+int HitchanceOptimal( int wpnMaxDist, int skillVal )
+{
+	if( skillVal >= MAX_SKILL_DISTANCE )
+	{
+		return wpnMaxDist;
+	}
+	
+	int optimal = wpnMaxDist * skillVal / MAX_SKILL_DISTANCE;
+
+	return optimal;
+}
+
+int HitchanceFaloff( int wpnMaxDist, int skillVal )
+{
+	int faloff = wpnMaxDist * skillVal / MAX_SKILL_DISTANCE;
+	
+	return faloff;
+}
+
+int BaseHitChance( int distance, int optimal, int faloff )
+{
+	if( distance <= optimal )
+	{
+		return MAX_HITCHANCE;
+	}
+	
+	if( distance > ( optimal + faloff ) )
+	{
+		return MIN_HITCHANCE;
+	} 
+
+	int hitChance = int( MIN_HITCHANCE + ( cos( ( distance - optimal ) * 3.14f / faloff ) + 1 ) / 2 * ( MAX_HITCHANCE - MIN_HITCHANCE ) );
+	
+	return hitChance;
+}
+
 
 #endif // HITCHANCE_MODULE

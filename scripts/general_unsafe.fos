@@ -23,7 +23,7 @@
 #include "speed_h.fos"
 
 import void Actions( Critter& cr, uint8 actionType, uint16 pickType ) from "context_callback";
-
+import void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo ) from "main";
 import bool e_UseAutoCloseDoor( Item& door, Critter& cr, int skill ) from "item";
 
 bool Action( Critter& player, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen )
@@ -349,7 +349,7 @@ void unsafe_openCodeDoor( Critter& player, int itemId, int code, int param2, str
 	}
 }
 
-void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ command, int[] @ param4 )
+void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int param2, string@ param3, int[] @ param4 )
 {
 	if( cr.IsBusy() )
 	{
@@ -381,7 +381,8 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 	Item@ hand = _CritGetItemHand(cr);
     uint8 mode = 0;
 	
-	ProtoItem@ weapon, ammo;
+	ProtoItem@ weapon;
+	ProtoItem@ ammo;
 	if( valid( hand ) )
 	{
 		mode = hand.Mode;
@@ -404,11 +405,15 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 		hand.SetEvent( ITEM_EVENT_MOVE, null );
 	}
 
-    uint16 toHx = hexX;
-	uint16 toHy = hexY;
-    int dist = GetDistantion( cr.HexX,  cr.HexY, hexX, hexY );
-    GetHexCoord( map, cr.HexX,  cr.HexY, toHx, toHy,  0.0f, dist );
-
+    uint16 toHx = hexX, toHy = hexY;
+    int dist = GetDistantion( cr.HexX, cr.HexY, hexX, hexY );
+	map.GetHexCoord( cr.HexX, cr.HexY, toHx, toHy, 0.0f, dist );
+	if( hexX != int( toHx ) || hexY != int( toHy ) )
+    {
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_NEED_AIM_BLOCKED );
+        return;
+    }
+	
 	if( valid( hand ) )
 	{
 		bool brokenArm = cr.Damage[ DAMAGE_LEFT_ARM ] + cr.Damage[ DAMAGE_RIGHT_ARM ] > 0;
@@ -436,8 +441,19 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 	uint8 weaponMode = mode;
 	mode = weaponMode;
 	int skillNum = ( valid( weapon ) ? _WeaponSkill( weapon, 0 ) : ( valid( hand ) ? SK_MELEE_WEAPONS : SK_UNARMED ) );
-	uint8 weaponSubtype = ( skillNum == SK_SMALL_GUNS || skillNum == SK_MEDIUM_GUNS || skillNum == SK_BIG_GUNS ) ? WS_GUN : 
+	uint8 weaponType = ( skillNum == SK_SMALL_GUNS || skillNum == SK_MEDIUM_GUNS || skillNum == SK_BIG_GUNS ) ? WS_GUN : 
 					( ( skillNum == SK_THROWING ) ? WS_THROWING : ( skillNum == SK_MELEE_WEAPONS ) ? WS_MELEE : WS_UNARMED );
+	
+	if( weaponType == WS_THROWING )
+	{
+		int wpnMaxDist = _WeaponMaxDist( weapon, mode );
+		wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int( 10 ), cr.Stat[ ST_STRENGTH ] ) );
+		if( dist > wpnMaxDist )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_THROW_TOO_FAR );
+			return;
+		}
+	}
 	
 	if( weapon.Weapon_MaxAmmoCount > 0 )
 	{
@@ -446,7 +462,7 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 			uint8 dir = GetDirection( cr.HexX, cr.HexY, toHx, toHy );
 			cr.SetDir( dir );
 
-			if( weaponSubtype == WS_GUN )
+			if( weaponType == WS_GUN )
 			{
 				cr.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid( hand ) ? hand : null );
 				cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
@@ -531,6 +547,73 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 		CombatAttack( cr, target, weapon, mode, ammo, hexX, hexY, false );
 		cr.Wait( GetProtoTime( weapon, mode, cr ) );
 	}
+}
+
+void unsafe_critter_attack( Critter& cr, int target_Id, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	Critter@ target = GetCritter( target_Id );
+	if( !valid( target ) )
+	{
+		return;
+	}
+	
+	Item@ hand = _CritGetItemHand( cr );
+    uint8 mode = 0;
+	
+	ProtoItem@ weapon;
+	if( valid( hand ) )
+	{
+		mode = hand.Mode;
+		@weapon = GetProtoItem( hand.GetProtoId() );
+	}
+	else
+	{
+		@weapon = cr.GetSlotProto( SLOT_HAND1, mode );
+	}
+	
+	if( !valid( weapon ) )
+	{
+		return;
+	}
+	
+	int wpnMaxDist = _WeaponMaxDist( weapon, mode );
+	uint skillNum = _WeaponSkill( weapon, mode );
+	if( skillNum == SK_THROWING )
+	{
+		wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int( 10 ), cr.Stat[ ST_STRENGTH ] ) );
+	}
+	
+	int dist = GetCrittersDistantion( cr, target );
+	if( ( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS || skillNum == SK_THROWING ) && dist > wpnMaxDist )
+	{
+		int run = cr.Mode[ MODE_NO_RUN ] > 0 ? 0 : 1;
+		int attack_dist = wpnMaxDist >= 2 ? wpnMaxDist - 1 : wpnMaxDist;
+		cr.RunClientScript( "client_main@__ChosenMoveToCritAction", target_Id, run, attack_dist, null, null );
+		uint[] values = { cr.Id, target.Id };
+		CreateTimeEvent( AFTER( REAL_MS( 500 ) ), "general_unsafe@e_WaitForAttack", values, true );
+		return;
+	}
+	
+	ProtoItem@ ammo;
+	if( weapon.Weapon_MaxAmmoCount > 0 )
+	{
+		@ammo = GetProtoItem( hand.AmmoPid );
+	}
+	
+	critter_attack( cr, target, weapon, mode, ammo );
+}
+
+uint e_WaitForAttack( uint[] @ values ) 
+{
+	Critter@ cr = GetCritter( values[0] );
+	if( MovementState( cr ) > 0 )
+	{
+		return REAL_MS( 300 );
+	}
+	
+	unsafe_critter_attack( cr, values[1], 0, 0, null, null );
+	
+    return 0;
 }
 
 uint e_emptySFX( uint[]@ values )
