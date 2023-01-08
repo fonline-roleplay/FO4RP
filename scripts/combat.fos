@@ -174,16 +174,12 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 	
 	uint _distance = GetDistantion( hx, hy, tx, ty );
 	string distance_info = _distance > 1 ? " [ Distance: " + _distance + " ]" : "";
-	if( _distance <= 1 && ammoRound > HIT_MAX_ROUNDS )
-	{
-		ammoRound = HIT_MAX_ROUNDS;
-	}
 	
 	SayLog( attacker, attack_info + "." + distance_info );
 
     bool isGrenade = ( weaponSubtype >= ITEM_SUBTYPE_WEAPON_GRENADE_FRAG && weaponSubtype <= ITEM_SUBTYPE_WEAPON_GRENADE_END );
     bool isFlamethrower = ( weaponSubtype == ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER );
-	bool isShotgun = ( ammoPid == PID_12g_BIRDSHOT ) || ( ammoPid == PID_12g_LOW ) || ( ammoPid == PID_12g_BUCKSHOT );
+	bool isShotgun = ( validAmmo && FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT ) );
     bool isRocket = ( ammoPid == PID_EXPLOSIVE_ROCKET ) || ( ammoPid == PID_ROCKET_AP ) || ( ammoPid == PID_ROBO_ROCKET_AMMO ) || ( ammoPid == PID_40MM_HE ) || ( ammoPid == PID_BOLTS_HE );
     bool eyeDamage = attacker.Damage[ DAMAGE_EYE ] != 0;
     bool crIsPlayer = attacker.IsPlayer();
@@ -232,31 +228,6 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
         target.EventAttacked( attacker );
     }
 
-    int baseToHit = skillVal - attacker.ParamBase[ ST_PARALYSIS_LEVEL ] * 3 + 2 * _WeaponMaxDist( weapon, use ) - attacker.ParamBase[ ST_DRUNK ];
-
-	inform( attacker, target, "baseToHit= "+ baseToHit );
-    
-	if( eyeDamage )
-	{
-        baseToHit -= 25;
-    }
-	
-	if( !isUnarmed )
-    {
-        int handlingStrength = attacker.Stat[ ST_STRENGTH ];
-        int reqStrength = weapon.Weapon_MinStrength;
-        
-		if( handlingStrength < reqStrength )
-		{
-            baseToHit -= ( reqStrength - handlingStrength ) * 20;
-		}
-		
-        if( FLAG( weaponPerk, WEAPON_PERK_ACCURATE ) )
-		{
-            baseToHit += 20;
-		}
-	}
-
     int dist = _distance;
 
     // main attack structure
@@ -293,8 +264,8 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 			if( weaponSubtype == ITEM_SUBTYPE_WEAPON_MELEE_LONG_KNIFE && !recursive && weaponMode == 0 )
 			{
 				Critter@[] critsCleave;
-				map.GetCrittersPath( hx, hy, tx, ty, 60.0f, wpnMaxDist, FIND_LIFE_AND_KO, critsCleave );
-				map.GetCrittersPath( hx, hy, tx, ty, -60.0f, wpnMaxDist, FIND_LIFE_AND_KO, critsCleave );
+				map.GetCrittersPath( hx, hy, tx, ty, CLEAVE_ATTACK_ANGLE, wpnMaxDist, FIND_LIFE_AND_KO, critsCleave );
+				map.GetCrittersPath( hx, hy, tx, ty, -CLEAVE_ATTACK_ANGLE, wpnMaxDist, FIND_LIFE_AND_KO, critsCleave );
 				for( uint i = 0, j = critsCleave.length(); i < j; i++ )
 				{
 					Critter@ newTarget = critsCleave[i];
@@ -346,13 +317,15 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		if( isFlamethrower && !recursive )
 		{
 			Critter@[] critsBurn;
-			map.GetCrittersPath( hx, hy, tx, ty, 15.0f, wpnMaxDist, FIND_LIFE_AND_KO, critsBurn );
-			map.GetCrittersPath( hx, hy, tx, ty, -15.0f, wpnMaxDist, FIND_LIFE_AND_KO, critsBurn );
+			map.GetCrittersPath( hx, hy, tx, ty, 0.0f, dist - 1, FIND_LIFE_AND_KO, critsBurn );
+			map.GetCrittersPath( hx, hy, tx, ty, FLAMER_ATTACK_ANGLE, wpnMaxDist, FIND_LIFE_AND_KO, critsBurn );
+			map.GetCrittersPath( hx, hy, tx, ty, -FLAMER_ATTACK_ANGLE, wpnMaxDist, FIND_LIFE_AND_KO, critsBurn );
 			for( uint i = 0, j = critsBurn.length(); i < j; i++ )
 			{
 				Critter@ newTarget = critsBurn[i];
 				if( valid( newTarget ) )
 				{
+					//if( validTarget
 					CombatAttack( attacker, newTarget, weapon, weaponMode, ammo, 0, 0, true );
 				}
 			}
@@ -2358,149 +2331,6 @@ uint GetHitAim( int hitLocation )
     }
     return 0;
 }
-
-
-// client only, possible use by AI
-int RawToHit( Critter& cr, Critter& target, ProtoItem@ weapon, uint8 weaponUse, ProtoItem@ ammo )
-{
-	bool validWeapon = valid( weapon );
-	int skillNum = validWeapon ? _WeaponSkill( weapon, weaponUse ) : SK_UNARMED;
-    uint8 weaponType = ( skillNum == SK_SMALL_GUNS || skillNum == SK_MEDIUM_GUNS || skillNum == SK_BIG_GUNS ) ? WS_GUN : ( skillNum == SK_THROWING ? WS_THROWING : ( skillNum == SK_MELEE_WEAPONS ? WS_MELEE : WS_UNARMED ) );
-	int toHit = cr.Skill[ skillNum ] + ( validWeapon ? ( 2 * _WeaponMaxDist( weapon, weaponUse ) ): 0 );
-    int weaponPerk = validWeapon ? weapon.Weapon_Perk : 0;
-    int blockers = 0;
-    int dist = GetDistantion( cr.HexX, cr.HexY, target.HexX, target.HexY );
-    if( skillNum != SK_UNARMED && skillNum != SK_MELEE_WEAPONS )
-    {
-        // ranged attack modifiers
-        int distmod1 = 2; // used for initial weapon bonus
-        int distmod2 = 0; // minimal distance
-        if( FLAG( weaponPerk, WEAPON_PERK_LONG_RANGE ) )
-		{
-            distmod1 = 4;
-		}
-		
-		if( FLAG( weaponPerk, WEAPON_PERK_SCOPE_RANGE ) )
-        {
-            distmod1 = 5;
-            distmod2 = 8;
-        }
-
-        int perception = cr.Stat[ ST_PERCEPTION ];
-        int acc = dist;
-
-        if( dist < distmod2 )
-		{
-            acc += distmod2;
-		}
-        else
-        {
-            if( cr.IsPlayer() )
-			{
-                acc -= ( perception - 2 ) * distmod1;
-			}
-            else
-			{
-                acc -= perception * distmod1;
-			}
-        }
-
-        if( -2 * perception > acc )
-		{
-            acc = -2 * perception;
-		}
-		
-        if( acc >= 0 )
-        {
-            if( cr.Damage[ DAMAGE_EYE ] != 0 )
-			{
-                acc *= -12;
-            }
-			else
-			{
-                acc *= -4;
-			}
-		}
-        else
-		{
-            acc *= -4;
-		}
-		
-        toHit += acc;
-
-        Map@ map = cr.GetMap();
-        blockers = map.GetCrittersPath( cr.HexX, cr.HexY, target.HexX, target.HexY, 0, dist, FIND_LIFE, null );
-        if( !target.IsKnockout() )
-		{
-            blockers--;
-		}
-		
-		toHit -= 10 * blockers;
-    }
-
-    if( validWeapon )
-    {
-        int handlingStrength = cr.Stat[ ST_STRENGTH ];
-        int reqStrength = weapon.Weapon_MinStrength;
-
-        if( handlingStrength < reqStrength )
-		{
-			toHit -= ( reqStrength - handlingStrength ) * 20;
-		}
-		
-        if( FLAG( weaponPerk, WEAPON_PERK_ACCURATE ) )
-		{
-            toHit += 20;
-		}
-    }
-
-    int acmod = target.Stat[ ST_ARMOR_CLASS ];
-	toHit -= acmod;
-
-    if( cr.Damage[ DAMAGE_EYE ] != 0 )
-	{
-        toHit -= 25;
-	}
-	
-    if( target.IsKnockout() )
-	{
-        toHit += 40;
-	}
-	
-    if( target.GetMultihex() > 0 )
-	{
-        toHit += 15;
-	}
-	
-	int hitLocation = _WeaponModeAim( weaponUse );
-	if( valid( target ) && target.IsBusy() )
-	{
-		if( ( cr.Dir + 3 ) % 6 == target.Dir )
-		{
-			toHit += 20;
-		}
-		else if( ( cr.Dir ) % 6 != target.Dir )
-		{
-			toHit -= acmod / 2;
-			if( hitLocation == HIT_LOCATION_HEAD )
-			{
-				toHit -= acmod / 2;
-			}
-		}
-	}
-	// advanced aiming
-	if( hitLocation == HIT_LOCATION_HEAD )
-	{
-		toHit /= 2;
-	}
-	else if( hitLocation == HIT_LOCATION_LEFT_ARM || hitLocation == HIT_LOCATION_RIGHT_ARM || hitLocation == HIT_LOCATION_RIGHT_LEG || hitLocation == HIT_LOCATION_LEFT_LEG )
-	{
-		toHit = toHit * 70 / 100;
-	}
-	
-	return toHit;
-}
-
 
 void NotifyOops( Critter& cr, Critter@ t1, Critter@ t2, CombatRes[]& results )
 {
