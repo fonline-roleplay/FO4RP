@@ -108,13 +108,57 @@ class AttackStruct
     }
 };
 
+Critter@ checkHitLine( Map& map, Critter& attacker, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16& tx, uint16& ty )
+{
+	uint16 x = attacker.HexX, y = attacker.HexY; 
+	uint distance = GetDistantion( x, y, tx, ty );		
+	
+	Critter@[] crs;
+	map.GetCrittersPath( x, y, tx, ty, 0.0f, distance, FIND_LIFE, crs );
+	
+	uint[] IDs = sortByDist( x, y, crs );
+	for( uint i = 0, l = IDs.length(); i < l; i++ )
+	{
+		Critter@ target = GetCritter( IDs[i] );
+		if( to_hit( attacker, target, weapon, weaponMode, ammo, 0, 0 ) - Random( 1, 100 ) > 0 )
+		{
+			tx = target.HexX;
+			ty = target.HexY; 
+			return target;
+		}
+	}
+	return null;
+}
+
+uint[] sortByDist( uint16 x, uint16 y, Critter@[] crs )
+{
+	uint[] result;
+	while( result.length() < crs.length() )
+	{
+		uint min_dist = 999, n = 0;
+		for( uint i = 0, l = crs.length(); i < l; i++ )
+		{
+			if( !valid( crs[i] ) ) continue;
+			uint distance = GetDistantion( x, y, crs[i].HexX, crs[i].HexY );	
+			if( distance < min_dist )
+			{
+				min_dist = distance;
+				n = i;
+			}
+		}
+		result.insertLast( crs[n].Id );
+		@crs[n] = null;		
+	}	
+	return result;
+}
+
 void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16 hexX, uint16 hexY, bool recursive )
 {
 	if( !valid( target ) && hexX == 0 && hexY == 0 )
 	{
         return;
 	}
-	
+
 	bool validAttacker = valid( attacker );
     uint8 use = _WeaponModeUse( weaponMode );
     uint8 aim = _WeaponModeAim( weaponMode );
@@ -150,6 +194,8 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 	bool validAmmo = valid( ammo );
     uint16 ammoPid = validAmmo ? ammo.ProtoId : 0;
 	uint8 weaponSubtype = validWeapon ? realWeapon.Proto.Item_Subtype : 0;
+	
+	@target = checkHitLine( map, attacker, weapon, weaponMode, ammo, tx, ty );
 	
     bool isBurst = ( ammoRound > 1 );
     if( isBurst )
@@ -277,10 +323,10 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		}
 	}
 
-	if( validWeapon )
+	if( validWeapon && !recursive )
 	{
 		//Weapons penetrate
-		if( FLAG( attack.WeaponPerk, WEAPON_PERK_PENETRATE ) && !recursive )  
+		if( FLAG( attack.WeaponPerk, WEAPON_PERK_PENETRATE ) )  
 		{
 			Critter@[] critsPenetrate;
 			map.GetCrittersPath( hx, hy, tx, ty, 0.0f, dist - 1, FIND_LIFE, critsPenetrate );
@@ -307,22 +353,38 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		}
 		
 		//Flamers AOE
-		if( isFlamethrower && !recursive )
+		if( isFlamethrower )
 		{
 			Critter@[] critsBurn;
-			map.GetCrittersPath( hx, hy, tx, ty, FLAMER_ATTACK_ANGLE, wpnMaxDist, FIND_LIFE_AND_KO, critsBurn );
-			map.GetCrittersPath( hx, hy, tx, ty, -FLAMER_ATTACK_ANGLE, wpnMaxDist, FIND_LIFE_AND_KO, critsBurn );
+			for( float i = -FLAMER_ATTACK_ANGLE; i <= FLAMER_ATTACK_ANGLE; i += 5.0f )
+			{
+				uint16 x = tx, y = ty;
+				map.GetCrittersPath( hx, hy, x, y, i, wpnMaxDist, FIND_LIFE_AND_KO, critsBurn );
+			}
+			
+			uint[] processed;
+				
 			for( uint i = 0, j = critsBurn.length(); i < j; i++ )
 			{
 				Critter@ newTarget = critsBurn[i];
-				if( valid( newTarget ) )
+				if( valid( newTarget ) && processed.find( newTarget.Id ) == -1 )
 				{
-					//if( validTarget
 					CombatAttack( attacker, newTarget, weapon, weaponMode, ammo, 0, 0, true );
+					processed.insertLast( newTarget.Id );
 				}
 			}
 			
 			critsBurn.resize( 0 );
+		}
+		
+		if( isShotgun ) 
+		{
+			for( uint i = 0; i < 10; i++ )
+			{
+				uint16 x = tx, y = ty;
+				moveAimHexRange( attacker, x, y, SHOTGUN_ATTACK_ANGLE, wpnMaxDist * 2 );
+				CombatAttack( attacker, null, weapon, weaponMode, ammo, x, y, true );				
+			}
 		}
 	}
 
@@ -369,12 +431,10 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 			}
 			else
 			{
-				NotifyMiss( attacker, results );
-				if( weapon.Windup_Time != 0 )
+				//change target hex
+				if( !recursive )
 				{
-					uint distanceMod = dist * 15; // modify to match fly effect
-					uint[] vals = { attacker.Id, 0, weapon.ProtoId, weaponMode, realWeapon.AmmoPid, tx, ty, 1, 0 };
-					CreateTimeEvent( AFTER( REAL_MS( distanceMod ) ), "e_DelayedAttackVFX", vals, false );
+					NotifyMiss( attacker, results );
 				}
 			}
         }
@@ -427,6 +487,9 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 	}
 	
     attacker.Action( ACTION_USE_WEAPON, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | ( ( ( !isHit && isCritical && !hitRandomly ) ? 1 : 0 ) << 8 ) | ( aim << 4 ) | use, realWeapon );
+	
+	uint[] attackerId = { attacker.Id };
+	CreateTimeEvent( AFTER( REAL_MS( GetProtoTime( weapon, use, attacker ) ) ), "combat@e_FinishShooting", attackerId, true );
 
     // animations are now played, and we're updating the hit randomly status now
     bool changedTarget = ( hitRandomly && ( @realTarget != null ) );
@@ -485,9 +548,8 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
     }
 	else if( isFlamethrower )
 	{
-		// Flame attack
 		if( !recursive )
-		{
+		{ //inital attack can't hit or miss - only spreads fire
 			int radius = 0;
 			uint8 strength = 1;
 			if( validAmmo )
@@ -498,31 +560,36 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 			
 			GenerateFire( map, tx, ty, radius, strength, attacker.Id );
 		}
-
-        if( isHit || changedTarget )
+		else
 		{
-			if( valid( realTarget ) )
+			if( isHit || changedTarget )
 			{
-				ApplyDamage( attack, realTarget, 1, criticalHit, !changedTarget, results );
+				if( valid( realTarget ) )
+				{
+					ApplyDamage( attack, realTarget, 1, criticalHit, !changedTarget, results );
+				}
 			}
-		}
-        else
-		{
-            NotifyMiss( attacker, results );
+			else
+			{
+				//hex miss placeholder
+			}
 		}
 	}
 	else if( isShotgun )
 	{
 		if( isHit || changedTarget )
 		{
-			if( valid( realTarget ) )
+			if( valid( realTarget ) && recursive )
 			{
 				ApplyDamage( attack, realTarget, 1, criticalHit, !changedTarget, results );
 			}
 		}
         else 
         {
-			NotifyMiss( attacker, results );
+			if( !recursive )
+			{
+				NotifyMiss( attacker, results );
+			}
 		}
 	}
 	else if( isRocket || attack.WeaponType == WS_THROWING )
@@ -585,19 +652,38 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 /////// !!!!!!! !!!!!!!!! stuff like animations, effects - MOVE TO FUNC!!!!!!!!!!!!!!!!!!!!!!
 
     // Shoot
-	AttackSound( attacker, weapon, weaponMode );
+	if( !recursive )
+	{
+		AttackSound( attacker, weapon, weaponMode );
+	}
 
-    if( _WeaponEffect( weapon, use ) != 0 && !recursive )
+	bool showBullet = _WeaponEffect( weapon, use ) != 0 && !recursive;
+	
+	if( isShotgun )
+	{
+		showBullet = _WeaponEffect( weapon, use ) != 0 && recursive;
+	}
+
+    if( showBullet )
     {
-		//Fly effect
-		uint[] valsN = { map.Id, _WeaponEffect( weapon, use ), attacker.Id, 0, hx, hy, tx, ty };
+		uint16 weaponPid = realWeapon.GetProtoId();
+		uint16 ttx = tx, tty = ty;
+		int ddist = GetDistantion( hx, hy, ttx, tty );
+		ddist = CLAMP( ddist - 3, 1, ddist );
+		GetHexCoord( map, hx, hy, ttx, tty, 0.0f, ddist );
+
+		uint[] valsN = { map.Id, _WeaponEffect( weapon, use ), attacker.Id, 0, hx, hy, ttx, tty };
 		for( int i = 0; i < CLAMP( ammoRound, 1, 10 ); i++ )
 		{
 			uint baseTime = 250;
 			uint k = i + 1;
 			baseTime *= k;
-			//Log( "burst: " + ammoRound + " delay: " + baseTime );
 			CreateTimeEvent( AFTER( REAL_MS( baseTime ) ), "e_FlyEffect", valsN, true );
+
+			uint[] vals = { attacker.Id, 0, weapon.ProtoId, weaponMode, realWeapon.AmmoPid, tx, ty, valid( target ) ? 0 : 1, 0 };
+			
+			int distance = int( GetDistantion( hx, hy, tx, ty ) * 7.75f );
+			CreateTimeEvent( AFTER( REAL_MS( baseTime + distance ) ), "e_DelayedAttackVFX", vals, false );
 		}
 	}
 
@@ -737,7 +823,14 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		}
 	}
 	
-    return;
+	return;
+}
+
+uint e_FinishShooting( uint[]@ vals )
+{
+	Critter@ cr = GetCritter( vals[0] );
+	cr.ParamBase[CR_BUSY_SHOOTING] = 0;
+	return 0;
 }
 
 uint e_FlyEffect( uint[]@ vals )
@@ -2053,12 +2146,6 @@ void SparkManager( Critter& cr, Map& map, uint8 attackDir, Critter& target, int 
 		}
 		else
 		{
-			uint16 weaponPid = realWeapon.GetProtoId();
-			uint[] vals = { cr.Id, target.Id, weaponPid, 0, realWeapon.AmmoPid, target.HexX, target.HexY, 0, 0 };
-			int baseTime = 250;
-			int k = j + 1;
-			baseTime *= k;
-			CreateTimeEvent( AFTER( REAL_MS( baseTime ) ), "e_DelayedAttackVFX", vals, false );
 		}
 	}
 }
@@ -3153,12 +3240,6 @@ uint e_DelayedAttack( uint[]@ values )
 			CombatAttack( attacker, target, weapon, weaponMode, ammo, hexX, hexY, false );
 			attacker.Wait( GetProtoTime( weapon, weaponMode, attacker ) );
 			
-			if( weapon.Windup_Time != 0 )
-			{
-				distance *= 15; // modify to match fly effect
-				uint[] vals = { attacker.Id, 0, weapon.ProtoId, weaponMode, realWeapon.AmmoPid, hexX, hexY, hexAttack, recursive };
-				CreateTimeEvent( AFTER( REAL_MS( distance ) ), "e_DelayedAttackVFX", vals, false );
-			}
 			realWeapon.ROUNDS_FIRED ++;
 			realWeapon.Update();
 		}
@@ -3975,6 +4056,36 @@ uint cte_Stunned( Critter& cr, int identifier, uint& rate )
     }
 	
     return REAL_SECOND( 1 );
+}
+
+void moveAimHexRandom( Critter& cr, uint16& x, uint16& y, int alpha, int beta )
+{
+    uint base_dist = GetDistantion( cr.HexX, cr.HexY, x, y );
+    int dist = base_dist + Random( -beta, beta );
+    dist = CLAMP( dist, 0, 999 );
+
+	moveAimHexRange( cr, x, y, alpha, dist );
+}
+
+void moveAimHexRange( Critter& cr, uint16& x, uint16& y, int alpha, int dist )
+{
+    float angle = Random( -alpha, alpha );
+   
+    Map@ map = cr.GetMap();
+    GetHexCoord( map, cr.HexX, cr.HexY, x, y, angle, dist );
+}
+
+void GetHexCoord( Map& map, uint16 fromX, uint16 fromY, uint16& toX, uint16& toY, float  angle, uint  dist ) //Hotfix, until engine update
+{
+    uint16 tempX = toX, tempY = toY;
+	map.GetHexCoord( fromX, fromY, toX, toY, angle, dist );
+    
+    if( toX == 0 && toY == 0 )
+    {
+		toX = tempX;
+		toY = tempY;
+        map.GetHexCoordWall( fromX, fromY, toX, toY, angle, dist );
+    }
 }
 
 #endif // COMBAT_MODULE
