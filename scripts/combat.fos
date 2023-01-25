@@ -152,6 +152,62 @@ uint[] sortByDist( uint16 x, uint16 y, Critter@[] crs )
 	return result;
 }
 
+void ShotgunSpread( AttackStruct@ attack, Critter& attacker, uint16 target_x, uint16 target_y, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint distance, uint pellets_count, uint angle_spread )
+{
+	Map@ map = attacker.GetMap();
+	
+	uint[] target_IDs, pellets_hit;
+	for( uint pellet_number = 0; pellet_number < pellets_count; pellet_number++ )
+	{
+		uint16 x = target_x, y = target_y;
+		moveAimHexRange( attacker, x, y, angle_spread, distance );
+		
+		Critter @target = checkHitLine( map, attacker, weapon, weaponMode, ammo, x, y );
+		if( valid( target ) )
+		{
+			int n = target_IDs.find( target.Id );
+			if( n == -1 )
+			{
+				target_IDs.insertLast( target.Id );
+				pellets_hit.insertLast(1);
+			}
+			else
+			{
+				pellets_hit[n]++;
+			}
+		}
+		else
+		{
+			bulletVFX( map, attacker, x, y, weapon, weaponMode, ammo );
+		}
+	}
+	
+	for( uint n = 0, l = target_IDs.length(); n < l; n++ )
+	{
+	    CombatRes[] results;
+		Critter @target = GetCritter(target_IDs[n]);
+		bool isCritical = CritRoll( attacker.Stat[ ST_CRITICAL_CHANCE ], target, map, attacker.HexX, attacker.HexY );
+		ApplyDamage( attack, target, pellets_hit[n], isCritical, true, results );
+		FlushResults( results );
+	}
+}
+
+void bulletVFX( Map& map, Critter& attacker, uint16 target_x, uint16 target_y, ProtoItem& weapon, uint8 weaponMode, ProtoItem& ammo )
+{ //Bullet VFX must stop in a few hexes before hitting the target hex with VFXspark:
+	uint16 vfx_x = target_x, vfx_y = target_y;
+	int dist = GetDistantion( attacker.HexX, attacker.HexY, vfx_x, vfx_y );
+		dist = CLAMP( dist - 3, 1, dist );
+	GetHexCoord( map, attacker.HexX, attacker.HexY, vfx_x, vfx_y, 0.0f, dist );
+
+	uint baseTime = 250;
+	uint[] flyEffectVals = { map.Id, _WeaponEffect( weapon, _WeaponModeUse( weaponMode ) ), attacker.Id, 0, attacker.HexX, attacker.HexY, vfx_x, vfx_y };
+	CreateTimeEvent( AFTER( REAL_MS( baseTime ) ), "e_FlyEffect", flyEffectVals, true );
+	
+	int distance = int( GetDistantion( attacker.HexX, attacker.HexY, target_x, target_y ) * 7.75f );
+	uint[] delayedAttackVals = { attacker.Id, 0, weapon.ProtoId, weaponMode, ammo.ProtoId, target_x, target_y, 1, 0 };
+	CreateTimeEvent( AFTER( REAL_MS( baseTime + distance ) ), "e_DelayedAttackVFX", delayedAttackVals, false );
+}
+
 void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16 hexX, uint16 hexY, bool recursive )
 {
 	if( !valid( target ) && hexX == 0 && hexY == 0 )
@@ -195,8 +251,6 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
     uint16 ammoPid = validAmmo ? ammo.ProtoId : 0;
 	uint8 weaponSubtype = validWeapon ? realWeapon.Proto.Item_Subtype : 0;
 	
-	@target = checkHitLine( map, attacker, weapon, weaponMode, ammo, tx, ty );
-	
     bool isBurst = ( ammoRound > 1 );
     if( isBurst )
 	{
@@ -211,18 +265,6 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 			dmgType = ammo.Ammo_DmgType;
 		}
 	}
-
-	string wpn_info = itemName( weapPid ) + ( validWeapon ? " #" + realWeapon.Id : "" ) + ( ammoPid != 0 ? " " + itemName( ammoPid ) : "" );
-	string attack_info = crInfo( attacker ) + " attacks" + ( isBurst ? " with burst" : "" ) + " using " + wpn_info + " on (" + tx + ":" + ty + ")";
-	if( valid( target ) )
-	{
-		attack_info += ", where a " + crInfo( target ) + " is.";
-	}
-	
-	uint _distance = GetDistantion( hx, hy, tx, ty );
-	string distance_info = _distance > 1 ? " [ Distance: " + _distance + " ]" : "";
-	
-	SayLog( attacker, attack_info + "." + distance_info );
 
     bool isGrenade = ( weaponSubtype >= ITEM_SUBTYPE_WEAPON_GRENADE_FRAG && weaponSubtype <= ITEM_SUBTYPE_WEAPON_GRENADE_END );
     bool isFlamethrower = ( weaponSubtype == ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER );
@@ -248,6 +290,23 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
     int acmod = validAmmo ? ammo.Ammo_AcMod : 0;
 
 	int skillVal = attacker.Skill[ skillNum ];
+
+	@target = checkHitLine( map, attacker, weapon, weaponMode, ammo, tx, ty );
+	
+	//void attackInfo(args)
+		string wpn_info = itemName( weapPid ) + ( validWeapon ? " #" + realWeapon.Id : "" ) + ( ammoPid != 0 ? " " + itemName( ammoPid ) : "" );
+		string attack_info = crInfo( attacker ) + " attacks" + ( isBurst ? " with burst" : "" ) + " using " + wpn_info + " on (" + tx + ":" + ty + ")";
+		if( valid( target ) )
+		{
+			attack_info += ", where a " + crInfo( target ) + " is.";
+		}
+		
+		uint _distance = GetDistantion( hx, hy, tx, ty );
+		string distance_info = _distance > 1 ? " [ Distance: " + _distance + " ]" : "";
+		
+		SayLog( attacker, attack_info + "." + distance_info );
+	//void attackInfo(args)
+
 
     // always unsneak
     if( attacker.Mode[ MODE_HIDE ] != 0 && !( weaponType == WS_THROWING && dmgType == DAMAGE_NORMAL && valid( target ) && !attacker.IsSeenBy( target ) ) )
@@ -379,12 +438,8 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		
 		if( isShotgun ) 
 		{
-			for( uint i = 0; i < 10; i++ )
-			{
-				uint16 x = tx, y = ty;
-				moveAimHexRange( attacker, x, y, SHOTGUN_ATTACK_ANGLE, wpnMaxDist * 2 );
-				CombatAttack( attacker, null, weapon, weaponMode, ammo, x, y, true );				
-			}
+			ShotgunSpread( attack, attacker, tx, ty, weapon, weaponMode, ammo, wpnMaxDist * 2, 10, SHOTGUN_ATTACK_ANGLE );
+			//most of combat logic was extracted, only ammo usage and miss-notifications left in CombatAttack
 		}
 	}
 
