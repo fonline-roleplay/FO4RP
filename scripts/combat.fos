@@ -108,6 +108,11 @@ class AttackStruct
     }
 };
 
+// AttackStruct[] delayed_attacks;
+// int add_delayed_attack( AttackStruct attack ) { return -1; }
+// AttackStruct@ get_delayed_attack( uint id ) { return null; }
+// bool erase_delayed_attack( uint id ) { return false;}
+
 Critter@ checkHitLine( Map& map, Critter& attacker, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16& tx, uint16& ty )
 {
 	uint16 x = attacker.HexX, y = attacker.HexY; 
@@ -152,7 +157,79 @@ uint[] sortByDist( uint16 x, uint16 y, Critter@[] crs )
 	return result;
 }
 
-void ShotgunSpread( AttackStruct@ attack, Critter& attacker, uint16 target_x, uint16 target_y, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint distance, uint pellets_count, uint angle_spread )
+void BurstSpread( AttackStruct@ attack, Critter& attacker, uint16 target_x, uint16 target_y, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint distance, uint bullet_count, int angle_spread )
+{
+	Map@ map = attacker.GetMap();
+	
+	uint[] target_IDs;
+	for( uint bullet_number = 0; bullet_number < bullet_count; bullet_number++ )
+	{
+		uint16 x = target_x, y = target_y;
+		
+		Critter @target = checkHitLine( map, attacker, weapon, weaponMode, ammo, x, y );
+		if( valid( target ) )
+		{
+			target_IDs.insertLast( target.Id );
+		}
+		else
+		{
+			target_IDs.insertLast( 0 );
+			moveAimHexRandom( attacker, target_x, target_y, angle_spread, int( 1 + distance * 0.1 ) );
+		}
+		
+		bulletVFX( map, attacker, x, y, weapon, weaponMode, ammo, bullet_number + 1 );
+	}
+	
+	for( uint n = 0, l = target_IDs.length(); n < l; n++ )
+	{
+		if( target_IDs[n] == 0 )
+		{
+			continue;
+		}
+		
+		Critter @target = GetCritter( target_IDs[n] );
+		if( !valid( target ) )
+		{
+			continue;
+		}
+		
+		CombatRes[] results;
+		bool isCritical = CritRoll( attacker.Stat[ ST_CRITICAL_CHANCE ], target, attacker.GetMap(), attacker.HexX, attacker.HexY );
+		ApplyDamage( attack, target, 1, isCritical, true, results );
+		FlushResults( results );
+
+		// uint baseTime = 250 * n;
+		// int shooting_distance = int( GetDistantion( attacker.HexX, attacker.HexY, target.HexX, target.HexY ) * 7.75f );
+		//uint[] vals = { attacker.Id, target.Id, add_delayed_attack( attack ) };
+		//CreateTimeEvent( AFTER( REAL_MS( baseTime + shooting_distance ) ), "e_BurstHitDelay", vals, true );
+	}	
+}
+
+uint e_BurstHitDelay( uint[]@ values )
+{
+	if( !valid( values ) || values.length() != 3 )
+	{
+		return 0;
+	}
+
+	Critter@ attacker = GetCritter( values[0] );
+	Critter@ target = GetCritter( values[1] );
+	AttackStruct@ attack = null; //get_delayed_attack( values[2] );
+
+	if( !valid( attacker ) || !valid( target ) || !valid( attack ) )
+	{
+		return 0;
+	}
+		
+    CombatRes[] results;
+	bool isCritical = CritRoll( attacker.Stat[ ST_CRITICAL_CHANCE ], target, attacker.GetMap(), attacker.HexX, attacker.HexY );
+	ApplyDamage( attack, target, 1, isCritical, true, results );
+	FlushResults( results );
+	
+	return 0;
+}
+
+void ShotgunSpread( AttackStruct@ attack, Critter& attacker, uint16 target_x, uint16 target_y, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint distance, uint pellets_count, int angle_spread )
 {
 	Map@ map = attacker.GetMap();
 	
@@ -192,15 +269,23 @@ void ShotgunSpread( AttackStruct@ attack, Critter& attacker, uint16 target_x, ui
 	}
 }
 
-void bulletVFX( Map& map, Critter& attacker, uint16 target_x, uint16 target_y, ProtoItem& weapon, uint8 weaponMode, ProtoItem& ammo )
+void bulletVFX( Map& map, Critter& attacker, uint16 target_x, uint16 target_y, ProtoItem& weapon, uint8 weaponMode, ProtoItem& ammo, uint round = 1 )
 { //Bullet VFX must stop in a few hexes before hitting the target hex with VFXspark:
 	uint16 vfx_x = target_x, vfx_y = target_y;
 	int dist = GetDistantion( attacker.HexX, attacker.HexY, vfx_x, vfx_y );
 		dist = CLAMP( dist - 3, 1, dist );
 	GetHexCoord( map, attacker.HexX, attacker.HexY, vfx_x, vfx_y, 0.0f, dist );
 
-	uint baseTime = 250;
-	uint[] flyEffectVals = { map.Id, _WeaponEffect( weapon, _WeaponModeUse( weaponMode ) ), attacker.Id, 0, attacker.HexX, attacker.HexY, vfx_x, vfx_y };
+	uint baseTime = 250 * round;
+	
+	uint weapon_effect = _WeaponEffect( weapon, _WeaponModeUse( weaponMode ) );
+	bool isShotgun = FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT );
+	if( isShotgun )
+	{
+		weapon_effect = PID_FLYING_SPIKE;
+	}
+	
+	uint[] flyEffectVals = { map.Id, weapon_effect, attacker.Id, 0, attacker.HexX, attacker.HexY, vfx_x, vfx_y };
 	CreateTimeEvent( AFTER( REAL_MS( baseTime ) ), "e_FlyEffect", flyEffectVals, true );
 	
 	int distance = int( GetDistantion( attacker.HexX, attacker.HexY, target_x, target_y ) * 7.75f );
@@ -415,7 +500,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		if( isFlamethrower )
 		{
 			Critter@[] critsBurn;
-			for( float i = -FLAMER_ATTACK_ANGLE; i <= FLAMER_ATTACK_ANGLE; i += 5.0f )
+			for( int i = -FLAMER_ATTACK_ANGLE; i <= FLAMER_ATTACK_ANGLE; i += 5 )
 			{
 				uint16 x = tx, y = ty;
 				map.GetCrittersPath( hx, hy, x, y, i, wpnMaxDist, FIND_LIFE_AND_KO, critsBurn );
@@ -440,6 +525,13 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		{
 			ShotgunSpread( attack, attacker, tx, ty, weapon, weaponMode, ammo, wpnMaxDist * 2, 10, SHOTGUN_ATTACK_ANGLE );
 			//most of combat logic was extracted, only ammo usage and miss-notifications left in CombatAttack
+		}
+		
+		if( isBurst )
+		{
+			int angle = 10;
+			int distance = GetDistantion( hx, hy, tx, ty );
+			BurstSpread( attack, attacker, tx, ty, weapon, weaponMode, ammo, distance, ammoRound, angle );
 		}
 	}
 
@@ -698,7 +790,14 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 	}
     else
 	{
-        attacker.Say( SAY_NETMSG, "Combat error: weapon PID=" + weapPid + " not handled, please send bug report." );
+		if( isBurst )
+		{
+			
+		}
+		else
+		{
+			attacker.Say( SAY_NETMSG, "Combat error: weapon PID=" + weapPid + " not handled, please send bug report." );
+		}
 	}
 	
     // combat messages
@@ -714,7 +813,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 
 	bool showBullet = _WeaponEffect( weapon, use ) != 0 && !recursive;
 	
-	if( isShotgun )
+	if( isShotgun || isBurst )
 	{
 		showBullet = _WeaponEffect( weapon, use ) != 0 && recursive;
 	}
@@ -738,7 +837,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 			uint[] vals = { attacker.Id, 0, weapon.ProtoId, weaponMode, realWeapon.AmmoPid, tx, ty, valid( target ) ? 0 : 1, 0 };
 			
 			int distance = int( GetDistantion( hx, hy, tx, ty ) * 7.75f );
-			CreateTimeEvent( AFTER( REAL_MS( baseTime + distance ) ), "e_DelayedAttackVFX", vals, false );
+			CreateTimeEvent( AFTER( REAL_MS( baseTime + distance ) ), "e_DelayedAttackVFX", vals, true );
 		}
 	}
 
@@ -3703,15 +3802,8 @@ uint e_DelayedAttackVFX( uint[]@ values )
 	{
 		case( DAMAGE_NORMAL ):
 		{	
-			if( ammoRound == 1 )
-			{
-				effectPid = PID_EXPLODE_BULLET_SINGLE;
-				PlayGenericSound( map, hexX, hexY, _GetOneRandom( DirtHitNormSFX ), 10 );
-			}
-			else
-			{
-				effectPid = PID_EXPLODE_BULLET_BURST;
-			}
+			effectPid = PID_EXPLODE_BULLET_SINGLE;
+			PlayGenericSound( map, hexX, hexY, _GetOneRandom( DirtHitNormSFX ), 10 );
 			flashPid = PID_FLASH_NORM;
 			break;
 		}
@@ -4065,13 +4157,13 @@ void moveAimHexRandom( Critter& cr, uint16& x, uint16& y, int alpha, int beta )
 
 void moveAimHexRange( Critter& cr, uint16& x, uint16& y, int alpha, int dist )
 {
-    float angle = Random( -alpha, alpha );
+    int angle = Random( -alpha, alpha );
    
     Map@ map = cr.GetMap();
     GetHexCoord( map, cr.HexX, cr.HexY, x, y, angle, dist );
 }
 
-void GetHexCoord( Map& map, uint16 fromX, uint16 fromY, uint16& toX, uint16& toY, float  angle, uint  dist ) //Hotfix, until engine update
+void GetHexCoord( Map& map, uint16 fromX, uint16 fromY, uint16& toX, uint16& toY, int angle, uint dist ) //Hotfix, until engine update
 {
     uint16 tempX = toX, tempY = toY;
 	map.GetHexCoord( fromX, fromY, toX, toY, angle, dist );
@@ -4081,6 +4173,14 @@ void GetHexCoord( Map& map, uint16 fromX, uint16 fromY, uint16& toX, uint16& toY
 		toX = tempX;
 		toY = tempY;
         map.GetHexCoordWall( fromX, fromY, toX, toY, angle, dist );
+
+		LineTrace_IsRaked lineTrace;
+		bool isRakedLine = lineTrace.CheckLine( map, fromX, fromY, toX, toY, dist );		
+		if( !isRakedLine )
+		{
+			toX = lineTrace.LastHexX;
+			toY = lineTrace.LastHexY;
+		}
     }
 }
 
