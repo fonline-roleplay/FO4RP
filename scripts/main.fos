@@ -128,7 +128,6 @@ bool start()
     //SetSendParameter( ST_PLAYER_KARMA, true );
     // Armor class, uses Agility
     SetSendParameter( ST_ARMOR_CLASS, true );
-    SetSendParameter( ST_CURRENT_AP, true );
     // Agility
     SetSendParameter( ST_AGILITY, true );
     // Hit points, uses Strenght and Endurance
@@ -296,13 +295,15 @@ uint loop() // moved to loop.fos
 // Call on something critter attack another.
 void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo )
 {
+	bool isPlayer = cr.IsPlayer();
+
 	if( CritterIsBusy( cr ) )
 	{
 		return;
 	}
 	else
 	{
-		cr.ParamBase[CR_BUSY_SHOOTING] = 1;
+		cr.ParamBase[ CR_IS_ATTACKING ] = 1;
 	}
 	
 	if( !cr.IsLife() )
@@ -321,12 +322,14 @@ void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weap
 	
 	uint8 mode = weaponMode;
 	
-	if( !weapon_use_ap( cr, weapon, mode ) )
+	int needAp = attack_ap( cr, weapon, mode );
+	//Log( "cr.Stat[ ST_CURRENT_AP ] " + cr.Stat[ ST_CURRENT_AP ] + " needAp " + needAp );
+	if( isPlayer && ( needAp == 0 || cr.Stat[ ST_CURRENT_AP ] < needAp ) )
 	{
 		return;
 	}
-	
-	uint windupTime = GetProtoWindupTime(weapon, mode, cr);
+
+	uint windupTime = GetProtoWindupTime( weapon, mode, cr );
 
 	uint[] values = { cr.Id, target.Id, weapon.ProtoId, mode, 0, 0, 0, 0, 0 };
 	if( valid( ammo ) )
@@ -340,7 +343,7 @@ void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weap
 	
     if( cr.ParamBase[ CR_IS_WINDUPED ] == 0 )
     {
-        if( cr.IsPlayer() && weapon_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_MINIGUN )
+        if( isPlayer && weapon_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_MINIGUN )
         {
             if( !IsMutant( cr ) && !IsRobot( cr ) && !ExoCheck( cr ) )
             {
@@ -356,11 +359,13 @@ void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weap
         windupTime = 5;
     }
 	
-	int skillNum = ( valid( weapon ) ? _WeaponSkill( weapon, 0 ) : ( valid( realWeapon ) ? SK_MELEE_WEAPONS : SK_UNARMED ) );
-	uint8 weaponType = ( skillNum == SK_SMALL_GUNS || skillNum == SK_MEDIUM_GUNS || skillNum == SK_BIG_GUNS ) ? WS_GUN : 
-					( ( skillNum == SK_THROWING ) ? WS_THROWING : ( skillNum == SK_MELEE_WEAPONS ) ? WS_MELEE : WS_UNARMED );
+	if( isPlayer )
+	{
+		cr.StatBase[ ST_CURRENT_AP ] -= needAp * 100;
+	}
 	
-	if( weaponType == WS_GUN )
+	int skillNum = _WeaponSkill( weapon, mode );
+	if( skillNum == SK_SMALL_GUNS || skillNum == SK_MEDIUM_GUNS || skillNum == SK_BIG_GUNS )
 	{
 		cr.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid( realWeapon ) ? realWeapon : null );
 		cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
@@ -369,6 +374,8 @@ void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weap
 			cr.EraseTimeEvents( CTE_SLOWRELOAD );
 			realWeapon.SetEvent( ITEM_EVENT_MOVE, null );
 		}
+
+		CreateTimeEvent( AFTER( REAL_MS( windupTime ) ), "combat@e_DelayedAttack", values, false );
 	}
 	else
 	{
@@ -376,8 +383,6 @@ void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weap
 		cr.Wait( GetProtoTime( weapon, mode, cr ) );
 		return;
 	}
-	
-	CreateTimeEvent( AFTER( REAL_MS( windupTime ) ), "combat@e_DelayedAttack", values, false );
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -1967,8 +1972,10 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			{			
 				return false;
 			}
+			
 			cr.Action( ACTION_PICK_CRITTER, 2, null );
 			cr.StatBase[ ST_CURRENT_AP ] -= 5000;
+			
 			if( ( targetCr.IsPlayer() || ( targetCr.IsNoPlanes() && targetCr.GetTalkedPlayers( null ) == 0 ) ) && targetCr.Mode[MODE_NO_PUSH] == 0 && targetCr.MoveToDir( cr.Dir ) )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUSH_TARGET );
@@ -1979,6 +1986,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_RESIST );
 				SayLog( cr, crInfo( cr ) + " can't push " + crInfo( targetCr ) + "." );
 			}
+			
 			return true; 
 		}
 
