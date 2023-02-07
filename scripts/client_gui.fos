@@ -40,9 +40,13 @@ int GM_store_type = -1;
 GUIScreen@[] AllScreens;
 GUIScreen@[] ActiveScreens;
 bool[] KeyPressed;
+bool[] MousePressed;
+uint[] MousePressTick;
 KeybData@[] KbData;
 IGUIScreenOpt@  LastScreenOpt = null;
 IGUIElementOpt@ LastElementOpt = null;
+
+uint FullAutoTick = 0;
 
 class KeybData
 {
@@ -680,12 +684,15 @@ class GUIScreen : IGUIScreenOpt
 			//Combat UI
 			if( GetCurrentCursor() == CURSOR_USE_WEAPON )
 			{
+				
 				uint8 mode = 0;
 				ItemCl@ weapon = chosen.GetItem( 0, SLOT_HAND1 );
 				bool validWeapon = valid( weapon );
 				ProtoItem@ ProtoWeapon = chosen.GetSlotProto( SLOT_HAND1, mode );
 				uint skillNum = _WeaponSkill( ProtoWeapon, mode );
 				int skillVal = chosen.Skill[ skillNum ];
+				
+				CritterCl@ target = GetMonitorCritter( __MouseX, __MouseY );
 				
 				if( validWeapon )
 				{
@@ -697,6 +704,7 @@ class GUIScreen : IGUIScreenOpt
 					ProtoItem@ ammo = validWeapon ? GetProtoItem( weapon.AmmoPid ) : null;
 					bool validAmmo = valid( ammo );
 					bool isShotgun = validAmmo && FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT );
+					 
 
 					
 					if( usesAmmo && validAmmo )
@@ -706,11 +714,50 @@ class GUIScreen : IGUIScreenOpt
 							blastRadius = ammo.Blast_Radius;
 							isRocket = true;
 						}
+						
+						if( MousePressed[ MOUSE_CLICK_LEFT ] )
+						{
+							int use = _WeaponModeUse( weapon.Mode );
+							bool isFullAuto = ( _WeaponAnim2( ProtoWeapon, use ) == ANIM2_AUTO );
+							uint waitTime =  _GetProtoWaitTime( ProtoWeapon, use );
+							uint tick = GetTick();
+							
+							if( isFullAuto && ( ( FullAutoTick + waitTime ) <  tick ) )
+							{
+								if( !chosen.IsBusy() )
+								{
+									int apCost 	= GetUseApCost( chosen, weapon, weapon.Mode );
+									int chAp 	= chosen.Stat[ ST_ACTION_POINTS ];
+									if( !( chAp < apCost ) )
+									{
+										uint16  rounds = _WeaponRound( ProtoWeapon, use );
+										
+										// Server wnats to play sound of empty magazine when someone is attacking with it
+										
+										//if( !( rounds > weapon.AmmoCount ) )
+										//{
+											if( !valid( target ) || target.IsDead() || ( @target == @chosen ) )
+											{
+												uint16 hexX = 0, hexY = 0;
+												GetMonitorHex( __MouseX, __MouseY, hexX, hexY );
+												// Crunch for interface elements click/hold, todo FIX
+												if( hexX != 0 && hexY != 0 )
+													RunServerScriptUnsafe( "general_unsafe@unsafe_hex_attack", hexX, hexY, 0, null, null );
+											}
+											else
+											{
+												RunServerScriptUnsafe( "general_unsafe@unsafe_critter_attack", target.Id, 0, 0, null, null );
+											}
+										//}
+										FullAutoTick = tick;
+									}
+								}
+							}
+						}
 					}
 
 					uint16 hxX = 0, hxY = 0;
 					GetMonitorHex( __MouseX, __MouseY, hxX, hxY );
-					CritterCl@ target = GetMonitorCritter( __MouseX, __MouseY );
 					if( valid( target ) && target.Id != chosen.Id )
 					{
 						hxX = target.HexX;
@@ -816,6 +863,8 @@ class GUIScreen : IGUIScreenOpt
 						
 						DrawPrimitive( DRAW_PRIMITIVE_TRIANGLEFAN, data );
 					}
+					
+					
 				}
 			}
 			
@@ -992,7 +1041,9 @@ class GUIScreen : IGUIScreenOpt
 				{
 					uint16 hexX = 0, hexY = 0;
 					GetMonitorHex( x, y, hexX, hexY );
-					RunServerScriptUnsafe( "general_unsafe@unsafe_hex_attack", hexX, hexY, 0, null, null );
+					// Crunch for interface elements click/hold, todo FIX
+					if( hexX != 0 && hexY != 0 )
+						RunServerScriptUnsafe( "general_unsafe@unsafe_hex_attack", hexX, hexY, 0, null, null );
 					return true;
 				}
 				else
@@ -2229,7 +2280,15 @@ void GUI_Init()
     KeyPressed.resize( 0x100 );
     for( uint i = 0, j = KeyPressed.length(); i < j; i++ )
         KeyPressed[ i ] = false;
-
+	MousePressed.resize( MOUSE_CLICK_EXT4 + 1 );
+	MousePressTick.resize( MOUSE_CLICK_EXT4 + 1 );
+	for( int i = 0, j = MousePressed.length(); i < j; i ++ )
+	{
+		MousePressed[i] = false;
+		MousePressTick[i] = 0;
+	}
+		
+	
     // Register hardcoded screens
     CreateScreen( CLIENT_MAIN_SCREEN_LOGIN, null );
     CreateScreen( CLIENT_MAIN_SCREEN_REGISTRATION, null );
@@ -2471,6 +2530,7 @@ void GUI_Render()
 
 bool GUI_MouseDown( int click, int x, int y )
 {
+	MousePressed[click] = true;
     uint len = ActiveScreens.length();
     if( len != 0 )
     {
@@ -2510,6 +2570,7 @@ bool GUI_MouseDown( int click, int x, int y )
 
 bool GUI_MouseUp( int click, int x, int y )
 {
+	MousePressed[click] = false;
     uint len = ActiveScreens.length();
     if( len != 0 )
 	{
