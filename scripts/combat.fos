@@ -180,24 +180,25 @@ uint[] sortByDist( uint16 x, uint16 y, Critter@[] crs )
 	return result;
 }
 
-void ShotgunSpread( AttackStruct@ attack, Critter& attacker, uint16 target_x, uint16 target_y, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint distance, uint pellets_count, int angle_spread )
+void ShotgunSpread( AttackStruct@ attack, Critter& attacker, uint16 target_x, uint16 target_y, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint distance, uint pellets_count, float angle_spread )
 {
 	Map@ map = attacker.GetMap();
-	
+	uint16 ax = attacker.HexX, ay = attacker.HexY;
 	uint[] target_IDs, pellets_hit;
+	float angle_shift = SHOTGUN_ATTACK_ANGLE * 2 / ( pellets_count -1 );
 	for( uint pellet_number = 0; pellet_number < pellets_count; pellet_number++ )
 	{
-		uint16 x = target_x, y = target_y;
-		moveAimHexRange( attacker, x, y, angle_spread, distance );
-		
-		Critter @target = checkHitLine( map, attacker, weapon, weaponMode, ammo, x, y );
+		float angle = angle_spread - angle_shift * pellet_number;
+		uint16 tx = target_x, ty = target_y;
+		GetHexCoord( map, ax, ay, tx, ty, angle, distance );
+		Critter @target = checkHitLine( map, attacker, weapon, weaponMode, ammo, tx, ty );
 		if( valid( target ) )
 		{
 			int n = target_IDs.find( target.Id );
 			if( n == -1 )
 			{
 				target_IDs.insertLast( target.Id );
-				pellets_hit.insertLast(1);
+				pellets_hit.insertLast( 1 );
 			}
 			else
 			{
@@ -206,7 +207,7 @@ void ShotgunSpread( AttackStruct@ attack, Critter& attacker, uint16 target_x, ui
 		}
 		else
 		{
-			bulletVFX( map, attacker, x, y, weapon, weaponMode, ammo );
+			bulletVFX( map, attacker, tx, ty, weapon, weaponMode, ammo );
 		}
 	}
 	
@@ -519,7 +520,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 
 		if( isShotgun ) //OK BUT REVISE!!!
 		{
-			ShotgunSpread( attack, attacker, tx, ty, weapon, weaponMode, ammo, wpnMaxDist * 2, 10, SHOTGUN_ATTACK_ANGLE );
+			ShotgunSpread( attack, attacker, tx, ty, weapon, weaponMode, ammo, wpnMaxDist * 2, SHOTGUN_PELLETS, SHOTGUN_ATTACK_ANGLE );
 			//most of combat logic was extracted, only ammo usage and miss-notifications left in CombatAttack
 		}
 	}
@@ -672,7 +673,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 			}
 
 			uint16 mx = tx, my = ty;
-			moveAimHexRandom( attacker, mx, my, MISS_ANGLE, 1 + dist * 10 / 100 );
+			moveAimHexRandom( attacker, map, mx, my, MISS_ANGLE, 1 + dist * 10 / 100 );
 			CombatAttack( attacker, null, weapon, weaponMode, ammo, mx, my, recursive );
 			FlushResults( results );
 			return;
@@ -741,7 +742,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		else if( exploding )
 		{
 			uint16 mx = tx, my = ty;
-			moveAimHexRandom( attacker, mx, my, MISS_ANGLE, 1 + dist * 10 / 100 );
+			moveAimHexRandom( attacker, map, mx, my, MISS_ANGLE, 1 + dist * 10 / 100 );
 			//Log( "hx " + hx + " hy " + hy + " tx " + tx + " ty " + ty );
 			CommenceExplosion( attack, map, hx, hy, mx, my, null, weapPid, false, valid( realTarget ) ? realTarget.Id : 0, isRocket, isGrenade, results );
 			NotifyMiss( attacker, results );
@@ -1351,7 +1352,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 		// Shotgun modifier
 		if( FLAG( ammoPerk, AMMO_PERK_SPREADSHOT ) )
 		{
-			rawDmg /= 10;
+			rawDmg /= SHOTGUN_PELLETS;
 		}
 		
         if( rawDmg > 0 )
@@ -4156,38 +4157,37 @@ uint cte_Stunned( Critter& cr, int identifier, uint& rate )
     return REAL_SECOND( 1 );
 }
 
-void moveAimHexRandom( Critter& cr, uint16& x, uint16& y, int alpha, int beta )
+void moveAimHexRandom( Critter& cr, Map& map, uint16& x, uint16& y, int alpha, int beta )
 {
     uint base_dist = GetDistantion( cr.HexX, cr.HexY, x, y );
     int dist = base_dist + Random( -beta, beta );
     dist = CLAMP( dist, 0, 999 );
 
-	moveAimHexRange( cr, x, y, alpha, dist );
+	moveAimHexRange( cr, map, x, y, alpha, dist );
 }
 
-void moveAimHexRange( Critter& cr, uint16& x, uint16& y, int alpha, int dist )
+void moveAimHexRange( Critter& cr, Map& map, uint16& x, uint16& y, int alpha, int dist )
 {
-	int angle = Random( -alpha, alpha );
+	float angle = Random( -alpha, alpha );
  
-    Map@ map = cr.GetMap();
     GetHexCoord( map, cr.HexX, cr.HexY, x, y, angle, dist );
 }
 
-void GetHexCoord( Map& map, uint16 fromX, uint16 fromY, uint16& toX, uint16& toY, int angle, uint dist ) //Hotfix, until engine update
+void GetHexCoord( Map& map, uint16 fromX, uint16 fromY, uint16& toX, uint16& toY, float angle, uint dist ) //Hotfix, until engine update
 {
     uint16 tempX = toX, tempY = toY;
 	map.GetHexCoord( fromX, fromY, toX, toY, angle, dist );
-    
+    Log( "here0" + " toX " + toX + " toY " + toY  );
     if( toX == 0 && toY == 0 )
     {
 		toX = tempX;
 		toY = tempY;
         map.GetHexCoordWall( fromX, fromY, toX, toY, angle, dist );
-
+		Log( "here1"+ " toX " + toX + " toY " + toY  );
 		LineTrace_IsRaked lineTrace;
 		bool isRakedLine = lineTrace.CheckLine( map, fromX, fromY, toX, toY, dist );		
 		if( !isRakedLine )
-		{
+		{Log( "here2" + " toX " + toX + " toY " + toY  );
 			toX = lineTrace.LastHexX;
 			toY = lineTrace.LastHexY;
 		}
