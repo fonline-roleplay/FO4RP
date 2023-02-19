@@ -55,21 +55,22 @@ Item@[] getEmitters( Map& map )
 	return result;
 }
 
-uint[] getFenceEntires( Map& map )
+Item@[] getFenceEmitters( Map& map )
 {
-	uint[] result;	
+	Item@[] misk;
 	
-	for( uint i = ENTIRE_LASER_FENCE_BEGIN; i < ENTIRE_LASER_FENCE_END; i++ )
+	map.GetItemsByType( ITEM_TYPE_MISC, misk );
+	
+	Item@[] result;
+	for( uint i = 0; i < misk.length(); i ++ ) 
 	{
-		int entireId = i;
-		int entires = map.CountEntire( entireId );
-		if( entires != 0 )
+		Item@ emitter = misk[i];
+		if( valid( emitter ) )
 		{
-			result.insertLast( entireId );
-		}
-		else
-		{
-			continue;
+			if( emitter.GetProtoId() == PID_LAZER_EMITTER_NS ||emitter.GetProtoId() == PID_LAZER_EMITTER_WE )
+			{
+				result.insertLast( emitter );
+			}
 		}
 	}
 	
@@ -136,14 +137,13 @@ float skillbonus( int admin, int hacker )
 
 bool checkLaserFence( Item& terminal, Map& map )
 {
-	bool LaserOn;
-	uint entires = map.CountEntire( terminal.FENCE_GROUP );
-	uint16 hx = 0, hy = 0;
-	uint8 dir = 0;
-	map.GetEntireCoords( terminal.FENCE_GROUP, 0, hx, hy, dir );
-	Item@ deathHex = null;
-	@deathHex = map.GetItem( hx, hy, PID_DEATH_HEX );
-	return !valid( deathHex ) ? LaserOn = false : LaserOn = true;
+	Item@ fence = GetItem( terminal.FENCE_GROUP );
+	bool isOn = false;
+	if( valid( fence ) )
+	{
+		isOn = fence.FIELD_STATE == EMITTER_DISABLED ? false : true;
+	}
+	return isOn;
 }
 
 void StartMenuTerminal( Critter& cr, Item& terminal )
@@ -212,13 +212,18 @@ class MenuTerminal: CenteredMenuHandler
 			{
 				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) )
 				{
-					if( terminal.FENCE_GROUP != 0 && map.CountEntire( terminal.FENCE_GROUP ) > 0 )
+					if( terminal.FENCE_GROUP != 0 )
 					{
 						string lex = "$state" + STR_INSERT_TEXT_LINE( checkLaserFence( terminal, map ) ? STR_DEVICE_ENABLED : STR_DEVICE_DISABLED );
 						if( menu.ButtonMsg( STR_TERMINAL_MENU_LASER_FENCE, lex ) )
 						{
 							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-							ToggleLaserFence( map, terminal.FENCE_GROUP );	
+							Item@ emitter = GetItem( terminal.FENCE_GROUP );
+							if( valid( emitter ) )
+							{
+								ToggleLaserFence( map, emitter, false );	
+							}
+							
 							return true;
 						}
 					}
@@ -512,10 +517,23 @@ class MenuTerminal: CenteredMenuHandler
 		}
 		
 		info += "$fence";
+		
+		string name = terminal.FENCE_GROUP;
+		Item@ emitter = GetItem( terminal.FENCE_GROUP );
+		if( valid( emitter ) )
+		{
+			string@ lexem = Item_GetLexems( emitter );
+			if( valid( lexem ) && lexem.length() > 3 )
+			{
+				int pos = findFirstNotOf( lexem, "¤" );
+				name = substring( lexem, pos, lexem.length() );
+			}
+		}
+		
 		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) && terminal.FENCE_GROUP != 0 )
 		{
 			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_FENCE_INFO )
-				 + "$fenceID" + terminal.FENCE_GROUP
+				 + "$fenceID" + name
 				 + "$fenceStatus" + STR_INSERT_TEXT_LINE( checkLaserFence( terminal, map ) ? STR_DEVICE_ENABLED : STR_DEVICE_DISABLED );
 		}
 		
@@ -2152,7 +2170,6 @@ class MenuSelectFence: CenteredMenuHandler
 	{
         @this.terminal = @terminal;
         @this.map = @map;
-		level = 1;
 		selectorPos = 0;
 		arrayPos = 0;
     }
@@ -2164,9 +2181,9 @@ class MenuSelectFence: CenteredMenuHandler
 			return false;
 		}
 
-		uint[] FenceEntires = getFenceEntires( map );
+		Item@[] FenceEmitters = getFenceEmitters( map );
 		
-		if( FenceEntires.length() != 0 )
+		if( FenceEmitters.length() != 0 )
 		{
 			if( menu.ButtonMsg( STR_PREVIOUS ) )
 			{
@@ -2174,14 +2191,15 @@ class MenuSelectFence: CenteredMenuHandler
 				selectorPos--;
 				if( arrayPos == 0 )
 				{
-					arrayPos = FenceEntires.length() - 1;
+					arrayPos = FenceEmitters.length() - 1;
 					selectorPos = arrayPos;
 				}
 				else
 				{
 					arrayPos = selectorPos;
 				}
-				terminal.FENCE_GROUP = FenceEntires[ arrayPos ];
+				
+				terminal.FENCE_GROUP = FenceEmitters[ arrayPos ].Id;
 				return true;
 			}
 			
@@ -2189,7 +2207,7 @@ class MenuSelectFence: CenteredMenuHandler
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				selectorPos++;
-				if( arrayPos == FenceEntires.length() -1 )
+				if( arrayPos == FenceEmitters.length() -1 )
 				{
 					arrayPos = 0;
 					selectorPos = arrayPos;
@@ -2198,7 +2216,7 @@ class MenuSelectFence: CenteredMenuHandler
 				{
 					arrayPos = selectorPos;
 				}
-				terminal.FENCE_GROUP = FenceEntires[ arrayPos ];
+				terminal.FENCE_GROUP = FenceEmitters[ arrayPos ].Id;
 				return true;
 			}
 			
@@ -2253,9 +2271,10 @@ class MenuSelectFence: CenteredMenuHandler
 
     string@ Description( Critter& cr )
 	{	
-		uint[] FenceEntires = getFenceEntires( map );	
+		Item@[] FenceEntires = getFenceEmitters( map );	
 		
 		string info = "$info";
+
 		if( FenceEntires.length() != 0 )
 		{
 			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_FENCE_EMITTERS_LIST )
@@ -2263,7 +2282,7 @@ class MenuSelectFence: CenteredMenuHandler
 				 
 			for( uint j = 0; j < FenceEntires.length() ; j ++ )
 			{
-				info += "|0xFFFF00 " + FenceEntires[j] + "|0x3CF800 ; ";
+				info += "|0xFFFF00 " + FenceEntires[j].Id + "|0x3CF800 ; ";
 			}
 			
 			info[ info.length() - 2 ] = ' ';
@@ -2279,7 +2298,7 @@ class MenuSelectFence: CenteredMenuHandler
 		else
 		{ 
 			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_FENCE_NO_EMITTERS );
-		}		
+		}	
 		
 		return info;
 	}

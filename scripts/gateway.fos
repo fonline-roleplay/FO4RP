@@ -191,85 +191,109 @@ void ToggleDoorBlocker( Map& map, Item& door, bool create )
 	}
 }
 
-void ToggleLaserFence( Map& map, int entireId )
+void ToggleLaserFence( Map& map, Item& emitter, bool create )
 {
-	if( entireId < ENTIRE_LASER_FENCE_BEGIN && entireId > ENTIRE_LASER_FENCE_END )
+	if( !valid( map ) )
 	{
 		return;
 	}
-
-	uint entires = map.CountEntire( entireId );
-	uint16 hx = 0, hy = 0;
-	uint8 dir = 0;
-	for( uint i = 0; i < entires; i++ )
+	
+	if( !valid( emitter ) )
 	{
-		map.GetEntireCoords( entireId, i, hx, hy, dir );
-
-		uint distance = 2;
-		uint16 laserFencePid = PID_LAZER_FENCE_NS;
-
-		if( dir == 1 )
+		return;
+	}
+	
+	if( create && emitter.FIELD_STATE == EMITTER_DISABLED )
+	{
+		emitter.FIELD_STATE = EMITTER_ENABLED;
+	}
+	else if( emitter.FIELD_STATE == EMITTER_DISABLED )
+	{
+		create = true;
+		emitter.FIELD_STATE = EMITTER_ENABLED;
+	}
+	else
+	{
+		create = false;
+		emitter.FIELD_STATE = EMITTER_DISABLED;
+	}
+	
+	uint16 emitterPid = emitter.GetProtoId();
+	uint16 hx = emitter.HexX, hy = emitter.HexY;
+	
+	uint steps = 0;
+	if( create )
+	{
+		Item@ deathHex;
+		@ deathHex = map.AddItem( hx, hy, PID_DEATH_HEX, 1 );
+		if( valid( deathHex ) )
 		{
-			distance = 5;
-			laserFencePid = PID_LAZER_FENCE_WE;
+			deathHex.PARENT_ITM_ID = emitter.Id;
 		}
-		Item@ deathHex = null;
-		@deathHex = map.GetItem( hx, hy, PID_DEATH_HEX );
+		
 		uint16 tx = hx, ty = hy;
-		if( !valid( deathHex ) )
-		{ 
-			@deathHex = map.AddItem( hx, hy, PID_DEATH_HEX, 1 );
-			CheckVictims( map, hx, hy );
-			deathHex.DEATH_HEX_TYPE = ANIM2_DEAD_LASER;
-
-			map.MoveHexByDir( tx, ty, dir, 1 );
-			if( dir == 1 )
-			{
-				map.MoveHexByDir( tx, ty, 0, 1 );
-			}
-			Item@ fenceVFX = map.AddItem( tx, ty, laserFencePid, 1 );
-			PlayGenericSound( map, tx, ty, "saber_on.ogg", 6 ); 
-		}
-		else
+		for( uint i = 0, len = 100; i < len; i++ )
 		{
-			DelGatewayItm( deathHex );
-
-			map.MoveHexByDir( tx, ty, dir, 1 );
-			if( dir == 1 )
+			steps ++;
+			if( emitterPid == PID_LAZER_EMITTER_NS )
 			{
-				map.MoveHexByDir( tx, ty, 0, 1 );
+				map.MoveHexByDir( tx, ty, 2, 1 );
+				@ deathHex = map.AddItem( tx, ty, PID_DEATH_HEX, 1 );
+				if( valid( deathHex ) )
+				{
+					deathHex.PARENT_ITM_ID = emitter.Id;
+					CheckVictims( map, tx, ty );
+					deathHex.DEATH_HEX_TYPE = ANIM2_DEAD_LASER;
+				}
+				
+				Item@ reciever = map.GetItem( tx, ty, PID_LAZER_EMITTER_SN );
+				if( valid( reciever ) )
+				{
+					break;
+				}
+				
+				if( steps == 2 )
+				{
+					Item@ fieldVfx = map.AddItem( tx, ty, PID_LAZER_FENCE_NS, 1 );
+					if( valid( fieldVfx ) )
+					{
+						fieldVfx.PARENT_ITM_ID = emitter.Id;
+						PlayGenericSound( map, tx, ty, "saber_on.ogg", 6 ); 
+					}
+					
+					steps = 0;
+				}
 			}
-			Item@ fenceVFX = map.GetItem( tx, ty, laserFencePid );
-			if( valid( fenceVFX ) )
+			else if( emitterPid == PID_LAZER_EMITTER_WE )
 			{
-				DelGatewayItm( fenceVFX );
-				PlayGenericSound( map, tx, ty, "saber_off.ogg", 6 ); 
+				//TECH DEBT
+				break;
 			}
 		}
-
-		for( uint steps = 0; steps < distance; steps ++ )
+		
+	}
+	else
+	{
+		Item@[] toClean;
+		map.GetItems( PID_DEATH_HEX, toClean );
+		map.GetItems( PID_LAZER_FENCE_NS, toClean );
+		for( uint i = 0, len = toClean.length(); i < len; i ++ )
 		{
-			if( dir == 1 && ( steps == 1 || steps == 3 || steps == 5 ) )
+			steps ++;
+			Item@ delete = toClean[i];
+			if( valid( delete ) && delete.PARENT_ITM_ID == int( emitter.Id ) )
 			{
-				map.MoveHexByDir( hx, hy, 0, 1 );
-			}
-			else
-			{
-				map.MoveHexByDir( hx, hy, dir, 1 );
-			}
-
-			@deathHex = map.GetItem( hx, hy, PID_DEATH_HEX ); 
-			if( !valid( deathHex ) )
-			{ 
-				@deathHex = map.AddItem( hx, hy, PID_DEATH_HEX, 1 );
-				CheckVictims( map, hx, hy );
-				deathHex.DEATH_HEX_TYPE = ANIM2_DEAD_LASER;
-			}
-			else
-			{
-				DelGatewayItm( deathHex );
+				if( steps == 2 )
+				{
+					PlayGenericSound( map, delete.HexX, delete.HexY, "saber_off.ogg", 6 );
+					steps == 0;
+				}
+				
+				DelGatewayItm( delete );
 			}
 		}
+		
+		toClean.resize(0);
 	}
 }
 
