@@ -113,15 +113,15 @@ class AttackStruct
 // AttackStruct@ get_delayed_attack( uint id ) { return null; }
 // bool erase_delayed_attack( uint id ) { return false;}
 
-Critter@ checkHitLine( Map& map, Critter& attacker, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16& tx, uint16& ty )
+void MissedShot( Map& map, Critter& attacker, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16& tx, uint16& ty, bool recursive )
 {
 	uint16 x = attacker.HexX, y = attacker.HexY; 
 	uint distance = GetDistantion( x, y, tx, ty );		
 
-	Critter@[] crs;
-	map.GetCrittersPath( x, y, tx, ty, 0.0f, distance, FIND_LIFE_AND_KO, crs );
+	Critter@[] critters;
+	map.GetCrittersPath( x, y, tx, ty, 0.0f, distance, FIND_LIFE_AND_KO, critters );
 	
-	uint[] IDs = sortByDist( x, y, crs );
+	uint[] IDs = sortByDist( x, y, critters );
 	for( uint i = 0, l = IDs.length(); i < l; i++ )
 	{
 		Critter@ target = GetCritter( IDs[i] );
@@ -129,21 +129,40 @@ Critter@ checkHitLine( Map& map, Critter& attacker, ProtoItem& weapon, uint8 wea
 		{
 			continue;
 		}
-		//Critter size and bullet chance logic here		
 		
-		int hitChance = 80;
-		if( valid( ammo ) )
+		int hitChance = RandomTargetChance( target, ammo );
+		if( Random( 1, 100 ) <= hitChance )
 		{
-			if( FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT ) )
+			int toHit = to_hit( attacker, target, weapon, weaponMode, ammo, tx, ty, true );
+			if( ( toHit - Random( 1, 100 ) ) >= 0 )
 			{
-				hitChance = 100;
+				CombatAttack( attacker, target, weapon, weaponMode, ammo, tx, ty, recursive, true );
+				return;
 			}
 		}
-		
-		if( target.IsKnockout() )
+	}
+
+	CombatAttack( attacker, null, weapon, weaponMode, ammo, tx, ty, false, true );
+}
+
+Critter@ checkHitLine( Map& map, Critter& attacker, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16& tx, uint16& ty )
+{
+	uint16 x = attacker.HexX, y = attacker.HexY; 
+	uint distance = GetDistantion( x, y, tx, ty );		
+
+	Critter@[] critters;
+	map.GetCrittersPath( x, y, tx, ty, 0.0f, distance, FIND_LIFE_AND_KO, critters );
+	
+	uint[] IDs = sortByDist( x, y, critters );
+	for( uint i = 0, l = IDs.length(); i < l; i++ )
+	{
+		Critter@ target = GetCritter( IDs[i] );
+		if( target.Id == attacker.Id )
 		{
-			hitChance /= 2;
+			continue;
 		}
+		
+		int hitChance = RandomTargetChance( target, ammo );
 		
 		if( Random( 1, 100 ) <= hitChance )
 		{
@@ -152,6 +171,25 @@ Critter@ checkHitLine( Map& map, Critter& attacker, ProtoItem& weapon, uint8 wea
 	}
 	
 	return null;
+}
+
+int RandomTargetChance( Critter& target, ProtoItem@ ammo )
+{
+	int hitChance = 80;
+	if( valid( ammo ) )
+	{
+		if( FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT ) )
+		{
+			hitChance = 100;
+		}
+	}
+	
+	if( target.IsKnockout() )
+	{
+		hitChance /= 2;
+	}
+	
+	return hitChance;
 }
 
 uint[] sortByDist( uint16 x, uint16 y, Critter@[] crs )
@@ -246,7 +284,7 @@ void bulletVFX( Map& map, Critter& attacker, uint16 target_x, uint16 target_y, P
 	CreateTimeEvent( AFTER( REAL_MS( baseTime + distance ) ), "combat@e_DelayedAttackVFX", delayedAttackVals, false );
 }
 
-void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16 hexX, uint16 hexY, bool recursive )
+void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16 hexX, uint16 hexY, bool recursive, bool autohit )
 {
 	if( !valid( target ) && hexX == 0 && hexY == 0 )
 	{
@@ -324,8 +362,8 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 	bool isAmmoRegen = FLAG( weaponPerk, WEAPON_PERK_RECHARGE );
 	bool isBurst = ( _WeaponAnim2( weapon, use ) == ANIM2_BURST );
 
-	if( isBurst && validWeapon && !recursive )
-	{
+	if( isBurst && validWeapon && !recursive && !autohit )
+	{ Log( "Burst mode!!! " );
 		uint burstDelay = 0;
 		uint len = realWeapon.AmmoCount < ammoRound ? realWeapon.AmmoCount : ammoRound;
 		for( uint i = 0; i < len; i++ )
@@ -340,26 +378,28 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		return;
 	}
 
-    Critter@ realTarget = null;
-
     CombatRes[] results;
 
 	//check for accidental hit
-	@realTarget = checkHitLine( map, attacker, weapon, weaponMode, ammo, tx, ty );
-	if( valid( realTarget ) )
+	if( !autohit )
 	{
-		if( validTarget )
+		Critter@ realTarget;
+		@realTarget = checkHitLine( map, attacker, weapon, weaponMode, ammo, tx, ty );
+		if( valid( realTarget ) )
 		{
-			if( realTarget.Id != target.Id )
+			if( validTarget )
+			{
+				if( realTarget.Id != target.Id )
+				{
+					@target = realTarget;
+					validTarget = valid( target );
+				}
+			}
+			else
 			{
 				@target = realTarget;
 				validTarget = valid( target );
 			}
-		}
-		else
-		{
-			@target = realTarget;
-			validTarget = valid( target );
 		}
 	}
 	
@@ -378,7 +418,6 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 	
 	SayLog( attacker, attack_info + "." + distance_info );
 	//void attackInfo(args)
-
 
     // always unsneak
     if( attacker.Mode[ MODE_HIDE ] != 0 && !( weaponType == WS_THROWING && dmgType == DAMAGE_NORMAL && validTarget && !attacker.IsSeenBy( target ) ) )
@@ -458,7 +497,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 					{
 						if( newTarget.Id != target.Id )
 						{
-							CombatAttack( attacker, newTarget, weapon, weaponMode, ammo, 0, 0, true );
+							CombatAttack( attacker, newTarget, weapon, weaponMode, ammo, 0, 0, true, false );
 						}
 					}
 				}
@@ -479,15 +518,18 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 				Critter@ newTarget = critsPenetrate[i];
 				if( valid( newTarget ) )
 				{
-					if( isHthAttack )
+					if( newTarget.Id != target.Id )
 					{
-						CombatAttack( attacker, newTarget, weapon, weaponMode, ammo, 0, 0, true );
-					}
-					else
-					{
-						int distance = GetDistantion( hx, hy, newTarget.HexX, newTarget.HexY ) * 2;
-						uint[] vals = { attacker.Id, newTarget.Id, weapon.ProtoId, weaponMode, realWeapon.AmmoPid, 0, 0, 0, 1 };
-						CreateTimeEvent( AFTER( REAL_MS( distance ) ), "combat@e_DelayedAttack", vals, false );
+						if( isHthAttack )
+						{
+							CombatAttack( attacker, newTarget, weapon, weaponMode, ammo, 0, 0, true, false );
+						}
+						else
+						{
+							int distance = GetDistantion( hx, hy, newTarget.HexX, newTarget.HexY ) * 2;
+							uint[] vals = { attacker.Id, newTarget.Id, weapon.ProtoId, weaponMode, realWeapon.AmmoPid, 0, 0, 0, 1 };
+							CreateTimeEvent( AFTER( REAL_MS( distance ) ), "combat@e_DelayedAttack", vals, false );
+						}
 					}
 				}
 			}
@@ -512,7 +554,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 				Critter@ newTarget = critsBurn[i];
 				if( valid( newTarget ) && processed.find( newTarget.Id ) == -1 )
 				{
-					CombatAttack( attacker, newTarget, weapon, weaponMode, ammo, 0, 0, true );
+					CombatAttack( attacker, newTarget, weapon, weaponMode, ammo, 0, 0, true, false );
 					processed.insertLast( newTarget.Id );
 				}
 			}
@@ -532,57 +574,22 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
         attack.TargetId = target.Id;
 	}
 
-    int toHit = to_hit( attacker, target, weapon, weaponMode, ammo, hx, hy, randomHit );
+    int toHit = 100; 
+	if( !autohit )
+	{
+		toHit = to_hit( attacker, target, weapon, weaponMode, ammo, hx, hy, randomHit );
+	}
+
 	//Log( "attacker.Id " + attacker.Id + " toHit " + toHit );
-    int margin = toHit - Random( 1, 100 );
+    int hitRoll = toHit - Random( 1, 100 );
 	
-    if( margin < 0 )  // if missed
+    if( hitRoll < 0 )
     {
 		SayLog( attacker, crInfo( attacker ) + " misses." );
-        if( attacker.Mode[ MODE_INVULNERABLE ] == 0 )
-        {
-            isCritical = ( ( ( - margin ) / 10 ) >= Random( 1, 100 ) );
-			
-            if( isCritical )
-            {
-                int roll = Random( 1, 100 ) - 5 * ( attacker.Stat[ ST_LUCK ] - 5 );
-                if( roll <= 35 )
-				{
-                    roll = 0;
-                }
-				else if( roll <= 65 )
-				{
-                    roll = 1;
-                }
-				else if( roll <= 80 )
-				{
-                    roll = 2;
-                }
-				else if( roll <= 95 )
-				{
-                    roll = 3;
-                }
-				else
-				{
-                    roll = 4;
-				}
-			}
-			/*else
-			{
-				//change target hex
-				if( !recursive && !hexAttack )
-				{
-					NotifyMiss( attacker, results );
-				}
-			}*/
-        }
     }
     else
     {
         isHit = true;
-		
-		isCritical = validTarget;
-		
 		if( !validTarget )
 		{
 			isCritical = false;
@@ -593,27 +600,9 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		}
     }
 
-    if( hitRandomly && validTarget ) // REVISE
-	{
-        Critter@ randomTarget = ChooseRandomTarget( map, attacker, target, wpnMaxDist );
-        if( @randomTarget != null )
-		{
-            @realTarget = randomTarget;
-            tx = realTarget.HexX;
-            ty = realTarget.HexY;
-            attack.Aim = HIT_LOCATION_UNCALLED;
-            realTarget.ModeBase[ MODE_HIDE ] = 0;         // done here to allow combat notifications later
-            NotifyOops( attacker, target, realTarget, results );
-        }
-    }
-	else
-	{
-        @realTarget = target;
-	}
-
 	if( attacker.Anim2Life == ANIM2_WINDUP )
 	{
-		attacker.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+		attacker.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 	}
 	
 	if( attacker.ParamBase[ CR_IS_WINDUPED ] == 1 )
@@ -623,7 +612,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 
     attacker.Action( ACTION_USE_WEAPON, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | ( ( ( !isHit && isCritical && !hitRandomly ) ? 1 : 0 ) << 8 ) | ( aim << 4 ) | use, realWeapon );
 
-    // commencing attack, various instances
+    // Commencing attack, various instances
     bool criticalHit = isHit && isCritical;
 
 	// UNARMED AND MELEE ATTACK
@@ -638,45 +627,39 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		
         if( isHit )
 		{
-            int crDir = attacker.Dir;
-            int tDir  = valid( realTarget) ? realTarget.Dir : attacker.Dir;
-
-            if( valid( realTarget) )
+            if( valid( target) )
 			{
-				ApplyDamage( attack, realTarget, 1, criticalHit, true, results );
+				ApplyDamage( attack, target, 1, criticalHit, true, results );
 			}
 		}
 		else
 		{
-			if( valid( realTarget ) )
+			if( !hexAttack )
 			{
-				ApplyDamage( attack, realTarget, 1, false, false, results );
+				NotifyMiss( attacker, results );
 			}
-			/*else if( !hexAttack )
-			{
-                NotifyMiss( attacker, results );
-			}*/
 		}
     }
 	else if( ( attack.WeaponType == WS_GUN ) && !isRocket && !isFlamethrower && !isShotgun )
 	{
         if( isHit )
 		{
-			if( valid( realTarget ) )
+			if( valid( target ) )
 			{
-				ApplyDamage( attack, realTarget, 1, criticalHit, false, results );
+				ApplyDamage( attack, target, 1, criticalHit, false, results );
 			}
 		}
         else         // standard miss here - BULLET BEHAVIOUR - BURSTS FULL AUTO
         {
-			/*if( !hexAttack )
-			{
-				NotifyMiss( attacker, results );
-			}*/
-
 			uint16 mx = tx, my = ty;
 			moveAimHexRandom( attacker, map, mx, my, MISS_ANGLE, 1 + dist * 10 / 100 );
-			CombatAttack( attacker, null, weapon, weaponMode, ammo, mx, my, recursive );
+			MissedShot( map, attacker, weapon, weaponMode, ammo, mx, my, recursive );
+			
+			if( !hexAttack )
+			{
+				NotifyMiss( attacker, results );
+			}
+			
 			FlushResults( results );
 			return;
 		}
@@ -699,14 +682,10 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		{
 			if( isHit )
 			{
-				if( valid( realTarget ) )
+				if( valid( target ) )
 				{
-					ApplyDamage( attack, realTarget, 1, criticalHit, false, results );
+					ApplyDamage( attack, target, 1, criticalHit, false, results );
 				}
-			}
-			else
-			{
-				//hex miss placeholder
 			}
 		}
 	}
@@ -714,9 +693,9 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 	{
 		if( isHit )
 		{
-			if( valid( realTarget ) && recursive )
+			if( valid( target ) && recursive )
 			{
-				ApplyDamage( attack, realTarget, 1, criticalHit, false, results );
+				ApplyDamage( attack, target, 1, criticalHit, false, results );
 			}
 		}
        /*else 
@@ -734,11 +713,11 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		{
             if( exploding )
 			{
-                CommenceExplosion( attack, map, hx, hy, tx, ty, realTarget, weapPid, criticalHit, valid( realTarget ) ? realTarget.Id : 0, isRocket, isGrenade, results );
+                CommenceExplosion( attack, map, hx, hy, tx, ty, target, weapPid, criticalHit, valid( target ) ? target.Id : 0, isRocket, isGrenade, results );
             }
-			else if( valid( realTarget ) )
+			else if( valid( target ) )
 			{
-				ApplyDamage( attack, realTarget, 1, criticalHit, false, results );
+				ApplyDamage( attack, target, 1, criticalHit, false, results );
 			}
 		}
 		else if( exploding )
@@ -746,7 +725,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 			uint16 mx = tx, my = ty;
 			moveAimHexRandom( attacker, map, mx, my, MISS_ANGLE, 1 + dist * 10 / 100 );
 			//Log( "hx " + hx + " hy " + hy + " tx " + tx + " ty " + ty );
-			CommenceExplosion( attack, map, hx, hy, mx, my, null, weapPid, false, valid( realTarget ) ? realTarget.Id : 0, isRocket, isGrenade, results );
+			CommenceExplosion( attack, map, hx, hy, mx, my, null, weapPid, false, valid( target ) ? target.Id : 0, isRocket, isGrenade, results );
 			//NotifyMiss( attacker, results );
 		}
 	}
@@ -929,7 +908,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 			}
         }
     }
-    // Npc miss text
+
     if( !attack.TargetHit && validTarget )
     {
         /*if( !target.IsPlayer() )
@@ -2540,7 +2519,7 @@ void NotifyOops( Critter& cr, Critter@ t1, Critter@ t2, CombatRes[]& results )
         uint[] allEff = { CMSG_HIT_RANDOMLY, cr.Id };
         Critter@[] him = { cr };
         Critter@[] crits;
-        cr.GetMap().GetCrittersSeeing( him, true, FIND_ALL | FIND_ONLY_PLAYERS, crits );
+        cr.GetMap().GetCrittersSeeing( him, true, FIND_LIFE_AND_KO | FIND_ONLY_PLAYERS, crits );
         for( int i = 0, j = crits.length(); i < j; i++ )
 		{
             AddEff( crits[ i ], allEff, results );
@@ -2553,7 +2532,7 @@ void NotifyOops( Critter& cr, Critter@ t1, Critter@ t2, CombatRes[]& results )
         uint[] allEff = { CMSG_OOPS, t1.Id, t2.Id };
         Critter@[] them = { t1, t2 };
         Critter@[] crits;
-        t1.GetMap().GetCrittersSeeing( them, true, FIND_ALL | FIND_ONLY_PLAYERS, crits );
+        t1.GetMap().GetCrittersSeeing( them, true, FIND_LIFE_AND_KO | FIND_ONLY_PLAYERS, crits );
         for( int i = 0, j = crits.length(); i < j; i++ )
 		{
             AddEff( crits[ i ], allEff, results );
@@ -2570,7 +2549,7 @@ void NotifyMiss( Critter@ cr, CombatRes[]& results )
     uint[] allEff = { CMSG_MISS, cr.Id };
     Critter@[] him = { cr };
     Critter@[] crits;
-    cr.GetMap().GetCrittersSeeing( him, true, FIND_ALL | FIND_ONLY_PLAYERS, crits );
+    cr.GetMap().GetCrittersSeeing( him, true, FIND_LIFE_AND_KO | FIND_ONLY_PLAYERS, crits );
     for( int i = 0, j = crits.length(); i < j; i++ )
 	{
         AddEff( crits[ i ], allEff, results );
@@ -2578,63 +2557,6 @@ void NotifyMiss( Critter@ cr, CombatRes[]& results )
 	
 	crits.resize( 0 );
     return;
-}
-
-//REVISE
-Critter@ ChooseRandomTarget( Map& map, Critter& cr, Critter& target, uint wpnMaxDist )
-{
-    Critter@[] crits;
-    uint16 hx = cr.HexX;
-    uint16 hy = cr.HexY;
-	
-	uint16 bx = 0, by = 0, pbx = 0, pby = 0;
-	
-    uint n = map.GetCrittersHex( hx, hy, wpnMaxDist, FIND_LIFE_AND_KO, crits );
-    if( n == 0 )
-	{
-        return null;
-    }
-	
-	uint   start = Random( 0, n - 1 );
-    for( uint i = start; i < n; i++ )
-    {
-        if( !valid( crits[ i ] ) )
-		{
-            continue;
-		}
-		
-		if( crits[ i ].Id == cr.Id || ( valid( target ) && crits[ i ].Id == target.Id ) )
-		{
-            continue;
-		}
-		
-        map.GetCrittersPath( hx, hy, crits[ i ].HexX, crits[ i ].HexY, 0.0f, 0, FIND_LIFE_AND_KO | FIND_ALL, null, pbx, pby, bx, by );
-        if( bx == crits[ i ].HexX && by == crits[ i ].HexY )
-		{
-            return crits[ i ];
-		}
-	}
-	
-    for( uint i = 0; i < start; i++ )
-    {
-        if( !valid( crits[ i ] ) )
-		{
-            continue;
-		}
-		
-        if( crits[ i ].Id == cr.Id || ( valid( target ) && crits[ i ].Id == target.Id ) )
-		{
-            continue;
-		}
-		
-		map.GetCrittersPath( hx, hy, crits[ i ].HexX, crits[ i ].HexY, 0.0f, 0, FIND_LIFE_AND_KO | FIND_ALL, null, pbx, pby, bx, by );
-		if( bx == crits[ i ].HexX && by == crits[ i ].HexY )
-		{
-            return crits[ i ];
-		}
-	}
-
-    return null;
 }
 
 uint8 RandomAim()
@@ -3382,7 +3304,7 @@ uint e_DelayedAttack( uint[]@ values )
 
 		if( !recursive )
 		{
-			CombatAttack( attacker, target, weapon, weaponMode, ammo, hexX, hexY, false );
+			CombatAttack( attacker, target, weapon, weaponMode, ammo, hexX, hexY, false, false );
 			attacker.Wait( GetProtoTime( weapon, weaponMode, attacker ) );
 			
 			realWeapon.ROUNDS_FIRED ++;
@@ -3390,7 +3312,7 @@ uint e_DelayedAttack( uint[]@ values )
 		}
 		else
 		{
-			CombatAttack( attacker, target, weapon, weaponMode, ammo, hexX, hexY, true );
+			CombatAttack( attacker, target, weapon, weaponMode, ammo, hexX, hexY, true, false );
 		}
 	}
 
