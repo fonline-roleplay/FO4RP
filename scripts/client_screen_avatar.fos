@@ -3,40 +3,83 @@
 #include "_macros.fos"
 #include "_client_defines.fos"
 #include "client_gui_h.fos"
+#include "sprite.fos"
+
+import Sprite@ GetAvatar( uint hash ) from "client_avatars";
+import Sprite@ GetAvatar( CritterCl& critter ) from "client_avatars";
 
 const uint AvatarCount = 3;
 
-funcdef void WindowsExplorer_OpenFileFuncdef( string file ); // placeholder
-void WindowsExplorer_OpenFile( string file, WindowsExplorer_OpenFileFuncdef@ func ){} // placeholder
-
 class AvaScreen : IGUIScreenCallbackShow
 {	
-	void OnShow( int critterId, int p1, int p2 )
+	AvaScreen()
 	{
-		CritterId = uint( critterId );
+		CritterId = 0;
+		Activate.resize( AvatarCount );
+		Upload.resize( AvatarCount );
+		Ava.resize( AvatarCount );
+	}
+
+	void OnShow( int ava0, int ava1, int ava2 )
+	{
+		CritterId = GetChosen().Id; // uint( critterId );
+		DropButtons();
+		
+		Ava[0].SetPic( ava0 );
+		Ava[1].SetPic( ava1 );
+		Ava[2].SetPic( ava2 );
 	}
 	
+	void DropButtons()
+	{
+		for( uint i = 0; i < AvatarCount; i++ )
+		{
+			Activate[i].ElementOption.JammingState = false;
+		}
+	}
+		
 	bool IsChosen()
 	{
 		CritterCl@ chosen = GetChosen();
 		return valid( chosen ) ? chosen.Id == CritterId : false;
 	}
 	
+	void SetAva( uint index, string& file )
+	{
+		Sprite ava;
+		ava.Load( file, PT_ROOT );
+		Ava[index].SetPic( ava );
+	}
+	
 	uint CritterId;
+	array<AvaActivate@> Activate;
+	array<AvaUpload@> Upload;
+	array<AvaPic@> Ava;
 }
 
-mixin class MutualAvaButton
+mixin class MutualAva
 {
 	uint Index;
 	AvaScreen@ Screen;
 	IGUIElementOpt@ ElementOption;
+	IGUIElementOpt@ ProtoElementOption;
 	
 	void construct( uint index, AvaScreen@ screen )
 	{
 		Index = index;
 		@Screen = screen;
+		@ElementOption = null;
 	}
 	
+	void InstanceInit( IGUIInstanceContext@ context, IGUIElementOpt@ element )
+	{
+		@ElementOption = element;
+	}
+	
+}
+
+mixin class MutualAvaButton
+{	
 	void OnMouseClick( int click ) override
 	{
 		if( click == MOUSE_CLICK_LEFT )
@@ -46,7 +89,31 @@ mixin class MutualAvaButton
 	}
 }
 
-class AvaActivate : IGUIElementCallbackMouseClick, MutualAvaButton
+class AvaPic : MutualAva
+{
+	AvaPic( uint index, AvaScreen@ screen )
+	{
+		construct( index, screen );
+	}
+	
+	void SetPic( uint hash )
+	{	
+		SetPic( GetAvatar( GetChosen() ) );
+	}
+	
+	void SetPic( Sprite@ sprite )
+	{	
+		if( sprite is null )
+			return;
+		else
+		{
+			ElementOption.SetSprite( sprite );
+			ElementOption.SetSize( ProtoElementOption.GetSurfaceWidth(), ProtoElementOption.GetSurfaceHeight() );
+		}
+	}
+}
+
+class AvaActivate : IGUIElementCallbackMouseClick, MutualAva, MutualAvaButton
 {	
 	AvaActivate( uint index, AvaScreen@ screen )
 	{
@@ -55,11 +122,12 @@ class AvaActivate : IGUIElementCallbackMouseClick, MutualAvaButton
 	
 	void Button( )
 	{
-
+		Screen.DropButtons();
+		ElementOption.JammingState = true;
 	}
 }
 
-class AvaUpload : IGUIElementCallbackMouseClick, MutualAvaButton
+class AvaUpload : IGUIElementCallbackMouseClick, MutualAva, MutualAvaButton
 {
 	AvaUpload( uint index, AvaScreen@ screen )
 	{
@@ -68,32 +136,34 @@ class AvaUpload : IGUIElementCallbackMouseClick, MutualAvaButton
 	
 	void Button( )
 	{
-		WindowsExplorer_OpenFile( "Avatar Files (*.png)\0*.png", AvatarUpload );
+		AvatarUpload_Chosen( WindowsExplorer_OpenFile( "Avatar Files (*.png)\0*.png" ) );
 	}
-	
+	/*
 	WindowsExplorer_OpenFileFuncdef@ get_AvatarUpload()
 	{
 		if( Screen.IsChosen() )
 			return WindowsExplorer_OpenFileFuncdef( @this.AvatarUpload_Chosen );
 		else return WindowsExplorer_OpenFileFuncdef( @this.AvatarUpload_OtherCritter );
-	}
+	}*/
 	
-	void AvatarUpload_Chosen( string file )
+	void AvatarUpload_Chosen( string& file )
 	{
 		CritterCl@ chosen = GetChosen();
 		if( !valid( chosen ) )
 			return;
-			
+		
 		AddFileToServerCollection( file, 1, chosen.Id, Index, func: FileCollectionUploadFuncdef( @this.FileCollectionUpload ) );
+		
 	}
 	
-	void AvatarUpload_OtherCritter( string file )
+	void AvatarUpload_OtherCritter( string& file )
 	{
-		AddFileToServerCollection( file, 1, Screen.CritterId, Index, func: FileCollectionUploadFuncdef( @this.FileCollectionUpload ) );
+		//AddFileToServerCollection( file, 1, Screen.CritterId, Index, func: FileCollectionUploadFuncdef( @this.FileCollectionUpload ) );
 	}
 	
 	void FileCollectionUpload( int result, uint fileid, string& filePath, int type, int p0, int p1, int p2 )
 	{
+		Message( "filePath: " + filePath + " result: " + result );
 		switch( result )
 		{
 			case ( -1 ): // Error
@@ -101,11 +171,21 @@ class AvaUpload : IGUIElementCallbackMouseClick, MutualAvaButton
 		
 			case ( 1 ): // Success
 			{
-				// copy file to cache, new file name == fileid.png
-				
+				Screen.SetAva( Index, filePath );
 			} break;
 			
 			default: break;
+		}
+	}
+}
+
+class AvaExit : IGUIElementCallbackMouseClick
+{
+	void OnMouseClick( int click ) override
+	{
+		if( click == MOUSE_CLICK_LEFT )
+		{
+			GUI_HideScreen( CLIENT_SCREEN_AVATAR, 0, 0, 0 );
 		}
 	}
 }
@@ -114,27 +194,39 @@ void GUIInit( )
 {
 	AvaScreen screen();
 	
-	GUI_CreateScreenIni( CLIENT_SCREEN_AVATAR, "AvaMainPic" )
-		.CallbackShow( screen );
+	GUI_CreateScreenIni( CLIENT_SCREEN_AVATAR, "Ava" )
+		.CallbackShow( screen )
+		.AutoCursor( true, CURSOR_DEFAULT );
 	
 	string pref = "";
 	for( uint i = 0; i < AvatarCount; i++ )
 	{
 		AvaActivate activate( i, screen );
 		AvaUpload upload( i, screen );
-	
-		pref = "Ava" + ( i + 1 );
-		GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, pref + "Pic", 0, 0 );
-		@activate.ElementOption = GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, pref + "Activate", 0, 0 )
-			.CallbackMouseClick( activate );
+		AvaPic pic( i, screen );
 		
-		GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, pref + "ActivateDn", 0, 0 );
-		@upload.ElementOption = GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, pref + "Upload", 0, 0 )
-			.CallbackMouseClick( upload );
+		pref = "Ava" + ( i + 1 );
+		
+		@pic.ProtoElementOption = GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, pref + "Pic", 0, 0 )
+			.CallbackInstanceInit( IGUIElementInstanceInitFunc( pic.InstanceInit ) );
+		
+		@activate.ProtoElementOption = GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, pref + "Activate", 0, 0 )
+			.CallbackMouseClick( activate )
+			.DownPicIni( pref + "ActivateDn" )
+			.SetJamming( true )
+			.CallbackInstanceInit( IGUIElementInstanceInitFunc( activate.InstanceInit ) );
+		
+		@upload.ProtoElementOption = GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, pref + "Upload", 0, 0 )
+			.CallbackMouseClick( upload )
+			.DownPicIni( pref + "UploadDn" )
+			.CallbackInstanceInit( IGUIElementInstanceInitFunc( upload.InstanceInit ) );
 			
-		GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, pref + "UploadDn", 0, 0 );
+		@screen.Activate[i] = activate;
+		@screen.Upload[i] = upload;
+		@screen.Ava[i] = pic;
 	}
 	
-	GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, "AvaExitBut", 0, 0 );
-	GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, "AvaExitButDn", 0, 0 );
+	GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, "AvaExitBut", 0, 0 )
+		.CallbackMouseClick( AvaExit() )
+		.DownPicIni( "AvaExitButDn" );
 }
