@@ -10,6 +10,7 @@
 #include "drugs_h.fos"
 #include "radiation_h.fos"
 #include "firestarter_h.fos"
+#include "scenery_h.fos"
 
 class MenuWell: CenteredMenuHandler
 {
@@ -385,20 +386,27 @@ uint e_WellCharge( uint[] @ values )
 }
 
 
-bool isFlask( Critter& cr, Item& waterPump )
+bool isFlask( Critter& cr, Item@ waterPump )
 {
-	if( valid( waterPump ) )
-	{
-		Item@ flask = _CritGetItemHand( cr );
-		if( !valid( flask) )
-		{
-			return false;
-		}
+	return isFlask( cr, valid( waterPump ) ? waterPump.WATERSOURCE_DNA : PID_GLASS_BOTTLE_DIRTY_FULL_PRT );
+}
 
-		if( flask.Proto.Type == ITEM_TYPE_FLASK && ( flask.DRINK_DNA == waterPump.WATERSOURCE_DNA || flask.DRINK_DNA == 0 ) )
-		{
-			return true;
-		}
+bool isFlask( Critter& cr, int watersource_dna )
+{
+	Item@ flask = _CritGetItemHand( cr );
+	if( !valid(flask) )
+	{
+		return false;
+	}
+
+	if( flask.Proto.Type != ITEM_TYPE_FLASK )
+	{
+		return false;
+	}
+	
+	if( flask.DRINK_DNA == 0 || flask.DRINK_DNA == watersource_dna )
+	{
+		return true;
 	}
 	
 	return false;
@@ -615,7 +623,7 @@ void ltp_gathWater_init()
 	ltp_gathWater_inited = true;
 }
 
-bool start_gathering_water( Critter& cr, Item& waterPump )
+bool start_gathering_water( Critter& cr, Item@ waterPump )
 {
 	if( !ltp_gathWater_inited )
 	{ 
@@ -657,25 +665,79 @@ bool start_gathering_water( Critter& cr, Item& waterPump )
 	return false;
 }
 
-int CalcSequence( Critter& cr, Item& waterPump )
+bool start_gathering_water( Critter& cr, uint scenery_pid )
+{
+	if( !ltp_gathWater_inited )
+	{ 
+		ltp_gathWater_init();
+	}
+	
+	Map@ map = cr.GetMap();		
+	
+	if( scenSwampList.find( scenery_pid ) == -1 && water_sources.find( scenery_pid ) == -1 )
+	{
+		return false;
+	}	
+
+	Item@ hand = _CritGetItemHand( cr );
+	if( !FindFlask( hand ) && !isFlask( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) && !hasItem( cr, PID_BOTTLE_GLASS, SLOT_HAND1 ) && !hasItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT, SLOT_HAND1 ) )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HOLD_TARE );
+		return false;
+	}
+
+	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = CalcSequence( cr, null );
+	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+	StartProcess( cr, LTP_GATHER_WATER, 0, 0, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+	PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
+
+	return true;
+}
+
+int CalcSequence( Critter& cr, Item@ waterPump )
 {
 	int sequence = 0;
 	
+	Item@ flask = _CritGetItemHand( cr );
+	if( !valid( flask ) )
+	{
+		return 0;
+	}
+	
+	if( !valid( waterPump ) )
+	{
+		uint16 pid = flask.GetProtoId();
+		if( pid == PID_BOTTLE_GLASS || pid == PID_GLASS_BOTTLE_DIRTY_FULL_PRT )
+		{
+			if(  pid == PID_GLASS_BOTTLE_DIRTY_FULL_PRT )
+			{
+				sequence += flask.Proto.Partial_Item - flask.REMAINING_USES;
+			}
+			
+			int bottlesCount = cr.CountItem( PID_BOTTLE_GLASS );
+			sequence += bottlesCount * 5;
+			return sequence;
+		}
+		
+		return flask.Proto.Partial_Item - flask.REMAINING_USES;
+	}
+	
 	if( isFlask( cr, waterPump ) )
 	{
-		Item@ flask = _CritGetItemHand( cr );
 		sequence = waterPump.REMAINING_CHARGE > ( flask.Proto.Partial_Item - flask.REMAINING_USES ) ? ( flask.Proto.Partial_Item - flask.REMAINING_USES ) : waterPump.REMAINING_CHARGE;
 	}
 	else
 	{
 		int bottlesCount = cr.CountItem( PID_BOTTLE_GLASS );
-		ProtoItem@ bottleProto = GetProtoItem( PID_BOTTLE_GLASS );
 		sequence += bottlesCount * 5; // constant val for glass bottles, need rewamp with entire bottle code
 		if( sequence > waterPump.REMAINING_CHARGE )
 		{
 			sequence = waterPump.REMAINING_CHARGE;
 		}
 	}
+	
 	return sequence;
 }
 
@@ -683,17 +745,25 @@ uint process_gather_water( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_GATHER_WATER )
 
-  	Item@ waterPump = GetItem( param2 );
+  	Item@ waterPump = null;
+	if( param2 != 0 )
+	{
+		@waterPump = GetItem( param2 );
+	}
+	
+	uint16 watersource_dna = PID_GLASS_BOTTLE_DIRTY_FULL_PRT;
 	
   	if( valid( waterPump ) )
 	{
-      	if( ( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, waterPump.WATERSOURCE_DNA ) && !isFlask( cr, waterPump ) ) || waterPump.REMAINING_CHARGE < 1 )
+		watersource_dna = waterPump.WATERSOURCE_DNA;
+		
+      	if( ( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, watersource_dna ) && !isFlask( cr, watersource_dna ) ) || waterPump.REMAINING_CHARGE < 1 )
 		{
-			uint warningMsg = ( !hasItem( cr, PID_BOTTLE_GLASS ) || !hasItem( cr, waterPump.WATERSOURCE_DNA ) ) ? STR_NO_MORE_BOTTLES : STR_NO_MORE_WATER_LEFT;
-			if( isFlask( cr, waterPump ) )
+			uint warningMsg = ( !hasItem( cr, PID_BOTTLE_GLASS ) || !hasItem( cr, watersource_dna ) ) ? STR_NO_MORE_BOTTLES : STR_NO_MORE_WATER_LEFT;
+			if( isFlask( cr, watersource_dna ) )
 			{
 				Item@ flask = _CritGetItemHand( cr );
-				warningMsg = waterPump.REMAINING_CHARGE > flask.REMAINING_USES ? STR_FILLED_TARE : STR_NO_MORE_WATER_LEFT;
+				warningMsg = ( valid( waterPump ) && waterPump.REMAINING_CHARGE > flask.REMAINING_USES ) ? STR_FILLED_TARE : STR_NO_MORE_WATER_LEFT;
 			}
 			
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, warningMsg );
@@ -706,96 +776,116 @@ uint process_gather_water( Critter@ cr, int& param0, int& param1, int& param2 )
 		{
 			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_FILLS_TARE );
 		}
-		
-		if( hasItem( cr, waterPump.WATERSOURCE_DNA ) )
+	}
+	
+	if( hasItem( cr, watersource_dna ) )
+	{
+		Item@ waterBottlePrt = getItem( cr, watersource_dna );
+		if( waterBottlePrt.REMAINING_USES < int( waterBottlePrt.Proto.Partial_Item ) )
 		{
-			Item@ waterBottlePrt = getItem( cr, waterPump.WATERSOURCE_DNA );
-			if( waterBottlePrt.REMAINING_USES < int( waterBottlePrt.Proto.Partial_Item ) )
+			if( valid( waterPump ) )
 			{
 				waterPump.REMAINING_CHARGE --;
-				waterBottlePrt.REMAINING_USES ++;
-				waterBottlePrt.EXTRA_WEIGHT = waterBottlePrt.REMAINING_USES * 100;
+			}
 
-				Map@ map = cr.GetMap();
-				PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
-				waterBottlePrt.Update();
-			}
-			else
-			{
-			
-				Item@ waterBottle = null;
-				if( waterPump.WATERSOURCE_DNA == PID_GLASS_BOTTLE_FULL_PRT )
-				{
-					@ waterBottle = cr.AddItem( PID_GLASS_BOTTLE_FULL, 1 );
-				}
-				else
-				{
-					@ waterBottle = cr.AddItem( PID_GLASS_BOTTLE_DIRTY_FULL, 1 );
-				}
-				_SubItem( waterBottlePrt , 1 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FILLED_BOTTLE );
-				waterBottle.Update();
-			}
-			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
-		}
-		else if( isFlask( cr, waterPump ) )
-		{
-			Item@ flask = _CritGetItemHand( cr );
-			if( ( flask.Proto.Partial_Item - flask.REMAINING_USES ) > 0 )
-			{
-				waterPump.REMAINING_CHARGE --;
-				if( flask.REMAINING_USES == 0 )
-				{
-					ChangeFlaskProto( flask );	
-				}
-				
-				flask.REMAINING_USES ++;
-				flask.EXTRA_WEIGHT = flask.REMAINING_USES * 100;
-
-				if( flask.DRINK_DNA == 0 )
-				{
-					flask.DRINK_DNA = waterPump.WATERSOURCE_DNA;
-				}
-
-				Map@ map = cr.GetMap();
-				PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
-				flask.Update();
-			}
-			else
-			{
-				cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FILLED_TARE );
-				return 0;
-			}
-		}
-		else
-		{
-			Item@ bottle = cr.GetItem( PID_BOTTLE_GLASS, -1 );
-			_SubItem( bottle , 1 );
-		
-			Item@ waterBottlePrt = cr.AddItem( waterPump.WATERSOURCE_DNA, 1 );
-			
-			Item@ hands = cr.GetItem( 0, SLOT_HAND1 );
-			if( valid( hands ) )
-			{
-				cr.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
-			}
-			
-			cr.MoveItem( waterBottlePrt.Id, waterBottlePrt.GetCount(), SLOT_HAND1 );
-		
-			waterPump.REMAINING_CHARGE --;
 			waterBottlePrt.REMAINING_USES ++;
 			waterBottlePrt.EXTRA_WEIGHT = waterBottlePrt.REMAINING_USES * 100;
 
 			Map@ map = cr.GetMap();
 			PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
-
 			waterBottlePrt.Update();
 		}
+		else
+		{
+		
+			Item@ waterBottle = null;
+			if( watersource_dna == PID_GLASS_BOTTLE_FULL_PRT )
+			{
+				@ waterBottle = cr.AddItem( PID_GLASS_BOTTLE_FULL, 1 );
+			}
+			else
+			{
+				@ waterBottle = cr.AddItem( PID_GLASS_BOTTLE_DIRTY_FULL, 1 );
+			}
+			_SubItem( waterBottlePrt , 1 );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FILLED_BOTTLE );
+			waterBottle.Update();
+		}
+		
 		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
-    }
-	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
-	return 0;
+	}
+	else if( isFlask( cr, watersource_dna ) )
+	{
+		Item@ flask = _CritGetItemHand( cr );
+		if( valid( flask ) && ( flask.Proto.Partial_Item - flask.REMAINING_USES ) > 0 )
+		{
+			if( valid( waterPump ) )
+			{
+				waterPump.REMAINING_CHARGE --;
+			}
+			
+			if( flask.REMAINING_USES == 0 )
+			{
+				ChangeFlaskProto( flask );	
+			}
+			
+			flask.REMAINING_USES ++;
+			flask.EXTRA_WEIGHT = flask.REMAINING_USES * 100;
+
+			if( flask.DRINK_DNA == 0 )
+			{
+				flask.DRINK_DNA = watersource_dna;
+			}
+
+			Map@ map = cr.GetMap();
+			PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
+			flask.Update();
+		}
+		else
+		{
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FILLED_TARE );
+			return 0;
+		}
+	}
+	else
+	{
+		Item@ bottle = cr.GetItem( PID_BOTTLE_GLASS, -1 );
+		if( !valid( bottle ) )
+		{
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_MORE_BOTTLES );
+			return 0;
+		}
+		
+		_SubItem( bottle , 1 );
+	
+		cr.AddItem( watersource_dna, 1 );
+		Item@ waterBottlePrt = cr.GetItem( watersource_dna, -1 );
+		
+		Item@ hands = cr.GetItem( 0, SLOT_HAND1 );
+		if( valid( hands ) )
+		{
+			cr.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
+		}
+		
+		cr.MoveItem( waterBottlePrt.Id, waterBottlePrt.GetCount(), SLOT_HAND1 );
+	
+		if( valid( waterPump ) )
+		{
+			waterPump.REMAINING_CHARGE --;
+		}
+		
+		waterBottlePrt.REMAINING_USES ++;
+		waterBottlePrt.EXTRA_WEIGHT = waterBottlePrt.REMAINING_USES * 100;
+
+		Map@ map = cr.GetMap();
+		PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
+
+		waterBottlePrt.Update();
+	}
+	
+	return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 }
 
 void setAnimState( Item& item )
@@ -1043,7 +1133,35 @@ void Cleaning( Critter& player, uint soap_pid, int water_source )
 
 void Cleaning( Critter& player, Critter& target, uint soap_pid, int water_source )
 {
-	if( PrepareCleaning( player, target, water_source ) )
+	Item@ hand = player.GetItem( 0, SLOT_HAND1 );
+	if( valid( hand ) )
+	{
+		switch( hand.GetProtoId() )
+		{
+			case( PID_BOTTLE_GLASS ): 
+			case(PID_GLASS_BOTTLE_DIRTY_FULL_PRT ):
+			{
+				start_gathering_water( player, water_source );
+				return;
+			}
+			case( PID_itplate2 ):
+			{
+				uint count = hand.GetCount();
+				_SubItem( hand, count );
+				player.AddItem( PID_itplate3, count );
+				return;
+			}
+			default:
+			{
+				if( isFlask( player, water_source ) )
+				{
+					start_gathering_water( player, water_source );
+				}
+				return;
+			}
+		}
+	}
+	else if( PrepareCleaning( player, target, water_source ) )
 	{
 		SoapEffect( player, target, soap_pid, water_source );
 	}
