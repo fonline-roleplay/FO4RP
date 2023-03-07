@@ -1064,10 +1064,97 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
         target.ModeBase[ MODE_HIDE ] = 0;
 	}
 
+    int dmgType = attack.DmgType;
+	
+    if( validAmmo )
+	{
+		if( FireAmmo.find( attack.Ammo.ProtoId ) != -1 )
+		{
+			dmgType = DAMAGE_FIRE;
+		}
+		else if( attack.Ammo.ProtoId == PID_BOLTS_HE )
+		{
+			dmgType = DAMAGE_EXPLODE;
+		}
+	}
+	
+	int targetDR = target.Stat[ ST_NORMAL_RESIST + dmgType - 1 ];
+    int targetDT = target.Stat[ ST_NORMAL_ABSORB + dmgType - 1 ];
+
+    if( FLAG( eff, HF_BYPASS_ARMOR ) && dmgType != DAMAGE_EMP )
+	{
+        targetDT /= 5;
+        targetDR /= 5;
+    }
+
+	//cover mechanics
+	if( target.Param[ CR_IS_RELAXING ] == 5 && !FLAG( weaponPerk, WEAPON_PERK_IGNORE_COVER ) )
+	{
+		int coverDT = CheckCover( map, hexX, hexY, target );
+		if( coverDT > 0 )
+		{
+			targetDT += coverDT;
+			target.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_COMBAT_COVER_SAVE, "@$coverDT" + coverDT );
+		}
+	}
+
+    targetDR += attack.DrMod;
+    targetDR = CLAMP( targetDR, 0, 100 );
+    int dmgMin = ( attack.DmgMin + attack.BonusDmg ) * attack.MinDmgMod / 100;
+    int dmgMax = ( attack.DmgMax + attack.BonusDmg ) * attack.MaxDmgMod / 100;
+
+    float rawDmg = 0;
+    float totalDmg = 0;
+
+    if( ( attack.WeaponType == WS_MELEE || attack.WeaponType == WS_THROWING ) && attack.RealWeapon.IsDeteriorable() )
+	{
+        dmgMin -= int( dmgMin * ( GetDeteriorationProcent( attack.RealWeapon ) * 0.01f ) );
+        dmgMax -= int( dmgMax * ( GetDeteriorationProcent( attack.RealWeapon ) * 0.01f ) );
+    }
+
+	if( validAttacker )
+	{
+		inform( attacker, target, "DMin = " + dmgMin + ", DMax = " + dmgMax );
+	}
+	
+    for( uint i = 0; i < rounds; i++ )
+	{
+        rawDmg = Random( dmgMin, dmgMax );
+		// Boxing gloves modifier
+		if( validWeapon && FLAG( weaponPerk, WEAPON_PERK_NON_LEATHAL ) )
+		{
+			rawDmg /= 2;
+		}
+
+		if( validAttacker )
+		{
+			inform( attacker, target, "raw= " + rawDmg );
+		}
+
+		rawDmg -= targetDT;
+        rawDmg -= rawDmg * targetDR / 100;
+		
+		// Shotgun modifier
+		if( FLAG( ammoPerk, AMMO_PERK_SPREADSHOT ) )
+		{
+			rawDmg /= SHOTGUN_PELLETS;
+		}
+		
+        if( rawDmg > 0 )
+		{
+            totalDmg += rawDmg;
+		}
+    }
+
     if( target.Mode[ MODE_INVULNERABLE ] != 0 )
 	{
         isCritical = false;
     }
+	
+	if( totalDmg <= targetDT )
+	{
+		isCritical = false;
+	}
 	
 	if( isCritical || attack.ForceFlags != 0 )
 	{
@@ -1265,88 +1352,16 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 		}
     }
 
-    int dmgType = attack.DmgType;
-	
-    if( validAmmo )
+	if( isCritical )
 	{
-		if( FireAmmo.find( attack.Ammo.ProtoId ) != -1 )
-		{
-			dmgType = DAMAGE_FIRE;
-		}
-		else if( attack.Ammo.ProtoId == PID_BOLTS_HE )
-		{
-			dmgType = DAMAGE_EXPLODE;
-		}
-	}
-	
-	int targetDR = target.Stat[ ST_NORMAL_RESIST + dmgType - 1 ];
-    int targetDT = target.Stat[ ST_NORMAL_ABSORB + dmgType - 1 ];
-
-    if( FLAG( eff, HF_BYPASS_ARMOR ) && dmgType != DAMAGE_EMP )
-	{
-        targetDT /= 5;
-        targetDR /= 5;
-    }
-
-	//cover mechanics
-	if( target.Param[ CR_IS_RELAXING ] == 5 && !FLAG( weaponPerk, WEAPON_PERK_IGNORE_COVER ) )
-	{
-		int coverDT = CheckCover( map, hexX, hexY, target );
-		if( coverDT > 0 )
-		{
-			targetDT += coverDT;
-			target.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_COMBAT_COVER_SAVE, "@$coverDT" + coverDT );
-		}
-	}
-
-    targetDR += attack.DrMod;
-    targetDR = CLAMP( targetDR, 0, 100 );
-    int dmgMin = ( attack.DmgMin + attack.BonusDmg ) * attack.MinDmgMod / 100;
-    int dmgMax = ( attack.DmgMax + attack.BonusDmg ) * attack.MaxDmgMod / 100;
-
-    float rawDmg = 0;
-    float totalDmg = 0;
-
-    if( ( attack.WeaponType == WS_MELEE || attack.WeaponType == WS_THROWING ) && attack.RealWeapon.IsDeteriorable() )
-	{
-        dmgMin -= int( dmgMin * ( GetDeteriorationProcent( attack.RealWeapon ) * 0.01f ) );
-        dmgMax -= int( dmgMax * ( GetDeteriorationProcent( attack.RealWeapon ) * 0.01f ) );
-    }
-	
-	if( validAttacker )
-	{
-		inform( attacker, target, "DMin = " + dmgMin + ", DMax = " + dmgMax + ", critDmgMod = " + critDmgMod );
-	}
-	
-    for( uint i = 0; i < rounds; i++ )
-	{
-        rawDmg = Random( dmgMin, dmgMax ) * critDmgMod / 100;
-		// Boxing gloves modifier
-		if( validWeapon && FLAG( weaponPerk, WEAPON_PERK_NON_LEATHAL ) )
-		{
-			rawDmg /= 2;
-		}
-
+		totalDmg = totalDmg * critDmgMod / 100;
+		
 		if( validAttacker )
 		{
-			inform( attacker, target, "raw= "+ rawDmg );
+			inform( attacker, target, "critDmgMod = " + critDmgMod );
 		}
+	}
 
-		rawDmg -= targetDT;
-        rawDmg -= rawDmg * targetDR / 100;
-		
-		// Shotgun modifier
-		if( FLAG( ammoPerk, AMMO_PERK_SPREADSHOT ) )
-		{
-			rawDmg /= SHOTGUN_PELLETS;
-		}
-		
-        if( rawDmg > 0 )
-		{
-            totalDmg += rawDmg;
-		}
-    }
-	
 	if( validAttacker )
 	{
 		inform( attacker, target, "total= "+ totalDmg );
