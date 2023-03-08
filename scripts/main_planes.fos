@@ -10,6 +10,9 @@
 #include "lockers_h.fos"
 #include "combat_h.fos"
 #include "hitchance_h.fos"
+#include "speed_h.fos"
+
+import void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo ) from "main";
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Called on some plane added.
@@ -380,6 +383,7 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
 	//  In: r0 target id, r1 0, r2 0
 	//  Out: r0 best dist, r1 min dist, r2 max dist (if == 0 than run away)
 	{
+		//npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
         Critter@ target = GetCritter( r0 );
         uint8 mode = 0;
         ProtoItem@ weapon = npc.GetSlotProto( SLOT_HAND1, mode );
@@ -505,8 +509,21 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
             }
         }
 		
-		if( weapon.Weapon_Round_0 > 1 || ValidateBurst( npc, target, weapon, use ) )
+		if( weapon.Weapon_Anim2_0 == ANIM2_AUTO )
 		{
+			r1 = HIT_LOCATION_NONE;
+			uint[] values = { npc.Id, target.Id, weapon.ProtoId, ammo.ProtoId, use };
+			uint time = _GetProtoWindupTime( weapon );
+			npc.ParamBase[ CR_FULL_AUTO ] = 1;
+			CreateTimeEvent( AFTER( REAL_MS( time ) ), "main_planes@e_fullAuto", values, false );
+		}
+		else if( _WeaponRound( weapon, use ) > 1 && ValidateBurst( npc, target, weapon, ammo, use ) )
+		{
+			r1 = HIT_LOCATION_NONE;
+		}
+		else if( _WeaponIsSecondaryAviable( weapon ) && weapon.Weapon_Anim2_1 == ANIM2_BURST && ValidateBurst( npc, target, weapon, ammo, use ) )
+		{
+			r0 = 1;
 			r1 = HIT_LOCATION_NONE;
 		}
 		else
@@ -519,6 +536,69 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
     }
 	
     return false;
+}
+
+uint e_fullAuto( uint[]@ values )
+{
+	Critter@ npc = GetCritter( values[0] );
+	Critter@ target = GetCritter( values[1] );
+	ProtoItem@ weapon = GetProtoItem( values[2] );
+	ProtoItem@ ammo = GetProtoItem( values[3] );
+	int use = values[4];
+	
+	if( npc.Param[ CR_FULL_AUTO ] == 0 )
+	{
+		npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+		return 0;
+	}
+	
+	if( !valid( npc ) )
+	{
+		npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+		return 0;
+	}
+	
+	if( npc.IsDead() || npc.IsKnockout() ) 
+	{
+		npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+		return 0;
+	}
+	
+	if( !valid( target ) ) 
+	{
+		npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+		return 0; 
+	}
+	
+	if( target.IsDead() )
+	{
+		npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+		return 0;
+	}
+	
+	Map@ map = npc.GetMap();
+	if( !valid( map ) )
+	{
+		npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+		return 0;
+	}
+	
+	if( MovementState( npc ) > 0 )
+	{
+		npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+		return 0;
+	}
+	
+	if( npc.Param[ CR_AUTO_ROUNDS_FIRED ] > 10 )
+	{
+		npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+		return 0;
+	}
+
+	critter_attack( npc, target, weapon, use, ammo );
+	
+	uint wait = _GetProtoWaitTime( weapon, use );
+	return REAL_MS( wait );
 }
 
 int ChooseAim( Critter& npc, Critter& target, int toHit )
@@ -558,6 +638,7 @@ class CTraceFirstCritter : ITraceContext
 		{
             return true;
         }
+		
 		@Cr = map.GetCritter( hx, hy );
         return valid( Cr ) && Cr.Cond == COND_LIFE && GetDistantion( Gx, Gy, Cr.HexX, Cr.HexY ) >= Mindist;
     }
@@ -586,16 +667,22 @@ bool IsCurrentEnemy( Critter& npc, uint targetId )
 			return true;
 		}
 	}
+	
     return false;
 }
 
-bool ValidateBurst( Critter& npc, Critter& target, ProtoItem@ weapon, uint mode )
+bool ValidateBurst( Critter& npc, Critter& target, ProtoItem@ weapon, ProtoItem@ ammo, uint mode )
 {
-    if( Random( 0, 2 ) == 0 ) // force normal shot, for a little diversity
+	if( to_hit( npc, target, weapon, mode, ammo, 0, 0, false ) < 95 )
 	{
 		return false;
-	}                 
-    
+	}
+	
+	if( Random( 0, 2 ) == 0 ) // force normal shot, for a little diversity
+	{
+		return false;
+	}     
+	
 	Map@ map = npc.GetMap();
     uint maxDist = _WeaponMaxDist( weapon, mode );
 	uint16 hx = npc.HexX;
@@ -603,6 +690,7 @@ bool ValidateBurst( Critter& npc, Critter& target, ProtoItem@ weapon, uint mode 
     uint16 tx = target.HexX;
     uint16 ty = target.HexY;
     Critter@ blocker = TraceFirstCritter( hx, hy, tx, ty, map, maxDist, hx, hy, 0 );
+	
     if( valid( blocker ) && !IsCurrentEnemy( npc, blocker.Id ) )
 	{
 		return false;
@@ -612,28 +700,29 @@ bool ValidateBurst( Critter& npc, Critter& target, ProtoItem@ weapon, uint mode 
     uint16 sy = hy;
     uint16 ex = tx;
     uint16 ey = hy;
-    uint8  dir = GetOffsetDir( hx, hy, tx, ty, 89.0f );
+    uint8  dir = GetOffsetDir( hx, hy, tx, ty, 2.0f );
     map.MoveHexByDir( sx, sy, dir, 1 );
     map.MoveHexByDir( ex, ey, dir, 1 );
     @blocker = TraceFirstCritter( sx, sy, ex, ey, map, maxDist, hx, hy, 3 );
     if( valid( blocker ) && !IsCurrentEnemy( npc, blocker.Id ) )
-	{
-		return false;
-	}
+    {
+        return false;
+    }
 
     sx = hx;
     sy = hy;
     ex = tx;
     ey = hy;
-    dir = GetOffsetDir( hx, hy, tx, ty, -89.0f );
+    dir = GetOffsetDir( hx, hy, tx, ty, -2.0f );
     map.MoveHexByDir( sx, sy, dir, 1 );
     map.MoveHexByDir( ex, ey, dir, 1 );
     @blocker = TraceFirstCritter( sx, sy, ex, ey, map, maxDist, hx, hy, 3 );
     if( valid( blocker ) && !IsCurrentEnemy( npc, blocker.Id ) )
-	{
-		return false;
-	}
-    return true;
+    {
+        return false;
+    }
+
+	return true;
 }
 
 void SkillsSort( Critter& npc, int[]& skills, uint first, uint count )
