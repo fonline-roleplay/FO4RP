@@ -169,7 +169,7 @@ bool hasKey( Critter& cr, Item& locker )
 	return false;
 }
 
-bool LockpickMenu( Critter& cr, Item& locker )
+bool LockpickMenu( Critter& cr, Item& locker ) // REFACTOR THIS SHIT TO SUCKLESS!!!
 {
 	cr.StatBase[ ST_VAR0 ] = locker.Id;
 	
@@ -183,12 +183,12 @@ bool LockpickMenu( Critter& cr, Item& locker )
 	
 	if( locker.Proto.Item_Subtype != ITEM_SUBTYPE_BRIEFCASE )
 	{
-		if( hasKey( locker ) && hasKeyAround( cr, locker ) )
+		if( hasKeyAround( cr, locker ) )
 		{
 			data.insertLast( BTN( STR_EXTRACT_KEY ) );
 			data.insertLast( ( FLAG( locker.LockerCondition, LOCKER_LOCKED ) ? BTN( STR_UNLOCK ) : BTN( STR_LOCK ) ) );
 		}
-		else if( hasKey( cr, locker ) ) 
+		else if( IsKeyAviable( cr, locker.LockerId ) ) 
 		{
 			data.insertLast( BTN( STR_INSERT_KEY ) );
 			data.insertLast( ( FLAG( locker.LockerCondition, LOCKER_LOCKED ) ? BTN( STR_UNLOCK ) : BTN( STR_LOCK ) ) );
@@ -234,8 +234,7 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
                 return true;
             }
             // Check key
-            if( !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) && locker.LockerId != 0 &&
-                !FLAG( locker.LockerCondition, LOCKER_BROKEN ) && FLAG( locker.LockerCondition, LOCKER_LOCKED ) )
+            if( !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) && locker.LockerId != 0 && !FLAG( locker.LockerCondition, LOCKER_BROKEN ) && FLAG( locker.LockerCondition, LOCKER_LOCKED ) )
             {
                 cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_ITEM_LOCKER_NEED_KEY );
 				LockerBudge( locker );
@@ -438,12 +437,13 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
 }
 
 void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
-{ 
+{
     Item@ lockItm = GetItem( player.Stat[ ST_VAR0 ] );
     if( !valid( lockItm ) )
 	{
         return;
     }
+	
 	Item@lockpick = player.GetItem( 0, SLOT_HAND1 );
 	Map@ map = player.GetMap();
 	
@@ -459,6 +459,7 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
         player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STR_YOU_KNOCK );
 		LogItemMovement( player, lockItm, "knocks on the" ); 
     }
+	
     if( answerI == 1 )
     {
 		map.SetTextMsg( lockItm.HexX, lockItm.HexY, COLOR_RED, TEXTMSG_TEXT, STR_MAPMSG_LOUD_BANG );
@@ -466,6 +467,7 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
 	
 		return;
 	}
+	
     if( answerI == 2 )
     {
 		if( hasKey( lockItm ) ) 
@@ -503,11 +505,13 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
             lockItm.STORED_CODE = Random( 1, 9 ) * 10 + Random( 1, 9 );
             lockItm.ENTERED_CODE = 11;
         }
+        
         if( lockItm.LOCK_TYPE == 2 )
         {
             lockItm.STORED_CODE = Random( 1, 9 ) * 100 + Random( 1, 9 ) * 10 + Random( 1, 9 );
             lockItm.ENTERED_CODE = 111;
         }
+        
         if( lockItm.LOCK_TYPE == 3 )
         {
             lockItm.STORED_CODE = Random( 1, 9 ) * 1000 + Random( 1, 9 ) * 100 + Random( 1, 9 ) * 10 + Random( 1, 9 );
@@ -568,10 +572,25 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
 			LogItemMovement( player, lockItm, "inserts key in the lock" ); 
 			putKey( player, lockItm );
 		}
+		else
+		{
+			player.Say( SAY_NETMSG, "|0xFFFF00 You must have a key in your inventory." );
+		}
 	}
+
 	if( answerI == 4 )
 	{
-		if( !hasKey( lockItm ) )
+		bool thisSide = false;
+		if( hasKey( lockItm ) ) 
+		{
+			thisSide = hasKeyAround( player, lockItm );
+		}
+		else if( IsKeyAviable( player, lockItm.LockerId ) )
+		{
+			thisSide = true;
+		}
+		
+		if( thisSide )
 		{
 			if( FLAG( lockItm.LockerCondition, LOCKER_LOCKED ) )
 			{
@@ -590,33 +609,10 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
 				PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
 			}
 		}
-		else
+		else 
 		{
-			bool thisSide = hasKeyAround( player, lockItm );
-			if( thisSide )
-			{
-				if( FLAG( lockItm.LockerCondition, LOCKER_LOCKED ) )
-				{
-					UNSETFLAG( lockItm.LockerCondition, LOCKER_LOCKED );
-					player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_UNLOCK_DOOR );
-					player.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_UNLOCKS );
-					LogItemMovement( player, lockItm, "unlocks" );
-					PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
-				}
-				else
-				{
-					SETFLAG( lockItm.LockerCondition, LOCKER_LOCKED );
-					player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOCK_DOOR );
-					player.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_LOCKS );
-					LogItemMovement( player, lockItm, "locks" );
-					PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
-				}
-			}
-			else 
-			{ 
-				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEY_OTHER_SIDE ); 
-				LogCrimeMovement( player, lockItm, "can't lockpick - key on the other side" ); 
-			}
+			player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEY_OTHER_SIDE ); 
+			LogCrimeMovement( player, lockItm, "can't lockpick - key on the other side" ); 
 		}
 
 		LockpickMenu( player, lockItm );
