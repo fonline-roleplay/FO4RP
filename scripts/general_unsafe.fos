@@ -136,6 +136,7 @@ void unsafe_radioHead( Critter& cr, int, int, int, string@ message, int[]@ )
 				if( FLAG( radio.Flags, ITEM_RADIO ) )
 				{
 					cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_USE_RADIO );
+					break;
 				}
 			}
 		}
@@ -449,7 +450,7 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 	}
 	
 	int needAp = attack_ap( attacker, weapon, mode );
-	if( ( needAp == 0 || attacker.Stat[ ST_CURRENT_AP ] < needAp ) && attacker.Param[ CR_FULL_AUTO ] == 0 )
+	if( ( needAp == 0 || attacker.Stat[ ST_CURRENT_AP ] < needAp ) && attacker.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
 	{
 		return;
 	}
@@ -499,7 +500,7 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 		{
 			@ammo = GetProtoItem( hand.AmmoPid );
 		}
-	}	
+	}
 	
 	if( weaponType == WS_GUN )
 	{
@@ -541,19 +542,6 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 	uint ammoPID = valid( ammo ) ? ammo.ProtoId : 0;
 
 	attacker.SetDir( GetDirection( attacker.HexX, attacker.HexY, hexX, hexY ) );
-	if( attacker.Param[ CR_IS_WINDUPED ] == 0 && attacker.Param[ CR_FULL_AUTO ] == 0 )
-	{
-		attacker.Wait( windupTime );
-	}
-	else if( attacker.Param[ CR_FULL_AUTO ] != 0 )
-	{
-		attacker.Wait( _GetProtoWaitTime( weapon, mode ) );
-	}
-	else
-	{
-		attacker.Wait( 10 );
-		windupTime = 0;
-	}
 	
 	if( ( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS ) && dist > wpnMaxDist )
 	{
@@ -561,9 +549,48 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 		return;
 	}
 
-	if( attacker.Param[ CR_FULL_AUTO ] == 0 )
+	uint waitTime = _GetProtoWaitTime( weapon, mode );
+	
+	if( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS )
+	{
+		attacker.Wait( waitTime );
+	}
+    else if( attacker.Param[ CR_IS_WINDUPED ] == 0 && _WeaponAnim2( weapon, mode ) != ANIM2_AUTO )
+    {
+        if( _WeaponAnim2( weapon, mode ) == ANIM2_BURST )
+		{
+			attacker.Wait( windupTime + waitTime );
+		}
+		else
+		{
+			attacker.Wait( windupTime );
+		}
+    }
+	else if( _WeaponAnim2( weapon, mode ) == ANIM2_AUTO )
+	{
+		if( attacker.Param[ CR_AUTO_ROUNDS_FIRED ] > 0 )
+		{
+			attacker.Wait( _GetProtoWaitTime( weapon, mode ) );
+		}
+		else
+		{
+			attacker.Wait( windupTime );
+		}
+	}
+    else
+    {
+        attacker.Wait( 10 );
+        windupTime = 0;
+    }
+
+	if( attacker.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 || skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS )
 	{
 		attacker.StatBase[ ST_CURRENT_AP ] -= needAp * 100;
+	}
+	
+	if( _WeaponAnim2( weapon, mode ) == ANIM2_AUTO )
+	{
+		attacker.ParamBase[ CR_AUTO_ROUNDS_FIRED ] ++;
 	}
 	
 	if( weapon.Windup_Time != 0 && !_ItemIsBroken( hand ) && GetDeteriorationProcent( hand ) < 100 )
@@ -576,7 +603,6 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 	else
 	{
 		CombatAttack( attacker, target, weapon, mode, ammo, hexX, hexY, false, false );
-		attacker.Wait( GetProtoTime( weapon, mode, attacker ) );
 	}
 }
 
@@ -610,15 +636,9 @@ void unsafe_critter_attack( Critter& attacker, int target_Id, int param1, int we
 	}
 	
 	int needAp = attack_ap( attacker, weapon, mode );
-	if( ( needAp == 0 || attacker.Stat[ ST_CURRENT_AP ] < needAp ) && attacker.Param[ CR_FULL_AUTO ] == 0 )
+	if( ( needAp == 0 || attacker.Stat[ ST_CURRENT_AP ] < needAp ) && attacker.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
 	{
 		return;
-	}
-	
-	uint windupTime = GetProtoWindupTime( weapon, mode, attacker );
-	if( windupTime == 0 )
-	{
-		windupTime == 300;
 	}
 	
 	int skillNum = ( valid( weapon ) ? _WeaponSkill( weapon, 0 ) : ( valid( hand ) ? SK_MELEE_WEAPONS : SK_UNARMED ) );
@@ -1571,29 +1591,8 @@ void unsafe_StopNamingState( Critter& player, int param0, int param1, int param2
 	player.ParamBase[ CR_REMEMBERING_NAME ] = 0;
 }
 
-void unsafe_FullAutoState( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
-{
-	if( player.Param[ CR_FULL_AUTO ] == 0 )
-	{
-		player.ParamBase[ CR_FULL_AUTO ] = 1;
-		player.AddTimeEvent( "general_unsafe@cte_unsafe_rapid_fire", REAL_MS( 0 ), CTE_RAPID_FIRE, param0 );
-	}
-}
-
-uint cte_unsafe_rapid_fire( Critter& player, int identifier, uint& rate )
-{
-	if( !player.IsBusy() )
-	{
-		unsafe_FullAutoStop( player, 0, 0, 0, null, null );
-		return 0;
-	}
-	
-	return REAL_MS( 100 );
-}
-
 void unsafe_FullAutoStop( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
 {
-	player.ParamBase[ CR_FULL_AUTO ] = 0;
 	player.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
 	player.Wait( 0 );
 }

@@ -404,7 +404,7 @@ EXPORT int getParam_Ap( CritterMutual& cr, uint )
 
 EXPORT int getParam_RegenAp( CritterMutual& cr, uint )
 {
-    if( cr.Params[ CR_SLEEPING_STATE ] > 0 || cr.Params[ CR_FULL_AUTO ] > 0 )
+    if( cr.Params[ CR_SLEEPING_STATE ] > 0 )
     {
         return 0;
     }
