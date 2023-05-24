@@ -38,10 +38,20 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 		return false;
     }
 
-	if( ( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR ) && HandsTied( cr ) )
+	if( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR )
 	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FREE_HANDS );
-		return false;
+		if( HandsTied( cr ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FREE_HANDS );
+			return false;
+		}
+		
+		Item@ back = _CritGetItemBack( cr );
+		if( valid( back ) )
+		{
+			cr.Say( SAY_NETMSG, "|0xFFFF00 The item on your back is preventing you from changing clothes" );
+			return false;
+		}
 	}
 
 	if( pid == PID_WORKBENCH_TOKEN || pid == PID_FIREPLACE_TOKEN || pid == PID_AMMOBENCH_TOKEN )
@@ -66,8 +76,8 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 	}
 	
 #endif // __SERVER
-    bool  moveFreeze = false,
-          dropFreeze = false;
+    bool  moveFreeze = false;
+    bool  dropFreeze = false;
 
 #ifndef __CLIENT
 	if( toSlot == SLOT_GROUND )
@@ -159,6 +169,7 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 				actionStr = "removes from back";
 				break;
 		}
+		
 		LogItemMovement( cr, item, actionStr );
 	}
 #endif // __CLIENT
@@ -215,36 +226,28 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 		}
     }
 
-    // Armor animation
+	// Armor animation
+	uint16 skin = cr.Stat[ ST_BASE_CRTYPE ];
+	if( skin == 0 )
+	{
+		skin = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
+	}
+	bool isRoboPlayer = skin_robot.find( skin ) != -1;
+	bool isRoboArmor = armor_robots.find( pid ) != -1;
+	bool isMutePlayer = skin_supermute.find( skin ) != -1;
+	bool isMuteArmor = armor_supermutants.find( pid ) != -1;
     if( toSlot == SLOT_ARMOR )
     {
         if( item.GetType() != ITEM_TYPE_ARMOR )
 		{
             return false;
         }
-		
-		if( item.Proto.Slot != SLOT_INV )
-		{
-            return false;
-		}
 
-		uint16 skin = cr.Stat[ ST_BASE_CRTYPE ];
-		if( skin == 0 )
-		{
-			skin = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
-		}
-		
-		bool isRoboPlayer = skin_robot.find( skin ) != -1;
-		bool isRoboArmor = armor_robots.find( pid ) != -1;
-		bool isMutePlayer = skin_supermute.find( skin ) != -1;
-		bool isMuteArmor = armor_supermutants.find( pid ) != -1;
-		
 		if( isRoboPlayer != isRoboArmor || isMutePlayer != isMuteArmor || ( cr.Stat[ ST_BODY_TYPE ] != BT_DOG && pid == PID_DOG_ARMOR ) )
 		{
 			#ifdef __CLIENT
 			Message( TEXTMSG_TEXT, STR_HUMANS_CANT_WEAR ); 
 			#endif // __CLIENT
-			//cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HUMANS_CANT_WEAR );
 			return false;
 		}
 	}
@@ -252,9 +255,33 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
     // Custom slot checks
     if( toSlot > SLOT_ARMOR )
     {
-        if( toSlot != item.Proto.Slot )
+        if( toSlot != item.Proto.Slot || ( fromSlot == SLOT_ARMOR && toSlot == SLOT_BACK ) )
 		{
             return false;
+		}
+		
+		if( toSlot == SLOT_BACK && item.GetType() == ITEM_TYPE_ARMOR )
+		{
+			if( isRoboPlayer || isMutePlayer || ( !IsHuman( cr ) && cr.Stat[ ST_BODY_TYPE ] != BT_GHOUL ) )
+			{
+				#ifdef __CLIENT
+				Message( "|0xFFFF00 You can't wear robes like that!" ); 
+				#endif // __CLIENT
+				return false;
+			}
+			
+			Item@ armor = _CritGetItemArmor( cr );
+			if( valid( armor ) )
+			{
+				uint16 armor_pid = armor.GetProtoId();
+				if( HidefaceArmor.find( armor_pid ) != -1 || PowerArmors.find( armor_pid ) != -1 )
+				{
+					#ifdef __CLIENT
+					Message( "|0xFFFF00 You can't wear robe over this type or armor" ); 
+					#endif // __CLIENT
+					return false;
+				}
+			}
 		}
 	}
 
@@ -274,7 +301,8 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 {
 	uint8 toSlot = item.CritSlot;
 	uint16 pid = item.GetProtoId();
-			
+	uint8 type = item.GetType();
+	
 	if( toSlot == SLOT_HEAD || fromSlot == SLOT_HEAD )
 	{	
 		int signH = ( toSlot == SLOT_HEAD ? int(1) : -1 );
@@ -308,17 +336,65 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 		ArmorEffects( cr, item );
 	}
 		
-	if( cr.ParamBase[ CR_IS_WINDUPED ] != 0 && fromSlot == SLOT_HAND1 && item.GetType() == ITEM_TYPE_WEAPON )
+	if( cr.ParamBase[ CR_IS_WINDUPED ] != 0 && fromSlot == SLOT_HAND1 && type == ITEM_TYPE_WEAPON )
 	{
 		ChangeWindup( cr, true );
 	}
 	
-	//Armor skins change
-	if( item.GetType() == ITEM_TYPE_ARMOR && ( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR ) )
+	bool isMale = ( cr.Stat[ ST_GENDER ] == GENDER_MALE );
+	uint armor_skin = ( isMale ? item.Proto.Armor_CrTypeMale : item.Proto.Armor_CrTypeFemale );
+	
+	//Robes overide current skin in back slot
+	if( type == ITEM_TYPE_ARMOR && ( fromSlot == SLOT_BACK || toSlot == SLOT_BACK ) )
 	{
-		bool isMale = ( cr.Stat[ ST_GENDER ] == GENDER_MALE );
-		uint armor_skin = ( isMale ? item.Proto.Armor_CrTypeMale : item.Proto.Armor_CrTypeFemale );
+		uint crType = cr.Stat[ ST_ARMOR_SKIN ] == 0 ? cr.Stat[ ST_BASE_CRTYPE ] : cr.Stat[ ST_ARMOR_SKIN ];
+
+		if( GetCritterAnimType( cr.CrType ) != ANIM_TYPE_3D )
+		{
+			if( toSlot == SLOT_BACK )
+			{
+				if( skin_robe.find( armor_skin ) != -1 )
+				{
+					if( skin_small.find( cr.Stat[ ST_BASE_CRTYPE ] ) != -1 )
+					{
+						crType = CRTYPE_SMALL_ROBE;  //kids, dwarfs and goris
+					}
+					else
+					{
+						crType = armor_skin;
+					}
+					
+					cr.StatBase[ ST_ARMOR_SKIN ] = cr.CrType;
+				}
+				
+				//Flags for face, avatar and description hiding items
+				if( HidefaceHoods.find( pid ) != -1 )
+				{
+					SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HOOD );
+				}
+			}
+			else
+			{
+				cr.StatBase[ ST_ARMOR_SKIN ] = 0;
+				
+				if( HidefaceHoods.find( pid ) != -1 )
+				{
+					UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HOOD );
+				}
+			}
+			
+			ArmorEffects( cr, item );
+		}
 		
+		if( cr.CrType != crType ) 
+		{
+			cr.ChangeCrType( crType );
+		}
+	}
+	
+	//Armor skins change
+	if( type == ITEM_TYPE_ARMOR && ( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR ) )
+	{
 		if( cr.Stat[ ST_BASE_CRTYPE ] == 0 )
 		{
 			cr.StatBase[ ST_BASE_CRTYPE ] = ( isMale ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
@@ -645,7 +721,7 @@ void ArmorEffects( Critter& cr, Item@ item )
 		}
 	}
 
-	if( valid( item ) )
+	if( valid( item ) && item.CritSlot != SLOT_BACK )
 	{
 		bool PAhelmetOn = hasItems( cr, HelmetsPA, SLOT_HEAD );
 		bool CAhelmetOn = hasItems( cr, HelmetsCA, SLOT_HEAD );
@@ -655,11 +731,11 @@ void ArmorEffects( Critter& cr, Item@ item )
 			uint16 armorPid = armor.GetProtoId();
 			if( PowerArmors.find( armorPid ) != -1 )
 			{
-				cr.ChangeCrType( PAhelmetOn ? CRTYPE_PA : CRTYPE_PA_HEADLESS ); 
+				cr.ChangeCrType( PAhelmetOn ? CRTYPE_PA : CRTYPE_PA_HEADLESS );
 			}
 			else if( armorPid == PID_HARDENED_POWER_ARMOR )
 			{
-				cr.ChangeCrType( PAhelmetOn ? CRTYPE_PA_HARDY : CRTYPE_PA_HARDY_HEADLESS ); 
+				cr.ChangeCrType( PAhelmetOn ? CRTYPE_PA_HARDY : CRTYPE_PA_HARDY_HEADLESS );
 			}
 			else if( ( armorPid == PID_COMBAT_ARMOR_MK1 || armorPid == PID_COMBAT_ARMOR_MK2 || armorPid == PID_COMBAT_ARMOR_MK3 || armorPid == PID_RIOT_ARMOR || armorPid == PID_CA_BROTHERHOOD || armorPid == PID_CA_MOD_MK1 || armorPid == PID_CA_MOD_MK2 || armorPid == PID_CA_MOD_MK3 ) && cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_BLD_TRIBAL )
 			{

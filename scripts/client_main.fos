@@ -2873,7 +2873,7 @@ string critter_description( CritterCl& cr, int lookType )
 string critter_description_full( CritterCl& cr, string& result )
 {
 	result += "" + COLOR_NETMSG + critter_description_health( cr ) + critter_description_hand( cr ) + critter_description_slots( cr ) + critter_description_stats( cr );
-			
+
 	return result;
 }
 
@@ -2971,7 +2971,17 @@ string critter_description_maker( int lookType, int target_id, int age, int gend
 				GenderAgeDesc = false;
 				view_name = "";
 			}
-		}		
+		}
+		
+		ItemCl@ back = _CritGetItemBack( cr );
+		if( valid( back ) )
+		{
+			if( ArmorHidingLevel( back.GetProtoId() ) == 1 && FLAG( cr.Param[ PLAYER_FLAGS ], PLAYER_FLAG_HIDE_FACE ) )
+			{
+				GenderAgeDesc = false;
+				view_name = "";
+			}
+		}
 		
 		if( view_name == "" )
 		{
@@ -2989,11 +2999,10 @@ string critter_description_maker( int lookType, int target_id, int age, int gend
 				case( BT_MEN ): 
 				case( BT_WOMEN ):
 				{
-					view_name += ", ";
-					
 					uint ageStr = GetMsgStrNumUpper( TEXTMSG_GAME, STR_CRIT_LOOK_AGE( CLAMP( gender, GENDER_MALE, GENDER_FEMALE ), CLAMP( age, 0, 90 ) ) );
 					if( ageStr != 0 )
 					{
+						view_name += ", ";
 						view_age = GetMsgStr( TEXTMSG_GAME, ageStr );
 					}
 
@@ -3174,9 +3183,11 @@ string critter_description_maker( int lookType, int target_id, int age, int gend
 					description += "|0x3CF800 . " + GetMsgStr( TEXTMSG_DLG, STR_NPC_PROTO_DESC( npcPid ) );
 				}
 			}
+			
 			result = TRIM_DOTS( ReplaceText( GetMsgStr( TEXTMSG_GAME, line_type ), "NAME", COLOR_CRITTER + description ) ) + ".";
 		}
 	}
+	
 	return result;
 }
 
@@ -3193,6 +3204,15 @@ string critter_description_health( CritterCl& cr )
 	{
 		uint8 ArmorType = ArmorHidingLevel( armor.GetProtoId() );
 		if( ( ArmorType == 2 ) || ( ArmorType == 3 && cr.ParamBase[ QST_MEDIUM ] == 2 ) || ( ArmorType == 1 && FLAG( cr.Param[ PLAYER_FLAGS ], PLAYER_FLAG_HIDE_FACE ) ) )
+		{
+			gender = GENDER_UNKNOWN;
+		}
+	}
+	
+	ItemCl@ back = _CritGetItemBack( cr );
+	if( valid( back ) )
+	{
+		if( ArmorHidingLevel( back.GetProtoId() ) == 1 && FLAG( cr.Param[ PLAYER_FLAGS ], PLAYER_FLAG_HIDE_FACE ) )
 		{
 			gender = GENDER_UNKNOWN;
 		}
@@ -3526,20 +3546,53 @@ string critter_description_slots( CritterCl& cr )
 	
 	bool hasPrefix = false;
 	uint gender = cr.StatBase[ ST_GENDER ];
-
+	bool show_armor = true;
+	bool robed = false;
+	
 	ItemCl@ armor = _CritGetItemArmor( cr );
 	uint8 ArmorType = 0;
 	
 	if( valid( armor ) )
 	{
-		ArmorType = ArmorHidingLevel( armor.GetProtoId() );
-		if( ( ArmorType == 2 ) || ( ArmorType == 3 && cr.ParamBase[ QST_MEDIUM ] == 2 ) || ( ArmorType == 1 && FLAG( cr.Param[ PLAYER_FLAGS ], PLAYER_FLAG_HIDE_FACE ) ) )
+		ItemCl@ back = _CritGetItemBack( cr );
+		if( valid( back ) )
 		{
-			gender = GENDER_IT;
+			ArmorType = ArmorHidingLevel( back.GetProtoId() );
+			if( ArmorType == 1 )
+			{
+				show_armor = false;
+				robed = true;
+			}
 		}
 		
-		result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_MALE_ARMOR + gender ) + getLexName( armor );
-		hasPrefix = true;
+		if( show_armor )
+		{
+			ArmorType = ArmorHidingLevel( armor.GetProtoId() );
+			if( ( ArmorType == 2 ) || ( ArmorType == 3 && cr.ParamBase[ QST_MEDIUM ] == 2 ) || ( ArmorType == 1 && FLAG( cr.Param[ PLAYER_FLAGS ], PLAYER_FLAG_HIDE_FACE ) ) )
+			{
+				gender = GENDER_IT;
+			}
+			
+			result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_MALE_ARMOR + gender ) + getLexName( armor );
+			hasPrefix = true;
+		}
+		
+		if( robed )
+		{
+			string shape = "";
+			switch( armor.Proto.Material )
+			{
+				case( MATERIAL_METAL ):
+				case( MATERIAL_POLYMER ):
+					shape = " Wears heavy armor beneath the robe.";
+					hasPrefix = true;
+					break;
+			}
+			
+			result += shape;
+			hasPrefix = false;
+		}
+		
 	}
 
 	ItemCl@ head = _CritGetItemHead( cr );
@@ -3566,8 +3619,15 @@ string critter_description_slots( CritterCl& cr )
 	ItemCl@ back = _CritGetItemBack( cr );
 	if( valid( back ) )
 	{
-		result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_BACKPACK ) + getLexName( back );
-		result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_BACKPACK_HE_ENDLINE + gender );
+		if( back.GetType() == ITEM_TYPE_ARMOR )
+		{
+			result += " The person is covered by a " + getLexName( back ) + ".";
+		}
+		else
+		{
+			result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_BACKPACK ) + getLexName( back );
+			result += GetMsgStr( TEXTMSG_GAME, STR_CRIT_BACKPACK_HE_ENDLINE + gender );
+		}
 	}
 	
 	return result;
@@ -3608,16 +3668,29 @@ uint8 ArmorHidingLevel( uint pid )
 
 bool CanShowFace( CritterCl& cr )
 {
+	ItemCl@ back = _CritGetItemBack( cr );
+	if( valid( back ) )
+	{
+		if( ArmorHidingLevel( back.GetProtoId() ) == 1 )
+		{
+			return !FLAG( cr.Param[ PLAYER_FLAGS ], PLAYER_FLAG_HIDE_FACE );
+		}
+	}
+	
 	ItemCl@ armor = _CritGetItemArmor( cr );
 	if( valid( armor ) )
 	{
 		switch( ArmorHidingLevel( armor.GetProtoId() ) )
 		{
-			case( 1 ): return !FLAG( cr.Param[ PLAYER_FLAGS ], PLAYER_FLAG_HIDE_FACE );
-			case( 2 ): return false;
-			case( 3 ): return cr.ParamBase[ QST_MEDIUM ] != 2;
+			case( 1 ): 
+				return !FLAG( cr.Param[ PLAYER_FLAGS ], PLAYER_FLAG_HIDE_FACE );
+			case( 2 ): 
+				return false;
+			case( 3 ): 
+				return cr.ParamBase[ QST_MEDIUM ] != 2;
 		}
 	}
+	
 	return true;
 }
 
@@ -3667,6 +3740,17 @@ string critter_description_stats( CritterCl& cr )
 		showface = cr.ParamBase[ QST_MEDIUM ] != 2;
 		showbody = false;
 		usual = "";
+	}
+	
+	ItemCl@ back = _CritGetItemBack( cr );
+	if( valid( back ) )
+	{
+		if( back.GetType() == ITEM_TYPE_ARMOR )
+		{
+			showface = !hideopt;
+			showbody = false;
+			usual = "";
+		}
 	}
 	
 	if( showface )
@@ -3798,13 +3882,27 @@ string critter_description_stats( CritterCl& cr )
 	}
 	else
 	{
-		if( !showface )
+		if( OpenArmor == 1 || ( valid( back ) && back.GetType() == ITEM_TYPE_ARMOR ) )
 		{
-			look += GetMsgStr( TEXTMSG_GAME, STR_DESC_HIDDEN_ARMOR );
+			if( showface )
+			{
+				look += ". " + GetMsgStr( TEXTMSG_GAME, STR_DESC_HIDDEN_APP );
+			}
+			else
+			{
+				look += GetMsgStr( TEXTMSG_GAME, STR_DESC_HIDDEN_APP );
+			}
 		}
 		else
 		{
-			look += ". " + GetMsgStr( TEXTMSG_GAME, STR_DESC_HIDDEN_APP );
+			if( showface )
+			{
+				look += ". " + GetMsgStr( TEXTMSG_GAME, STR_DESC_HIDDEN_ARMOR );
+			}
+			else
+			{
+				look += GetMsgStr( TEXTMSG_GAME, STR_DESC_HIDDEN_ARMOR );
+			}
 		}
 	}
 	
