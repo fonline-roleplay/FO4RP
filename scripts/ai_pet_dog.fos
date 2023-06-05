@@ -1,0 +1,523 @@
+#ifndef AI_PET_DOG
+#define AI_PET_DOG
+
+#include "_utils.fos"
+#include "npc_planes_h.fos"
+#include "heal_h.fos"
+#include "speed_h.fos"
+
+import void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string@ param3, int[] @ param4 ) from "general_unsafe";
+
+void GM_PetDog( Critter& npc ) // Export
+{
+    npc.SetScript( "_PetDogInit" );
+	npc.Say( SAY_EMOTE, "barks" );
+}
+
+void _PetDogInit( Critter& npc, bool firstTime )
+{
+	npc.SetEvent( CRITTER_EVENT_SHOW_CRITTER,	"_CritterLookAt" );
+	npc.SetEvent( CRITTER_EVENT_HIDE_CRITTER,	"_CritterOutOfSight" );
+    npc.SetEvent( CRITTER_EVENT_IDLE,			"_Idle" );
+	npc.SetEvent( CRITTER_EVENT_MESSAGE,     	"_OnMessage" );
+    npc.SetEvent( CRITTER_EVENT_PLANE_BEGIN,	"_PlaneBegin" );
+	npc.SetEvent( CRITTER_EVENT_PLANE_END,		"_PlaneEnd" );
+    npc.SetEvent( CRITTER_EVENT_DEAD,			"_MyDeath" );
+    npc.SetEvent( CRITTER_EVENT_ATTACKED,		"_Attacked" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_DEAD,		"_FindKiller" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACK,	"_AssistAttack" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACKED,	"_AssistAttacked" );
+}
+
+void _CritterLookAt( Critter& npc, Critter& target )
+{
+	if( npc.IsDead() )
+	{
+		return;
+	}
+	
+	if( npc.CheckEnemyInStack( target.Id ) )
+	{
+		if( target.IsDead() )
+		{ 
+			npc.EraseEnemyFromStack( target.Id );
+			return;
+		}
+		
+		npc.ErasePlane( AI_PLANE_WALK, true );
+		AddAttackPlane( npc, 0, target );
+		return;
+	}
+	
+	if( Random( 0, 100 ) == 100 )
+	{
+		uint16 hx = npc.HexX, hy = npc.HexY;
+		uint16 tx = target.HexX, ty = target.HexY;
+		uint dir = GetDirection( hx, hy, tx, ty );
+		npc.SetDir( dir );
+	}
+}
+
+void _CritterOutOfSight( Critter& npc, Critter& target )
+{
+	if( npc.IsDead() )
+	{
+		return;
+	}
+	
+	if( npc.CheckEnemyInStack( target.Id ) )
+	{
+		npc.DropPlanes();
+		if( npc.IsSee( target ) )
+		{
+			if( target.IsDead() )
+			{ 
+				npc.EraseEnemyFromStack( target.Id );
+				return;
+			}
+			
+			npc.AddEnemyInStack( target.Id );
+			AddAttackPlane( npc, 0, target );
+			
+		}
+		else
+		{
+			uint16 hx = npc.HexX, hy = npc.HexY;
+			uint16 tx = target.HexX, ty = target.HexY;
+			int dir = GetDirection( hx, hy, tx, ty );
+			AddWalkPlane( npc, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, dir, true, 1 );
+		}
+	}
+}
+
+void _Idle( Critter& npc )
+{
+	if( npc.IsPlayer() )
+	{
+		npc.SetEvent( CRITTER_EVENT_IDLE, null );
+		return;
+	}
+
+	if( npc.IsDead() || npc.IsKnockout() )
+	{
+		return;
+	}
+
+	if( npc.IsBusy() || !npc.IsNoPlanes() )
+	{
+		return;
+	}
+}
+
+void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
+{
+    if( npc.IsPlayer() )
+	{
+		return;
+	}
+	
+    if( npc.IsDead() )
+	{
+		return;
+	}
+	
+    if( npc.Param[ MERC_MASTER_ID ] == 0 )
+	{
+		return;
+	}
+
+    if( npc.Param[ MERC_MASTER_ID ] != int( fromCrit.Id ) )
+	{
+		return;
+	}
+
+    switch( message )
+	{
+		case( MSG_PET_SIT_MESSAGE ):
+		{
+			npc.Say( SAY_EMOTE_ON_HEAD, "obeys it's master" );
+			npc.ClearEnemyStack();
+			npc.DropPlanes();
+			
+			if( !npc.IsKnockout() )
+			{
+				unsafe_sleep( npc, 1, 0, 0, null, null );
+				npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+				npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
+				npc.SetHomePos( npc.HexX, npc.HexY, npc.Dir );
+				npc.ModeBase[ MODE_NO_HOME ] = 0;
+			}
+
+			break;
+		}
+		case( MSG_PET_STAND_MESSAGE ):
+		{
+			npc.Say( SAY_EMOTE_ON_HEAD, "obeys it's master" );
+			npc.ClearEnemyStack();
+			npc.DropPlanes();
+			
+			if( npc.IsKnockout() )
+			{
+				unsafe_sleep( npc, 1, 0, 0, null, null );
+			}
+			
+			break;
+		}
+		case( MSG_PET_STAY_MESSAGE ):
+		{
+			npc.Say( SAY_EMOTE_ON_HEAD, "obeys it's master" );
+			npc.ClearEnemyStack();
+			npc.DropPlanes();
+			
+			npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+			npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
+			npc.SetHomePos( npc.HexX, npc.HexY, npc.Dir );
+			npc.ModeBase[ MODE_NO_HOME ] = 0;
+			break;
+		}
+		case( MSG_PET_FOLLOW_MESSAGE ):
+		{
+			npc.ClearEnemyStack();
+			npc.DropPlanes();
+			
+			if( npc.IsKnockout() )
+			{
+				unsafe_sleep( npc, 1, 0, 0, null, null );
+				npc.Wait( 1000 );
+			}
+
+			npc.Say( SAY_EMOTE_ON_HEAD, "begins to follow master" );
+			
+			ChangeCritterSpeed( npc );
+			npc.ModeBase[ MODE_NO_HOME ] = 1;
+			npc.StatBase[ ST_FOLLOW_CRIT ] = fromCrit.Id;
+			npc.AddTimeEvent( "mobcontrol@follow", REAL_SECOND( 1 ), CTE_NPC_FOLLOW );
+			break;
+		}
+		case( MSG_PET_ATTACK_MESSAGE ):
+		{
+			Critter@ target = GetCritter( value );
+			if( valid( target ) )
+			{
+				npc.Say( SAY_EMOTE_ON_HEAD, "grnarls aggressively" );
+				npc.DropPlanes();
+				
+				if( npc.IsKnockout() )
+				{
+					unsafe_sleep( npc, 1, 0, 0, null, null );
+					npc.Wait( 1000 );
+				}
+
+				npc.AddEnemyInStack( target.Id );
+				AttackOrFind( npc, target, false );
+			}
+
+			break;
+		}
+		case( MSG_PET_KILL_MESSAGE ):
+		{
+			Critter@ target = GetCritter( value );
+			if( valid( target ) )
+			{
+				npc.Say( SAY_EMOTE_ON_HEAD, "loud gnarl" );
+			
+				npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+				npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
+				npc.SetHomePos( npc.HexX, npc.HexY, npc.Dir );
+				npc.ModeBase[ MODE_NO_HOME ] = 0;
+			
+				if( npc.IsKnockout() )
+				{
+					unsafe_sleep( npc, 1, 0, 0, null, null );
+					npc.Wait( 1000 );
+				}
+
+				npc.AddEnemyInStack( target.Id );
+				AttackOrFind( npc, target, true );
+			}
+			
+			break;
+		}
+	}
+}
+
+int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem )
+{
+	if( npc.IsDead() )
+	{
+		return PLANE_DISCARD;
+	}
+	
+    if( plane.Type == AI_PLANE_ATTACK )
+	{
+        Critter@ target = GetCritter( plane.Attack_TargId );
+        if( !valid( target ) )
+		{
+			return PLANE_RUN_GLOBAL;
+		}
+
+        if( ( target.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] ) && target.Stat[ ST_TEAM_ID ] != 0 )
+		{
+			return PLANE_DISCARD; 
+		}
+	}
+	else if ( reason == REASON_FROM_SCRIPT )
+	{
+		return PLANE_KEEP;
+	}
+	
+    return PLANE_RUN_GLOBAL;
+}
+
+int _PlaneEnd( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem ) 
+{
+	if( npc.IsDead() )
+	{
+		return PLANE_DISCARD;
+	}
+	
+	if( reason == REASON_GAG_CRITTER && someCr.IsNpc() )
+	{
+        if( someCr.ParamBase[ ST_TEAM_ID ] != npc.ParamBase[ ST_TEAM_ID ] )
+		{
+            return PLANE_RUN_GLOBAL;
+		}
+		
+        if( TryLetPassage( someCr, npc ) ) 
+		{
+            npc.Wait( AI_DELAY );
+            return PLANE_KEEP;
+        }
+    }
+	
+	return PLANE_RUN_GLOBAL;
+}
+
+void _MyDeath( Critter& npc, Critter@ killer ) 
+{
+	npc.DropPlanes();
+    npc.ClearEnemyStack();
+	npc.AddTimeEvent ( "rotting@cte_rotten", 0, CTE_ROTTEN, 0 );
+}
+
+bool _Attacked( Critter& npc, Critter& target )
+{
+	if( !valid( npc ) )
+	{
+		return false;
+	}
+	
+	if( npc.IsDead() )
+	{
+		return false;
+	}
+	
+	if( !valid( target ) )
+	{
+		return false;
+	}
+	
+	if( target.IsDead() )
+	{
+		return false;
+	}
+	
+	npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+	npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
+	
+	if( int( target.Id ) == npc.Stat[ MERC_MASTER_ID ] ) 
+	{
+        npc.EraseEnemyFromStack( target.Id );
+        EraseAttackPlane( npc, target );
+		return true;
+	}
+	else
+	{
+		AttackOrFind( npc, target, true );
+	}
+	
+    return true;
+}
+
+void _FindKiller( Critter& npc, Critter& fromCrit, Critter@ killer )
+{
+	if( !valid( killer ) )
+	{
+		return;
+	}
+	
+	if( killer.IsDead() )
+	{
+		return;
+	}
+	
+    if( npc.IsPlayer() )
+	{
+		return;
+	}
+	
+    if( npc.IsDead() )
+	{
+		return;
+	}
+	
+	if( npc.IsSee( killer ) )
+	{
+		if( killer.IsDead() )
+		{ 
+			npc.EraseEnemyFromStack( killer.Id );
+			return;
+		}
+		
+		npc.AddEnemyInStack( killer.Id );
+		AttackOrFind( npc, killer, true );
+	}
+}
+
+void _AssistAttack( Critter& npc, Critter& fromCr, Critter& target )
+{
+	if( npc.IsDead() )
+	{
+		return;
+	}
+	
+	if( target.IsDead() )
+	{
+		return;
+	}
+	
+	if( fromCr.Stat[ ST_TEAM_ID ] == 0 )
+	{
+		return;
+	}
+	
+	npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+	npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
+	
+	if( fromCr.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] )
+	{
+		if( target.Stat[ ST_TEAM_ID ] != npc.Stat[ ST_TEAM_ID ] && !target.IsDead() )
+		{
+			npc.AddEnemyInStack( target.Id );
+			AttackOrFind( npc, target, false );
+		}
+	}
+}
+
+void _AssistAttacked( Critter& npc, Critter& fromCr, Critter& attacker )
+{
+	if( npc.IsDead() )
+	{
+		return;
+	}
+	
+	if( attacker.IsDead() )
+	{
+		return;
+	}
+	
+	if( fromCr.Stat[ ST_TEAM_ID ] == 0 )
+	{
+		return;
+	}
+	
+	npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+	npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
+	
+	if( fromCr.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] )
+	{
+		if( attacker.Stat[ ST_TEAM_ID ] != npc.Stat[ ST_TEAM_ID ] && !attacker.IsDead() )
+		{
+			npc.AddEnemyInStack( attacker.Id );
+			AttackOrFind( npc, attacker, false );
+		}
+	}
+}
+
+void AttackOrFind( Critter& self, Critter& target, bool kill )
+{
+	if( !valid( self ) )
+	{
+		return;
+	}
+	
+	if( self.IsDead() )
+	{
+		return;
+	}
+	
+	if( !valid( target ) )
+	{
+		return;
+	}
+	
+	if( target.IsDead() )
+	{
+		self.EraseEnemyFromStack( target.Id );
+		EraseAttackPlane( self, target );
+	}
+	
+	if( self.IsSee( target ) )
+	{
+		if( kill )
+		{
+			AddAttackPlane( self, 0, target );
+		}
+		else
+		{
+			uint[] values = { self.Id, target.Id, 10 };
+			CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "ai_pet_dog@e_stopAttack", values, true );
+			AddAttackPlane( self, 0, target, -10 );
+		}
+	}
+	else
+	{
+		AddWalkPlane( self, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, Random( 0, 5 ), true, 1 );
+	}
+}
+
+uint e_stopAttack( uint[]@ values )
+{
+	Critter@ self = GetCritter( values[0] );
+	if( !valid( self ) )
+	{
+		return 0;
+	}
+	
+	Critter@ target = GetCritter( values[1] );
+	if( !valid( target ) )
+	{
+		return 0;
+	}
+	
+	if( self.IsDead() || target.IsDead() )
+	{
+		return 0;
+	}
+	
+	if( self.IsDead() || target.IsDead() )
+	{
+		return 0;
+	}
+	
+	Map@ sMap = self.GetMap();
+	Map@ tMap = target.GetMap();
+	
+	if( sMap.Id != tMap.Id )
+    {
+		EraseAttackPlane( self, target );
+		return 0;
+	}
+	
+	int minHp = -values[2];
+	if( target.Stat[ ST_CURRENT_HP ] <= minHp )
+	{
+		self.EraseEnemyFromStack( target.Id );
+		EraseAttackPlane( self, target );
+		return 0;
+	}
+	
+	return REAL_SECOND(1);
+}
+
+#endif //AI_PET_DOG
