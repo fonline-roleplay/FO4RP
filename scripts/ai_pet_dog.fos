@@ -76,7 +76,11 @@ void _CritterOutOfSight( Critter& npc, Critter& target )
 				return;
 			}
 			
-			npc.AddEnemyInStack( target.Id );
+			if( !npc.CheckEnemyInStack( target.Id ) )
+			{
+				npc.AddEnemyInStack( target.Id );
+			}
+			
 			AddAttackPlane( npc, 0, target );
 			
 		}
@@ -106,6 +110,32 @@ void _Idle( Critter& npc )
 	if( npc.IsBusy() || !npc.IsNoPlanes() )
 	{
 		return;
+	}
+	
+	if( npc.Stat[ ST_FOLLOW_CRIT ] != 0 )
+	{
+		Critter@ follow = GetCritter( npc.Stat[ ST_FOLLOW_CRIT ] );
+		if( valid( follow ) )
+		{
+			Map@ nMap = npc.GetMap();
+			Map@ fMap = follow.GetMap();
+	
+			if( nMap.Id == fMap.Id )
+			{
+				if( npc.IsSee( follow ) )
+				{
+					npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+					npc.ModeBase[ MODE_NO_HOME ] = 1;
+					npc.AddTimeEvent( "mobcontrol@follow", REAL_SECOND( 1 ), CTE_NPC_FOLLOW );
+				}
+			}
+		}
+	}
+	
+	uint[] index;
+	if( npc.Mode[ MODE_NO_HOME ] == 1 && npc.GetTimeEvents( CTE_NPC_FOLLOW, index, null, null ) == 0 && Random( 1, 3 ) == 1 )
+	{
+		npc.MoveRandom();
 	}
 }
 
@@ -140,26 +170,25 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 	{
 		case( MSG_PET_SIT_MESSAGE ):
 		{
+			NpcRefresh( npc, 0 );
+			
 			npc.Say( SAY_EMOTE_ON_HEAD, "obeys it's master" );
-			npc.ClearEnemyStack();
-			npc.DropPlanes();
+			npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
+			npc.SetHomePos( npc.HexX, npc.HexY, npc.Dir );
 			
 			if( !npc.IsKnockout() )
 			{
 				unsafe_sleep( npc, 1, 0, 0, null, null );
-				npc.EraseTimeEvents( CTE_NPC_FOLLOW );
-				npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
-				npc.SetHomePos( npc.HexX, npc.HexY, npc.Dir );
-				npc.ModeBase[ MODE_NO_HOME ] = 0;
 			}
 
 			break;
 		}
 		case( MSG_PET_STAND_MESSAGE ):
 		{
+			NpcRefresh( npc, 1 );
+			
 			npc.Say( SAY_EMOTE_ON_HEAD, "obeys it's master" );
-			npc.ClearEnemyStack();
-			npc.DropPlanes();
+			npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
 			
 			if( npc.IsKnockout() )
 			{
@@ -170,20 +199,21 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 		}
 		case( MSG_PET_STAY_MESSAGE ):
 		{
-			npc.Say( SAY_EMOTE_ON_HEAD, "obeys it's master" );
-			npc.ClearEnemyStack();
-			npc.DropPlanes();
-			
-			npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+			NpcRefresh( npc, 0 );
 			npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
+			npc.Say( SAY_EMOTE_ON_HEAD, "obeys it's master" );
 			npc.SetHomePos( npc.HexX, npc.HexY, npc.Dir );
-			npc.ModeBase[ MODE_NO_HOME ] = 0;
+			
+			if( npc.IsKnockout() )
+			{
+				unsafe_sleep( npc, 0, 0, 0, null, null );
+			}
+			
 			break;
 		}
 		case( MSG_PET_FOLLOW_MESSAGE ):
 		{
-			npc.ClearEnemyStack();
-			npc.DropPlanes();
+			NpcRefresh( npc, 1 );
 			
 			if( npc.IsKnockout() )
 			{
@@ -192,8 +222,6 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 			}
 
 			npc.Say( SAY_EMOTE_ON_HEAD, "begins to follow master" );
-			
-			ChangeCritterSpeed( npc );
 			npc.ModeBase[ MODE_NO_HOME ] = 1;
 			npc.StatBase[ ST_FOLLOW_CRIT ] = fromCrit.Id;
 			npc.AddTimeEvent( "mobcontrol@follow", REAL_SECOND( 1 ), CTE_NPC_FOLLOW );
@@ -204,16 +232,20 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 			Critter@ target = GetCritter( value );
 			if( valid( target ) )
 			{
-				npc.Say( SAY_EMOTE_ON_HEAD, "grnarls aggressively" );
-				npc.DropPlanes();
-				
+				NpcRefresh( npc, 1 );
+
 				if( npc.IsKnockout() )
 				{
 					unsafe_sleep( npc, 1, 0, 0, null, null );
 					npc.Wait( 1000 );
 				}
-
-				npc.AddEnemyInStack( target.Id );
+				
+				npc.Say( SAY_EMOTE_ON_HEAD, "grnarls aggressively" );
+				if( !npc.CheckEnemyInStack( target.Id ) )
+				{
+					npc.AddEnemyInStack( target.Id );
+				}
+				
 				AttackOrFind( npc, target, false );
 			}
 
@@ -224,12 +256,9 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 			Critter@ target = GetCritter( value );
 			if( valid( target ) )
 			{
+				NpcRefresh( npc, 1 );
+				
 				npc.Say( SAY_EMOTE_ON_HEAD, "loud gnarl" );
-			
-				npc.EraseTimeEvents( CTE_NPC_FOLLOW );
-				npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
-				npc.SetHomePos( npc.HexX, npc.HexY, npc.Dir );
-				npc.ModeBase[ MODE_NO_HOME ] = 0;
 			
 				if( npc.IsKnockout() )
 				{
@@ -237,8 +266,35 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 					npc.Wait( 1000 );
 				}
 
-				npc.AddEnemyInStack( target.Id );
+				if( !npc.CheckEnemyInStack( target.Id ) )
+				{
+					npc.AddEnemyInStack( target.Id );
+				}
+				
 				AttackOrFind( npc, target, true );
+			}
+			
+			break;
+		}
+		case( MSG_PET_PROTECT_MESSAGE ):
+		{
+			if( value > 0 )
+			{
+				npc.ParamBase[ PET_PROTECT_ID ] = value;
+				npc.Say( SAY_EMOTE_ON_HEAD, "starts protecting" );
+				npc.ClearEnemyStack();
+				npc.DropPlanes();
+
+				if( npc.IsKnockout() )
+				{
+					unsafe_sleep( npc, 1, 0, 0, null, null );
+					npc.Wait( 1000 );
+				}
+				
+				npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+				npc.ModeBase[ MODE_NO_HOME ] = 1;
+				npc.StatBase[ ST_FOLLOW_CRIT ] = npc.Param[ PET_PROTECT_ID ];
+				npc.AddTimeEvent( "mobcontrol@follow", REAL_SECOND( 1 ), CTE_NPC_FOLLOW );
 			}
 			
 			break;
@@ -266,7 +322,7 @@ int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Ite
 			return PLANE_DISCARD; 
 		}
 	}
-	else if ( reason == REASON_FROM_SCRIPT )
+	else if( reason == REASON_FROM_SCRIPT )
 	{
 		return PLANE_KEEP;
 	}
@@ -328,13 +384,12 @@ bool _Attacked( Critter& npc, Critter& target )
 	}
 	
 	npc.EraseTimeEvents( CTE_NPC_FOLLOW );
-	npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
+	npc.ModeBase[ MODE_NO_HOME ] = 1;
 	
-	if( int( target.Id ) == npc.Stat[ MERC_MASTER_ID ] ) 
+	if( int( target.Id ) == npc.Param[ PET_OWNER_ID ] || int( target.Id ) == npc.Param[ PET_PROTECT_ID ] ) 
 	{
         npc.EraseEnemyFromStack( target.Id );
         EraseAttackPlane( npc, target );
-		return true;
 	}
 	else
 	{
@@ -350,8 +405,14 @@ void _FindKiller( Critter& npc, Critter& fromCrit, Critter@ killer )
 	{
 		return;
 	}
-	
+
 	if( killer.IsDead() )
+	{
+		npc.EraseEnemyFromStack( killer.Id );
+		return;
+	}
+	
+	if( int( killer.Id ) == npc.Param[ PET_OWNER_ID ] || int( killer.Id ) == npc.Param[ PET_PROTECT_ID ] || killer.Id == npc.Id )
 	{
 		npc.EraseEnemyFromStack( killer.Id );
 		return;
@@ -367,15 +428,24 @@ void _FindKiller( Critter& npc, Critter& fromCrit, Critter@ killer )
 		return;
 	}
 	
-	if( npc.IsSee( killer ) && npc.Stat[ PET_PROTECT_ID ] != int( killer.Id ) && npc.Stat[ PET_OWNER_ID ] != int( killer.Id ) )
+	if( npc.Param[ PET_PROTECT_ID ] == int( fromCrit.Id ) || npc.Param[ PET_OWNER_ID ] == int( fromCrit.Id ) )
 	{
-		npc.AddEnemyInStack( killer.Id );
+		if( !npc.CheckEnemyInStack( killer.Id ) )
+		{
+			npc.AddEnemyInStack( killer.Id );
+		}
+		
 		AttackOrFind( npc, killer, true );
 	}
 }
 
 void _AssistAttack( Critter& npc, Critter& fromCr, Critter& target )
 {
+	if( !valid( target ) )
+	{
+		return;
+	}
+	
 	if( npc.IsDead() )
 	{
 		return;
@@ -385,17 +455,23 @@ void _AssistAttack( Critter& npc, Critter& fromCr, Critter& target )
 	{
 		return;
 	}
-	
-	if( npc.Stat[ PET_PROTECT_ID ] != int( fromCr.Id ) && npc.Stat[ PET_OWNER_ID ] != int( fromCr.Id ) )
+
+	if( npc.Param[ PET_OWNER_ID ] == int( target.Id ) )
 	{
+		NpcRefresh( npc, 1 );
+		npc.AddEnemyInStack( fromCr.Id );
+		AttackOrFind( npc, fromCr, false );
 		return;
 	}
-	
-	npc.EraseTimeEvents( CTE_NPC_FOLLOW );
-	npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
-	
-	npc.AddEnemyInStack( target.Id );
-	AttackOrFind( npc, target, false );
+
+	if( npc.Param[ PET_PROTECT_ID ] == int( fromCr.Id ) || npc.Param[ PET_OWNER_ID ] == int( fromCr.Id ) )
+	{
+		npc.ModeBase[ MODE_NO_HOME ] = 1;
+		npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+
+		npc.AddEnemyInStack( target.Id );
+		AttackOrFind( npc, target, false );
+	}
 }
 
 void _AssistAttacked( Critter& npc, Critter& fromCr, Critter& attacker )
@@ -410,26 +486,30 @@ void _AssistAttacked( Critter& npc, Critter& fromCr, Critter& attacker )
 		return;
 	}
 	
-	if( npc.Stat[ PET_PROTECT_ID ] != int( fromCr.Id ) && npc.Stat[ PET_OWNER_ID ] != int( fromCr.Id ) )
+	if( int( attacker.Id ) == npc.Param[ PET_OWNER_ID ] )
 	{
+		npc.EraseEnemyFromStack( attacker.Id );
 		return;
 	}
 	
-	npc.EraseTimeEvents( CTE_NPC_FOLLOW );
-	npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
-	
-	npc.AddEnemyInStack( attacker.Id );
-	AttackOrFind( npc, attacker, false );
+	if( npc.Param[ PET_PROTECT_ID ] == int( fromCr.Id ) || npc.Param[ PET_OWNER_ID ] == int( fromCr.Id ) )
+	{
+		npc.ModeBase[ MODE_NO_HOME ] = 1;
+		npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+		
+		npc.AddEnemyInStack( attacker.Id );
+		AttackOrFind( npc, attacker, false );
+	}
 }
 
-void AttackOrFind( Critter& self, Critter& target, bool kill )
+void AttackOrFind( Critter& npc, Critter& target, bool kill )
 {
-	if( !valid( self ) )
+	if( !valid( npc ) )
 	{
 		return;
 	}
 	
-	if( self.IsDead() )
+	if( npc.IsDead() )
 	{
 		return;
 	}
@@ -441,33 +521,41 @@ void AttackOrFind( Critter& self, Critter& target, bool kill )
 	
 	if( target.IsDead() )
 	{
-		self.EraseEnemyFromStack( target.Id );
-		EraseAttackPlane( self, target );
+		npc.EraseEnemyFromStack( target.Id );
+		EraseAttackPlane( npc, target );
+		return;
 	}
 	
-	if( self.IsSee( target ) )
+	if( int( target.Id ) == npc.Param[ PET_OWNER_ID ] || int( target.Id ) == npc.Param[ PET_PROTECT_ID ] )
+	{
+		npc.EraseEnemyFromStack( target.Id );
+		EraseAttackPlane( npc, target );
+		return;
+	}
+	
+	if( npc.IsSee( target ) )
 	{
 		if( kill )
 		{
-			AddAttackPlane( self, 0, target );
+			AddAttackPlane( npc, 0, target );
 		}
 		else
 		{
-			uint[] values = { self.Id, target.Id, 10 };
+			uint[] values = { npc.Id, target.Id, 10 };
 			CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "ai_pet_dog@e_stopAttack", values, true );
-			AddAttackPlane( self, 0, target, -10 );
+			AddAttackPlane( npc, 0, target, -10 );
 		}
 	}
 	else
 	{
-		AddWalkPlane( self, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, Random( 0, 5 ), true, 1 );
+		AddWalkPlane( npc, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, Random( 0, 5 ), true, 1 );
 	}
 }
 
 uint e_stopAttack( uint[]@ values )
 {
-	Critter@ self = GetCritter( values[0] );
-	if( !valid( self ) )
+	Critter@ npc = GetCritter( values[0] );
+	if( !valid( npc ) )
 	{
 		return 0;
 	}
@@ -478,34 +566,43 @@ uint e_stopAttack( uint[]@ values )
 		return 0;
 	}
 	
-	if( self.IsDead() || target.IsDead() )
+	if( npc.IsDead() || target.IsDead() )
 	{
 		return 0;
 	}
 	
-	if( self.IsDead() || target.IsDead() )
+	if( npc.IsDead() || target.IsDead() )
 	{
 		return 0;
 	}
 	
-	Map@ sMap = self.GetMap();
+	Map@ sMap = npc.GetMap();
 	Map@ tMap = target.GetMap();
 	
 	if( sMap.Id != tMap.Id )
     {
-		EraseAttackPlane( self, target );
+		EraseAttackPlane( npc, target );
 		return 0;
 	}
 	
 	int minHp = -values[2];
 	if( target.Stat[ ST_CURRENT_HP ] <= minHp )
 	{
-		self.EraseEnemyFromStack( target.Id );
-		EraseAttackPlane( self, target );
+		npc.EraseEnemyFromStack( target.Id );
+		EraseAttackPlane( npc, target );
 		return 0;
 	}
 	
 	return REAL_SECOND(1);
+}
+
+void NpcRefresh( Critter& npc, int no_home )
+{
+	npc.ClearEnemyStack();
+	npc.DropPlanes();
+	npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+	npc.ModeBase[ MODE_NO_HOME ] = no_home;
+	npc.ParamBase[ PET_PROTECT_ID ] = 0;
 }
 
 #endif //AI_PET_DOG
