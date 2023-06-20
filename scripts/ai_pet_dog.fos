@@ -27,6 +27,8 @@ void _PetDogInit( Critter& npc, bool firstTime )
 	npc.SetEvent( CRITTER_EVENT_SMTH_DEAD,		"_FindKiller" );
 	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACK,	"_AssistAttack" );
 	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACKED,	"_AssistAttacked" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_MOVE_ITEM,	"_WeaponSnow" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_USE_SKILL,	"_TouchItem" );
 }
 
 void _CritterLookAt( Critter& npc, Critter& target )
@@ -141,6 +143,21 @@ void _Idle( Critter& npc )
 
 void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 {
+	if( !valid( npc ) )
+	{
+		return;
+	}
+
+	if( !valid( fromCrit ) )
+	{
+		return;
+	}
+
+	if( message == 0 )
+	{
+		return;
+	}
+
     if( npc.IsPlayer() )
 	{
 		return;
@@ -299,6 +316,51 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 			
 			break;
 		}
+		case( MSG_PET_GUARD_MESSAGE ):
+		{
+			if( value > 0 )
+			{
+				NpcRefresh( npc, 1 );
+
+				npc.StatBase[ ST_FOLLOW_CRIT ] = 0;
+				npc.ParamBase[ PET_GUARD_ID ] = value;
+
+				if( npc.IsKnockout() )
+				{
+					unsafe_sleep( npc, 1, 0, 0, null, null );
+					npc.Wait( 1000 );
+				}
+				
+				Critter@ guarded = GetCritter( npc.Param[ PET_GUARD_ID ] );
+				if( valid( guarded ) )
+				{
+					AddWalkPlane( npc, 0, guarded.HexX, guarded.HexY, GetDirection( npc.HexX, npc.HexY, guarded.HexX, guarded.HexY ), true, 2 );
+					npc.Say( SAY_EMOTE_ON_HEAD, "starts guarding" );
+					uint[] values = { npc.Id, guarded.Id };
+					CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "e_checkMovement", values, true );
+					CreateTimeEvent( AFTER( REAL_SECOND( 5 ) ), "e_delayedHomePos", values, true );
+					break;
+				}
+				
+				Map@ map = npc.GetMap();
+				if( valid( map ) )
+				{
+					Item@ guard_itm = map.GetItem( npc.Param[ PET_GUARD_ID ] );
+					if( valid( guard_itm ) )
+					{
+						npc.Say( SAY_EMOTE_ON_HEAD, "starts guarding" );
+						AddWalkPlane( npc, 0, guard_itm.HexX, guard_itm.HexY, GetDirection( npc.HexX, npc.HexY, guard_itm.HexX, guard_itm.HexY ), true, 2 );
+						uint[] values = { npc.Id, guard_itm.Id };
+						CreateTimeEvent( AFTER( REAL_SECOND( 5 ) ), "e_delayedHomePos", values, true );
+						break;
+					}
+				}
+			}
+			
+			break;
+		}
+		default:
+			break;
 	}
 }
 
@@ -502,6 +564,28 @@ void _AssistAttacked( Critter& npc, Critter& fromCr, Critter& attacker )
 	}
 }
 
+void _WeaponSnow( Critter& npc, Critter& guarded, Item& item, uint8 fromSlot )
+{
+	if( npc.Param[ PET_GUARD_ID ] > 0 && npc.Param[ PET_GUARD_ID ] == int( guarded.Id ) )
+	{
+		if( ( item.GetType() == ITEM_TYPE_WEAPON || item.GetType() == ITEM_TYPE_AMMO ) && fromSlot != SLOT_HAND1 )
+		{
+			npc.AddEnemyInStack( guarded.Id );
+			AttackOrFind( npc, guarded, false );
+		}
+	}
+}
+
+void _TouchItem( Critter& npc, Critter& fromCrit, int skill, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
+{
+	if( valid( onItem ) && npc.Param[ PET_GUARD_ID ] > 0 && npc.Param[ PET_GUARD_ID ] == int( onItem.Id ) )
+	{
+		npc.AddEnemyInStack( fromCrit.Id );
+		AttackOrFind( npc, fromCrit, false );
+	}
+}	
+
+// Support functions
 void AttackOrFind( Critter& npc, Critter& target, bool kill )
 {
 	if( !valid( npc ) )
@@ -528,9 +612,9 @@ void AttackOrFind( Critter& npc, Critter& target, bool kill )
 	
 	if( int( target.Id ) == npc.Param[ PET_OWNER_ID ] || int( target.Id ) == npc.Param[ PET_PROTECT_ID ] )
 	{
-		npc.EraseEnemyFromStack( target.Id );
-		EraseAttackPlane( npc, target );
-		return;
+		//npc.EraseEnemyFromStack( target.Id );
+		//EraseAttackPlane( npc, target );
+		//return;
 	}
 	
 	if( npc.IsSee( target ) )
@@ -603,6 +687,57 @@ void NpcRefresh( Critter& npc, int no_home )
 	npc.EraseTimeEvents( CTE_NPC_FOLLOW );
 	npc.ModeBase[ MODE_NO_HOME ] = no_home;
 	npc.ParamBase[ PET_PROTECT_ID ] = 0;
+	npc.ParamBase[ PET_GUARD_ID ] = 0;
+}
+
+uint e_checkMovement( uint[]@ values )
+{
+	Critter@ npc = GetCritter( values[0] );
+	Critter@ guarded = GetCritter( values[1] );
+	
+	if( !valid( npc ) )
+	{
+		return 0;
+	}
+	
+	if( npc.IsDead() ) 
+	{
+		return 0;
+	}
+	
+	if( !valid( guarded ) ) 
+	{ 
+		return REAL_MS( 500 );
+	}
+	
+	if( guarded.IsDead() )
+	{
+		return 0;
+	}
+	
+	if( MovementState( guarded ) != MOVE_STATE_STILL )
+	{
+		npc.AddEnemyInStack( guarded.Id );
+		AttackOrFind( npc, guarded, false );
+		return 0;
+	}
+	
+	return REAL_MS( 500 );
+}
+
+uint e_delayedHomePos( uint[]@ values )
+{
+	Critter@ npc = GetCritter( values[0] );
+	
+	if( !valid( npc ) )
+	{
+		return 0;
+	}
+	
+	npc.ModeBase[ MODE_NO_HOME ] = 0;
+	npc.SetHomePos( npc.HexX, npc.HexY, npc.Dir );
+	
+	return 0;
 }
 
 #endif //AI_PET_DOG
