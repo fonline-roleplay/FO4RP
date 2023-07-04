@@ -5,13 +5,26 @@
 #include "npc_planes_h.fos"
 #include "heal_h.fos"
 #include "speed_h.fos"
+#include "drugs_h.fos"
+#include "food_h.fos"
 
 import void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string@ param3, int[] @ param4 ) from "general_unsafe";
+
+#define FOOD_SEARCH_RANGE ( 16 )
 
 void GM_PetDog( Critter& npc ) // Export
 {
     npc.SetScript( "_PetDogInit" );
 	npc.Say( SAY_EMOTE, "barks" );
+	if( npc.GetTimeEvents( CTE_THIRST, null, null, null ) < 1 )
+	{
+		npc.AddTimeEvent( "gameplay@cte_Thirst", REAL_SECOND( npc.Param[ CR_THIRST_SPEED ] ), CTE_THIRST, 0 );
+	}
+	
+	if( npc.GetTimeEvents( CTE_HUNGER, null, null, null ) < 1 )
+	{
+		npc.AddTimeEvent( "gameplay@cte_Hunger", REAL_SECOND( npc.Param[ CR_HUNGER_SPEED ] ), CTE_HUNGER, 0 );
+	}
 }
 
 void _PetDogInit( Critter& npc, bool firstTime )
@@ -179,10 +192,65 @@ void _Idle( Critter& npc )
 		}
 	}
 	
-	uint[] index;
-	if( npc.Mode[ MODE_NO_HOME ] == 1 && npc.GetTimeEvents( CTE_NPC_FOLLOW, index, null, null ) == 0 && Random( 1, 3 ) == 1 )
+	if( npc.Param[ PET_HUNGER ] >= 24 && npc.Stat[ ST_LEVEL ] < 12 )
 	{
-		npc.MoveRandom();
+		NpcRefresh( npc, 1 );
+	}
+	
+	uint[] index;
+	if( npc.Mode[ MODE_NO_HOME ] == 1 && npc.GetTimeEvents( CTE_NPC_FOLLOW, index, null, null ) == 0 )
+	{
+		if( npc.Stat[ ST_LEVEL ] < 12 && npc.Param[ PET_HUNGER ] >= 6 )
+		{
+			if( npc.Param[ PET_FOOD_CHARGE ] < 2 )
+			{
+				Item@[] foodstuff;
+				npc.GetItemsByType( ITEM_TYPE_FOOD, foodstuff );
+				
+				Item@ meat;
+				for( uint i = 0, len = foodstuff.length(); i < len ; i ++ )
+				{
+					@ meat = foodstuff[i];
+					if( valid( meat ) )
+					{
+						if( meat.Proto.Item_Subtype >= ITEM_SUBTYPE_DRUG_FOOD_MEAT && meat.Proto.Item_Subtype <= ITEM_SUBTYPE_DRUG_FOOD_MEAT_SPOILED )
+						{
+							npc.Wait( 2000 );
+							npc.Action( ACTION_DODGE, 1, meat );
+							npc.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_CONSUMED, "$proto@msg item " + ( meat.GetProtoId() * 100 ) + "@" );
+							ProccessFood( npc, npc, meat );
+							UseDrug( npc, meat );
+							npc.ParamBase[ PET_FOOD_CHARGE ] ++;
+							Log( "Pet Ate meat " + npc.Param[ PET_FOOD_CHARGE ] );
+							npc.AddTimeEvent( "ai_pet_dog@cte_shit", REAL_SECOND( Random( 5, 15 ) ), CTE_SHIT, 0 );
+							break;
+						}
+					}
+				}
+			}
+			
+			if( npc.Param[ PET_FOOD_CHARGE ] > 0 && npc.Param[ PET_HUNGER ] >= 12 )
+			{
+				npc.ParamBase[ PET_FOOD_CHARGE ] --;
+				npc.ParamBase[ PET_HUNGER ] -= 12;
+				if( npc.Param[ PET_HUNGER ] <= 0 )
+				{
+					npc.Param[ PET_HUNGER ] == 0;
+				}
+				Log( "Pet used fat PET_FOOD_CHARGE " + npc.Param[ PET_FOOD_CHARGE ] + " npc.Param[ PET_HUNGER ] " + npc.Param[ PET_HUNGER ] );
+			}
+			else if( npc.Param[ PET_FOOD_CHARGE ] < 2 )
+			{
+				if( !FindFood( npc ) )
+				{
+					npc.MoveRandom();
+				}
+			}
+		}
+		else if( Random( 1, 2 ) == 2 )
+		{
+			npc.MoveRandom();
+		}
 	}
 }
 
@@ -540,6 +608,11 @@ void _FindKiller( Critter& npc, Critter& fromCrit, Critter@ killer )
 		return;
 	}
 	
+	if( killer.Id == npc.Id )
+	{
+		return;
+	}
+	
 	if( npc.Param[ PET_PROTECT_ID ] == int( fromCrit.Id ) || npc.Param[ PET_OWNER_ID ] == int( fromCrit.Id ) )
 	{
 		if( !npc.CheckEnemyInStack( killer.Id ) )
@@ -663,6 +736,49 @@ void _CheckDoor( Critter& npc, Item& door )
 }
 
 // Support functions
+bool FindFood( Critter& npc )
+{
+	Map@ map = npc.GetMap();
+	if( !valid( map ) )
+	{
+		return false;
+	}
+	
+	uint16 tx = npc.HexX, ty = npc.HexY;
+	Item@[] foodstuff;
+	for( uint i = 1; i < FOOD_SEARCH_RANGE; i++ )
+	{
+		for( uint j = 0; j < 6; j++ )
+		{
+			map.MoveHexByDir( tx, ty, j, i );
+			map.GetItems( tx, ty, foodstuff );
+		}
+	}
+	
+	Item@ food;
+	Item@ meat;
+	for( uint i = 0, len = foodstuff.length(); i < len ; i ++ )
+	{
+		@ food = foodstuff[i];
+		if( valid( food ) )
+		{
+			if( food.Proto.Item_Subtype >= ITEM_SUBTYPE_DRUG_FOOD_MEAT && food.Proto.Item_Subtype <= ITEM_SUBTYPE_DRUG_FOOD_MEAT_SPOILED )
+			{
+				@ meat = food;
+				break;
+			}
+		}
+	}
+	
+	if( valid( meat ) )
+	{
+		AddPickPlane( npc, 0, meat.HexX, meat.HexY, meat.GetProtoId(), 0, true );
+		return true;
+	}
+
+	return false;
+}
+
 void AttackOrFind( Critter& npc, Critter& target, bool kill )
 {
 	if( !valid( npc ) )
@@ -684,6 +800,11 @@ void AttackOrFind( Critter& npc, Critter& target, bool kill )
 	{
 		npc.EraseEnemyFromStack( target.Id );
 		EraseAttackPlane( npc, target );
+		return;
+	}
+	
+	if( npc.Id == target.Id )
+	{
 		return;
 	}
 	
@@ -815,6 +936,27 @@ uint e_delayedHomePos( uint[]@ values )
 	npc.SetHomePos( npc.HexX, npc.HexY, npc.Dir );
 	
 	return 0;
+}
+
+uint cte_shit( Critter& npc, int identifier, uint& rate )
+{
+	if( npc.IsDead() )
+	{
+		return 0; 
+	}
+	
+	Map@ map = npc.GetMap();
+	if( !valid( map ) )
+	{
+		return 0;	
+	}
+	
+	npc.Wait( 2000 );
+	uint16 hx = npc.HexX, hy = npc.HexY;
+	map.MoveHexByDir( hx, hy, _RevDir( npc.Dir ), 1 );
+	map.AddItem( hx, hy, PID_SHIT_SMALL, 1 );
+	Log( "Pet made a poo-poo " );
+	return 0; 
 }
 
 #endif //AI_PET_DOG
