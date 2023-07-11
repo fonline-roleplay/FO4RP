@@ -663,7 +663,12 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOGS_CANT_DO_THAT );
 		return false;
 	}
-		Log( "critter_use_item" );
+
+	if( valid( targetCr ) && targetCr.Param[ PET_OWNER_ID ] == int( cr.Id ) )
+	{
+		return true;
+	}
+
 	string exception_catcher = cr.Id + "# in " + (valid(cr.GetMap())?"@"+cr.GetMap().Id:"global") + " used "
 		+ (valid(item)?item.Id:0) + ":" + (valid(item)?item.GetProtoId():0) + " on ["
 		+ (valid(targetCr)?targetCr.Id:0) + ", "
@@ -2171,19 +2176,22 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOGS_CANT_DO_THAT );
 				return false;
 			}
-
-			if( valid( targetItem ) && targetItem.Accessory == ACCESSORY_CRITTER )
+			
+			if( valid( targetItem ) )
 			{
-				StartMenuAskAction( cr, targetItem );
-				return true;
-			}
-
-			uint16 tiPid = targetItem.GetProtoId();
-			if( valid( targetItem ) && ( tiPid == PID_REMOTE_DETONATOR || tiPid == PID_SLAVE_COLLAR_SWITCH || ( tiPid == PID_SLAVE_COLLAR && targetItem.BONDAGE_STATE == BONDAGE_STATE_OFF ) ) )
-			{
-				int[] data = {0};
-				cr.RunClientScript( "client_screen_numberpad@ShowScreen", targetItem.Id, 0, 0, "Input radio frequency", data );
-				return true;
+				if( targetItem.Accessory == ACCESSORY_CRITTER )
+				{
+					StartMenuAskAction( cr, targetItem );
+					return true;
+				}
+				
+				uint16 tiPid = targetItem.GetProtoId();
+				if( tiPid == PID_REMOTE_DETONATOR || tiPid == PID_SLAVE_COLLAR_SWITCH || ( tiPid == PID_SLAVE_COLLAR && targetItem.BONDAGE_STATE == BONDAGE_STATE_OFF ) )
+				{
+					int[] data = {0};
+					cr.RunClientScript( "client_screen_numberpad@ShowScreen", targetItem.Id, 0, 0, "Input radio frequency", data );
+					return true;
+				}
 			}
 
 			break;
@@ -2224,13 +2232,19 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 					{
 						return false;
 					}
-
+					
+					if( targetCr.IsNpc() && targetCr.IsLife() && !isGM( cr ) )
+					{
+						return false;
+					}
+					
 					if( cr.Timeout[ TO_SK_STEAL ] > 0 && !isGM( cr ) && targetCr.ModeBase[ MODE_NO_STEAL ] == 0 )
 					{
 						if( !targetCr.IsDead() )
 						{
 							targetCr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_RESISTS_TAKE_ITEM );
 						}
+						
 						cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_TRIES_TAKE_ITEM);
 						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TIRED_TAKE_ITEM );
 						CrimeLog( cr, crInfo( cr ) + " is trying to take item from " + crInfo( targetCr ) );
@@ -2299,70 +2313,74 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 							}
 						}
 
-						if( StealContainerOrArmor( cr, targetCr, targetItem ) )
+						if( valid( targetItem ) && StealContainerOrArmor( cr, targetCr, targetItem ) )
 						{
 							return true;
 						}
 					}
 				}
 			}
+			
+			if( valid( targetItem ) )
+			{
+				uint16 tiPid = targetItem.GetProtoId();
+				//Explosives
+				if( tiPid == PID_TNT_PACK_ACTIVE || tiPid == PID_ACTIVE_DYNAMITE )
+				{
+					Explode( targetItem );
+					return true;
+				}
+				//X3 container stack decrease
+				if( ContainersX3.find( tiPid ) != -1 )
+				{
+					TakeX3Container( cr, targetItem );
+					return true;
+				}
+				//X2 container stack decrease
+				if( ContainersX2.find( tiPid ) != -1 )
+				{
+					TakeX2Container( cr, targetItem );
+					return true;
+				}
+				// take barrel
+				if( Barrels.find( tiPid ) != -1 )
+				{
+					TakeBarrel( cr, targetItem );
+					return true;
+				}
 
-			uint16 tiPid = targetItem.GetProtoId();
-			//Explosives
-			if( valid( targetItem ) && ( tiPid == PID_TNT_PACK_ACTIVE || tiPid == PID_ACTIVE_DYNAMITE ) )
-			{
-				Explode( targetItem );
-				return true;
+				//Move of locked furniture
+				if( ( tiPid == PID_FIREBARREL || tiPid == PID_BRAZIER ) && targetItem.Val0 == 0 )
+				{
+					LockInPlace( cr, targetItem );
+					return true;
+				}
+				//Cards deck shuffle
+				if( tiPid == PID_CARDS_DECK )
+				{
+					ShuffleDeck( cr, targetItem );
+					return true;
+				}
+				//Cards in hand actions
+				if( tiPid == PID_CARDS_HAND )
+				{
+					CheckCardsHand( cr, targetItem );
+					return true;
+				}
+				//Single gamble card action
+				if( Cards.find( tiPid ) != -1 )
+				{
+					StartMenuCard( cr, targetItem );
+					return true;
+				}
+				//General attempt at repair
+				if( targetItem.IsDeteriorable() || targetItem.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE )
+				{
+					TryRepairItem( cr, targetItem );
+					return true;
+				}
 			}
-			//X3 container stack decrease
-			if( valid( targetItem ) && ContainersX3.find( tiPid ) != -1 )
-			{
-				TakeX3Container( cr, targetItem );
-				return true;
-			}
-			//X2 container stack decrease
-			if( valid( targetItem ) && ContainersX2.find( tiPid ) != -1 )
-			{
-				TakeX2Container( cr, targetItem );
-				return true;
-			}
-			// take barrel
-			if( valid( targetItem ) && Barrels.find( tiPid ) != -1 )
-			{
-				TakeBarrel( cr, targetItem );
-				return true;
-			}
-
-			//Move of locked furniture
-			if( valid( targetItem ) && ( tiPid == PID_FIREBARREL || tiPid == PID_BRAZIER ) && targetItem.Val0 == 0 )
-			{
-				LockInPlace( cr, targetItem );
-				return true;
-			}
-			//Cards deck shuffle
-			if( valid( targetItem ) && ( tiPid == PID_CARDS_DECK ) )
-			{
-				ShuffleDeck( cr, targetItem );
-				return true;
-			}
-			//Cards in hand actions
-			if( valid( targetItem ) && ( tiPid == PID_CARDS_HAND ) )
-			{
-				CheckCardsHand( cr, targetItem );
-				return true;
-			}
-			//Single gamble card action
-			if( valid( targetItem ) && Cards.find( tiPid ) != -1 )
-			{
-				StartMenuCard( cr, targetItem );
-				return true;
-			}
-			//General attempt at repair
-			if( targetItem.IsDeteriorable() || targetItem.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE )
-			{
-				TryRepairItem( cr, targetItem );
-				return true;
-			}
+			
 			break;
 		}
 
