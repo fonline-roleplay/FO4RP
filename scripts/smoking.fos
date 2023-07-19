@@ -1,4 +1,4 @@
-#ifndef SMOKING
+\#ifndef SMOKING
 #define SMOKING
 
 #include "_utils.fos"
@@ -23,7 +23,94 @@ bool CheckSmokers( Critter& cr, Item& item )
 			TrySmoking( cr, item );
 			break;
 	}
+	
 	return true;
+}
+
+void IgniteSmoker( Critter& cr, Item& smoker )
+{
+	uint16 smoker_pid = smoker.GetProtoId();
+	uint16 ignited_pid = 0;
+	Item@ ignited = null;
+	
+	switch( smoker_pid )
+	{
+		case( PID_JOINT ):
+			cr.MoveItem( smoker.Id, smoker.GetCount(), SLOT_INV );
+			_SubItem( smoker, 1 );
+			ignited_pid = PID_JOINT_PRT;
+			break;
+		case( PID_CIGARETTE ):
+			cr.MoveItem( smoker.Id, smoker.GetCount(), SLOT_INV );
+			_SubItem( smoker, 1 );
+			ignited_pid = PID_CIGARETTE_PRT;
+			break;
+		case( PID_PREWAR_CIGAR1 ):
+			cr.MoveItem( smoker.Id, smoker.GetCount(), SLOT_INV );
+			_SubItem( smoker, 1 );
+			ignited_pid = PID_PREWAR_CIGAR1_PRT;
+			break;
+		case( PID_PREWAR_CIGAR2 ):
+			cr.MoveItem( smoker.Id, smoker.GetCount(), SLOT_INV );
+			_SubItem( smoker, 1 );
+			ignited_pid = PID_PREWAR_CIGAR2_PRT;
+			break;
+		case( PID_SMOKING_PIPE ):
+		case( PID_SAVAGE_SMOKING_PIPE ):
+		case( PID_PREWAR_SMOKING_PIPE ):
+		{
+			if( smoker.REMAINING_USES <= 0 )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIPE_EMPTY );
+				return;
+			}
+			
+			@ ignited = smoker;
+		}
+		default:
+			break;
+	}
+	
+	if( ignited_pid != 0 )
+	{
+		@ ignited = cr.AddItem( ignited_pid, 1 );
+	}
+	
+	if( valid( ignited ) && ignited_pid != 0 )
+	{
+		cr.MoveItem( ignited.Id, ignited.GetCount(), SLOT_HAND1 );
+	}
+	
+	if( ignited.SMOKE_EVENT > 0 )
+	{
+		EraseTimeEvent( ignited.SMOKE_EVENT );
+		ignited.SMOKE_EVENT = 0;
+	}
+	Map@ map = cr.GetMap();
+	if( valid( map ) )
+	{
+		PlayGenericSound( map, cr.HexX, cr.HexY, "smoking.ogg", 6 );
+	}
+	
+	ignited.SMOKER_STATE = STATE_BURING;
+	uint[] values = { ignited.Id };
+	ignited.SMOKE_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "e_SmokerBurn", values, true );
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_IGNITE_SMOKER );
+}
+
+uint e_SmokerBurn( uint[]@ values )
+{
+	Item@ smoker = GetItem( values[0] );
+	if( valid( smoker ) )
+	{
+		if( smoker.SMOKER_STATE == STATE_BURING )
+		{
+			smoker.SMOKER_STATE = STATE_EXTINGUISHED;
+			return REAL_MINUTE( 15 );
+		}
+	}
+	
+	return 0;
 }
 
 void TakeCigarettes( Critter& cr, Item& pack )
@@ -55,9 +142,9 @@ void TakeCigarettes( Critter& cr, Item& pack )
 	}
 }
 
-void TrySmoking( Critter& cr, Item& item )
+void TrySmoking( Critter& cr, Item& smoker )
 {
-	if( !hasItems( cr, heatSources ) )
+	if( smoker.SMOKE_EVENT == 0 )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_FIRE_TO_SMOKE );
 		return;
@@ -69,7 +156,7 @@ void TrySmoking( Critter& cr, Item& item )
 		return;
 	}
 	
-	if( item.CritSlot != SLOT_HAND1 && item.CritSlot != SLOT_HEAD )
+	if( smoker.CritSlot != SLOT_HAND1 && smoker.CritSlot != SLOT_HEAD )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HOLD_OBJECT );
 		return;
@@ -80,36 +167,94 @@ void TrySmoking( Critter& cr, Item& item )
 	PlayGenericSound( map, cr.HexX, cr.HexY, cr.Stat[ ST_GENDER ] == GENDER_MALE ? "smoking.ogg" : "Fem_Smoking.ogg", 6 );
 	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_CIGARETTES_SMOKE );
 	
-	uint16 Pid = item.GetProtoId();
-	if( Pid == PID_KOSYAK )
+	uint16 pid = smoker.GetProtoId();
+	if( pid == PID_JOINT_PRT )
 	{
 		SayLog( cr, crInfo( cr ) + " is smoking a joint." );
-		SmokeJoint( cr, item );
+		SmokeJoint( cr, smoker );
 	}
-	else if( Pid == PID_CIGARETTE )
+	else if( pid == PID_CIGARETTE_PRT )
 	{
 		SayLog( cr, crInfo( cr ) + " is smoking a cigarette." );
-		_SubItem( item, 1 );
-		TobaccoEffect( cr );
+		SmokeCig( cr, smoker );
 	}
-	else if( SmokingPipes.find( Pid ) != -1 )
+	else if( SmokingPipes.find( pid ) != -1 )
 	{
 		SayLog( cr, crInfo( cr ) + " is smoking a pipe." );
-		SmokePipe( cr, item );
+		SmokePipe( cr, smoker );
 	}
-	else
+	else if( pid == PID_PREWAR_CIGAR1_PRT || pid == PID_PREWAR_CIGAR2_PRT )
 	{
 		SayLog( cr, crInfo( cr ) + " is smoking cigar." );
-		SmokeCigar( cr, item );		
+		SmokeCigar( cr, smoker );
 	}
 }
 
+void SmokeCig( Critter& cr, Item& cigarette )
+{
+	cigarette.SMOKER_STATE = STATE_BURING;
+	cigarette.REMAINING_USES--;
+	string hash = "";
+	switch( cigarette.REMAINING_USES )
+	{			
+		case( 3 ):
+			hash = "art\\inven\\misc\\cig\\Zigarette3_inv.png";
+			break;							
+		case( 2 ):
+			hash = "art\\inven\\misc\\cig\\Zigarette2_inv.png";
+			break;
+		case( 1 ):
+			hash = "art\\inven\\misc\\cig\\Zigarette1_inv.png";
+			break;
+		default:
+			break;
+	}
+	
+	cigarette.PicInv = GetStrHash( hash );
+	cigarette.Update();
+	if( cigarette.Val0 < 1 )
+	{
+		_SubItem( cigarette, 1 );
+		cr.AddItem ( PID_CIGARETTE_BUTT, 1 );
+	}
+	
+	TobaccoEffect( cr );
+}
+
+
 void SmokeJoint( Critter& cr, Item& joint )
 {
-	if( Random( 0, 2 ) == 0 )
+	joint.SMOKER_STATE = STATE_BURING;
+	joint.REMAINING_USES--;
+	string hash = "";
+	switch( joint.REMAINING_USES )
 	{
+		case( 4 ):
+			hash = "art\\inven\\misc\\joint\\Joint3_inv.png";
+			break;				
+		case( 3 ):
+			hash = "art\\inven\\misc\\joint\\Joint2_inv.png";
+			break;							
+		case( 2 ):
+			hash = "art\\inven\\misc\\joint\\Joint1_inv.png";
+			break;
+		case( 1 ):
+			hash = "art\\inven\\misc\\joint\\Joint0_inv.png";
+			break;
+		default:
+			break;
+	}
+	
+	joint.PicInv = GetStrHash( hash );
+	joint.Update();
+	
+	if( joint.Val0 < 1 )
+	{
+		EraseTimeEvent( joint.SMOKE_EVENT );
+		joint.SMOKE_EVENT = 0;
 		_SubItem( joint, 1 );
 	}
+	
 	WeedEffect( cr );
 }
 
@@ -118,8 +263,12 @@ void SmokePipe( Critter& cr, Item& smokingPipe )
 	if( smokingPipe.REMAINING_USES <= 0 )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIPE_EMPTY );
+		EraseTimeEvent( smokingPipe.SMOKE_EVENT );
+		smokingPipe.SMOKE_EVENT = 0;
 		return;
 	}
+	
+	smokingPipe.SMOKER_STATE = STATE_BURING;
 	
 	if( smokingPipe.PIPE_CHARGE == CHARGE_TOBACCO )
 	{	
@@ -132,15 +281,11 @@ void SmokePipe( Critter& cr, Item& smokingPipe )
 	
 	smokingPipe.REMAINING_USES--;
 	smokingPipe.Update();
-	if( smokingPipe.REMAINING_USES == 0 )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIPE_BURNED );
-		return;
-	}
 }
 
 void SmokeCigar( Critter& cr, Item& cigar )
 {
+	cigar.SMOKER_STATE = STATE_BURING;
 	uint16 Pid = cigar.GetProtoId();
 	if( Pid == PID_PREWAR_CIGAR1 || Pid == PID_PREWAR_CIGAR2 )
 	{
@@ -180,6 +325,8 @@ void SmokeCigar( Critter& cr, Item& cigar )
 			case( 1 ):
 				hash = "art\\inven\\misc\\cigar\\cigar_st9_inv.png";
 				break;
+			default:
+				break;
 		}
 		
 		cigar.PicInv = GetStrHash( hash );
@@ -187,9 +334,12 @@ void SmokeCigar( Critter& cr, Item& cigar )
 		
 		if( cigar.Val0 < 1 )
 		{
+			EraseTimeEvent( cigar.SMOKE_EVENT );
+			cigar.SMOKE_EVENT = 0;
 			_SubItem( cigar, 1 );
 		}
 	}
+	
 	TobaccoEffect( cr );
 }
 
@@ -259,7 +409,7 @@ void WeedEffect( Critter& cr )
 	int time = cr.Timeout[ TO_TIREDNESS ];
 	if( time > 0 )
 	{
-		time = CLAMP( time - REAL_SECOND( Random( 60, 120 ) ), 0, time );
+		time = CLAMP( time - REAL_SECOND( Random( 40, 100 ) ), 0, time );
 		cr.TimeoutBase[ TO_TIREDNESS ] = __FullSecond + time;
 	}
 }
