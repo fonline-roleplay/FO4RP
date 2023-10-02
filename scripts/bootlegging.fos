@@ -120,15 +120,74 @@ void StillStage( Item& still )
 	if( still.STATE == STATE_WORKING )
 	{
 		if( still.STILL_RAW_MATERIAL > 0 )
-		{			
+		{
 			if( still.STILL_TEMPRATURE < 100 )
 			{
 				still.STILL_TEMPRATURE += FUEL_BURN_AMOUNT / 3;
+			}
+			else
+			{
+				int spirit_percent = 1;
+				if( still.STILL_RAW_MATERIAL > 0 )
+				{
+					spirit_percent = still.STILL_SPIRIT_LEVEL * 100 / still.STILL_RAW_MATERIAL;
+				}
+				
+				int vapor_rate = 1;
+				if( still.STILL_SPIRIT_LEVEL > 0 )
+				{
+					vapor_rate = still.STILL_RAW_MATERIAL * 100 / still.STILL_SPIRIT_LEVEL;
+				}
+				
+				int gain = ALCOHOL_GAIN;
+				if( still.STILL_SPIRIT_LEVEL < gain )
+				{
+					gain = still.STILL_SPIRIT_LEVEL;
+				}
+				
+				still.STILL_SPIRIT_LEVEL -= gain;
+				if( still.STILL_SPIRIT_LEVEL < 0 )
+				{
+					still.STILL_SPIRIT_LEVEL = 0;
+				}
+				
+				still.STILL_PRODUCT += gain;
+				still.STILL_RAW_MATERIAL -= int( vapor_rate * spirit_percent / 100 );
+				if( still.STILL_RAW_MATERIAL < 0 )
+				{
+					still.STILL_RAW_MATERIAL = 0;
+				}
 			}
 		}
 		else
 		{
 			still.STILL_TEMPRATURE += FUEL_BURN_AMOUNT / 2;
+		}
+	}
+	
+	if( still.STILL_TEMPRATURE >= MAX_TEMPRATURE && still.GetProtoId() != PID_STILL_S_BROKEN )
+	{
+		for( uint i = 0; i < 6; i++ )
+		{
+			uint16 tx = still.HexX, ty = still.HexY;
+			map.MoveHexByDir( tx, ty, i, 1 );
+			Critter@ victim = map.GetCritter( tx, ty );
+			if( !map.IsHexPassed( tx, ty ) && !valid( victim ) )
+			{
+				continue;
+			}
+			
+			GenerateFire( map, tx, ty, 0, 2, 0 );
+			still.ChangeProto( PID_STILL_S_BROKEN );
+			still.PicMap = still.Proto.PicMap;
+			setAnimState( still );
+						
+			still.STATE = STATE_BROKEN;
+			still.STILL_RAW_MATERIAL = 0;
+			still.STILL_PRODUCT = 0;
+			still.IMPURITIES = 100;
+			still.STILL_SPIRIT_LEVEL = 0;
+			still.CURRENT_FUEL = 0;
 		}
 	}
 }
@@ -146,7 +205,7 @@ uint e_StillCoolDown( uint[]@ values )
 		return 0;
 	}
 	
-	still.STILL_TEMPRATURE -= int( FUEL_BURN_AMOUNT * 2 );
+	still.STILL_TEMPRATURE -= FUEL_BURN_AMOUNT / 2;
 	if( still.STILL_TEMPRATURE <= 0 )
 	{
 		still.STILL_TEMPRATURE = 0;
@@ -254,8 +313,6 @@ bool TransferToStill( Critter& cr, Item& homebrew, Item& still )
 	return true;
 }
 
-
-
 uint e_Explode( uint[]@ values )
 {
 	uint itemId = values[0];
@@ -295,7 +352,7 @@ uint e_steamFX( uint[]@ vals )
 	Item@ e_steamFX = GetItem( itemId );
 	if( valid( e_steamFX ) )  
 	{
-		if( e_steamFX.STILL_TEMPRATURE >= 37500 )
+		if( e_steamFX.STILL_TEMPRATURE >= 100 )
 		{
 			uint16 hexX=0, hexY=0;
 			Map@ map = e_steamFX.GetMapPosition( hexX, hexY );
@@ -333,19 +390,15 @@ void setAnimState( Item& still )
 string@ GenerateDescription( Item& still )
 {
 	string info = "$state";
-	bool is_working = false;
-	switch( still.STATE )
+
+	if( still.STATE == STATE_OFF )
 	{
-		case STATE_OFF:
-			info += STR_INSERT_TEXT_LINE( STR_STILL_MENU_NOT_BURNING );
-			break;
-		default:
-			is_working = true;
+		info += STR_INSERT_TEXT_LINE( STR_STILL_MENU_NOT_BURNING );
 	}
-	
-	if( is_working )
+	else if( still.STATE == STATE_WORKING )
 	{
-		float temprature = FloatFromBits( still.STILL_TEMPRATURE );
+		info += STR_INSERT_TEXT_LINE( STR_STILL_MENU_BURNING );
+		int temprature = still.STILL_TEMPRATURE;
 		if( temprature <= 0 )
 		{
 			temprature = 22;
@@ -353,8 +406,12 @@ string@ GenerateDescription( Item& still )
 		
 		info += "$temp" + temprature;
 
-		float pressure = FloatFromBits( still.STILL_PRESSURE );
+		float pressure = still.STILL_PRESSURE / 1000.0f;
 		info += "$press" + pressure;
+	}
+	else
+	{
+		info += STR_INSERT_TEXT_LINE( STR_STILL_BROKEN );
 	}
 
 	float raw_material = still.STILL_RAW_MATERIAL / 1000.0f;
