@@ -1444,7 +1444,7 @@ class MenuGMSpawnersBeast: DefaultMenuHandler
 int[] sinf_menu_list =
 {
 	STR_GM_MENU_PLAYER_LOGINS		, 	// SINF_LOGINS			( 0x00000001 )
-	STR_GM_MENU_ID_IN_DESC			, 	// SINF_ID_CRITS		( 0x00000002 )
+	STR_GM_MENU_PLAYER_HITPOINTS	, 	// SINF_PLAYERS_HP		( 0x00000002 )
 	STR_GM_MENU_ID_OVER_HEAD		, 	// SINF_ID_HEADS		( 0x00000004 )
 	STR_GM_MENU_ID_IN_CHAT			, 	// SINF_ID_CHAT			( 0x00000008 )
 	STR_GM_MENU_ID_ITEMS_IN_CHAT	, 	// SINF_ID_ITEMS		( 0x00000010 )
@@ -5312,6 +5312,13 @@ class MenuGMHex: DefaultMenuHandler
 			return menu.OpenChild( "Level " + GM_Hex_Gas_Spawn.level, GM_Hex_Gas_Spawn );
 		}
 		
+		if( menu.ButtonMsg( STR_GM_HEXMENU_ADD_EFF ) )
+		{
+			MenuGMHexBlind@ GM_Hex_Eff_Spawn = MenuGMHexBlind( map, hex_X, hex_Y );
+			GM_Hex_Eff_Spawn.level = level + 1;
+			return menu.OpenChild( "Level " + GM_Hex_Eff_Spawn.level, GM_Hex_Eff_Spawn );
+		}	
+		
 		if( menu.ButtonMsg( STR_GM_HEXMENU_TELEPORT_THERE ) )
 		{
 			gm.TransitToHex( hex_X, hex_Y, gm.Dir );
@@ -5360,7 +5367,7 @@ class MenuGMHexMob: DefaultMenuHandler
 		
         Map@ map = GetMap( map_id );
 		
-        if( map is null )
+        if( !valid( map ) )
 		{
             return true;
         }
@@ -5929,7 +5936,119 @@ void hex_spawn_NPC( Critter& gm, Map& map, uint16 hexX, uint16 hexY )
 		}
     }
 }
-//end hex spawning
+
+void BlindingEffect( Map& map, uint16 x, uint16 y, int time, int radius, int color )
+{
+	color = CLAMP( color, 0, int( blinding_color_names.length() - 1 ) );
+	
+	Critter@[] crs;
+	uint count = map.GetCrittersHex( x, y, radius, FIND_ALL | FIND_ONLY_PLAYERS, crs );
+	for( uint i = 0; i < count; i++ )
+	{
+		FlushScreen( crs[i], blinding_color_values[color], blinding_color_values[color], time * 1000 );
+		SayLog( crs[i], crInfo( crs[i] ) + " gets blinded with " + blinding_color_names[color] + " color for " + time + " seconds." );
+	}
+}
+
+//Menu for hex flash effects
+class MenuGMHexBlind: DefaultMenuHandler
+{
+    uint map_id;
+	uint16 hex_X;
+	uint16 hex_Y;
+	uint level;
+	
+    MenuGMHexBlind( Map& map, uint16 hexX, uint16 hexY )
+	{
+        map_id = map.Id;
+		hex_X = hexX;
+		hex_Y = hexY;
+		level = 1;
+    }
+
+    bool MenuUpdate( Critter& gm, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+		
+        if( !valid( map ) )
+		{
+            return true;
+        }
+		
+		int time = gm.ParamBase[ CR_VAL2 ];
+		int radius = gm.ParamBase[ CR_VAL3 ];
+		int color = gm.ParamBase[ CR_VAL4 ];
+
+		if( time > 0 && radius > 0 )
+		{
+			if( menu.Button( "Применить" ) )
+			{
+				BlindingEffect( map, hex_X, hex_Y, time, radius, color );
+				unsafe_log_2( gm, 0, 0, 0, gm.Name + " " + gm.Id + " Flushes ( time " + time + ", radius " + radius + ", color " + blinding_color_names[color] + " ) hex on map: " + map.Id + " hex_X: " + hex_X + " hex_Y: " + hex_Y, null );
+				return false;
+			}
+		}
+		
+		if( menu.ButtonExtSay( "Длительность: ", "" + time, "Укажите время в секундах:" ) )
+		{
+			string str = menu.GetSayValue();
+			int	val = 0;
+			StrToInt( str, val );
+			if( val > 0 && val < 121)
+			{
+				gm.ParamBase[ CR_VAL2 ] = val;
+				gm.Say( SAY_NETMSG, "|0xFFFF00 Длительность " + val + " секунд." );
+			}
+			else
+			{
+				gm.Say( SAY_NETMSG, "|0xFFFF00 Укажите время от 1 до 120 секунд!" );
+			}
+			return true;
+		}
+
+		if( menu.ButtonExtSay( "Радиус: ", "" + radius, "Установите радиус эффекта:" ) )
+		{
+			string str = menu.GetSayValue();
+			int val = 0;
+			StrToInt( str, val );
+			if( val > 0 )
+			{
+				gm.ParamBase[ CR_VAL3 ] = val;
+				gm.Say( SAY_NETMSG, "|0xFFFF00 Радиус: " + val + " гексов." );
+			}
+			else
+			{
+				gm.ParamBase[ CR_VAL3 ] = 0;
+				gm.Say( SAY_NETMSG, "|0xFFFF00 Значение должно быть положительным!" );
+			}
+			return true;
+		}
+
+		if( menu.Button( "Цвет: " + blinding_color_names[color] ) )
+		{
+			gm.ParamBase[ CR_VAL4 ] = ( gm.ParamBase[ CR_VAL4 ] + 1 ) % blinding_color_names.length();
+			return true;
+		}
+		
+		if( menu.Button( "Return" ) )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+
+    string@ Description( Critter& gm )
+	{	
+		string info = "Визуальный эффект по местности:";
+		return info;
+	}
+		
+	string@ ButtonCancel()
+	{
+        return ButtonDecorator( "Hide menu", null );
+    }
+}
 
 //Menu for Radiation spawn
 class MenuGMHexRad: DefaultMenuHandler
