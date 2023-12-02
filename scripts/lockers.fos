@@ -9,45 +9,7 @@
 
 import bool canPutItemInContainer( Critter& cr, Item@ item, Item@ container ) from "main";
 
-bool UseCodeLock( Critter& cr, Item& codeLock, Item& locker )
-{
-	if( !valid( codeLock ) )
-	{
-		return false;
-	}
-
-	if( valid( locker ) && _LockerIsOpen( locker ) )
-	{
-		uint16 pid = locker.GetProtoId();
-		uint8 type = locker.GetType();
-	    if( pid == PID_TERMINAL )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_LOCK_TERMINAL );
-			return false; 
-		}
-		
-		if( pid == PID_TENT_DOOR_EW || pid == PID_TENT_DOOR_NS )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_LOCK );
-			return false; 
-		}
-		
-		if( ( type == ITEM_TYPE_DOOR || ( type == ITEM_TYPE_CONTAINER && locker.Proto.Container_Changeble ) ) && locker.ENTERED_CODE == 0 ) 
-        {
-            if( InteractContainer.find( pid ) == -1 )
-            {
-				locker.LOCK_TYPE = LOCK_CODE;
-				string passwordInfo = "Set new password";
-				int[] lockId = { codeLock.Id };
-				cr.RunClientScript( "client_screen_numberpad@ShowScreen", locker.Id, 0, 0, passwordInfo, lockId );
-			}
-		}
-
-		return true;
-	}
-
-	return false;
-}
+import void ShowInputBoxScreen( Critter& cr, string funcName, uint16 textLength, uint8 flags ) from "main";
 
 bool UseItemOnLocker( Critter& cr, Item& locker, Item& item )
 {
@@ -1204,7 +1166,7 @@ bool TryRemoveLock( Critter& cr, Item& item, Item& targetItem )
 		ltp_lock_remove_init();
 	}
 	
-	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CRITTER_LOOT_DELAY;
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CRITTER_LOOT_DELAY * 2;
 	cr.ParamBase[ ST_LTP_SEQUENCE ] = 0;
 	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
 	StartProcess( cr, LTP_LOCK_REMOVE, 0, item.Id, targetItem.Id, cr.Param[ ST_LTP_SEQUENCE_WAIT ] );
@@ -1230,12 +1192,12 @@ uint process_lock_remove( Critter@ cr, int& param0, int& param1, int& param2 )
         return 0;
 	}
 	
-	LockerRemoval( cr, tool, targetItem );
+	LockRemoval( cr, tool, targetItem );
 
 	return 0;
 }
 
-bool LockerRemoval( Critter& cr, Item& item, Item& targetItem )
+bool LockRemoval( Critter& cr, Item& item, Item& targetItem )
 {
 	uint8 itemType = targetItem.GetType();
 	uint16 pid = item.GetProtoId();
@@ -1307,6 +1269,7 @@ bool LockerRemoval( Critter& cr, Item& item, Item& targetItem )
 		Map@ map = cr.GetMap();
 		PlayGenericSound( map, cr.HexX, cr.HexY, "ILCNTNRC.mp3", 20 );
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REMOVED_LOCK );
+		LogCrimeMovement( cr, targetItem, " had its lock removed" );
 	}
 	
 	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
@@ -1339,6 +1302,219 @@ bool KeyBunchUse( Critter& cr, Item@ item, Item@ targetItem )
 			return true;
 		}
 	}
+	
+	return false;
+}
+
+bool TryInstallLock( Critter& cr, Item& item, Item& onItem )
+{
+	if( !valid( item ) )
+	{
+		return false;
+	}
+	
+	if( !valid( onItem ) )
+	{
+		return false;
+	}
+	
+	uint16 pid = item.GetProtoId();
+	uint16 tpid = onItem.GetProtoId();
+	uint8 type = onItem.GetType();
+	
+	if( tpid == PID_TERMINAL )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_LOCK_TERMINAL );
+		return false; 
+	}
+	
+	if( tpid == PID_TENT_DOOR_EW || tpid == PID_TENT_DOOR_NS )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_LOCK );
+		return false; 
+	}
+	
+	if( ( ( type == ITEM_TYPE_DOOR || ( type == ITEM_TYPE_CONTAINER && onItem.Proto.Container_Changeble ) ) && onItem.Val1 == 0 ) 
+			|| ( InteractContainer.find( tpid ) != -1 || onItem.Proto.Item_Subtype == ITEM_SUBTYPE_BRIEFCASE ) && onItem.Val0 == 0 )
+	{
+		if( _LockerIsClose( onItem ) || InteractContainer.find( tpid ) != -1 )
+		{
+			Item@ used = null;
+			if( pid == PID_LOCK_CODE )
+			{
+				if( !hasItem( cr, PID_COPPER_WIRE ) )
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRES_WIRE );
+					return true;
+				}
+				
+				@used = cr.GetItem( PID_COPPER_WIRE, -1 ); 
+			}
+			else
+			{
+				if( !hasItem( cr, PID_CRAFT_M_BARS ) )
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_METAL_PART );
+					return true;
+				}
+				
+				@used = cr.GetItem( PID_CRAFT_M_BARS, -1 ); 
+			}
+			
+			if( onItem.LockerCondition != LOCKER_LOCKED && onItem.LockerComplexity == 0 && !FLAG( onItem.LockerCondition, LOCKER_ELECTRO ) && onItem.ENTERED_CODE == 0 )
+			{
+				if( !ltp_lock_install_inited )
+				{
+					ltp_lock_install_init();
+				}
+	
+				cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CRITTER_LOOT_DELAY * 2;
+				cr.ParamBase[ ST_LTP_SEQUENCE ] = 0;
+				cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+				StartProcess( cr, LTP_LOCK_INSTALL, used.Id, item.Id, onItem.Id, cr.Param[ ST_LTP_SEQUENCE_WAIT ] );
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_INSTALL_LOCK );
+				return true;
+			}
+			else
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOOR_LOCKED );
+				return true;
+			}
+		}
+		else 
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOOR_NOT_CLOSED );
+			return true;
+        }
+	}
+	else
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOOR_CANT_LOCK );
+		return true;
+	}
+}
+
+bool ltp_lock_install_inited = false;
+void ltp_lock_install_init()
+{
+	LTPREG( LTP_LOCK_INSTALL, process_lock_set )
+	ltp_lock_install_inited = true;
+}
+
+uint process_lock_set( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESSD( LTP_LOCK_INSTALL )
+	
+	Item@ used = GetItem( param0 );
+	if( !valid( used ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+        return 0;
+	}
+	
+	Item@ tool = GetItem( param1 );
+    if( !valid( tool ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+        return 0;
+	}
+	
+	Item@ targetItem = GetItem( param2 );
+	if( !valid( targetItem ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+        return 0;
+	}
+	
+	if( tool.GetProtoId() == PID_LOCK_CODE )
+	{
+		UseCodeLock( cr, tool, targetItem, used );
+	}
+	else
+	{
+		InstallLock( cr, tool, targetItem, used );
+	}
+	
+	return 0;
+}
+
+bool InstallLock( Critter& cr, Item& item, Item& targetItem, Item& used )
+{
+	uint key_pid = PID_BLANK_KEY;
+	switch( item.GetProtoId() )
+	{
+		case( PID_LOCK_LOW ):
+			targetItem.LOCK_TYPE = LOCK_LOW;
+			key_pid = PID_TEMPLE_KEY;
+			break;
+		case( PID_LOCK_MED ):
+			targetItem.LOCK_TYPE = LOCK_MED;
+			key_pid = PID_JAIL_KEY;
+			break;
+		case( PID_LOCK_HARD ):
+			targetItem.LOCK_TYPE = LOCK_HARD;
+			key_pid = PID_VAULT_13_SHACK_KEY;
+			break;
+		default:
+			return false;
+	}
+
+	_SubItem( used, 1 );
+	
+	Item@ key = cr.AddItem( key_pid, 1 );
+	key.LockerId = Random( 0, 65534 );
+
+	targetItem.LockerId = key.LockerId;
+	targetItem.LockerCondition = LOCKER_LOCKED;
+	targetItem.LockerComplexity = cr.Skill[ SK_LOCKPICK ];
+
+	//Log( "An item #" + targetItem.Id + " is locked. Lock complexity is: " + targetItem.LockerComplexity + "." );
+	LogCrimeMovement( cr, targetItem, "is locked. Lock complexity is: " + targetItem.LockerComplexity + "." );
+	_SubItem( item, 1 );
+
+	key.SetLexems( null );
+	key.Update();
+
+	cr.StatBase[ ST_LAST_DOOR_ID ] = key.Id;
+	cr.StatBase[ ST_LAST_CONT_ID ] = key.Accessory;
+	ShowInputBoxScreen( cr, "general_unsafe@unsafe_addLexem#Description:", 0, INPUTBOX_CLOSE_ON_ENTER );
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	return true;
+}
+
+bool UseCodeLock( Critter& cr, Item& codeLock, Item& locker, Item& used )
+{
+	if( !valid( codeLock ) )
+	{
+		return false;
+	}
+
+	if( !valid( used ) )
+	{
+		return false;
+	}
+
+	if( valid( locker ) )
+	{
+		uint16 pid = locker.GetProtoId();
+		uint8 type = locker.GetType();
+		
+		if( ( type == ITEM_TYPE_DOOR || ( type == ITEM_TYPE_CONTAINER && locker.Proto.Container_Changeble ) ) && locker.ENTERED_CODE == 0 ) 
+        {
+            if( InteractContainer.find( pid ) == -1 )
+            {
+				locker.LOCK_TYPE = LOCK_CODE;
+				string passwordInfo = "Set new password";
+				int[] lockId = { codeLock.Id };
+				cr.RunClientScript( "client_screen_numberpad@ShowScreen", locker.Id, 0, 0, passwordInfo, lockId );
+				_SubItem( used, 1 );
+				cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+			}
+		}
+		
+		return true;
+	}
+
 	return false;
 }
 
