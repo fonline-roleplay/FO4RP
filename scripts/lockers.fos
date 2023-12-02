@@ -3,6 +3,7 @@
 
 #include "_utils.fos"
 #include "lockers_h.fos"
+#include "_ltp.fos"
 #include "gateway_h.fos"
 #include "terminal_h.fos"
 
@@ -1179,9 +1180,65 @@ void LockerBudge( Item& item )
     map.PlaySound( sound, item.HexX, item.HexY, 8 );
 }
 
+bool ltp_lock_remove_inited = false;
+void ltp_lock_remove_init()
+{
+	LTPREG( LTP_LOCK_REMOVE, process_lock_remove )
+	ltp_lock_remove_inited = true;
+}
+
+bool TryRemoveLock( Critter& cr, Item& item, Item& targetItem )
+{
+	if( !valid( item ) )
+	{
+		return false;
+	}
+	
+	if( !valid( targetItem ) )
+	{
+		return false;
+	}
+	
+	if( !ltp_lock_remove_inited )
+	{
+		ltp_lock_remove_init();
+	}
+	
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CRITTER_LOOT_DELAY;
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = 0;
+	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+	StartProcess( cr, LTP_LOCK_REMOVE, 0, item.Id, targetItem.Id, cr.Param[ ST_LTP_SEQUENCE_WAIT ] );
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_REMOVE_LOCK );
+	return true;
+}
+
+uint process_lock_remove( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESSD( LTP_LOCK_REMOVE )
+	Item@ tool = GetItem( param1 );
+
+    if( !valid( tool ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+        return 0;
+	}
+	
+	Item@ targetItem = GetItem( param2 );
+	if( !valid( targetItem ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+        return 0;
+	}
+	
+	LockerRemoval( cr, tool, targetItem );
+
+	return 0;
+}
+
 bool LockerRemoval( Critter& cr, Item& item, Item& targetItem )
 {
 	uint8 itemType = targetItem.GetType();
+	uint16 pid = item.GetProtoId();
 	if( ( ( itemType == ITEM_TYPE_DOOR || itemType == ITEM_TYPE_CONTAINER ) && targetItem.LOCK_TYPE != 0 && _LockerIsOpen( targetItem ) && !FLAG( targetItem.LockerCondition, LOCKER_LOCKED ) ) 
 		|| ( itemType == ITEM_TYPE_CONTAINER && InteractContainer.find( targetItem.GetProtoId() ) != -1 && targetItem.LOCK_TYPE != 0 && !FLAG( targetItem.LockerCondition, LOCKER_LOCKED  ) ) )
 	{
@@ -1206,7 +1263,7 @@ bool LockerRemoval( Critter& cr, Item& item, Item& targetItem )
 		
 		if( pid_locker != 0 )
 		{
-			if( item.GetProtoId() == PID_MULTI_TOOL )
+			if( pid == PID_MULTI_TOOL || pid == PID_SUPER_TOOL_KIT )
 			{
 				Item@ locker = cr.AddItem( pid_locker, 1 );
 				locker.Update();
@@ -1214,31 +1271,34 @@ bool LockerRemoval( Critter& cr, Item& item, Item& targetItem )
 
 			if( item.GetProtoId() == PID_CROWBAR )
 			{
+				uint16 amount = 1;
 				switch( pid_locker )
 				{
 					case( PID_LOCK_LOW ):
-						pid_locker = 3;
+						amount = 3;
 						break;
 					case( PID_LOCK_MED ):
-						pid_locker = 6;
+						amount = 6;
 						break;
 					case( PID_LOCK_HARD ):
-						pid_locker = 10;
+						amount = 10;
 						break;
 					case( PID_LOCK_CODE ):
-						pid_locker = 6;
+						amount = 6;
 						break;
 					default:
-						pid_locker = 1;
+						amount = 1;
 						break;
 				}
 				
-				cr.AddItem( PID_CRAFT_M_BARS, Random( 1, pid_locker ) );
+				cr.AddItem( PID_CRAFT_M_BARS, Random( 1, amount ) );
 			}
 		}
 		
 		targetItem.LOCK_TYPE = 0;
 		targetItem.CODEDOOR_CODE = 0;
+		targetItem.ENTERED_CODE = 0;
+		targetItem.STORED_CODE = 0;
 		targetItem.LockerComplexity = 0;
 		targetItem.LockerId = 0;
 		targetItem.LockerCondition = LOCKER_ISOPEN;
@@ -1248,6 +1308,8 @@ bool LockerRemoval( Critter& cr, Item& item, Item& targetItem )
 		PlayGenericSound( map, cr.HexX, cr.HexY, "ILCNTNRC.mp3", 20 );
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REMOVED_LOCK );
 	}
+	
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 	
 	return true;
 }
