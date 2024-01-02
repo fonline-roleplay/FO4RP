@@ -14,25 +14,12 @@ class MenuFurnace: CenteredMenuHandler
 	string furnace_id_str;
 	
 
-    MenuFurnace( Item& furnace, Map& map, int fur_type ) 
+    MenuFurnace( Item& furnace, Map& map, int furnace_type ) 
 	{
 		furnace_id = furnace.Id;
 		map_id = map.Id;
-		furnace_type = fur_type;
-		
+		this.furnace_type = furnace_type;
     }
-	
-	void menu_EnableFurnace( Item& furnace, Map& map, Critter& cr, iDialogBox& menu )
-	{
-	}
-	
-	void menu_DisableFurnace( Item& furnace, Map& map, Critter& cr, iDialogBox& menu )
-	{
-	}
-	
-	void addFuel( Item& furnace, Map& map, Critter& cr, iDialogBox& menu )
-	{
-	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
@@ -55,6 +42,10 @@ class MenuFurnace: CenteredMenuHandler
 
         if( menu.ButtonMsg( STR_FURNITURE_MENU_EXAMINE )  )
 		{
+			if( furnace_type == FURNACE_ENERGY_TYPE )
+			{
+				PlayGenericSound( map, furnace.HexX, furnace.HexY, "CLANK1.mp3", 15 );
+			}
 			if( furnace.STATE == STATE_BURNING )
 			{
 				if( hasItems( cr, FurnaceTools, SLOT_HAND1 ) )
@@ -71,10 +62,63 @@ class MenuFurnace: CenteredMenuHandler
             ShowContainer( cr, furnace, TRANSFER_HEX_CONT_DOWN );
             return false; 
         }
-		// call button
-		menu_EnableFurnace( furnace, map, cr, menu );
-		menu_DisableFurnace( furnace, map, cr, menu );
-		addFuel( furnace, map, cr, menu );
+		
+		if( furnace_type == FURNACE_WOOD_TYPE && furnace.STATE == STATE_EXTINGUISHED && menu.ButtonMsg( STR_FIRE_MENU_IGNITE )  )
+		{
+			if( hasItems( cr, Igniters ) )
+			{
+				Item@[] igniters = getItems( cr, Igniters );
+				Item@ igniter = igniters[0];
+				Ignite( cr, igniter, furnace );
+			}
+			else
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_LIGHTER );
+			}
+		}
+		
+		if ( furnace_type == FURNACE_ENERGY_TYPE && furnace.STATE == STATE_EXTINGUISHED && menu.ButtonMsg( STR_DEVICE_ACTIVATE ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			if ( not enableFurnace( furnace ) )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_POWER_IS_OFF );
+			}
+		}
+		
+		if( furnace_type == FURNACE_WOOD_TYPE && furnace.STATE == STATE_BURNING && menu.ButtonMsg( STR_FIRE_MENU_EXTINGUISH ) )
+		{
+			if( hasItems( cr, WaterSource ) )
+			{
+				Item@[] watersource = getItems( cr, WaterSource );
+				Item@ water = watersource[0];
+				Extinguish( cr, water, furnace );
+			}
+			else
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_WATER_FOR_FIRE );
+			}
+		}
+		
+		if ( furnace_type == FURNACE_ENERGY_TYPE && furnace.STATE == STATE_BURNING && menu.ButtonMsg( STR_DEVICE_DEACTIVATE ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			disableFurnace( furnace);
+		}
+		
+		if( furnace_type == FURNACE_WOOD_TYPE && menu.ButtonMsg( STR_FIRE_MENU_ADD_FUEL ) )
+		{
+			if( hasItems( cr, FireFuel ) )
+			{
+				Item@[] fireFuel = getItems( cr, FireFuel );
+				Item@ fuel = fireFuel[0];
+				FeedTheFire( cr, fuel, furnace );
+			}
+			else
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_FIREFUEL_2 );
+			}
+		}
 
 		if( furnace.STATE == STATE_EXTINGUISHED && menu.ButtonMsg( STR_FURNITURE_MENU_BUTTON ) )
 		{
@@ -97,9 +141,11 @@ class MenuFurnace: CenteredMenuHandler
     }
 	int getDescriptionLine()
 	{
-		// watch the heirs classes
-		return STR_FURNACE_MENU_MAIN;
-	}
+		if ( furnace_type == FURNACE_ENERGY_TYPE )
+			return STR_FURNACE_MENU_ENERGY_MAIN;
+		else
+			return STR_FURNACE_MENU_MAIN;
+	}		
 	
 	string@ Description( Critter& cr )
 	{
@@ -188,127 +234,26 @@ class MenuFurnace: CenteredMenuHandler
     }
 }
 
-class WoodFurnace : MenuFurnace
+bool enableFurnace( Item& furnace )
 {
-	
-	WoodFurnace( Item& furnace, Map& map, int fur_type ) 
+	if ( valid( furnace ) && CheckGeneratorOnMap( furnace.MapId ) )
 	{
-		furnace_id = furnace.Id;
-		map_id = map.Id;
-		furnace_type = FURNACE_WOOD_TYPE;
-		
-    }
-	
-	void menu_EnableFurnace( Item& furnace, Map& map, Critter& cr, iDialogBox& menu )
-	{
-		if( furnace.STATE == STATE_EXTINGUISHED && menu.ButtonMsg( STR_FIRE_MENU_IGNITE )  )
-		{
-			if( hasItems( cr, Igniters ) )
-			{
-				Item@[] igniters = getItems( cr, Igniters );
-				Item@ igniter = igniters[0];
-				Ignite( cr, igniter, furnace );
-			}
-			else
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_LIGHTER );
-			}
-		}		
+		furnace.STATE = STATE_BURNING;
+		uint[] values = { furnace.Id, furnace.MapId };
+		furnace.FIRE_EVENT = CreateTimeEvent( AFTER( REAL_MS( 1500 ) ),"e_FurnaceWork", values, true );
+		setAnimState( furnace );
+		return true;
 	}
-	
-	void addFuel( Item& furnace, Map& map, Critter& cr, iDialogBox& menu )
-	{
-		if( menu.ButtonMsg( STR_FIRE_MENU_ADD_FUEL ) )
-		{
-			if( hasItems( cr, FireFuel ) )
-			{
-				Item@[] fireFuel = getItems( cr, FireFuel );
-				Item@ fuel = fireFuel[0];
-				FeedTheFire( cr, fuel, furnace );
-			}
-			else
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_FIREFUEL_2 );
-			}
-		}
-	}
-	
-	void menu_DisableFurnace( Item& furnace, Map& map, Critter& cr, iDialogBox& menu )
-	{
-	
-		if( furnace.STATE == STATE_BURNING && menu.ButtonMsg( STR_FIRE_MENU_EXTINGUISH ) )
-		{
-			if( hasItems( cr, WaterSource ) )
-			{
-				Item@[] watersource = getItems( cr, WaterSource );
-				Item@ water = watersource[0];
-				Extinguish( cr, water, furnace );
-			}
-			else
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_WATER_FOR_FIRE );
-			}
-		}
-	}
-	
-	int getDescriptionLine()
-	{
-			return STR_FURNACE_MENU_MAIN;
-	}
-}
-
-class ArcFurnace : MenuFurnace
-{
-	ArcFurnace( Item& furnace, Map& map, int fur_type ) 
-	{
-		furnace_id = furnace.Id;
-		map_id = map.Id;
-		furnace_type = FURNACE_ENERGY_TYPE;
-		
-    }
-	
-	void menu_EnableFurnace( Item& furnace, Map& map, Critter& cr, iDialogBox& menu  )
-	{
-		if ( furnace.STATE == STATE_EXTINGUISHED && menu.ButtonMsg( STR_DEVICE_ACTIVATE ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			if ( CheckGeneratorOnMap( map_id ) )
-			{
-				enableFurnace( furnace );
-			}
-			else
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_POWER_IS_OFF );
-			}
-		}
-	}
-	
-	void menu_DisableFurnace( Item& furnace, Map& map, Critter& cr, iDialogBox& menu)
-	{
-		if ( furnace.STATE == STATE_BURNING && menu.ButtonMsg( STR_DEVICE_DEACTIVATE ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			disableFurnace( furnace);
-		}
-	}
-	
-	
-	int getDescriptionLine()
-	{
-			return STR_FURNACE_MENU_ENERGY_MAIN;
-	}
-}
-
-void enableFurnace( Item& furnace )
-{
-	furnace.STATE = STATE_BURNING;
-	uint[] values = { furnace.Id, furnace.MapId };
-	furnace.FIRE_EVENT = CreateTimeEvent( AFTER( REAL_MS( 1500 ) ),"e_FurnaceWork", values, true );
-	setAnimState( furnace );
+	return false;
 }
 
 void disableFurnace( Item& furnace )
 {
+	Map@ map = GetMap ( furnace.MapId );
+	if( valid( map ) )
+	{
+		PlayGenericSound( map, furnace.HexX, furnace.HexY, "STEAM.mp3", 30 );
+	}
 	furnace.STATE = STATE_EXTINGUISHED;
 	setAnimState( furnace );
 }
@@ -323,12 +268,15 @@ bool CheckGeneratorOnMap( uint& map_id )
 	{
 		for (uint index = 0; index < generators.length(); ++index)
 		{
-			if ( generators[index].STATE == STATE_BURNING )
+			Item@ generator = generators[index];
+			if ( valid( generator ) && generator.STATE == STATE_BURNING )
 			{
+				generators.resize(0);
 				return true;
 			}
 		}
 	}
+	generators.resize(0);
 	return false;
 }
 
@@ -390,27 +338,9 @@ void StartMenuFurnace( Critter& cr, Item& furnace )
 		return;
 	}
 	
-	switch (furnace_type)
-	{
-		case(FURNACE_WOOD_TYPE):
-		{
-			iMenuHandler@ handler = WoodFurnace( furnace, map, furnace_type );
-			iDialogBox@ menu = OpenMenu( cr, "Furnace", handler );
-			return;
-		}
-		case(FURNACE_ENERGY_TYPE):
-		{
-			iMenuHandler@ handler = ArcFurnace( furnace, map, furnace_type );
-			iDialogBox@ menu = OpenMenu( cr, "Furnace", handler );
-			return;
-		}
-		default:
-		{
-			iMenuHandler@ handler = MenuFurnace( furnace, map, furnace_type );
-			iDialogBox@ menu = OpenMenu( cr, "Furnace", handler );
-			return;
-		}
-	}
+	iMenuHandler@ handler = MenuFurnace( furnace, map, furnace_type );
+	iDialogBox@ menu = OpenMenu( cr, "Furnace", handler );
+	return;
 }
 
 void FurnaceStage( Item& furnace )
@@ -600,7 +530,8 @@ uint e_FurnaceWork( uint[]@ values )
 			FurnaceStage( furnace );
 			return 0;
 		}
-		// PlayGenericSound( map, furnace.HexX, furnace.HexY, ".mp3", 30 );
+		// PlayGenericSound( map, crusher.HexX, crusher.HexY, "crusher_work.mp3", 30 );
+		PlayGenericSound( map, furnace.HexX, furnace.HexY, "arc_furnace_work.mp3", 30 );
 		FurnaceStage( furnace );
 		return ARC_FURNACE_CYCLE_TIME;
 	}
