@@ -8,6 +8,67 @@
 #include "food_h.fos"
 #include "furniture_h.fos"
 
+class MenuTransferLiquid: CenteredMenuHandler {
+    uint target_id;
+
+    MenuTransferLiquid(Item& target) {
+        target_id = target.Id;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) {
+        Item@ target = GetItem(target_id);
+		Item@ flask = _CritGetItemHand( cr );
+
+        if( !valid(target) || !valid(flask) ) 
+		{
+            return false;
+        }
+		
+		if( !IsFlask(flask) || !IsFlask(target) )
+		{
+			return false;
+		}
+		
+		if( flask.REMAINING_USES == 0 && target.REMAINING_USES == 0 )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FLASK_EMPTY );
+			return false;
+		}
+		
+		if(flask.REMAINING_USES > 0 && target.REMAINING_USES != int( target.Proto.Partial_Item ))
+		{
+			if( menu.Button("Transfer Liquid into") ) 
+			{
+				ProcessFlask( cr, flask, target );
+				return false;
+			}
+		}
+		
+		if(target.REMAINING_USES > 0 && flask.REMAINING_USES != int( flask.Proto.Partial_Item ))
+		{
+			if( menu.Button("Transfer Liquid out") ) 
+			{
+				ProcessFlask( cr, target, flask );
+				return false;
+			}
+		}
+    
+        return true;
+    }
+    string@ ButtonCancel() {
+        return ButtonDecorator("Hide menu", null);
+    }
+    void OnMenuDraw(Critter& cr) {
+        cr.Say(SAY_NETMSG, DebugMenu(cr));
+    }
+}
+
+void StartMenuTransferLiquid( Critter& cr, Item& target)
+{
+    iMenuHandler@ handler = MenuTransferLiquid(target);
+    iDialogBox@ menu = OpenMenu(cr, "Flask", handler);
+}
+
 bool IsFlask(Item@ flask)
 {
 	if(!valid(flask))
@@ -108,66 +169,19 @@ bool PourFlask( Critter& cr, Item& flask )
 	return true;
 }
 
-bool ProcessFlask(Critter& cr, Item@ drink, Item@ flask)
+bool ProcessFlask(Critter& cr, Item@ input, Item@ output)
 {
-	if(!valid(drink) || !valid(flask))
+	if(!valid(input) || !valid(output))
 	{
 		return false;
 	}
 	
-	if(!IsFlask(drink) || !IsFlask(flask))
+	if(!IsFlask(input) || !IsFlask(output))
 	{
 		return false;
 	}
 	
-	TransferLiquid(cr, drink, flask);
-	
-	return true;
-}
-
-bool TransferLiquid(Critter@ cr, Item@ input, Item@ output)
-{
-	if(input.REMAINING_USES <= 0)
-	{	
-		return false;
-	}
-	
-	if(input.REMAINING_USES == 1)
-	{
-		ChangeFlaskProto(input);
-	}
-	
-	if(output.REMAINING_USES == int( output.Proto.Partial_Item ))
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FLASK_FILLED_UP );
-		return false;
-	}
-	
-	if(output.REMAINING_USES == 0)
-	{
-		output.DRINK_DNA = input.DRINK_DNA;
-		ChangeFlaskProto(output);
-	}
-	
-
-	input.REMAINING_USES--;
-	output.REMAINING_USES++;
-	
-	input.EXTRA_WEIGHT-= 100;
-	output.EXTRA_WEIGHT+= 100;
-	
-	if(input.FLASK_TOXIN_LEVEL > 0)
-	{
-		output.FLASK_TOXIN_LEVEL += (((output.EXTRA_WEIGHT * output.FLASK_TOXIN_LEVEL) + (100 * input.FLASK_TOXIN_LEVEL)) / (output.EXTRA_WEIGHT + 100));
-	}
-	
-	if(input.SPIRIT_LEVEL > 0)
-	{
-		output.FLASK_TOXIN_LEVEL += (((output.EXTRA_WEIGHT * output.SPIRIT_LEVEL) + (100 * input.SPIRIT_LEVEL)) / (output.EXTRA_WEIGHT + 100));
-	}
-	
-	input.Update();
-	output.Update();
+	startTransfer(cr, input, output);
 	
 	return true;
 }
@@ -202,5 +216,110 @@ void ChangeFlaskProto(Item& item)
 		}
 	}
 }
+
+// LTP SHIT GOES HERE
+
+bool ltp_inited=false;
+void ltp_init()
+{
+    LTPREG( LTP_TRANSFER_LIQ, process_transfer_liquid )
+    ltp_inited=true;
+}
+
+void startTransfer( Critter& cr, Item& input, Item& output )
+{	
+    if(!ltp_inited)
+	{
+		ltp_init();
+	}
+	
+	if(!valid(input) || !valid(output))
+	{
+		return;
+	}
+	
+	if(!IsFlask(input) || !IsFlask(output))
+	{
+		return;
+	}
+	
+	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = output.REMAINING_USES > ( input.Proto.Partial_Item - input.REMAINING_USES ) ? ( input.Proto.Partial_Item - input.REMAINING_USES ) : output.REMAINING_USES;
+
+	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+	
+    StartProcess( cr, LTP_TRANSFER_LIQ, 0, input.Id, output.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+}
+
+void stopTransfer( Critter& cr )
+{
+    StopProcess( cr, true );
+}
+
+uint process_transfer_liquid( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_TRANSFER_LIQ )
+	
+	Item@ input = GetItem( param1 );
+  	Item@ output = GetItem( param2 );
+	
+	if(valid(input) && valid(output))
+	{
+		Map@ map = cr.GetMap();
+		PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
+		
+		if(input.REMAINING_USES <= 0)
+		{	
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FLASK_EMPTY );
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+			return 0;
+		}
+		
+		if(output.REMAINING_USES == int( output.Proto.Partial_Item ))
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FINISHED_FILLING );
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+			return 0;
+		}
+		
+		if(output.REMAINING_USES == 0)
+		{
+			output.DRINK_DNA = input.DRINK_DNA;
+			ChangeFlaskProto(output);
+		}
+		
+
+		input.REMAINING_USES--;
+		output.REMAINING_USES++;
+		
+		if(input.REMAINING_USES == 0)
+		{
+			input.DRINK_DNA = 0;
+			ChangeFlaskProto(input);
+		}
+		
+		input.EXTRA_WEIGHT = input.REMAINING_USES * 100;
+		output.EXTRA_WEIGHT = output.REMAINING_USES * 100;
+		
+		if(input.FLASK_TOXIN_LEVEL > 0)
+		{
+			output.FLASK_TOXIN_LEVEL += (((output.EXTRA_WEIGHT * output.FLASK_TOXIN_LEVEL) + (100 * input.FLASK_TOXIN_LEVEL)) / (output.EXTRA_WEIGHT + 100));
+		}
+		
+		if(input.SPIRIT_LEVEL > 0)
+		{
+			output.FLASK_TOXIN_LEVEL += (((output.EXTRA_WEIGHT * output.SPIRIT_LEVEL) + (100 * input.SPIRIT_LEVEL)) / (output.EXTRA_WEIGHT + 100));
+		}
+		
+		input.Update();
+		output.Update();
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+	}
+
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	return 0;
+}
+
 
 #endif //FLASK
