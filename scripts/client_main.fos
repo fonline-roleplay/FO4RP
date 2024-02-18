@@ -18,6 +18,8 @@
 #include "hitchance_h.fos"
 #include "geiger_h.fos"
 #include "radiation_h.fos"
+#include "client_event_h.fos"
+#include "config_parser_h.fos"
 
 import void InitializeGame() from "config";
 
@@ -205,6 +207,7 @@ uint loop()
 {
     FOFMOD_Update();
     WASDInputLoop();
+	ProcessEvents();
 
     if( loop_turn % 4 == 0 )
 	{
@@ -1364,12 +1367,191 @@ bool in_message( string& message, int& sayType, uint& critterId, uint& delay )
 	return true;
 }
 
+class GuitarPlaying
+{
+	uint pause = 100;
+	uint totalTunes = 0;
+	uint tuneNum = 0;
+	array<uint> string1, string2, string3, string4, string5, string6;
+	
+	uint PlayTune()
+	{
+		if(tuneNum >= totalTunes)
+		{
+			tuneNum = 0;
+			return 0;
+		}
+		
+		CritterCl@ chosen = GetChosen();
+		int[] radius = { 5 };
+		
+		if(string1[tuneNum] != 7) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "string1.ogg", radius );
+		if(string2[tuneNum] != 7) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "string2.ogg", radius );
+		if(string3[tuneNum] != 7) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "string3.ogg", radius );
+		if(string4[tuneNum] != 7) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "string4.ogg", radius );
+		if(string5[tuneNum] != 7) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "string5.ogg", radius );
+		if(string6[tuneNum] != 7) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "string6.ogg", radius );
+		
+		tuneNum++;
+		
+        return pause; // return value measuring time in MS to repeat the event ( same as server side )
+	}
+}
+
+GuitarPlaying Guitar;
+
+class PlayEvent : EventCallback
+{
+    uint function(array<uint>@ variables)
+    {
+        return Guitar.PlayTune(); // return value measuring time in MS to repeat the event ( same as server side )
+    }
+}
+PlayEvent PEvent;
+
+void LoadStrings(string rawStr, uint guitStrNum)
+{
+	string@[] temp;
+	array<uint>@ GuitStr;
+	
+	switch(guitStrNum)
+	{
+		case 1:
+		{
+			GuitStr = Guitar.string1;
+			break;
+		}
+		case 2:
+		{
+			GuitStr = Guitar.string2;
+			break;
+		}
+		case 3:
+		{
+			GuitStr = Guitar.string3;
+			break;
+		}
+		case 4:
+		{
+			GuitStr = Guitar.string4;
+			break;
+		}
+		case 5:
+		{
+			GuitStr = Guitar.string5;
+			break;
+		}
+		case 6:
+		{
+			GuitStr = Guitar.string6;
+			break;
+		}
+		default:
+			return; //false;
+	}
+	
+	Message("LoadingStr " + guitStrNum);
+	
+	temp = splitEx(rawStr, " ");
+
+	for(int i = 0; i < temp.length(); i++)
+	{
+		if(temp[i] == "-")
+		{
+			GuitStr.insertLast(7);
+			continue;
+		}
+		int res = 0;
+		StrToInt( temp[i], res );
+		GuitStr.insertLast(res);
+	}
+	
+	Message( "Str" + guitStrNum + "is " );
+	for(int i = 0; i < GuitStr.length(); i++)
+	{
+		Message( "" + GuitStr[i]);
+	}
+	
+	return; //true;
+}
+
+bool LoadTabsConfig(uint num)
+{
+    iConfig@ config = CreateConfig();
+
+	if( !config.Parse( "guitar_tabs.cfg", true ) )
+	{
+		Message("Cant load cfg!");
+		return false;
+	}
+	uint len = config.GetSectionsNum();
+	Message("config len "+len);
+
+	iSection@ sect = null;
+
+	for( uint i = 0; i < len; i++ )
+	{
+		@sect = config.GetSection( i );
+
+		string@ name = sect.GetName();
+
+		if( name == "Tab1" )
+		{
+			Message("name is Tab1");
+			
+			Guitar.pause = sect.GetKey( "pause" ).GetUint();
+			Guitar.totalTunes = sect.GetKey( "tunes" ).GetUint();
+			
+			string str1 = sect.GetKey( "string1" ).GetVal();
+			string str2 = sect.GetKey( "string2" ).GetVal();
+			string str3 = sect.GetKey( "string3" ).GetVal();
+			string str4 = sect.GetKey( "string4" ).GetVal();
+			string str5 = sect.GetKey( "string5" ).GetVal();
+			string str6 = sect.GetKey( "string6" ).GetVal();
+			
+			LoadStrings(str1, 1);
+			LoadStrings(str2, 2);
+			LoadStrings(str3, 3);
+			LoadStrings(str4, 4);
+			LoadStrings(str5, 5);
+			LoadStrings(str6, 6);
+			
+			Message("Creating TEvent");
+			CreateTimeEvent(1, PEvent, null);
+			return true;
+		}
+		else
+		{
+			Message("continuing load cfg");
+			continue;
+		}
+	}
+	Message("NOIEZZ, THAT SHIT RETURNED FALSE");
+	return false;
+}
+
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on send message.
 bool out_message( string& message, int& sayType )
 {
     if(message == "")
 	{
+		return false;
+	}
+	
+	if( findFirst( message, "~play" ) != -1 )
+	{
+		if( message.length() > 5 )
+		{
+			string nums = substring( message, 6, message.length() - 6 );
+			int res = 0;
+			string@[] temp;
+
+			temp = splitEx(nums, " ");
+			StrToInt( temp[0], res );
+			
+			LoadTabsConfig(res);
+		}
 		return false;
 	}
 	
