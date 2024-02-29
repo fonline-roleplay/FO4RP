@@ -1323,30 +1323,45 @@ class GuitarPlaying
 {
 	uint pause = 100;
 	uint fretsPerStr = 0;
-	uint fretNum = 0;
-	uint[] string1, string2, string3, string4, string5, string6;
+	uint currFret = 0;
+	uint[] strings;
 	
 	uint PlayTune()
 	{
-		if(fretNum >= fretsPerStr)
+		if(currFret >= fretsPerStr)
 		{
-			fretNum = 0;
+			ResetGuitar();
 			return 0;
 		}
 		
 		CritterCl@ chosen = GetChosen();
 		int[] radius = { 5 };
 
-		if(string1[fretNum] != 14) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "guitar_string1_" + string1[fretNum] + ".ogg", radius );
-		if(string2[fretNum] != 14) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "guitar_string2_" + string2[fretNum] + ".ogg", radius );
-		if(string3[fretNum] != 14) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "guitar_string3_" + string3[fretNum] + ".ogg", radius );
-		if(string4[fretNum] != 14) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "guitar_string4_" + string4[fretNum] + ".ogg", radius );
-		if(string5[fretNum] != 14) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "guitar_string5_" + string5[fretNum] + ".ogg", radius );
-		if(string6[fretNum] != 14) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "guitar_string6_" + string6[fretNum] + ".ogg", radius );
-	
-		fretNum++;
+		for(uint i = 0; i < 6; i++)
+		{
+			uint index = currFret + (fretsPerStr * i);
+			if(strings[index] != 14) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "guitar_string" + (i+1) + "_" + strings[index] + ".ogg", radius );
+		}
+		
+		currFret++;
 		
         return pause; // return value measuring time in MS to repeat the event ( same as server side )
+	}
+	
+	void ResetGuitar()
+	{
+		pause = 100;
+		fretsPerStr = 0;
+		currFret = 0;
+		strings.resize(0);
+		Message("done");
+	}
+	
+	void FillGuitar(uint pauseData, uint fretsNumData, uint[] strData)
+	{
+		pause = pauseData;
+		fretsPerStr = fretsNumData;
+		strings = strData;
 	}
 	
 }
@@ -1360,45 +1375,6 @@ class PlayEvent : EventCallback
     }
 }
 PlayEvent PEvent;
-
-uint[] @ GetGuitFretArr(uint num)
-{
-	uint[] @ fretArr;
-	switch(num)
-	{
-		case 1:
-		{
-			@fretArr = Guitar.string1;
-			break;
-		}
-		case 2:
-		{
-			@fretArr = Guitar.string2;
-			break;
-		}
-		case 3:
-		{
-			@fretArr = Guitar.string3;
-			break;
-		}
-		case 4:
-		{
-			@fretArr = Guitar.string4;
-			break;
-		}
-		case 5:
-		{
-			@fretArr = Guitar.string5;
-			break;
-		}
-		case 6:
-		{
-			@fretArr = Guitar.string6;
-			break;
-		}
-	}
-	return @fretArr;
-}
 
 void SendTabsNames( int param0, int param1, int param2, string@ param3, int[] @ param4 )
 {
@@ -1437,40 +1413,31 @@ void RecvGuitTabs( int pauseTime, int fretsNum, int param2, string@ param3, int[
 	{
 		Message("frets is invalid");
 	}
-	Guitar.pause = pauseTime;
-	Guitar.fretsPerStr = fretsNum;
 	Message("Pause - " + Guitar.pause + " fretsNum - " + Guitar.fretsPerStr + " Vals - " + frets.length());
 	
-	Serializator load(frets);
+	Serializator load(frets);	
+	uint[] str;
+	load.Get(str);
 	
-	for(int guitStr = 1; guitStr <= 6; guitStr++)
-	{
-		uint[] @ GuitFretsArr = GetGuitFretArr(guitStr);	 
-		GuitFretsArr.resize(fretsNum);
-		
-		uint[] temp;
-		load.Get(temp);
-		GuitFretsArr = temp;
-	}
+	Guitar.ResetGuitar();
+	Guitar.FillGuitar(pauseTime, fretsNum, str);
+	
 	CreateTimeEvent(1, PEvent, null);
 }
 
 void SendGuitTabs()
 {
 	Serializator send;
-	send.Set(Guitar.string1).Set(Guitar.string2).Set(Guitar.string3).Set(Guitar.string4).Set(Guitar.string5).Set(Guitar.string6);
+	send.Set(Guitar.strings);
 	RunServerScriptUnsafe( "general_unsafe@unsafe_SendGuitTabs", Guitar.pause, Guitar.fretsPerStr, 0, null, send.Buff2Int() );
 }
 
-void ParseStrings(string rawStr, uint fretArrNum)
+uint[] ParseStrings(string rawStr)
 {
 //	Message(rawStr);
 	
 	string@[] temp;
-	uint[] @ fretArr;
-	
-	@fretArr = GetGuitFretArr(fretArrNum);
-	fretArr.resize(0);
+	uint[] fretArr;
 	
 	temp = splitEx(rawStr, " ");
 	
@@ -1486,7 +1453,7 @@ void ParseStrings(string rawStr, uint fretArrNum)
 		StrToInt( temp[i], result );
 		fretArr.insertLast(result);
 	}
-	return;
+	return fretArr;
 }
 
 bool LoadTabsConfig(uint num)
@@ -1510,15 +1477,22 @@ bool LoadTabsConfig(uint num)
 
 		if( name == "Tab" + num )
 		{	
-			Guitar.pause = sect.GetKey( "pause" ).GetUint();
-			Guitar.fretsPerStr = sect.GetKey( "frets" ).GetUint();
 			string tabsName = sect.GetKey( "name" ).GetVal();
 			if(tabsName.length() > 0) Message("Now Playing: " + tabsName);
 			
-			for(int j = 1; j <= 6; j++)
+			uint[] str;
+			for(uint j = 1; j <= 6; j++)
 			{
-				ParseStrings( sect.GetKey( "string" + j ).GetVal(), j);
+				uint[] temp = ParseStrings( sect.GetKey( "string" + j ).GetVal());
+				uint len2 = temp.length();
+				for(uint y = 0; y < len2; y++)
+				{
+					str.insertLast(temp[y]);
+				}
 			}
+			
+			Guitar.ResetGuitar();
+			Guitar.FillGuitar(sect.GetKey( "pause" ).GetUint(), sect.GetKey( "frets" ).GetUint(), str);
 
 			CreateTimeEvent(1, PEvent, null);
 			SendGuitTabs();
