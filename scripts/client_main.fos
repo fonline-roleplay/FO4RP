@@ -1319,18 +1319,28 @@ bool map_message( string& message, uint16& hexX, uint16& hexY, uint& color, uint
 ///////////////////////////
 // Guitar Client-Side logic
 ///////////////////////////
-class GuitarPlaying
+class CGuitarEvent : EventCallback
 {
-	uint pause = 100;
-	uint fretsPerStr = 0;
-	uint currFret = 0;
+	uint pause;
+	uint fretsPerStr;
+	uint currFret;
+	uint posX, posY;
 	uint[] strings;
 	
-	uint PlayTune()
+	CGuitarEvent(uint pauseData, uint fretsNumData, uint fretNum, uint posXData, uint posYData, uint[] strData)
 	{
-		if(currFret >= fretsPerStr)
+		this.pause = pauseData;
+		this.fretsPerStr = fretsNumData;
+		this.strings = strData;
+		this.currFret = fretNum;
+		this.posX = posXData;
+		this.posY = posYData;
+	}
+	
+    uint function(array<uint>@ variables)
+    {
+       	if(this.currFret >= this.fretsPerStr)
 		{
-			ResetGuitar();
 			return 0;
 		}
 		
@@ -1340,41 +1350,18 @@ class GuitarPlaying
 		for(uint i = 0; i < 6; i++)
 		{
 			uint index = currFret + (fretsPerStr * i);
-			if(strings[index] != 14) __PlaySound( chosen.Id, chosen.HexX, chosen.HexY, "guitar_string" + (i+1) + "_" + strings[index] + ".ogg", radius );
+			if(strings[index] != 14) __PlaySound( chosen.Id, posX, posY, "guitar_string" + (i+1) + "_" + strings[index] + ".ogg", radius );
 		}
 		
 		currFret++;
 		
         return pause; // return value measuring time in MS to repeat the event ( same as server side )
-	}
-	
-	void ResetGuitar()
-	{
-		pause = 100;
-		fretsPerStr = 0;
-		currFret = 0;
-		strings.resize(0);
-		Message("done");
-	}
-	
-	void FillGuitar(uint pauseData, uint fretsNumData, uint[] strData)
-	{
-		pause = pauseData;
-		fretsPerStr = fretsNumData;
-		strings = strData;
-	}
-	
-}
-GuitarPlaying Guitar;
+    }	
 
-class PlayEvent : EventCallback
-{
-    uint function(array<uint>@ variables)
-    {
-        return Guitar.PlayTune(); // return value measuring time in MS to repeat the event ( same as server side )
-    }
 }
-PlayEvent PEvent;
+
+CGuitarEvent@ currGuitEvent;
+IEvent@ currTE;
 
 void SendTabsNames( int param0, int param1, int param2, string@ param3, int[] @ param4 )
 {
@@ -1406,30 +1393,33 @@ void StartPlay( int num, int param1, int param2, string@ param3, int[] @ param4 
 	LoadTabsConfig(num);
 }
 
-void RecvGuitTabs( int pauseTime, int fretsNum, int param2, string@ param3, int[] @ frets )
+void RecvGuitTabs( int pauseTime, int fretsNum, int fretPos, string@ param3, int[] @ frets )
 {
 	Message("You received tabs");
 	if(!valid(frets))
 	{
 		Message("frets is invalid");
 	}
-	Message("Pause - " + Guitar.pause + " fretsNum - " + Guitar.fretsPerStr + " Vals - " + frets.length());
+	Message("Pause - " + pauseTime + " fretsNum - " + fretsNum + " Vals - " + frets.length());
 	
 	Serializator load(frets);	
 	uint[] str;
 	load.Get(str);
 	
-	Guitar.ResetGuitar();
-	Guitar.FillGuitar(pauseTime, fretsNum, str);
-	
-	CreateTimeEvent(1, PEvent, null);
+	CritterCl@ chos = GetChosen();
+	@currGuitEvent = CGuitarEvent(pauseTime, fretsNum, 0, chos.HexX, chos.HexY, str);
+	if(valid(currTE))
+	{
+		RemoveEvent(currTE);
+	}
+	@currTE = CreateTimeEvent(1, currGuitEvent, null);
 }
 
 void SendGuitTabs()
 {
 	Serializator send;
-	send.Set(Guitar.strings);
-	RunServerScriptUnsafe( "general_unsafe@unsafe_SendGuitTabs", Guitar.pause, Guitar.fretsPerStr, 0, null, send.Buff2Int() );
+	send.Set(currGuitEvent.strings);
+	RunServerScriptUnsafe( "general_unsafe@unsafe_SendGuitTabs", currGuitEvent.pause, currGuitEvent.fretsPerStr, currGuitEvent.currFret, null, send.Buff2Int() );
 }
 
 uint[] ParseStrings(string rawStr)
@@ -1491,10 +1481,13 @@ bool LoadTabsConfig(uint num)
 				}
 			}
 			
-			Guitar.ResetGuitar();
-			Guitar.FillGuitar(sect.GetKey( "pause" ).GetUint(), sect.GetKey( "frets" ).GetUint(), str);
-
-			CreateTimeEvent(1, PEvent, null);
+			CritterCl@ chos = GetChosen();
+			@currGuitEvent = CGuitarEvent(sect.GetKey( "pause" ).GetUint(), sect.GetKey( "frets" ).GetUint(), 0, chos.HexX, chos.HexY, str);
+			if(valid(currTE))
+			{
+				RemoveEvent(currTE);
+			}
+			@currTE = CreateTimeEvent(1, currGuitEvent, null);
 			SendGuitTabs();
 			
 			return true;
