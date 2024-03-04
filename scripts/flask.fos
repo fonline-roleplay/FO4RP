@@ -122,7 +122,7 @@ class MenuWaterBarrel: CenteredMenuHandler
 		{	
 			if( menu.ButtonMsg( STR_WATERWORKS_MENU_DRINK ) )
 			{
-				DrinkFlask(cr, waterBarrel);
+				DrinkFlask(cr, cr, waterBarrel);
 				return true;
 			}
 		}
@@ -189,9 +189,11 @@ uint GetFlagsCount(uint flags)
     return count;
 }
 
-bool DrinkFlask( Critter& cr, Item& flask )
+bool DrinkFlask( Critter& cr, Critter& targetCr, Item& flask )
 {
 	Map@ map = cr.GetMap(); 
+	bool isSameCr = cr.Id == targetCr.Id;
+	
 	if( !valid( map ) || !valid( flask ) )
 	{
 		return false;
@@ -209,55 +211,65 @@ bool DrinkFlask( Critter& cr, Item& flask )
 		return false;
 	}
 	
-	if( flask.DRINK_DNA != 0 )
+	uint flags2count = flask.FLASK_TASTE & ~DRINK_FLAG_TOXIN;
+	if(GetFlagsCount(flags2count) > 5)
 	{
-		uint flags2count = flask.FLASK_TASTE & ~DRINK_FLAG_TOXIN;
-		
-		if(GetFlagsCount(flags2count) > 5)
+		if(isSameCr && cr.ParamBase[ ST_INTELLECT ] > 3)
 		{
-			cr.Say(SAY_NETMSG, "Вы видите в таре то, что хуже стекломоя и решаете не пить это");
+			cr.Say(SAY_NETMSG, "You see something strange in flask and declining to drink that.");
 			return false;
 		}
-		
-		flask.REMAINING_USES--;
-		flask.EXTRA_WEIGHT = flask.REMAINING_USES * 100;
-		
-		uint8 hungerModifier = flask.HUNGER_REDUSE;
-		uint8 ThirstModifier = flask.THIRST_REDUSE;
-		cr.StatBase[ ST_HUNGER ] += hungerModifier; //* SATURATION_SIMPLIFIER;
-		cr.StatBase[ ST_THIRST ] += ThirstModifier; //* SATURATION_SIMPLIFIER;
-		cr.ParamBase[ ST_POISONING_LEVEL ] += flask.FLASK_TOXIN_LEVEL;
-		
-		if( cr.Param[ ST_RADIATION_LEVEL ] > 0 && flask.FLASK_POLUTION_LEVEL == 0)
+		else if(!isSameCr)
 		{
-			cr.ParamBase[ ST_RADIATION_LEVEL ] -= int( flask.SPIRIT_LEVEL * 0.25f );
-			if( cr.Param[ ST_RADIATION_LEVEL ] < 0 )
+			uint percent = (targetCr.IsKnockout()) ? 101 : 25 + (cr.ParamBase[ ST_AGILITY ] * 2) + (cr.ParamBase[ ST_STRENGTH ] * 2) - (targetCr.ParamBase[ ST_AGILITY ] * 2) - (targetCr.ParamBase[ ST_STRENGTH ] * 2);
+			uint rand = Random(0, 100);
+			if(percent < rand)
 			{
-				cr.ParamBase[ ST_RADIATION_LEVEL ] = 0;
+				cr.Say(SAY_NETMSG, "Target is resisting");
+				return false;
 			}
 		}
-		else
-		{
-			cr.ParamBase[ ST_RADIATION_LEVEL ] += flask.FLASK_POLUTION_LEVEL;
-		}
+		targetCr.ParamBase[ ST_POISONING_LEVEL ] += 15;
+	}
 		
-		if( cr.Param[ ST_DRUNK ] != 100 )
-		{
-			cr.ParamBase[ ST_DRUNK ] += int( flask.SPIRIT_LEVEL * 0.25f );
-			if( cr.Stat[ ST_DRUNK ] > 0 && cr.GetTimeEvents( CTE_DRUNK, null, null, null ) < 1 )
-			{
-				cr.AddTimeEvent( "gameplay@cte_Drunk", REAL_SECOND( cr.Param[ CR_DRUNK_SPEED ] ), CTE_DRUNK, 0 );
-			}
-		}
-		else
-		{
-			AffectPoison( cr, int( flask.SPIRIT_LEVEL ) );
-		}
+	flask.REMAINING_USES--;
+	flask.EXTRA_WEIGHT = flask.REMAINING_USES * 100;
 		
-		if(FLAG(flask.FLASK_TASTE, DRINK_FLAG_TOXIN))
+	uint8 hungerModifier = flask.HUNGER_REDUSE;
+	uint8 ThirstModifier = flask.THIRST_REDUSE;
+	targetCr.StatBase[ ST_HUNGER ] += hungerModifier; //* SATURATION_SIMPLIFIER;
+	targetCr.StatBase[ ST_THIRST ] += ThirstModifier; //* SATURATION_SIMPLIFIER;
+	targetCr.ParamBase[ ST_POISONING_LEVEL ] += flask.FLASK_TOXIN_LEVEL;
+		
+	if( targetCr.Param[ ST_RADIATION_LEVEL ] > 0 && flask.FLASK_POLUTION_LEVEL == 0)
+	{
+		targetCr.ParamBase[ ST_RADIATION_LEVEL ] -= int( flask.SPIRIT_LEVEL * 0.25f );
+		if( targetCr.Param[ ST_RADIATION_LEVEL ] < 0 )
 		{
-			AffectParalysis( cr, 100 );
+			targetCr.ParamBase[ ST_RADIATION_LEVEL ] = 0;
 		}
+	}
+	else
+	{
+		targetCr.ParamBase[ ST_RADIATION_LEVEL ] += flask.FLASK_POLUTION_LEVEL;
+	}
+		
+	if( targetCr.Param[ ST_DRUNK ] != 100 )
+	{
+		targetCr.ParamBase[ ST_DRUNK ] += int( flask.SPIRIT_LEVEL * 0.25f );
+		if( targetCr.Stat[ ST_DRUNK ] > 0 && targetCr.GetTimeEvents( CTE_DRUNK, null, null, null ) < 1 )
+		{
+			targetCr.AddTimeEvent( "gameplay@cte_Drunk", REAL_SECOND( targetCr.Param[ CR_DRUNK_SPEED ] ), CTE_DRUNK, 0 );
+		}
+	}
+	else
+	{
+		AffectPoison( targetCr, int( flask.SPIRIT_LEVEL ) );
+	}
+		
+	if(FLAG(flask.FLASK_TASTE, DRINK_FLAG_TOXIN))
+	{
+		AffectParalysis( targetCr, 50 );
 	}
 	
 	if( flask.REMAINING_USES == 0 )
@@ -265,8 +277,8 @@ bool DrinkFlask( Critter& cr, Item& flask )
 		flask.REMAINING_USES = 0;
 		flask.DRINK_DNA = 0;
 		flask.EXTRA_WEIGHT = 0;
-		flask.Val3 = 0;
-		flask.Val4 = 0;
+		flask.HUNGER_REDUSE = 0;
+		flask.THIRST_REDUSE = 0;
 		flask.FLASK_TOXIN_LEVEL = 0;
 		flask.Val6 = 0;
 		flask.FLASK_POLUTION_LEVEL = 0;
