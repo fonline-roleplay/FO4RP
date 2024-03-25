@@ -48,7 +48,7 @@ class MenuTransferLiquid: CenteredMenuHandler {
 		
 		if(flask.REMAINING_USES > 0 && target.REMAINING_USES != int( target.Proto.Partial_Item ))
 		{
-			if( menu.Button("Transfer Liquid into") ) 
+			if( menu.ButtonMsg(STR_TRANSFER_LIQ_IN) ) 
 			{
 				ProcessFlask( cr, flask, target );
 				return false;
@@ -57,7 +57,7 @@ class MenuTransferLiquid: CenteredMenuHandler {
 		
 		if( ( target.REMAINING_USES > 0 && flask.REMAINING_USES != int( flask.Proto.Partial_Item ) ) || flask.GetProtoId() == PID_BOTTLE_GLASS)
 		{
-			if( menu.Button("Transfer Liquid out") ) 
+			if( menu.ButtonMsg(STR_TRANSFER_LIQ_OUT) ) 
 			{
 				ProcessFlask( cr, target, flask );
 				return false;
@@ -189,6 +189,22 @@ uint GetFlagsCount(uint flags)
     return count;
 }
 
+void Emote( Critter& target, Item& consumed )
+{
+	target.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT,STR_EMOTE_DRINKS );
+	target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CONSUMED_DRINK, "$proto@msg item " + ( consumed.Proto.ProtoId * 100 ) + "@" );
+	
+	if( target.Param[ ST_RADIATION_LEVEL ] > 0 && consumed.SPIRIT_LEVEL != 0 )
+	{
+		target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOST_RAD, "$rad" + consumed.SPIRIT_LEVEL );
+	}
+	
+	if( consumed.FLASK_POLUTION_LEVEL != 0 )
+	{
+		target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DRUNK_POISON, "$poison" + consumed.FLASK_POLUTION_LEVEL );
+	}
+}
+
 bool DrinkFlask( Critter& cr, Critter& targetCr, Item& flask )
 {
 	Map@ map = cr.GetMap(); 
@@ -198,12 +214,6 @@ bool DrinkFlask( Critter& cr, Critter& targetCr, Item& flask )
 	{
 		return false;
     }
-	
-	if( flask.CritSlot != SLOT_HAND1 && flask.GetProtoId() != PID_WATER_BARREL )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HOLD_FLASK );
-		return false;
-	}
 	
 	if( flask.REMAINING_USES <= 0 )
 	{
@@ -215,10 +225,10 @@ bool DrinkFlask( Critter& cr, Critter& targetCr, Item& flask )
 	{
 		if(!targetCr.IsKnockout())
 		{
-			cr.Say(SAY_NETMSG, "Target is resisting");
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_RESIST );
 			return false;
 		}
-		targetCr.Say(SAY_EMOTE, "Choking");
+		targetCr.SayMsg(SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_CHOKING);
 	}
 	
 	uint flags2count = flask.FLASK_TASTE & ~DRINK_FLAG_TOXIN;
@@ -226,12 +236,21 @@ bool DrinkFlask( Critter& cr, Critter& targetCr, Item& flask )
 	{
 		if(isSameCr && cr.ParamBase[ ST_INTELLECT ] > 3)
 		{
-			cr.Say(SAY_NETMSG, "You see something strange in flask and declining to drink that.");
+			cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, STR_STRANGE_DRINK);
 			return false;
+		}
+		else
+		{
+			cr.SayMsg(SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_CHOKING);
 		}
 		targetCr.ParamBase[ ST_POISONING_LEVEL ] += 15;
 	}
 		
+	if(isSameCr)
+	{
+		Emote(cr, flask);
+	}
+	
 	flask.REMAINING_USES--;
 	flask.EXTRA_WEIGHT = flask.REMAINING_USES * 100;
 		
@@ -324,6 +343,35 @@ bool PourFlask( Critter& cr, Item& flask )
 	
 	flask.Update();
 	return true;
+}
+
+bool CloseBottle(Critter& cr, Item& bottle)
+{
+	if(!valid(bottle) || !valid(cr))
+	{
+		return false;
+	}
+	
+	if( bottle.REMAINING_USES == bottle.Proto.Partial_Item &&
+		bottle.DRINK_DNA == bottle.Proto.StartValue_1 &&
+		bottle.EXTRA_WEIGHT == bottle.Proto.Partial_Item * 100 &&
+		bottle.HUNGER_REDUSE == bottle.Proto.Food_Restore &&
+		bottle.THIRST_REDUSE == bottle.Proto.Food_Thrist &&
+		bottle.FLASK_TASTE == bottle.Proto.StartValue_8 &&
+		bottle.SPIRIT_LEVEL == bottle.Proto.StartValue_9
+	)
+	{
+		_SubItem(bottle, 1);
+		int index = glass_bottles[2].find( bottle.GetProtoId() );
+		cr.AddItem( glass_bottles[1][index], 1 );
+	}
+	else
+	{
+		cr.Say(SAY_NETMSG, "You trying to close bottle and failing");
+		return false;
+	}
+	
+	return true;	
 }
 
 bool ProcessFlask(Critter& cr, Item@ input, Item@ output)
@@ -438,6 +486,7 @@ uint process_transfer_liquid( Critter@ cr, int& param0, int& param1, int& param2
 		
 		if(output.REMAINING_USES == int( output.Proto.Partial_Item ))
 		{
+			CloseBottle( cr, output );
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FINISHED_FILLING );
 			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 			return 0;
