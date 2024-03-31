@@ -6,10 +6,7 @@
 #include "heal_h.fos"
 #include "reload_h.fos"
 #include "Fractions.fosh"
-
-import uint CountMapPlayers( Map@ map ) from "manager";
-
-#define DISTANCE_RETURN_HOME		( 10 )
+#include "lockers_h.fos"
 
 void GM_GuardsInit( Critter& npc ) // Export
 {
@@ -33,7 +30,7 @@ void _AiGuardsInit( Critter& npc, bool firstTime )
 	npc.SetEvent( CRITTER_EVENT_KNOCKOUT,			"_MangeEntanglement" );
 	npc.SetEvent( CRITTER_EVENT_USE_SKILL_ON_ME,	"_ReactToSkill" );
 	npc.SetEvent( CRITTER_EVENT_SMTH_DROP_ITEM,		"_ReactToDrop" );
-	//npc.SetEvent( CRITTER_EVENT_SMTH_MOVE_ITEM,		"_ExplosiveSnow" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_MOVE_ITEM,		"_ExplosiveSnow" );
 }
 
 void _CritterLookAt( Critter& npc, Critter& target )
@@ -116,42 +113,12 @@ void _Idle( Critter& npc )
 		return;
 	}
 	
-	Map@ map = npc.GetMap();
-	if( !valid( map ) )
+	Item@ weapon = _CritGetItemHand( npc );
+	if( valid( weapon ) )
 	{
-		return; 
-	}
-	
-	if( CountMapPlayers( map ) == 0 )
-	{
-		Item@ weapon = _CritGetItemHand( npc );
-		if( valid( weapon ) )
+		if( weapon.Proto.Weapon_MaxAmmoCount - weapon.AmmoCount > 0 )
 		{
-			if( weapon.Proto.Weapon_MaxAmmoCount - weapon.AmmoCount > 0 )
-			{
-				FindAmmo( npc, weapon, 0 );
-			}
-		}
-			
-		uint mapId = 0;
-		uint16 homeX = 0;
-		uint16 homeY = 0;
-		uint8 dir = 0;
-		npc.GetHomePos( mapId, homeX, homeY, dir );
-		if( npc.ModeBase[ MODE_NO_HOME ] == 1 )
-		{
-			if( map.Id != mapId )
-			{
-				return;
-			}
-		
-			uint dist = GetDistantion( homeX, homeY, npc.HexX, npc.HexY );
-
-			if( int( dist ) > DISTANCE_RETURN_HOME )
-			{
-				npc.DropPlanes();
-				AddWalkPlane( npc, 0, homeX, homeY, dir, false, 0 );
-			}
+			FindAmmo( npc, weapon, 0 );
 		}
 	}
 }
@@ -210,18 +177,8 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 			return;
 		}
 		
-		if( npc.IsSee( target ) ) 
-		{
-			npc.AddEnemyInStack( target.Id );
-			AddAttackPlane( npc, 0, target );
-		} 
-		else if( npc.IsNoPlanes() ) 
-		{
-			uint16 hx = npc.HexX, hy = npc.HexY;
-			uint16 tx = target.HexX, ty = target.HexY;
-			int dir = GetDirection( hx, hy, tx, ty );
-			AddWalkPlane( npc, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, dir, true, 1 );
-		}
+		npc.AddEnemyInStack( target.Id );
+		AddAttackPlane( npc, 0, target );
 	}
 }
 
@@ -267,13 +224,73 @@ int _PlaneEnd( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@
             return PLANE_RUN_GLOBAL;
 		}
 		
-        if( TryLetPassage( someCr, npc ) ) 
+        if( TryLetPassage( someCr, npc ) )
 		{
             npc.Wait( AI_DELAY );
             return PLANE_KEEP;
         }
     }
 	
+	if( reason == REASON_GAG_ITEM || reason == REASON_DEADLOCK )
+	{
+        if( valid( someItem ) )
+		{
+            if( someItem.GetType() == ITEM_TYPE_DOOR && !FLAG( someItem.LockerCondition, LOCKER_ISOPEN ) &&
+                npc.Stat[ ST_BODY_TYPE ] <= BT_GHOUL && IsKeyAviable( npc, someItem.LockerId ) )
+			{
+                NpcPlane@ child = CreatePlane();
+                child.Type = AI_PLANE_PICK;
+                child.Priority = 0;
+                child.Pick_HexX = someItem.HexX;
+                child.Pick_HexY = someItem.HexY;
+                child.Pick_Pid = someItem.GetProtoId();
+                child.Pick_UseItemId = GetKeyId( npc, someItem.LockerId );
+                child.Pick_ToOpen = true;
+                child.Run = plane.Run;
+                plane.SetChild( child );
+                return PLANE_RUN_GLOBAL;                 // Cancel deleting
+			}
+            /* WIP need to find a way to animate critter without dropping plane stack */
+            else if( someItem.Proto.Material == MATERIAL_WOOD && someItem.Proto.Item_Subtype == ITEM_SUBTYPE_FURNITURE )
+			{
+                NpcPlane@ child = CreatePlane();
+                child.Type = AI_PLANE_PICK;
+                child.Priority = 0;
+                child.Identifier = 228;
+                child.Pick_HexX = someItem.HexX;
+                child.Pick_HexY = someItem.HexY;
+                child.Pick_Pid = someItem.GetProtoId();
+                child.Run = plane.Run;
+                plane.SetChild( child );
+
+                npc.Animate( 0, ANIM2_PUNCH_RIGHT, null, true, true );
+
+                if( isContainer( someItem ) )
+                {
+                    DropContainerItems( npc.GetMap(), someItem);
+                }
+				
+                DeleteItem( someItem );
+                
+                return PLANE_RUN_GLOBAL;
+            }	
+			else if( someItem.GetType() != ITEM_TYPE_DOOR )
+			{
+                NpcPlane@ child = CreatePlane();
+                child.Type = AI_PLANE_PICK;
+                child.Priority = 0;
+                child.Pick_HexX = someItem.HexX;
+                child.Pick_HexY = someItem.HexY;
+                child.Pick_Pid = someItem.GetProtoId();
+                child.Run = plane.Run;
+                plane.SetChild( child );
+                return PLANE_RUN_GLOBAL;                 // Cancel deleting
+            }			
+        }
+		
+		return PLANE_DISCARD;
+	}	
+
 	return PLANE_RUN_GLOBAL;
 }
 
@@ -321,10 +338,10 @@ bool _Attacked( Critter& npc, Critter& attacker )
 	}
 	else
 	{
-		npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
 		if( npc.IsSee( attacker ) ) 
 		{
 			npc.DropPlanes();
+			npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
 			npc.AddEnemyInStack( attacker.Id );
 			AddAttackPlane( npc, 0, attacker );
 			return true;
@@ -560,12 +577,9 @@ void _ReactToDrop( Critter& npc, Critter& fromCr, Item& item )
 	}
 	
 	Fraction@ npc_fraction = GetFraction( npc );
-	if( valid( npc_fraction ) )
+	if( GetFractionRelation( npc_fraction, fromCr ).Value == Relation_Ally )
 	{
-		if( GetFractionRelation( npc_fraction, fromCr ).Value == Relation_Ally )
-		{
-			return;
-		}
+		return;
 	}
 	
 	if( ( item.GetType() == ITEM_TYPE_TRAP && item.GetProtoId() != PID_TRAP_DEACTIVATED ) 
@@ -578,7 +592,7 @@ void _ReactToDrop( Critter& npc, Critter& fromCr, Item& item )
 		AddAttackPlane( npc, 0, fromCr );
 	}
 }
-/*
+
 void _ExplosiveSnow( Critter& npc, Critter& fromCr, Item& item, uint8 fromSlot )
 {
 	if( isGM( fromCr ) )
@@ -606,6 +620,6 @@ void _ExplosiveSnow( Critter& npc, Critter& fromCr, Item& item, uint8 fromSlot )
 		npc.AddEnemyInStack( fromCr.Id );
 		AddAttackPlane( npc, 0, fromCr );
 	}
-}*/
+}
 
 #endif //AI_GUARDS
