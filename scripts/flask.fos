@@ -352,14 +352,25 @@ bool CloseBottle(Critter& cr, Item& bottle)
 		return false;
 	}
 	
-	if( bottle.REMAINING_USES == bottle.Proto.Partial_Item &&
+	bool isSameBottle = ( bottle.REMAINING_USES == bottle.Proto.Partial_Item &&
 		bottle.DRINK_DNA == bottle.Proto.StartValue_1 &&
 		bottle.EXTRA_WEIGHT == bottle.Proto.Partial_Item * 100 &&
 		bottle.HUNGER_REDUSE == bottle.Proto.Food_Restore &&
 		bottle.THIRST_REDUSE == bottle.Proto.Food_Thrist &&
 		bottle.FLASK_TASTE == bottle.Proto.StartValue_8 &&
-		bottle.SPIRIT_LEVEL == bottle.Proto.StartValue_9
-	)
+		bottle.SPIRIT_LEVEL == bottle.Proto.StartValue_9 );
+	
+	if( bottle.GetProtoId() == PID_HOMEBREW_PRT )
+	{
+		_SubItem(bottle, 1);
+		int index = glass_bottles[2].find( bottle.GetProtoId() );
+		Item@ newBottle = cr.AddItem( glass_bottles[1][index], 1 );
+		newBottle.FLASK_TOXIN_LEVEL = bottle.FLASK_TOXIN_LEVEL;
+		newBottle.FLASK_POLUTION_LEVEL = bottle.FLASK_POLUTION_LEVEL;
+		newBottle.FLASK_TASTE = bottle.FLASK_TASTE;
+		newBottle.SPIRIT_LEVEL = bottle.SPIRIT_LEVEL;
+	}
+	else if( isSameBottle )
 	{
 		_SubItem(bottle, 1);
 		int index = glass_bottles[2].find( bottle.GetProtoId() );
@@ -434,27 +445,38 @@ void startTransfer( Critter& cr, Item& input, Item& output )
 	
 	if(output.GetProtoId() == PID_BOTTLE_GLASS)
 	{
+		if(input.REMAINING_USES < 1) return;
+		
 		uint16 pid = 0;
-		if(index_glass_bottles( input.DRINK_DNA, 1 ) != -1) pid = input.DRINK_DNA;
-		else
+		uint index = index_glass_bottles( input.DRINK_DNA, 1 );
+		if( index != -1 )
 		{
-			uint index = index_glass_bottles( input.DRINK_DNA, 2 );
-			if( index != -1 )
-			{
-				pid = glass_bottles[1][index];
-			}
+			pid = glass_bottles[2][index];
 		}	
-		cr.AddItem(pid, 1);
+		Item@ newBottle = cr.AddItem(pid, 1);
 		_SubItem(output, 1);
-		input.REMAINING_USES -= 5;
+		input.REMAINING_USES -= 1;
+		newBottle.REMAINING_USES = 1;
 		input.EXTRA_WEIGHT = input.REMAINING_USES * 100; 
+		newBottle.SPIRIT_LEVEL = input.SPIRIT_LEVEL;
+		newBottle.FLASK_TOXIN_LEVEL = input.FLASK_TOXIN_LEVEL;
+		Item@ hands = cr.GetItem( 0, SLOT_HAND1 );
+		if( valid( hands ) )
+		{
+			cr.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
+		}
+		cr.MoveItem( newBottle.Id, newBottle.GetCount(), SLOT_HAND1 );
+		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = 5;
+		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+		StartProcess( cr, LTP_TRANSFER_LIQ, 0, input.Id, newBottle.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		return;
 	}
 	
 	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
 	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
 	cr.ParamBase[ ST_LTP_SEQUENCE ] = input.REMAINING_USES > ( output.Proto.Partial_Item - output.REMAINING_USES ) ? ( output.Proto.Partial_Item - output.REMAINING_USES ) : input.REMAINING_USES;
-
 	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
 	
     StartProcess( cr, LTP_TRANSFER_LIQ, 0, input.Id, output.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
@@ -477,17 +499,17 @@ uint process_transfer_liquid( Critter@ cr, int& param0, int& param1, int& param2
 		Map@ map = cr.GetMap();
 		PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
 		
-		if(input.REMAINING_USES <= 0)
-		{	
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FLASK_EMPTY );
-			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
-			return 0;
-		}
-		
 		if(output.REMAINING_USES == int( output.Proto.Partial_Item ))
 		{
 			CloseBottle( cr, output );
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FINISHED_FILLING );
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+			return 0;
+		}
+		
+		if(input.REMAINING_USES <= 0)
+		{	
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FLASK_EMPTY );
 			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 			return 0;
 		}
@@ -499,33 +521,35 @@ uint process_transfer_liquid( Critter@ cr, int& param0, int& param1, int& param2
 		}
 		
 		output.FLASK_TASTE |= input.FLASK_TASTE;
-
+		
+		if(input.FLASK_TOXIN_LEVEL > 0)
+		{
+			int toxPerc1 = 100 * input.FLASK_TOXIN_LEVEL;
+			int toxPerc2 = output.EXTRA_WEIGHT * output.FLASK_TOXIN_LEVEL;
+			output.FLASK_TOXIN_LEVEL = ( toxPerc1 + toxPerc2 ) / ( 100 + output.EXTRA_WEIGHT );
+		}
+		
+		if(input.SPIRIT_LEVEL > 0)
+		{
+			int spiritPerc1 = 100 * input.SPIRIT_LEVEL;
+			int spiritPerc2 = output.EXTRA_WEIGHT * output.SPIRIT_LEVEL;
+			output.SPIRIT_LEVEL = ( spiritPerc1 + spiritPerc2 ) / ( 100 + output.EXTRA_WEIGHT );
+		}
+		
 		input.REMAINING_USES--;
 		output.REMAINING_USES++;
+		
+		input.EXTRA_WEIGHT = input.REMAINING_USES * 100;
+		output.EXTRA_WEIGHT = output.REMAINING_USES * 100;
+		
+		output.HUNGER_REDUSE = input.HUNGER_REDUSE;
+		output.THIRST_REDUSE = input.THIRST_REDUSE;
 		
 		if(input.REMAINING_USES == 0)
 		{
 			input.DRINK_DNA = 0;
 			ChangeFlaskProto(input);
 		}
-		
-		input.EXTRA_WEIGHT = input.REMAINING_USES * 100;
-		output.EXTRA_WEIGHT = output.REMAINING_USES * 100;
-		
-		if(input.FLASK_TOXIN_LEVEL > 0)
-		{
-			float toxPerc = output.REMAINING_USES * output.FLASK_TOXIN_LEVEL;
-			output.FLASK_TOXIN_LEVEL = int(( input.FLASK_TOXIN_LEVEL + toxPerc ) / ( 1 + output.REMAINING_USES ));
-		}
-		
-		if(input.SPIRIT_LEVEL > 0)
-		{
-			float spiritPerc = output.REMAINING_USES * output.SPIRIT_LEVEL;
-			output.SPIRIT_LEVEL = int(( input.SPIRIT_LEVEL + spiritPerc ) / ( 1 + output.REMAINING_USES ));
-		}
-		
-		output.HUNGER_REDUSE = input.HUNGER_REDUSE;
-		output.THIRST_REDUSE = input.THIRST_REDUSE;
 		
 		input.Update();
 		output.Update();
