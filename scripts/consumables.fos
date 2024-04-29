@@ -1,0 +1,211 @@
+#include "_utils.fos"
+
+#include "consumables/_utils.fos"
+
+#include "consumables/param_names.fos"
+#include "consumables/Consumables.fos"
+#include "consumables/Consumer.fos" 
+#include "consumables/Menu.fos"
+
+#include "consumables/_data.fos"
+#include "consumables/_debug.fos"
+
+#endif // CONSUMABLES_WIP
+
+//~run consumables showAll action 0 0
+void showAll( Critter& cr, int action, int, int )
+{
+	for( uint i = 0, len = consumables.list.length(); i < len; i++ )
+	{
+		cr.Say( SAY_NETMSG, i + ") " + consumables.list[i].toString() );
+		if( action != 0 )
+		{
+			cr.AddItem( consumables.list[i].pid, 10 );
+		}
+	}
+}
+
+bool main_logic( Critter& cr, Item& drug, Critter& target ) //exported
+{//FORMAT: returns true if processed item
+	uint pid = drug.GetProtoId();
+	
+	Consumable@ consumable = consumables.get( pid );
+	if( !valid( consumable ) )
+	{
+		return false;
+	}
+	
+	if( heal_items.find( pid ) != -1 )
+	{
+		if( cr.IsPlayer() && cr.Timeout[ TO_SK_FIRST_AID ] > 0 )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SK_COOLDOWN );
+			return true;
+		}
+		cr.TimeoutBase[ TO_SK_FIRST_AID ] = FIRST_AID_TIMEOUT( cr );
+	}
+	
+	if( target.Id != cr.Id )
+	{//NOTE: To ensure that target will use drug propertly by oneself		
+		MoveItem( drug, 1, target );
+	}
+	
+	consumable.sound.play(target);
+	consumable.item.add(target);
+	
+	consumable.effect.apply(target);
+	consumable.group.addiction.roll(target);
+	
+	Consumer( target, consumable )
+		.checkOverdose()
+		.checkPhases()
+	;
+	
+	if( consumable.isAlreadyConsumed == false )
+	{
+		if( !target.DeleteItem( pid, 1 ) )
+		{
+			cr.Say( SAY_NETMSG, "Target drug item not found!" );
+		}
+	}
+	
+	return true;
+}
+
+void changedParam_ADDICTION_JET( Critter& cr, uint, int oldValue ) 		{ ProcessAddiction( cr, oldValue, ADDICTION_JET, PID_JET ); }
+void changedParam_ADDICTION_PSYCHO( Critter& cr, uint, int oldValue )	{ ProcessAddiction( cr, oldValue, ADDICTION_PSYCHO, PID_PSYCHO ); }
+void changedParam_ADDICTION_BUFFOUT( Critter& cr, uint, int oldValue )  { ProcessAddiction( cr, oldValue, ADDICTION_BUFFOUT, PID_BUFFOUT ); }
+
+void ProcessAddiction( Critter& cr, int oldValue, uint param, uint pid )
+{
+	int newValue = cr.Param[ param ];
+
+	if( newValue == oldValue ) return;
+
+	if( oldValue == DRUG_ADDICTION_IS_GOING )
+		DropAddictionCTE( cr, pid );
+	
+	if( newValue == DRUG_ADDICTION_IS_GOING )
+		StartAddictionCTE( cr, pid );
+}
+
+void DropAddictionCTE( Critter& cr, uint pid )
+{
+	Consumable@ consumable = consumables.get( pid );
+	if( !valid( consumable ) ) return;
+	
+	consumable.group.addiction.effect.undo(cr);
+
+	EraseAddictionTimeEventsByPID( cr, pid );
+}
+
+void StartAddictionCTE( Critter& cr, uint pid )
+{
+	Consumable@ consumable = consumables.get( pid );
+	if( !valid( consumable ) ) return;
+
+	Effect@ effect = @consumable.group.addiction.effect;
+	effect.apply(cr);
+
+	cr.AddTimeEvent( "consumables@cte_addiction", REAL_MINUTE( effect.time ), pid, DRUG_ADDICTION_PHASE );
+}
+
+uint cte_addiction( Critter& cr, int pid, uint& phase )
+{
+	Consumable@ consumable = consumables.get( pid );
+	if( !valid( consumable ) ) return 0;
+
+	uint param = consumable.group.addiction.param;
+	if( param != 0 ) 
+	{
+		cr.AddictionBase[ param ] = DRUG_ADDICTION_IS_NONE;
+	}
+	
+	return 0;
+}
+
+uint cte_drug_process( Critter& cr, int pid, uint& phase )
+{
+	phase++;
+
+	Consumable@	consumable = consumables.get(pid);
+	if( !valid( consumable ) ) return 0;
+	
+	Consumer( cr, consumable ).checkAddiction(phase);
+
+	Effect@ _new = noEffect();
+	Effect@ _old = noEffect();
+	switch( phase )
+	{
+		case(1): @_new = @consumable.phase1; break;
+		case(2): @_new = @consumable.phase2; 
+				 @_old = @consumable.phase1; break;
+		case(3): @_old = @consumable.phase2; break; 
+	}
+	
+	_old.undo( cr );
+	_new.apply( cr );
+
+	return REAL_MINUTE( _new.time );		
+}
+
+void EraseAddictionTimeEventsByPID( Critter& cr, uint pid )
+{
+	uint[] uid, duration, phase;
+	uint count = cr.GetTimeEvents( pid, uid, duration, phase );
+	
+	for( uint j = 0; j < count; j++ )
+	{
+		if( phase[j] == DRUG_ADDICTION_PHASE )
+		{
+			cr.EraseTimeEvent( uid[j] );
+		}
+	}
+}
+
+void AddTimeEventsByPID( Critter& cr, uint pid, ActiveDrug@[]& list )
+{
+	uint[] index, duration, phase;
+	uint count = cr.GetTimeEvents( pid, index, duration, phase );
+	
+	for( uint j = 0; j < count; j++ )
+	{
+		list.insertLast( ActiveDrug( pid, index[j], phase[j], duration[j] ) );
+	}
+}
+
+ActiveDrug@[] enlistAllActiveDrugs( Critter& cr )
+{
+	ActiveDrug@[] list;
+	
+	for( uint i = 0, len = consumables.list.length(); i < len; i++ )
+	{
+		uint pid = consumables.list[i].pid;		
+		AddTimeEventsByPID( cr, pid, list );
+	}
+	
+	return list;
+}
+
+uint countActiveDrugsByPid( Critter& cr, uint pid )
+{
+	ActiveDrug@[] drugs = enlistAllActiveDrugs(cr);
+	
+	uint count = 0;
+	for( uint i = 0, len = drugs.length(); i < len; i++ )
+	{
+		if( drugs[i].pid() == pid )
+		{
+			count++;
+		}
+	}
+	
+	return count;
+}
+
+void skipStage( Critter& cr, ActiveDrug@ drug )
+{
+	cr.ChangeTimeEvent( drug.event_id(), 0, drug.phase() );
+}
+
+#endif // CONSUMABLES

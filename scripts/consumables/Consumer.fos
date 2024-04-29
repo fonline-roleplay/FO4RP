@@ -1,0 +1,126 @@
+#ifndef CONSUMABLES_CONSUMER
+#define CONSUMABLES_CONSUMER
+
+#include "ActiveDrug.fos"
+#include "DrugGroup.fos"
+#include "Consumable.fos"
+
+///Соотносит потребляемый предмет (из массива данных _data.fos) с криттером-получателем результата.
+///Основное хранилище логики взаимодействия с зависимостями, менеджмента фаз и передоза.
+
+class Consumer
+{
+	Critter@ cr;
+	Consumable@ consumable;
+	Consumer( Critter& cr, Consumable& consumable ) 
+	{
+		@this.cr = @cr;
+		@this.consumable = @consumable;
+	}	
+	
+	ActiveDrug@[] getActiveDrugs()
+	{
+		uint[] pids = consumable.group.pids;
+		
+		ActiveDrug@[] list;		
+		for( uint i = 0, l = pids.length(); i < l; i++ )
+		{
+			AddTimeEventsByPID( cr, pids[i], list );
+		}				
+		
+		return list;
+	}
+	
+	ActiveDrug@ getOldest( ActiveDrug@[] list )
+	{
+		ActiveDrug@ oldest = null;
+		for( uint i = 0, count = list.length(); i < count; i++ ) 
+		{
+			if( count > 1 || list[i].phase() > 1 )
+			{
+				if( list[i].isOlderThan(oldest) )
+				{
+					@oldest = @list[i];
+				}
+			}
+		}		
+		
+		return oldest;		
+	}	
+	
+	bool removeOldest()
+	{
+		ActiveDrug@ drug = getOldest( getActiveDrugs() ); 
+		if( !valid(drug) ) return true;
+		
+		cr.EraseTimeEvent( drug.event_id() );
+		
+		Consumable@	consumable = consumables.get(drug.pid());
+		if( !valid( consumable ) ) return false;	
+		
+		switch( drug.phase() )
+		{
+			case(1): consumable.phase1.undo( cr ); break;
+			case(2): consumable.phase2.undo( cr ); break;
+		}		
+		
+		return true;
+	}	
+	
+	Consumer@ checkPhases()
+	{
+		removeOldest();
+
+		cr.AddTimeEvent( "cte_drug_process", REAL_SECOND(0), consumable.pid, DRUG_PHASE_START );
+		
+		return this;
+	}
+	
+	Consumer@ checkOverdose()
+	{
+		Effect@ effect = consumable.group.overdose;
+
+		int overdose = getValue( cr, ST_GLOBAL_OVERDOSE );
+		
+		uint count = CLAMP( overdose, 0, OVERDOSE_MAX ) / OVERDOSE_PER_EFFECT;
+		for( uint i = 0; i < count; i++ )
+		{
+			effect.apply(cr);
+		}
+		
+		return this;
+	}
+	
+	Consumer@ checkAddiction( uint from_phase )
+	{
+		consumable.group.addiction.check( cr, isOnDrugs(from_phase) );		
+		
+		return this;
+	}
+	
+	bool isOnDrugs( uint from_phase )
+	{
+		if( from_phase <= 1 )
+		{
+			return true;
+		}
+		
+		ActiveDrug@[] list = getActiveDrugs();
+		for( uint i = 0, count = list.length(); i < count; i++ ) 
+		{
+			if( list[i].phase() <= 1 )
+			{
+				return true;
+			}
+		}			
+			
+		return false;
+	}
+	
+	string toString()
+	{
+		return crInfo( cr ) + " " + consumable.toString();
+	}
+}
+
+#endif
