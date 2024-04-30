@@ -1,16 +1,526 @@
+#define CONSUMABLES_MODULE
+
 #include "_utils.fos"
-
-#include "consumables/_utils.fos"
-
-#include "consumables/param_names.fos"
-#include "consumables/Consumables.fos"
-#include "consumables/Consumer.fos" 
+#include "fofmod_h.fos"
+#include "casino_h.fos"
+#include "consumables_h.fos"
 #include "consumables/Menu.fos"
-
 #include "consumables/_data.fos"
-#include "consumables/_debug.fos"
+#include "consumables/ParamChange.fos"
+#include "consumables/param_names.fos"
 
-#endif // CONSUMABLES_WIP
+class ActiveDrug 
+{
+	CTE cte;
+	
+	uint pid() 			{ return cte.group_id; }
+	uint phase() 		{ return cte.rate; }
+	uint time_left() 	{ return cte.time_left; }
+	uint event_id() 	{ return cte.event_id; }
+	
+	ActiveDrug( uint pid, uint event_id, uint phase, uint time_left ) 
+	{
+		cte = CTE( pid, event_id, phase, time_left );
+	}
+	
+	bool isOlderThan( ActiveDrug@ other )
+	{
+		if( this.phase() == DRUG_ADDICTION_PHASE ) return false;
+		
+		if( !valid( other ) ) return true;
+		if( this.phase() > other.phase() ) return true;
+		if( this.time_left() <= other.time_left() ) return true;
+		
+		return false;
+	}
+	
+	string toString()
+	{
+		return "ActiveDrug(" + itemName( pid() ) + ")#" + pid() + ":" + event_id() + " at " + phase() + " phase on " + DeltaTime_HMS( time_left() );
+	}
+}
+
+class Effect 
+{
+	uint time;
+	string name;
+	ParamChange@[] changes;
+	
+	Effect() { init(0); }
+	Effect( uint time ) { init(time); }	
+	
+	void init( uint time ) 
+	{
+		name = "effect";
+		this.time = time;
+		changes.resize(0);
+	}	
+	
+	Effect@ once( uint stat, int value ) 	  { return add( PermanentParamChange( stat, value ) ); }
+	Effect@ setState( uint stat, int value )  { return add( ParamSet( 			  stat, value ) ); }
+	Effect@ temporary( uint stat, int value ) { return add( ParamChange( 		  stat, value ) ); }	
+
+	Effect@ add( ParamChange@ change )
+	{
+		changes.insertLast( change );
+		
+		return this;
+	}	
+	
+	void apply( Critter& cr ) 
+	{
+		SayLog( cr, name + " apply to " + crInfo( cr ) );
+		
+		for( uint i = 0, len = changes.length(); i < len; i++ )
+		{
+			changes[i].apply( cr );
+		}
+	}	
+	
+	void undo( Critter& cr ) 
+	{
+		SayLog( cr, name + " undo to " + crInfo( cr ) );
+		
+		for( uint i = 0, len = changes.length(); i < len; i++ )
+		{
+			changes[i].undo( cr );
+		}
+	}	
+	
+	string toString() 
+	{//Format: Effect(HH:MM:SS) affects: PARAM#INDEX (value)[PERMANENT], PARAM#INDEX (value), ...
+		string result = "Effect(" + DeltaTime_HMS( time ) + ") affects: ";
+		
+		for( uint i = 0, len = changes.length(); i < len; i++ ) 
+		{
+			result += changes[i].toString();
+			if( i + 1 < len ) result += ", ";
+		}
+		
+		return result;
+	}
+}
+
+class noEffect : Effect
+{
+	noEffect() { name = toString(); }
+	void apply( Critter& cr ) override {}
+	void undo( Critter& cr )  override {}
+	string toString() override { return "[noEffect]"; }
+}
+
+class Addiction
+{
+	uint param;
+	uint chance;
+	Addiction( uint param, uint chance )
+	{
+		this.param = param;
+		this.chance = chance;
+	}	
+	
+	Effect@ effect;
+	Addiction@ on( Effect@ effect ) 
+	{
+		@this.effect = @effect;
+		this.effect.name = PARAM_NAME(param) + " .onAddiction";
+		
+		return this;
+	}	
+	
+	bool roll( Critter& cr )
+	{//FORMAT: Returns true if Critter have Addiction
+		if( cr.Addiction[ param ] != DRUG_ADDICTION_IS_NONE )
+			return true;
+
+		uint difficulty = chance;
+
+		if( cr.Trait[ TRAIT_CHEM_RELIANT ] != 0 )
+			difficulty *= 2;
+		
+		if( cr.Trait[ TRAIT_CHEM_RESISTANT ] != 0 )
+			difficulty /= 2;	
+		
+		if( Roll( 1, 100 ).failed( difficulty ) )
+		{
+			cr.AddictionBase[ param ] = DRUG_ADDICTION_IS_WAITING;
+			return true;
+		}
+		
+		return false;
+	}
+	
+	void check( Critter& cr, bool on_drugs )
+	{ //NOTE: Look at SetParameterChangeBehaviour(AddictionBase) for more info!
+		if( cr.Addiction[ param ] == DRUG_ADDICTION_IS_NONE ) return;
+
+		cr.AddictionBase[ param ] = DRUG_ADDICTION_IS_WAITING; 
+
+		if( !on_drugs )
+		{//NOTE: Starts the addiction cte if no drugs on stage 1 are present.
+			cr.AddictionBase[ param ] = DRUG_ADDICTION_IS_GOING;
+		}
+	}
+	
+	string toString() 
+	{ //FORMAT: "Addiction#PARAM(%) [effect]"
+		return  "Addiction#" + param + "(" + chance + "%) " + STR_INFO( effect );
+	}
+}
+
+class noAddiction : Addiction
+{
+	noAddiction() { @effect = noEffect(); }
+	bool roll( Critter& cr ) override { return false; }
+	void check( Critter& cr, bool on_drugs ) override {}
+	string toString() override { return "[noAddiction]"; }
+}
+
+class DrugGroup 
+{
+	uint[] pids;
+	string name;
+	DrugGroup(string name) { init(name); }
+	
+	void init( string name )
+	{
+		pids.resize(0);
+		this.name = name;
+		@overdose = noEffect();
+		@addiction = noAddiction();
+	}
+
+	void linkBack( Consumable@ consumable )
+	{
+		pids.insertLast( consumable.pid );
+	}
+	
+	Effect@ overdose;
+	DrugGroup@ onOverdose( Effect@ overdose ) 
+	{
+		@this.overdose = @overdose;
+		this.overdose.name = this.name + " .onOverdose";
+		
+		return this;
+	}
+	
+	Addiction@ addiction;
+	DrugGroup@ set( Addiction@ addiction ) 
+	{
+		@this.addiction = @addiction;
+		
+		return this;
+	}	
+	
+	uint[] phases;
+	DrugGroup@ addPhase( uint length )
+	{
+		phases.insertLast( length );
+		
+		return this;
+	}
+	
+	uint phaseLength( uint index )
+	{
+		return index < phases.length() ? phases[index] : 0;
+	}
+	
+	string toString() 
+	{//FORMAT: "[Name] phases: [list] pids: [list]] overdose: [effect] addicion [addiction]"
+		return "[" + name + "]"
+				+ "; phases: " + enlistUINT(phases)
+				+ "; pids: "  + enlistUINT(pids)
+				+ "; overdose: " + STR_INFO( overdose )
+				+ "; addiction: "+ STR_INFO( addiction )
+				;
+	}
+}
+
+class noDrugGroup : DrugGroup
+{
+	noDrugGroup() { super("noDrugGroup"); }
+	noDrugGroup( string name ) { super(name); }
+	string toString() override { return "[noDrugGroup]"; }
+}
+
+class Consumable 
+{
+	uint pid;
+	Consumable( uint pid ) 
+	{
+		this.pid = pid;
+		
+		@sound = noSound();
+		@item = noAddItem();
+		
+		@effect = noEffect();
+		@phase1 = noEffect();
+		@phase2 = noEffect();
+		
+		this.setGroup( noDrugGroup() );
+		
+		isAlreadyConsumed = false;
+	}	
+	
+	Sound@ sound;
+	Consumable@ setSound( string name, uint strength = DEFAULT_SOUND_DISTANCE ) { return setSound( Sound( name, strength ) ); }
+	Consumable@ setSound( Sound@ sound ) 
+	{
+		@this.sound = @sound;
+		
+		return this;
+	}	
+	
+	AddItem@ item;
+	Consumable@ returns( uint pid, uint count = 1 ) { return this.returns( AddItem( pid, count ) ); }
+	Consumable@ returns( AddItem@ item ) 
+	{
+		@this.item = @item;
+		
+		return this;
+	}	
+	
+	Effect@ effect;
+	Consumable@ onConsume( Effect@ effect ) 
+	{
+		@this.effect = @effect;
+		this.effect.name = itemName(pid) + " .onConsume";
+		
+		return this;
+	}	
+	
+	Effect@ phase1;
+	Consumable@ onPhase1( Effect@ phase1 ) 
+	{
+		@this.phase1 = @phase1;
+		this.phase1.name = itemName(pid) + " .onPhase1";
+		
+		return this;
+	}
+	
+	Effect@ phase2;
+	Consumable@ onPhase2( Effect@ phase2 ) 
+	{
+		@this.phase2 = @phase2;
+		this.phase2.name = itemName(pid) + " .onPhase2";
+		
+		return this;
+	}	
+	
+	DrugGroup@ group;
+	Consumable@ setGroup( DrugGroup@ group ) 
+	{
+		@this.group = @group;
+		group.linkBack(this);
+
+		syncPhaseTimesWithGroup();
+
+		return this;
+	}
+	
+	void syncPhaseTimesWithGroup()
+	{
+		if( phase1.time == 0 ) phase1.time = group.phaseLength(0);
+		if( phase2.time == 0 ) phase2.time = group.phaseLength(1);			
+	}
+	
+	bool isAlreadyConsumed;
+	Consumable@ autoConsumable( bool value ) 
+	{
+		isAlreadyConsumed = value;
+		
+		return this;
+	}	
+	
+	string toString() 
+	{
+		string info = "Consumable '" + itemName(pid) + "' PID#" + pid + ": "
+					+ " sound "     + STR_INFO( sound )
+					+ " returns "   + STR_INFO( item ) 
+					+ " [" + boolValue(isAlreadyConsumed,"autoConsumable") + "]"
+					+ " effect "    + STR_INFO( effect )
+					+ " phase1 "    + STR_INFO( phase1 )
+					+ " phase2 "    + STR_INFO( phase2 )
+					+ " drugGroup " + STR_INFO( group );
+					
+		return info;
+	}
+}
+
+class Consumables 
+{
+	Consumable@[] list;
+	Consumables() 
+	{ 
+		list.resize(0);
+	}	
+	
+	Consumables@ add( Consumable@ element ) 
+	{
+		list.insertLast( element );
+		
+		return this;
+	}	
+	
+	Consumable@ get( uint pid ) 
+	{
+		for( uint i = 0, len = list.length(); i < len; i++ )
+			if( list[i].pid == pid )
+				return list[i];			
+		return null;
+	}
+	
+	string toString()
+	{//FORMAT: enlist all elements
+		string result = "Consumables list:";
+		for( uint i = 0, len = list.length(); i < len; i++ )
+			result += "\n" + i + ") " + list[i].toString();
+		return result;
+	}
+}
+
+class Consumer
+{
+	Critter@ cr;
+	Consumable@ consumable;
+	Consumer( Critter& cr, Consumable& consumable ) 
+	{
+		@this.cr = @cr;
+		@this.consumable = @consumable;
+	}	
+	
+	ActiveDrug@[] getActiveDrugs()
+	{
+		uint[] pids = consumable.group.pids;
+		
+		ActiveDrug@[] list;		
+		for( uint i = 0, l = pids.length(); i < l; i++ )
+		{
+			AddTimeEventsByPID( cr, pids[i], list );
+		}				
+		
+		return list;
+	}
+	
+	ActiveDrug@ getOldest( ActiveDrug@[] list )
+	{
+		ActiveDrug@ oldest = null;
+		for( uint i = 0, count = list.length(); i < count; i++ ) 
+		{
+			if( count > 1 || list[i].phase() > 1 )
+			{
+				if( list[i].isOlderThan(oldest) )
+				{
+					@oldest = @list[i];
+				}
+			}
+		}		
+		
+		return oldest;		
+	}	
+	
+	bool removeOldest()
+	{
+		ActiveDrug@ drug = getOldest( getActiveDrugs() ); 
+		if( !valid(drug) ) return true;
+		
+		cr.EraseTimeEvent( drug.event_id() );
+		
+		Consumable@	consumable = consumables.get(drug.pid());
+		if( !valid( consumable ) ) return false;	
+		
+		switch( drug.phase() )
+		{
+			case(1): consumable.phase1.undo( cr ); break;
+			case(2): consumable.phase2.undo( cr ); break;
+		}		
+		
+		return true;
+	}	
+	
+	Consumer@ checkPhases()
+	{
+		removeOldest();
+
+		cr.AddTimeEvent( "cte_drug_process", REAL_SECOND(0), consumable.pid, DRUG_PHASE_START );
+		
+		return this;
+	}
+	
+	Consumer@ checkOverdose()
+	{
+		Effect@ effect = consumable.group.overdose;
+
+		int overdose = getValue( cr, ST_GLOBAL_OVERDOSE );
+		
+		uint count = CLAMP( overdose, 0, OVERDOSE_MAX ) / OVERDOSE_PER_EFFECT;
+		for( uint i = 0; i < count; i++ )
+		{
+			effect.apply(cr);
+		}
+		
+		return this;
+	}
+	
+	Consumer@ checkAddiction( uint from_phase )
+	{
+		consumable.group.addiction.check( cr, isOnDrugs(from_phase) );		
+		
+		return this;
+	}
+	
+	bool isOnDrugs( uint from_phase )
+	{
+		if( from_phase <= 1 )
+		{
+			return true;
+		}
+		
+		ActiveDrug@[] list = getActiveDrugs();
+		for( uint i = 0, count = list.length(); i < count; i++ ) 
+		{
+			if( list[i].phase() <= 1 )
+			{
+				return true;
+			}
+		}			
+			
+		return false;
+	}
+	
+	string toString()
+	{
+		return crInfo( cr ) + " " + consumable.toString();
+	}
+}
+
+//~run consumables param_change param delta action
+void param_change( Critter& cr, int param, int delta, int action )
+{
+	string info = YELLOW + "You have " + WHITE ;
+	ParamChange@ param_change;
+	switch( action ) {
+		case(0): 
+			@param_change = ParamChange( param, delta );
+			param_change.apply(cr); info += "applied "; 
+		break;
+		case(1): 
+			@param_change = ParamChange( param, delta );
+			param_change.undo(cr);  info += "reverted "; 
+		break;
+		case(2): 
+			@param_change = PermanentParamChange( param, delta );
+			param_change.apply(cr); info += "applied "; 
+		break;
+		case(3): 
+			@param_change = PermanentParamChange( param, delta );
+			param_change.undo(cr);  info += "reverted "; 
+		break;
+		default: info += "done nothing with "; break;
+	}
+	info += YELLOW + " param change: " + GREEN;
+	cr.Say( SAY_NETMSG, info + STR_INFO(param_change) );
+}
 
 //~run consumables showAll action 0 0
 void showAll( Critter& cr, int action, int, int )
@@ -207,5 +717,3 @@ void skipStage( Critter& cr, ActiveDrug@ drug )
 {
 	cr.ChangeTimeEvent( drug.event_id(), 0, drug.phase() );
 }
-
-#endif // CONSUMABLES
