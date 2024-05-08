@@ -7,6 +7,8 @@
 #include "firestarter_h.fos"
 #include "combat_h.fos"
 
+#define STASH_OWNER = Val2
+
 import uint8 checkSand( Map& map, uint16 tx, uint16 ty ) from "qmap_sand";
 
 void TryGetSand( Critter& cr, Item& shovel, int hexX, int hexY ) 
@@ -35,11 +37,18 @@ void TryGetSand( Critter& cr, Item& shovel, int hexX, int hexY )
 	PrepareDigging( cr, shovel );
 }
 
-bool ltp_inited = false;
-void ltp_init()
+bool ltp_digging_inited = false;
+void ltp_digging_init()
 {
 	LTPREG( LTP_DIGGING, process_digging )
-	ltp_inited = true;
+	ltp_digging_inited = true;
+}
+
+bool ltp_dig_stash_inited = false;
+void ltp_dig_stash_init()
+{
+	LTPREG( LTP_DIG_STASH, process_dig_stash )
+	ltp_dig_stash_inited = true;
 }
 
 bool PrepareDigging( Critter& cr, Item@ tool ) 
@@ -84,9 +93,9 @@ bool PrepareDigging( Critter& cr, Item@ tool )
 
 bool start_digging( Critter& cr, Item& tool )
 {
-	if( !ltp_inited )
+	if( !ltp_digging_inited )
 	{
-		ltp_init();
+		ltp_digging_init();
 	}
 	
 	if( valid( tool ) )
@@ -149,6 +158,165 @@ uint process_digging( Critter@ cr, int& param0, int& param1, int& param2 )
 				InjureCritter( cr, damage, DAMAGE_UNCALLED, cr.Dir, cr.Id, HIT_LOCATION_NONE, false );
 			}
 			
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+		}
+    }
+	return 0;
+}
+
+bool IsContainerCanStash( Item& stash )
+{
+	if(	stash.Proto.Item_Subtype == ITEM_SUBTYPE_FURNITURE ||
+		stash.Proto.Item_Subtype == ITEM_SUBTYPE_PERSONAL_BAG ||
+		stash.Proto.Item_Subtype == ITEM_SUBTYPE_BRIEFCASE )
+	{
+		return true;
+	}
+	return false;
+}
+
+bool TryDigStash( Critter& cr, Item& tool, Item& stash ) 
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+		return false;
+	}
+	
+	if( !valid( tool ) )
+	{
+		return false;
+	}
+	
+	if( !valid( stash ) )
+	{
+		return false;
+	}
+
+   	uint toolPid = tool.GetProtoId();
+	if( toolPid != PID_SHOVEL )
+	{
+		return false;
+	}
+	
+	uint stashPid = stash.GetProtoId();
+	if( !IsContainerCanStash( stash ) && stashPid != PID_STASH_BOX )
+	{
+		return false;
+	}
+	
+	if(checkSand(map, H2T(stash.HexX), H2T(stash.HexY)) == 0)
+	{
+		return false;
+	}
+
+	if( tool.CritSlot != SLOT_HAND1 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_EQUIP_TOOL );
+		return false;
+	}
+
+	if( IsTired( cr ) )
+	{
+		return false;
+	}
+	
+	if( cr.IsDmgTwoArm() || cr.IsDmgTwoLeg() )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_CANT_WORK );
+		return false; 
+	}
+	
+	start_dig_stash( cr, tool, stash );
+	return true;
+}
+
+bool start_dig_stash( Critter& cr, Item& tool, Item& stash)
+{
+	if( !ltp_dig_stash_inited )
+	{
+		ltp_dig_stash_init();
+	}
+	
+	if( valid( tool ) && valid( stash ) )
+	{	
+		uint hit_pause = ACTION_PAUSE_BASE - (int(cr.Stat[ST_AGILITY] / 2) * ACTION_PAUSE_BONUS_RATE );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint digging_rage = cr.Skill[ SK_OUTDOORSMAN ] + ( int(cr.Stat[ ST_STRENGTH ] / 2) * 10 ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = uint( ceil( float( ( OBJECT_HP_BASE ) / ( CLAMP( digging_rage, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		
+		uint[] values = { cr.Id, tool.Id };
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_diggingSound", values, false);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
+		_CritAnimateSwing(cr);
+		StartProcess( cr, LTP_DIG_STASH, 0, tool.Id, stash.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+		return true;
+	}
+	return false;
+}
+
+uint process_dig_stash( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_DIG_STASH )
+
+    Item@ tool = GetItem( param1 );
+	Item@ stash = GetItem( param2 );
+  	if( valid( tool ) && valid( stash ) )
+    {
+      	param0++;
+		Map@ currMap = cr.GetMap();
+		
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
+		{
+			int pid = stash.GetProtoId();
+			
+			if( pid == PID_STASH_BOX )
+			{
+				LogCrimeMovement( cr, stash, "Digged out stash at " + stash.HexX + " " + stash.HexY);
+				Item@[] contents;
+				stash.GetItems( 0, contents );
+				
+				uint16 tx = stash.HexX, ty = stash.HexY;
+				uint8 rand = Random(0, 5);
+				currMap.MoveHexByDir( tx, ty, rand, 1);
+				MoveItems( contents, currMap, tx, ty );
+				DeleteItem( stash );
+			}
+			else if( IsContainerCanStash(stash) )
+			{
+				LogCrimeMovement( cr, stash, "Buried stash at " + stash.HexX + " " + stash.HexY);
+				Item@ stashPit = currMap.AddItem(stash.HexX, stash.HexY, PID_STASH_BOX, 1);
+				MoveItem(stash, 1, stashPit, 0);
+				
+				uint8 frame = Random(0, 3);
+				ChangeFrame( stashPit, frame );
+				stashPit.Animate( frame, frame);
+				stashPit.TrapValue = cr.Skill[ SK_TRAPS ];
+				stashPit.STASH_OWNER = cr.Id;
+			}
+		}
+		else
+		{
+			_CritAnimateSwing(cr);
+			
+			if(valid( currMap ))
+			{
+				uint16 tx = cr.HexX, ty = cr.HexY;
+				uint8 rand = Random(0, 5);
+				currMap.MoveHexByDir( tx, ty, rand, 1);
+				currMap.AddItem( tx, ty, PID_SAND, 1 );
+			}
+			
+			uint[] values = { cr.Id };
+			CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_diggingSound", values, false );
+			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true );
+			
+			if( cr.IsInjured() )
+			{
+				uint damage = INJURED_HP_DAMAGE - cr.Stat[ ST_ENDURANCE ];
+				InjureCritter( cr, damage, DAMAGE_UNCALLED, cr.Dir, cr.Id, HIT_LOCATION_NONE, false );
+			}
+
 			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
     }
