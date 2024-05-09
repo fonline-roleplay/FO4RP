@@ -1,0 +1,319 @@
+#ifndef COMBAT_AIMING
+#define COMBAT_AIMING
+
+SizeGroups@ _size_groups = null;
+SizeGroups@ size_groups()
+{
+	if( valid(_size_groups) ) return _size_groups;
+	
+	uint head  = ( 1 << HIT_LOCATION_HEAD ) 	 | ( 1 << HIT_LOCATION_EYES );
+	uint chest = ( 1 << HIT_LOCATION_LEFT_ARM )  | ( 1 << HIT_LOCATION_RIGHT_ARM ) | ( 1 << HIT_LOCATION_TORSO );
+	uint groin = ( 1 << HIT_LOCATION_GROIN );
+	uint legs  = ( 1 << HIT_LOCATION_RIGHT_LEG ) | ( 1 << HIT_LOCATION_LEFT_LEG );
+
+	@_size_groups = SizeGroups()                              
+		.add( SizeGroup(SIZE_GROUP_TINY)
+				.set(critter_types_tiny)
+				.add( Layer( HEIGHT_GROUND, head | chest | groin | legs ) ) 
+			)
+		.add( SizeGroup(SIZE_GROUP_SMALL)
+				.set(critter_types_small)
+				.add( Layer( HEIGHT_LOW, head | chest ) )
+				.add( Layer( HEIGHT_GROUND, groin | legs ) ) 
+				.isBiggerThan( SIZE_GROUP_TINY )
+			)
+		.add( SizeGroup(SIZE_GROUP_MID)
+				.set(critter_types_mid)
+				.add( Layer( HEIGHT_MID, head ) )
+				.add( Layer( HEIGHT_LOW, groin | chest ) )
+				.add( Layer( HEIGHT_GROUND, legs ) ) 
+				.isBiggerThan( SIZE_GROUP_SMALL )
+			)
+		.add( SizeGroup(SIZE_GROUP_BIG)
+				.set(critter_types_big)
+				.add( Layer( HEIGHT_HI, head ) )															  
+				.add( Layer( HEIGHT_MID, chest ) )
+				.add( Layer( HEIGHT_LOW, groin ) )
+				.add( Layer( HEIGHT_GROUND, legs ) ) 
+				.isBiggerThan( SIZE_GROUP_MID )
+			)
+		.add( SizeGroup(SIZE_GROUP_FLYING)
+				.set(critter_types_flying)
+				.add( Layer( HEIGHT_HI, head | chest | groin | legs ) ) 
+			)	
+	;
+	
+	return _size_groups;
+}
+
+class SizeGroups
+{
+	SizeGroups() {}
+	
+	SizeGroup[] groups;
+	SizeGroups@ add( SizeGroup group ) 
+	{
+		groups.insertLast( group );
+		
+		return this;
+	}
+	
+	uint getHeight( uint8 aim, Critter& target )
+	{
+		SizeGroup@ group = getByCrType( target.Stat[ ST_BASE_CRTYPE ] );
+		
+		if( !valid( group ) ) 
+		{
+			Log( "!!! NO GROUP for CRTYPE = " + target.Stat[ ST_BASE_CRTYPE ] + " !!!" );//DEBUG
+			return AimToHeight(aim);
+		}
+		
+		return group.getHeight(aim);
+	}
+	
+	uint hit( uint height, Critter& target )
+	{
+		SizeGroup@ group;		
+		
+		if( isLaying(target) )
+		{
+			@group = getByName(SIZE_GROUP_TINY);
+		}
+		else
+		{
+			@group = getByCrType( target.Stat[ ST_BASE_CRTYPE ] );
+			
+			if( isSitting(target) && valid(group) )
+			{
+				@group = getByName( group.smaller );
+			}
+		}
+		
+		if( !valid( group ) ) 
+		{
+			Log( "!!! NO GROUP for CRTYPE = " + target.Stat[ ST_BASE_CRTYPE ] + " !!!" );//DEBUG
+			return HIT_LOCATION_NONE;
+		}
+		
+		return group.hit(height);
+	}
+	
+	SizeGroup@ getByCrType( uint crType ) 
+	{
+		for( uint i = 0, l = groups.length(); i < l; i++ )
+		{
+			if( groups[i].contains(crType) )
+			{
+				return groups[i];
+			}
+		}
+		return null;
+	}
+	
+	SizeGroup@ getByName( uint name )
+	{
+		for( uint i = 0, l = groups.length(); i < l; i++ )
+		{
+			if( groups[i].name == name )
+			{
+				return groups[i];
+			}
+		}
+		return null;
+	}
+	
+	string toString()
+	{
+		string result;
+		
+		for( uint i = 0, l = groups.length(); i < l; i++ )
+		{
+			result += "<" + i + ">" + groups[i].toString();
+		}
+		
+		return result;
+	}
+}
+
+class SizeGroup
+{
+	uint name;
+	SizeGroup( uint name )
+	{
+		this.name = name;
+		this.smaller = name;
+	}
+	
+	uint[] crTypes;
+	SizeGroup@ set( uint[] crTypes ) 
+	{
+		this.crTypes = crTypes;
+		
+		return this;
+	}
+	
+	Layer[] layers;
+	SizeGroup@ add( Layer layer ) 
+	{
+		layers.insertLast( layer );
+		
+		return this;
+	}
+	
+	uint smaller;
+	SizeGroup@ isBiggerThan( uint smaller )
+	{
+		this.smaller = smaller;
+		
+		return this;
+	}
+	
+	uint getHeight( uint body_part )
+	{
+		uint[] result;
+		for( uint i = 0, l = layers.length(); i < l; i++ )
+		{
+			if( layers[i].has( body_part ) )
+			{
+				result.insertLast( layers[i].height );
+			}
+		}
+		
+		if( result.length() == 0 ) return HEIGHT_GROUND;
+		if( result.length() == 1 ) return result[0];
+		return result[ Random( 0, result.length() - 1 ) ];
+	}
+	
+	uint hit( uint height )
+	{
+		for( uint i = 0, l = layers.length(); i < l; i++ )
+		{
+			if( layers[i].height != height ) continue;
+			return layers[i].hit();
+		}
+		return HIT_LOCATION_NONE;
+	}
+	
+	bool contains( uint crType )
+	{
+		return _Contains( crTypes, crType );
+	}
+	
+	string toString() 
+	{
+		string result = "'" + name + "' [" + enlistUINT(crTypes) + "] hits:" ;
+		for( uint i = 0, l = layers.length(); i < l; i++ )
+		{
+			result += "\n\t" + layers[i].toString();
+		}
+		return result;
+	}
+}
+
+class Layer
+{
+	uint height;
+	uint body_parts;
+	Layer( uint height, uint body_parts )
+	{
+		this.height = height;
+		this.body_parts = body_parts;
+	}
+	
+	uint hit()
+	{
+		uint[] result;
+		for( uint body_part = HIT_LOCATION_NONE; body_part <= HIT_LOCATION_UNCALLED; body_part++ ) 
+		{
+			if( has( body_part ) )
+			{
+				result.insertLast(body_part);
+			}
+		}
+		
+		if( result.length() == 0 ) return HIT_LOCATION_NONE;
+		if( result.length() == 1 ) return result[0];
+		return result[ Random( 0, result.length() - 1 ) ];
+	}
+	
+	bool has( uint body_part )
+	{
+		return FLAG( body_parts, 1 << body_part );
+	}
+	
+	string toString() 
+	{
+		string result = "Layer[" + height + "] contains: <" + body_parts + ">";
+		
+		for( uint i = HIT_LOCATION_NONE; i <= HIT_LOCATION_UNCALLED; i++ ) 
+		{
+			if( has( i ) )
+			{
+				result += " " + HIT_LOCATION_NAMES[i];
+			}
+		}
+		
+		return result;
+	}
+}
+
+int AimToHeight( uint8 aim )
+{
+	switch( aim ) 
+	{
+		case( HIT_LOCATION_HEAD      ): return HEIGHT_MID;
+		case( HIT_LOCATION_EYES      ): return HEIGHT_MID;
+		
+		case( HIT_LOCATION_LEFT_ARM  ): return HEIGHT_LOW;
+		case( HIT_LOCATION_RIGHT_ARM ): return HEIGHT_LOW;
+		case( HIT_LOCATION_TORSO     ): return HEIGHT_LOW;
+		
+		case( HIT_LOCATION_GROIN     ): return HEIGHT_GROUND;
+		case( HIT_LOCATION_NONE      ): return HEIGHT_GROUND;
+		case( HIT_LOCATION_UNCALLED  ): return HEIGHT_GROUND;		
+		case( HIT_LOCATION_RIGHT_LEG ): return HEIGHT_GROUND;
+		case( HIT_LOCATION_LEFT_LEG  ): return HEIGHT_GROUND;
+	}
+	
+	return HEIGHT_GROUND;
+}
+
+int getHeight( Critter& attacker, uint8 aim, Critter@ target )
+{
+	int height = AimToHeight(aim);
+	
+	if( !valid( target ) )
+	{
+		return height;
+	}
+	
+	if( isLaying(target) )
+	{
+		return HEIGHT_GROUND;
+	}
+	
+	height = size_groups().getHeight( aim, target );
+	
+	if( isSitting(target) )
+	{
+		height = MAX( height - 1, HEIGHT_GROUND );
+	}
+	
+	return height;
+}
+
+bool hit( Critter& attacker, Critter& target )
+{
+	uint height = attacker.ParamBase[ST_AIMING_HEIGHT];
+	uint aim = size_groups().hit( height, target );
+	
+	if( aim == HIT_LOCATION_NONE ) 
+	{
+		return false;
+	}
+	
+	attacker.ParamBase[CR_AUTO_AIM_TEMP] = aim;
+	return true;
+}
+
+#endif
