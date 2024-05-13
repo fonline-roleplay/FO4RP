@@ -7,6 +7,52 @@
 #include "consumables_menu.fos"
 #include "consumables_data.fos"
 #include "consumables_ParamChange.fos"
+#include "module/utils/param_names.fos"
+
+//~run consumables showAll action 0 0
+void showAll( Critter& cr, int action, int, int )
+{
+	for( uint i = 0, len = consumables.list.length(); i < len; i++ )
+	{
+		cr.Say( SAY_NETMSG, i + ") " + consumables.list[i].toString() );
+		if( action != 0 )
+		{
+			cr.AddItem( consumables.list[i].pid, 10 );
+		}
+	}
+}
+
+//~run consumables param_change param delta action
+void param_change( Critter& cr, int param, int delta, int action )
+{
+	string info = YELLOW + "You have " + WHITE ;
+	ParamChange@ param_change;
+	switch( action )
+	{
+		case( 0 ): 
+			@param_change = ParamChange( param, delta );
+			param_change.apply(cr); info += "applied "; 
+			break;
+		case( 1 ): 
+			@param_change = ParamChange( param, delta );
+			param_change.undo(cr);  info += "reverted "; 
+			break;
+		case( 2 ): 
+			@param_change = PermanentParamChange( param, delta );
+			param_change.apply(cr); info += "applied "; 
+			break;
+		case( 3 ): 
+			@param_change = PermanentParamChange( param, delta );
+			param_change.undo(cr);  info += "reverted "; 
+			break;
+		default:
+			info += "done nothing with ";
+			break;
+	}
+	
+	info += YELLOW + " param change: " + GREEN;
+	cr.Say( SAY_NETMSG, info + STR_INFO(param_change) );
+}
 
 class ActiveDrug 
 {
@@ -330,6 +376,7 @@ class Consumable
 		this.setGroup( noDrugGroup() );
 		
 		isAlreadyConsumed = false;
+		stackSize = 2;
 	}	
 	
 	Sound@ sound;
@@ -417,6 +464,14 @@ class Consumable
 		return this;
 	}	
 	
+	uint stackSize;
+	Consumable@ setStackSize( uint stackSize )
+	{
+		this.stackSize = stackSize;
+		
+		return this;
+	}
+	
 	string toString() 
 	{
 		string info = "Consumable '" + itemName(pid) + "' PID#" + pid + ": "
@@ -500,7 +555,8 @@ class Consumer
 		ActiveDrug@ oldest = null;
 		for( uint i = 0, count = list.length(); i < count; i++ ) 
 		{
-			if( count > 1 || list[i].phase() > 1 )
+			Consumable@ consumable = consumables.get( list[i].pid() );
+			if( count >= consumable.stackSize || list[i].phase() > 1 )
 			{
 				if( list[i].isOlderThan(oldest) )
 				{
@@ -520,6 +576,7 @@ class Consumer
 			return true;
 		}
 		
+		cr.ParamBase[CR_DRUGS_COUNT]--;		
 		cr.EraseTimeEvent( drug.event_id() );
 		
 		Consumable@	consumable = consumables.get(drug.pid());
@@ -545,6 +602,7 @@ class Consumer
 	{
 		removeOldest();
 
+		cr.ParamBase[CR_DRUGS_COUNT]++;		
 		cr.AddTimeEvent( "cte_drug_process", REAL_SECOND(0), consumable.pid, DRUG_PHASE_START );
 		
 		return this;
@@ -597,52 +655,7 @@ class Consumer
 	}
 }
 
-//~run consumables param_change param delta action
-void param_change( Critter& cr, int param, int delta, int action )
-{
-	string info = YELLOW + "You have " + WHITE ;
-	ParamChange@ param_change;
-	switch( action )
-	{
-		case( 0 ): 
-			@param_change = ParamChange( param, delta );
-			param_change.apply(cr); info += "applied "; 
-			break;
-		case( 1 ): 
-			@param_change = ParamChange( param, delta );
-			param_change.undo(cr);  info += "reverted "; 
-			break;
-		case( 2 ): 
-			@param_change = PermanentParamChange( param, delta );
-			param_change.apply(cr); info += "applied "; 
-			break;
-		case( 3 ): 
-			@param_change = PermanentParamChange( param, delta );
-			param_change.undo(cr);  info += "reverted "; 
-			break;
-		default:
-			info += "done nothing with ";
-			break;
-	}
-	
-	info += YELLOW + " param change: " + GREEN;
-	cr.Say( SAY_NETMSG, info + STR_INFO(param_change) );
-}
-
-//~run consumables showAll action 0 0
-void showAll( Critter& cr, int action, int, int )
-{
-	for( uint i = 0, len = consumables.list.length(); i < len; i++ )
-	{
-		cr.Say( SAY_NETMSG, i + ") " + consumables.list[i].toString() );
-		if( action != 0 )
-		{
-			cr.AddItem( consumables.list[i].pid, 10 );
-		}
-	}
-}
-
-bool main_logic( Critter& cr, Item& drug, Critter& target ) //exported
+bool consumed( Critter& cr, Item& drug, Critter& target ) //exported
 {//FORMAT: returns true if processed item
 	uint pid = drug.GetProtoId();
 	
@@ -802,6 +815,11 @@ uint cte_drug_process( Critter& cr, int pid, uint& phase )
 	_old.undo( cr );
 	_new.apply( cr );
 
+	if( _new.time == 0 )
+	{
+		cr.ParamBase[CR_DRUGS_COUNT]--;		
+	}
+
 	return REAL_MINUTE( _new.time );		
 }
 
@@ -841,6 +859,11 @@ ActiveDrug@[] enlistAllActiveDrugs( Critter& cr )
 	}
 	
 	return list;
+}
+
+uint countActiveDrugs( Critter& cr )
+{
+	return enlistAllActiveDrugs(cr).length();
 }
 
 uint countActiveDrugsByPid( Critter& cr, uint pid )
