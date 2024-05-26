@@ -297,10 +297,10 @@ class noAddiction : Addiction
 class DrugGroup 
 {
 	uint[] pids;
-	string name;
-	DrugGroup(string name) { init(name); }
+	uint name;
+	DrugGroup( uint name) { init(name); }
 	
-	void init( string name )
+	void init( uint name )
 	{
 		pids.resize(0);
 		this.name = name;
@@ -358,15 +358,15 @@ class noDrugGroup : DrugGroup
 {
 	noDrugGroup()
 	{
-		super( "noDrugGroup" );
+		super( 0 );
 	}
 	
-	noDrugGroup( string name )
+	noDrugGroup( uint name )
 	{
 		super( name );
 	}
 	
-	string toString() override { return "[noDrugGroup]"; }
+	string toString() override { return "[noDrugGroup:" + name + "]"; }
 }
 
 class Consumable 
@@ -386,7 +386,7 @@ class Consumable
 		this.setGroup( noDrugGroup() );
 		
 		isAlreadyConsumed = false;
-		stackSize = 2;
+		hasNoPhases = true;
 	}	
 	
 	Sound@ sound;
@@ -427,8 +427,15 @@ class Consumable
 	Effect@ phase1;
 	Consumable@ onPhase1( Effect@ phase1 ) 
 	{
+		if( this.phase1.name != NO_EFFECT_NAME )
+		{
+			Log( "!WARNING!	SKIPPING ATTEMPT TO OVERRIDE PHASE#1 EFFECT: [" + this.phase1.toString() + "] with [" + phase1.toString() + "]!" );
+			return this;
+		}
+		
 		@this.phase1 = @phase1;
 		this.phase1.name = itemName(pid) + " .onPhase1";
+		hasNoPhases = false;
 		
 		return this;
 	}
@@ -436,8 +443,15 @@ class Consumable
 	Effect@ phase2;
 	Consumable@ onPhase2( Effect@ phase2 ) 
 	{
+		if( this.phase2.name != NO_EFFECT_NAME )
+		{
+			Log( "!WARNING!	SKIPPING ATTEMPT TO OVERRIDE PHASE#2 EFFECT: [" + this.phase2.toString() + "] with [" + phase2.toString() + "]!" );
+			return this;
+		}
+		
 		@this.phase2 = @phase2;
 		this.phase2.name = itemName(pid) + " .onPhase2";
+		hasNoPhases = false;
 		
 		return this;
 	}	
@@ -474,13 +488,13 @@ class Consumable
 		return this;
 	}	
 	
-	uint stackSize;
-	Consumable@ setStackSize( uint stackSize )
+	bool hasNoPhases;
+	Consumable@ noPhases( bool value ) 
 	{
-		this.stackSize = stackSize;
+		hasNoPhases = value;
 		
 		return this;
-	}
+	}	
 	
 	string toString() 
 	{
@@ -566,7 +580,7 @@ class Consumer
 		for( uint i = 0, count = list.length(); i < count; i++ ) 
 		{
 			Consumable@ consumable = consumables.get( list[i].pid() );
-			if( count >= consumable.stackSize || list[i].phase() > 1 )
+			if( count > 1 || list[i].phase() > 1 )
 			{
 				if( list[i].isOlderThan(oldest) )
 				{
@@ -610,6 +624,8 @@ class Consumer
 	
 	Consumer@ checkPhases()
 	{
+		if( consumable.hasNoPhases ) return this;
+		
 		removeOldest();
 
 		cr.ParamBase[CR_DRUGS_COUNT]++;		
@@ -677,6 +693,11 @@ bool consumed( Critter& cr, Item& drug, Critter& target ) //exported
 		MoveItem( drug, 1, target );
 	}
 	
+	if( !IN_RANGE( drug.Proto.Item_Subtype, ITEM_SUBTYPE_DRUG_BEGIN, ITEM_SUBTYPE_DRUG_END ) )
+	{
+		Log( "! WARNING ! WRONG PROTOITEM SUBTYPE: " + itemDesc( drug ) ); 
+	}
+	
 	return consumed( cr, drug.GetProtoId(), target );
 }
 
@@ -723,30 +744,30 @@ bool consumed( Critter& cr, uint pid, Critter& target ) //exported
 
 void changedParam_ADDICTION_DOPE( Critter& cr, uint, int oldValue )
 {
-	ProcessAddiction( cr, oldValue, ADDICTION_DOPE, PID_JET );
+	ProcessAddiction( cr, oldValue, ADDICTION_DOPE, dg_doping );
 }
 
 void changedParam_ADDICTION_COMBAT_DRUGS( Critter& cr, uint, int oldValue )
 {
-	ProcessAddiction( cr, oldValue, ADDICTION_COMBAT_DRUGS, PID_PSYCHO );
+	ProcessAddiction( cr, oldValue, ADDICTION_COMBAT_DRUGS, dg_combat_drugs );
 }
 
 void changedParam_ADDICTION_HEAVY_DRUGS( Critter& cr, uint, int oldValue )
 {
-	ProcessAddiction( cr, oldValue, ADDICTION_HEAVY_DRUGS, PID_SHIFTEX );
+	ProcessAddiction( cr, oldValue, ADDICTION_HEAVY_DRUGS, dg_heavy );
 }
 
 void changedParam_ADDICTION_HEALING_DRUGS( Critter& cr, uint, int oldValue )
 {
-	ProcessAddiction( cr, oldValue, ADDICTION_HEALING_DRUGS, PID_TRAUMATIN );
+	ProcessAddiction( cr, oldValue, ADDICTION_HEALING_DRUGS, dg_healing_items );
 }
 
 void changedParam_ADDICTION_THERAPY_DRUGS( Critter& cr, uint, int oldValue )
 {
-	ProcessAddiction( cr, oldValue, ADDICTION_THERAPY_DRUGS, PID_JOINT );
+	ProcessAddiction( cr, oldValue, ADDICTION_THERAPY_DRUGS, dg_therapy );
 }
 
-void ProcessAddiction( Critter& cr, int oldValue, uint param, uint pid )
+void ProcessAddiction( Critter& cr, int oldValue, uint param, DrugGroup@ group )
 {
 	int newValue = cr.Param[ param ];
 
@@ -757,37 +778,35 @@ void ProcessAddiction( Critter& cr, int oldValue, uint param, uint pid )
 	
 	if( oldValue == DRUG_ADDICTION_IS_GOING )
 	{
-		DropAddictionCTE( cr, pid );
+		DropAddictionCTE( cr, group );
 	}
 	
 	if( newValue == DRUG_ADDICTION_IS_GOING )
 	{
-		StartAddictionCTE( cr, pid );
+		StartAddictionCTE( cr, group );
 	}
 }
 
-void DropAddictionCTE( Critter& cr, uint pid )
+void DropAddictionCTE( Critter& cr, DrugGroup@ group )
 {
-	Consumable@ consumable = consumables.get( pid );
-	if( !valid( consumable ) )
+	if( !valid( group ) )
 	{
 		return;
 	}
 	
-	consumable.group.addiction.effect.undo(cr);
+	group.addiction.effect.undo(cr);
 
-	EraseAddictionTimeEventsByPID( cr, pid );
+	EraseAddictionTimeEventsByPID( cr, group.name );
 }
 
-void StartAddictionCTE( Critter& cr, uint pid )
+void StartAddictionCTE( Critter& cr, DrugGroup@ group )
 {
-	Consumable@ consumable = consumables.get( pid );
-	if( !valid( consumable ) )
+	if( !valid( group ) )
 	{
 		return;
 	}
 	
-	Effect@ effect = @consumable.group.addiction.effect;
+	Effect@ effect = @group.addiction.effect;
 	effect.apply(cr);
 
 	int time = effect.time;
@@ -796,7 +815,7 @@ void StartAddictionCTE( Critter& cr, uint pid )
 		time /= 2;
 	}
 
-	cr.AddTimeEvent( "consumables@cte_addiction", REAL_MINUTE( time ), pid, DRUG_ADDICTION_PHASE );
+	cr.AddTimeEvent( "consumables@cte_addiction", REAL_MINUTE( time ), group.name, DRUG_ADDICTION_PHASE );
 }
 
 uint cte_addiction( Critter& cr, int pid, uint& phase )
@@ -870,6 +889,8 @@ uint cte_drug_process( Critter& cr, int pid, uint& phase )
 
 void EraseAddictionTimeEventsByPID( Critter& cr, uint pid )
 {
+	if( pid == 0 ) return;
+	
 	uint[] uid, duration, phase;
 	uint count = cr.GetTimeEvents( pid, uid, duration, phase );
 	
