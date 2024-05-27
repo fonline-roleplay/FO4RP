@@ -6,6 +6,8 @@
 #include "paralysis_h.fos"
 #include "poison_h.fos"
 #include "radiation_h.fos"
+#include "_npc_pids.fos"
+#include "speed_h.fos "
 
 class ParamChange
 {
@@ -28,6 +30,7 @@ class ParamChange
 		set(cr);
 		ParamData after = ParamData( cr, param );		
 		log( cr, "APPLIED from " + before.toString() + " to " + after.toString() );
+		ChangeCritterSpeed(cr);
 	}	
 	
 	void unset( Critter& cr )
@@ -41,6 +44,7 @@ class ParamChange
 		unset( cr );
 		ParamData after = ParamData( cr, param );		
 		log( cr, "REVERSED from " + before.toString() + " to " + after.toString() );
+		ChangeCritterSpeed(cr);
 	}
 	
 	void log( Critter& cr, string info )
@@ -283,16 +287,33 @@ class Event_Revive : Event
 	{
 		if( !cr.IsDead() ) return;
 		
-		if( cr.ParamBase[ CR_DEATH_STAGE ] < 50 )
+		if( cr.GetProtoId() != NPC_PID_PET_DOG && ( cr.ParamBase[ CR_DEATH_STAGE ] >= 50 || cr.Stat[ ST_MAX_LIFE ] <= 100 ) )
 		{
-			cr.ToLife();
-			cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 1000, cr.HexX, cr.HexY );
-			addBase( cr, ST_MAX_LIFE_EXT, -value );
-			log( cr, "was revived" );
+			log( cr, "is unavailable to revive." );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WASTED_ITEM );
+			return;
+		}
+		
+		cr.ToLife();
+		cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 1000, cr.HexX, cr.HexY );
+		
+		if( cr.GetProtoId() == NPC_PID_PET_DOG ) 
+		{
+			log( cr, "pet's revival" );
 		}
 		else
 		{
-			log( cr, "is unavailable to revive." );
+			addBase( cr, ST_MAX_LIFE_EXT, -value );
+			log( cr, "was revived" );
+		}			
+
+		if( cr.IsNpc() )
+		{
+			cr.ClearEnemyStack();
+		}
+		else
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_RESURECTION_SUCCESS );
 		}
 	}
 	
@@ -359,28 +380,13 @@ class Event_Fix_Limbs : Event
 	}
 }
 
-class Event_UseHealingItem : Event
-{
-	Event_UseHealingItem( int pid ) { this.value = pid; }
-	
-	void apply( Critter& cr ) override 
-	{
-		UseHealingItemByPid( cr, cr, value );
-	}
-	
-	string toString() override
-	{
-		return "[Use Healing Item] " + itemName(value);
-	}
-}
-
 class HealOverTime : Event
 {
 	HealOverTime( int value ) { super( ST_CURRENT_HP, value ); }
 	
 	void apply( Critter& cr ) override 
 	{
-		cr.AddTimeEvent( "heal@cte_quickheal", 0, CTE_QUICKHEAL, value );
+		cr.AddTimeEvent( "consumables@cte_quickheal", 0, CTE_QUICKHEAL, value );
 		
 		log( cr, "" );
 	}
@@ -389,6 +395,29 @@ class HealOverTime : Event
 	{
 		return "[Started healing over time] " + SIGN(value);
 	}
+}
+uint cte_quickheal( Critter& cr, int identifier, uint& rate ) 
+{
+	int heal = 5;
+	if( heal > int( rate ) )
+	{
+		heal = rate;
+	}
+	bool isHealed = true;
+
+	cr.StatBase[ ST_CURRENT_HP ] += heal;
+	int16 aidTime = 5;
+	
+	rate -= heal;
+
+	ChangeCritterSpeed(cr);
+	
+	bool repeat = true;
+	if( rate <= 0 )
+	{
+		repeat = false;
+	}
+	return repeat ? aidTime : 0;
 }
 
 class Event_Bleed : Event
