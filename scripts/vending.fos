@@ -2,6 +2,8 @@
 #define VENDING
 
 #include "_utils.fos"
+#include "_ltp.fos"
+#include "gathering_h.fos"
 #include "vending_h.fos"
 #include "speed_h.fos"
 
@@ -158,6 +160,16 @@ class MenuVendingMachine: CenteredMenuHandler
 			}
 		}
 		
+		if(vendMach.MONEY_TYPE != 1)
+		{
+			Item@ handItem = _CritGetItemHand(cr);
+			if((valid(handItem) && handItem.GetProtoId() == PID_MULTI_TOOL) && menu.ButtonMsg(STR_CHANGE_MONEY_TYPE))
+			{
+				start_money_type(cr, vendMach);
+				return false;
+			}
+		}
+
 		if( !FLAG( vendMach.LockerCondition, LOCKER_LOCKED ) )
 		{
 			Item@[] productItm;
@@ -482,6 +494,61 @@ void StartMenuSelectProduct( Critter& cr, Item& vendMach )
 
     iMenuHandler@ handler = MenuSelectProduct( vendMach, map );
     iDialogBox@ menu = OpenMenu( cr, "Vending machine", handler );
+}
+
+bool ltp_inited=false;
+
+void ltp_init()
+{
+    LTPREG( LTP_MONEY_TYPE, process_money_type )
+
+    ltp_inited=true;
+}
+
+bool start_money_type(Critter& cr, Item& vending)
+{
+	if(!ltp_inited)
+	{
+		ltp_init();
+	}
+
+	if(!valid(cr) || !valid(vending))
+	{
+		return false;
+	}
+
+	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	uint cracking_rate = cr.Skill[ SK_LOCKPICK ] + ( cr.Stat[ ST_STRENGTH ] * 10 ) + OBJECT_DPA_BASE; 
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = uint( ceil( float( ( OBJECT_HP_BASE ) / ( CLAMP( cracking_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+
+	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+	StartProcess(cr, LTP_MONEY_TYPE, 0, vending.Id, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ]);
+	return true;
+}
+
+uint process_money_type( Critter@ cr, int& param0, int& vendId, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_MONEY_TYPE )
+
+	Item@ vending = GetItem( vendId );
+
+    if(valid(vending))
+	{
+		param0++;
+
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
+		{
+			vending.MONEY_TYPE = 1;
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+			return 0;
+		}
+
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+	}
+
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	return 0;
 }
 
 #endif // VENDING
