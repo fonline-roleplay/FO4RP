@@ -11,6 +11,8 @@
 #include "furnace_h.fos"
 #include "waterworks_h.fos"
 #include "bootlegging_h.fos"
+#include "_macros.fos"
+#include "_global_events.fos"
 
 import uint8 checkWoodFloor( Map& map, uint16 tx, uint16 ty ) from "qmap_wooden";
 import uint8 checkCarpet(Map& map, uint16 tx, uint16 ty) from "qmap_carpet";
@@ -650,8 +652,8 @@ uint CalcualteCharges( uint radius )
 void SetFireEvent( Item& fire, uint strength )
 {
 	fire.SetEvent( ITEM_EVENT_WALK, "e_Hot" );	
-	uint[] values = { fire.Id, strength };
-	fire.FIRE_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 2 ) ), "e_WildFireBurn", values, true );
+	fire.FIRE_STRENGTH = strength;
+	fireManager.fireIDs.insertLast( fire.Id );
 }
 
 void FireCircle( Map@ map, int x, int y, uint strength, uint[]@ active_fires )
@@ -902,24 +904,18 @@ uint cte_Hot( Critter& cr, int identifier, uint& rate )
 	return REAL_SECOND( 1 );
 }
 
-uint e_WildFireBurn( uint[]@ values )
-{
-	if( !valid( values ) )
-	{
-		return 0;
-	}
-	
-    Item@ wildFire = GetItem( values[ 0 ] );
+void WildfireBurn(Item@ wildFire, int strength)
+{	
 	if( !valid( wildFire ) )
 	{
-		return 0;
+		return;
 	}
 	
 	Map@ map = GetMap( wildFire.MapId );
 	if( !valid( map ) )
 	{
 		StopWildFire( wildFire, false );
-		return 0;
+		return;
 	}
 	
 	bool create_ash = true;
@@ -929,7 +925,6 @@ uint e_WildFireBurn( uint[]@ values )
 	{
 		if( wildFire.FIRE_MARKER == 0 )
 		{
-			wildFire.FIRE_STRENGTH = values[ 1 ];
 			wildFire.FIRE_MARKER = 1;
 		}
 		
@@ -1009,7 +1004,7 @@ uint e_WildFireBurn( uint[]@ values )
 			
 			if( map.GetRain() == 0 || Random( 1, 10 ) != 10 || map.HasRoof( x, y ) )
 			{
-				return WILD_FIRE_BURNING_TIME;
+				return;
 			}
 		}
 	}
@@ -1020,7 +1015,7 @@ uint e_WildFireBurn( uint[]@ values )
 
 	StopWildFire( wildFire, create_ash );
 	
-    return 0;
+    return;
 }
 
 void StopWildFire( Item& fire, bool create_ash )
@@ -1343,5 +1338,59 @@ class MenuPowerGen: CenteredMenuHandler
     }
 }
 
+class FireManager : iManagerModule, iManager_loop
+{
+    FireManager()
+    {
+        AddStartCallback( "firestarter", "start" );
+    }
+    bool manager_init()
+    {
+        return true;
+    }
+	uint global_loop()
+	{
+		uint len = fireIDs.length();
+		if(len > 0)
+		{
+			for(uint i = 0; i < len; i++)
+			{
+				Item@ currFire = GetItem(fireIDs[i]);
+				if(!valid(currFire))
+				{
+					fireIDs.removeAt(i);
+					continue;
+				}
+				WildfireBurn(currFire, currFire.FIRE_STRENGTH);
+			}
+		}
+
+		return WILD_FIRE_BURNING_TIME;
+	}
+
+	uint[] fireIDs;
+}
+
+FireManager fireManager;
+
+void start()
+{
+    iManagerModule@  module = fireManager;
+    iManagerElement@ manager = manager_add_module( module, "FireManager", 10 );
+    if( manager is null )
+	{
+        return;
+	}
+
+	for(uint i = 0, leni = WildFires.length(); i < leni; i++)
+	{
+		Item@[] fireStack;
+		GetAllItems(WildFires[i], fireStack);
+		for(uint j = 0, lenj = fireStack.length(); j < lenj; j++)
+		{
+			fireManager.fireIDs.insertLast(fireStack[j].Id);
+		}
+	}
+}
 
 #endif // FIRESTARTER
