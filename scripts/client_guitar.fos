@@ -1,0 +1,178 @@
+#include "_utils.fos"
+#include "serializator.fos"
+#include "config_parser_h.fos"
+#include "client_event_h.fos"
+
+class CGuitarEvent : EventCallback
+{
+	uint pause = 0;
+	uint fretsPerStr = 1;
+	uint currFret = 0;
+	uint critId;
+	int8[] strings;
+	
+	CGuitarEvent(uint pauseData, uint fretsPerStrData, uint currFretData, uint crId, int8[] stringsData)
+	{
+		this.pause = pauseData;
+		this.fretsPerStr = fretsPerStrData;
+		this.strings = stringsData;
+		this.currFret = currFretData;
+		this.critId = crId;
+
+		if(currTE != null)
+		{
+			currTE.Destroy();
+		}
+		@currTE = CreateTimeEvent(1, currGuitEvent, null);
+	}
+	
+    uint function(array<uint>@ variables)
+    {
+		CritterCl@ guitPlayer = GetCritter(this.critId);
+       	if(this.currFret >= this.fretsPerStr || !valid(guitPlayer) )
+		{
+			@currTE = null;
+			return 0;
+		}
+		
+		int[] radius = { 15 };
+		for(uint i = 0; i < 6; i++)
+		{
+			uint index = currFret + (fretsPerStr * i);
+			string soundName = "guitar_string" + (i+1) + "_" + strings[index] + ".ogg";
+			if(strings[index] != -1)
+			{
+				__PlaySound( guitPlayer.Id, guitPlayer.HexX, guitPlayer.HexY, soundName, radius );
+			}
+		}
+		
+		currFret++;
+        return pause;
+    }	
+
+}
+
+CGuitarEvent@ currGuitEvent;
+IEvent@ currTE;
+
+void SendTabsNames( int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	string namesRaw;
+	iConfig@ config = CreateConfig();
+
+	if( !config.Parse( "guitar_tabs.cfg", true ) )
+	{
+		Message("Cant load cfg!");
+		return;
+	}
+	uint len = config.GetSectionsNum();
+
+	iSection@ sect = null;
+
+	for( uint i = 0; i < len; i++ )
+	{
+		@sect = config.GetSection( i );
+		string@ name = sect.GetName();
+		string tabsName = sect.GetKey( "name" ).GetVal();	
+		namesRaw += tabsName;
+		if(i != len - 1) namesRaw += "|";
+	}
+	RunServerScriptUnsafe( "item@unsafe_StartMenuGuitar", 0, 0, 0, namesRaw, null );
+}
+
+void StartPlay( int num, int param1, int param2, string@ param3, int[] @ param4 )
+{		
+	LoadTabsConfig(num);
+}
+
+void RecvGuitTabs( int crId, int param1, int param2, string@ param3, int[] @ serialize )
+{
+	if(!valid(serialize))
+	{
+		return;
+	}
+	
+	Serializator data(serialize);	
+	uint pause;
+	uint fretsPerStr;
+	uint currFret;
+	int8[] strings;
+	data.Get(pause);
+	data.Get(fretsPerStr);
+	data.Get(currFret);
+	data.Get(strings);
+
+	@currGuitEvent = CGuitarEvent(pause, fretsPerStr, currFret, crId, strings);
+}
+
+int8[] ParseStrings(string rawStr)
+{	
+	string@[] temp;
+	int8[] fretArr;
+	
+	temp = splitEx(rawStr, " ");
+	
+	int len = temp.length();
+	for(int i = 0; i < len; i++)
+	{
+		if(temp[i] == "-")
+		{
+			fretArr.insertLast(-1);
+			continue;
+		}
+		int result = 0;
+		StrToInt( temp[i], result );
+		fretArr.insertLast(result);
+	}
+	return fretArr;
+}
+
+bool LoadTabsConfig(uint num)
+{
+    iConfig@ config = CreateConfig();
+	if( !config.Parse( "guitar_tabs.cfg", true ) )
+	{
+		Message("Cant load cfg!");
+		return false;
+	}
+	uint len = config.GetSectionsNum();
+	iSection@ sect = null;
+
+	for( uint i = 0; i < len; i++ )
+	{
+		@sect = config.GetSection( i );
+		string@ sectionName = sect.GetName();
+
+		if( sectionName == "Tab" + num )
+		{	
+			string tabsName = sect.GetKey( "name" ).GetVal();
+			if(tabsName.length() > 0) 
+			{
+				Message("Now Playing: " + tabsName);
+			}
+
+			int8[] str;
+			for(uint j = 1; j <= 6; j++)
+			{
+				int8[] temp = ParseStrings( sect.GetKey( "string" + j ).GetVal() );
+				for( uint l = 0, len2 = temp.length(); l < len2; l++ )
+				{
+					str.insertLast( temp[l] );
+				}
+			}
+			
+			CritterCl@ chos = GetChosen();
+			@currGuitEvent = CGuitarEvent(sect.GetKey( "pause" ).GetUint(), sect.GetKey( "frets" ).GetUint(), 0, chos.Id, str);
+
+			Serializator send;
+			send.Set(currGuitEvent.pause).Set(currGuitEvent.fretsPerStr).Set(currGuitEvent.currFret).Set(currGuitEvent.strings);
+			RunServerScriptUnsafe( "general_unsafe@unsafe_SendGuitTabs", 0, 0, 0, null, send.Buff2Int() );
+			return true;
+		}
+		else
+		{
+			continue;
+		}
+	}
+	return false;
+}
