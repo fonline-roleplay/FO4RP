@@ -133,19 +133,25 @@ void GenerateItemNames(string& out)
 	for (const auto& [key, val] : defines)
 	{
 		out += FixedSizeStr(to_string(key), 2) + FixedSizeStr(val, 8);
-		if (foobj_eng.contains(key * 100)) out += "\\\\" + FixedSizeStr(foobj_eng[key * 100], 10);
-		if (foobj_rus.contains(key * 100)) out += foobj_rus[key * 100];
+		if (foobj_eng.contains(key * 100)) out += "// " + FixedSizeStr(foobj_eng[key * 100], 10) + " ";
+		if (foobj_rus.contains(key * 100)) out += "// " + foobj_rus[key * 100];
 		out += "\n";
 	}
 }
 
 int main(int argc, char* argv[])
 {
+	if (argc < 2 || argc > 2)
+	{
+		cout << "Wrong args, the only arg is server root path" << endl;
+		return 1;
+	}
+
 	serverRoot = argv[1];
 	LoadFOOBJ();
 	LoadDefines();
 	string itemNames;
 	GenerateItemNames(itemNames);
-	WriteFile("ItemNames.lst", itemNames);
+	WriteFile(serverRoot.string() + "/data/ItemNames.lst", itemNames);
 	return 0;
 }
