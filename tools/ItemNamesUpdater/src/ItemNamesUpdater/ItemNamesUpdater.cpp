@@ -1,6 +1,6 @@
 ﻿// FOnline engine's "ItemNames.lst" file generator.
 // Author: APAMk2, special for FO4RP
-// July 17, 2024.
+// June 17, 2024.
 
 #include <iostream>
 #include <fstream>
@@ -100,7 +100,7 @@ void LoadDefines()
 		while (getline(input, currString))
 		{
 			if (currString.length() < 1) continue;
-			bool defineTest = currString.substr(0, 12) == "#define PID_";
+			bool defineTest = ( currString.substr(0, 12) == "#define PID_" || currString.substr(0, 12) == "#define\tPID_" );
 			if (!defineTest) continue;
 
 			string define;
@@ -132,9 +132,9 @@ void GenerateItemNames(string& out)
 {
 	for (const auto& [key, val] : defines)
 	{
-		out += FixedSizeStr(to_string(key), 2) + FixedSizeStr(val, 8);
-		if (foobj_eng.contains(key * 100)) out += "// " + FixedSizeStr(foobj_eng[key * 100], 10) + " ";
-		if (foobj_rus.contains(key * 100)) out += "// " + foobj_rus[key * 100];
+		out += FixedSizeStr(to_string(key), 2) + FixedSizeStr(val, 10);
+		if (foobj_eng.contains(key * 100)) out += FixedSizeStr("// " + foobj_eng[key * 100], 10);
+		if (foobj_rus.contains(key * 100)) out += " // " + foobj_rus[key * 100];
 		out += "\n";
 	}
 }
