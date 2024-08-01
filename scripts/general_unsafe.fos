@@ -22,10 +22,10 @@
 #include "trap_h.fos"
 #include "speed_h.fos"
 #include "hitchance_h.fos"
+#include "serializator.fos"
 
 import void Actions( Critter& cr, uint8 actionType, uint16 pickType ) from "context_callback";
 import void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo ) from "main";
-import bool e_UseAutoCloseDoor( Item& door, Critter& cr, int skill ) from "item";
 
 bool Action( Critter& player, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen )
 {
@@ -91,7 +91,7 @@ void unsafe_OpenDoor( Critter& player, int param0, int param1, int param2, strin
 				
 				player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
 				UseSkillOnLocker( player, door, SKILL_PICK_ON_GROUND );
-				e_UseAutoCloseDoor( door, player, -1 );
+				player.StatBase[ ST_CURRENT_AP ] -= __RtApCostPickItem * 10;
 				break;
 			}
 			else if( !FLAG( door.Flags, ITEM_CAN_USE ) )
@@ -386,6 +386,11 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 		return;
 	}
 	
+	if( attacker.Param[CR_IS_SHOOTING] != 0 )
+	{
+		return;
+	}
+
 	Map@ map = attacker.GetMap();
 	if( !valid( map ) )
 	{
@@ -462,7 +467,11 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 	}
 	
 	int needAp = attack_ap( attacker, weapon, mode );
-	if( ( needAp == 0 || attacker.Stat[ ST_CURRENT_AP ] < needAp ) && attacker.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
+	bool HasAllAP = attacker.Stat[ ST_ACTION_POINTS ] == attacker.Stat[ ST_CURRENT_AP ];
+
+	if( ( !HasAllAP && attacker.Stat[ ST_ACTION_POINTS ] < needAp ) || 
+		( attacker.Stat[ ST_ACTION_POINTS ] >= needAp && attacker.Stat[ ST_CURRENT_AP ] < needAp ) &&
+		  attacker.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
 	{
 		return;
 	}
@@ -619,9 +628,11 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 		attacker.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
 		uint[] values = { attacker.Id, targetId, weapon.ProtoId, mode, ammoPID, hexX, hexY, 1, 0 };
 		CreateTimeEvent( AFTER( REAL_MS( windupTime ) ), "combat@e_DelayedAttack", values, false );
+		attacker.ParamBase[CR_IS_SHOOTING] = 1;
 	}
 	else
 	{
+		attacker.ParamBase[CR_IS_SHOOTING] = 0;
 		CombatAttack( attacker, target, weapon, mode, ammo, hexX, hexY, false, false );
 	}
 }
@@ -661,7 +672,11 @@ void unsafe_critter_attack( Critter& attacker, int target_Id, int param1, int we
 	}
 	
 	int needAp = attack_ap( attacker, weapon, mode );
-	if( ( needAp == 0 || attacker.Stat[ ST_CURRENT_AP ] < needAp ) && attacker.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
+	bool HasAllAP = attacker.Stat[ ST_ACTION_POINTS ] == attacker.Stat[ ST_CURRENT_AP ];
+
+	if( ( !HasAllAP && attacker.Stat[ ST_ACTION_POINTS ] < needAp ) || 
+		( attacker.Stat[ ST_ACTION_POINTS ] >= needAp && attacker.Stat[ ST_CURRENT_AP ] < needAp ) &&
+		  attacker.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
 	{
 		return;
 	}
@@ -685,10 +700,13 @@ void unsafe_critter_attack( Critter& attacker, int target_Id, int param1, int we
 	}
 	
 	//Log( "dist " + dist + " wpnMaxDist " + wpnMaxDist );
-	if( dist > wpnMaxDist && ( ( valid( ammo ) && FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT ) ) ) ) //( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS ) || 
+	if( ( valid( ammo ) && FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT ) ) )
 	{
-		attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_OUT_OF_RANGE );
-		return;
+		if( dist > wpnMaxDist * 2 )
+		{			
+			attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_OUT_OF_RANGE );
+			return;
+		}
 	}
 
 	if( ( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS || skillNum == SK_THROWING || weapon.Item_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER ) && dist > wpnMaxDist )
@@ -862,7 +880,7 @@ void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string
     }
 	else if( !player.IsKnockout() )
     {
-        player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( isBack == 0 ) ), 101, player.HexX, player.HexY );
+        player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( isBack == 0 ) ), player.Stat[ ST_CURRENT_AP ] + 1, player.HexX, player.HexY );
         player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_LIE_DOWN );
 		SayLog( player, crInfo( player ) + " lies down." );
 		player.ParamBase[ CR_SLEEPING_STATE ] = 1 + isBack;
@@ -1597,7 +1615,7 @@ void unsafe_store_last_checked_item( Critter& cr, int itemId, int type, int, str
 
 void unsafe_rolling( Critter& player, int param0, int param1, int param2, string@ param3, int[]@ param4 )
 {
-	Roll( player, param0, param1, param2 );
+	roll( player, param0, param1, param2 );
 }
 
 void unsafe_rolling_GM( Critter& gm, int param0, int param1, int param2, string@ param3, int[]@ vals )
@@ -1613,10 +1631,10 @@ void unsafe_rolling_GM( Critter& gm, int param0, int param1, int param2, string@
 		return;
 	}
 	
-	Roll( cr, vals[0], vals[1], vals[2] );
+	roll( cr, vals[0], vals[1], vals[2] );
 }
 
-void Roll( Critter& cr, int stat, int n, int val )
+void roll( Critter& cr, int stat, int n, int val )
 {
 	if( stat < 0 || stat > 7 || n < 0 || val < 0 )
 	{
@@ -1705,6 +1723,18 @@ void unsafe_turn_critter( Critter& player, int hexX, int hexY, int param2, strin
 		uint8 dir = GetDirection( player.HexX, player.HexY, hexX, hexY );
 		player.SetDir( dir );
 		player.Wait( 500 );
+	}
+}
+
+void unsafe_SendGuitTabs( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ fets )
+{
+	Critter@[] critters;
+    int count = player.GetMap().GetCrittersHex( player.HexX, player.HexY, 15, FIND_ALL | FIND_ONLY_PLAYERS, critters );
+	
+	for(int i = 0; i < count; i++)
+	{
+		if(player.Id == critters[i].Id) continue;
+		critters[i].RunClientScript( "client_guitar@RecvGuitTabs", player.Id, param1, 0, null, fets );
 	}
 }
 

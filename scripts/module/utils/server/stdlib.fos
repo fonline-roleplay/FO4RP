@@ -1,6 +1,119 @@
-bool gotMoney( Critter& cr, int amount )
+shared class AddItem
 {
-	return valid( CountMoney( cr, amount ) );
+	uint pid;
+	uint count;
+	
+	AddItem( uint pid, uint count = 1 ) 
+	{
+		this.pid = pid;
+		this.count = count;
+	}
+	
+	void add( Critter& cr )
+	{
+		cr.AddItem( pid, count );
+	}
+	
+	string toString()
+	{ //Format: pid(count)
+		return pid + "(" + count + ")";
+	}
+}
+
+shared class noAddItem : AddItem
+{
+	noAddItem() {}
+	void add( Critter& cr ) override { }
+	string toString() override { return "[noAddItem]"; }
+}
+
+shared class CTE
+{
+	uint rate;
+	uint group_id;
+	uint event_id;
+	uint time_left;
+	
+	CTE( uint group_id, uint event_id, uint rate, uint time_left ) 
+	{
+		this.rate = rate;
+		this.group_id = group_id;
+		this.event_id = event_id;
+		this.time_left = time_left;
+	}	
+		
+	string toString()
+	{//Format: CTE[group:event]rate(time)
+		return "CTE[" + group_id + ":" + event_id + "]" + rate + "(" + DeltaTime_HMS( time_left ) + ")";
+	}
+}
+
+shared class ParamData
+{
+	int base;
+	int value;
+	ParamData( Critter& cr, uint index )
+	{
+		base = getBase( cr, index );
+		value = getValue( cr, index );
+	}	
+	
+	string toString() 
+	{//Format: value(base)
+		return value + "(" + base + ")";
+	}
+}
+
+shared int setBase( Critter@ cr, uint param, int value ) {
+	if( !valid( cr ) ) return value;
+
+		 if( IN_RANGE( param, STAT_BEGIN, STAT_END ) )				cr.StatBase[param] 	     = value;			
+	else if( IN_RANGE( param, SKILL_BEGIN, SKILL_END ) )			cr.SkillBase[param]      = value;          
+	else if( IN_RANGE( param, TIMEOUT_BEGIN, TIMEOUT_END ) )		cr.TimeoutBase[param]    = __FullSecond + REAL_SECOND(value);        
+	else if( IN_RANGE( param, KILL_BEGIN, KILL_END ) )				cr.KillBase[param]       = value;           
+	else if( IN_RANGE( param, PERK_BEGIN, PERK_END ) )				cr.PerkBase[param]       = value;           
+	else if( IN_RANGE( param, AVATAR_BEGIN, AVATAR_END ) )			cr.ParamBase[param]      = value;          
+	else if( IN_RANGE( param, ADDICTION_BEGIN, ADDICTION_END ) )	cr.AddictionBase[param]  = value;	    
+	else if( IN_RANGE( param, KARMA_BEGIN, KARMA_END ) )			cr.KarmaBase[param] 	 = value;          
+	else if( IN_RANGE( param, DAMAGE_BEGIN, DAMAGE_END ) )			cr.DamageBase[param] 	 = value;         
+	else if( IN_RANGE( param, MODE_BEGIN, MODE_END ) )				cr.ModeBase[param] 		 = value;           
+	else if( IN_RANGE( param, TRAIT_BEGIN, TRAIT_END ) )			cr.TraitBase[param] 	 = value;          
+	else if( IN_RANGE( param, REPUTATION_BEGIN, REPUTATION_END ) )	cr.ReputationBase[param] = value;     
+	else 															cr.ParamBase[param] 	 = value;
+	
+	return getValue( cr, param ); 
+}
+
+shared void param_change_inform( Critter& cr, uint param, float delta )
+{
+	if( cr.Param[ QST_GAMEMODE ] != GAME_TEST ) return;
+	
+	switch(param)
+	{
+		case(ST_APREGEN_EXT): delta /= 100.0f;
+		default:break;
+	}
+	
+	if( delta > 0 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DRUG_STAT_GAIN, "$value" + delta + "$name" + STR_INSERT_PARAM_NAME(param) );
+	}
+	else if( delta < 0 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DRUG_STAT_LOSE, "$value" + (-delta) + "$name" + STR_INSERT_PARAM_NAME(param) );
+	}
+}
+
+shared int addBase( Critter& cr, uint param, int delta ) 
+{
+	param_change_inform( cr, param, delta );
+	int value = getBase( cr, param ) + delta;
+	return setBase( cr, param, value );
+}
+
+bool gotMoney( Critter& cr, int amount, int barter_mode )
+{
+	return valid( CountMoney( cr, amount, barter_mode ) );
 }
 
 bool giveMoney( Critter& crFrom, Critter@ crTo, int amount )
@@ -10,10 +123,10 @@ bool giveMoney( Critter& crFrom, Critter@ crTo, int amount )
 		return false;
 	}
 	
-	return giveItems( crFrom, crTo, CountMoney( crFrom, amount ) );
+	return giveItems( crFrom, crTo, CountMoney( crFrom, amount, crTo.ModeBase[ MODE_BARTER_ONLY_CASH ] ) );
 }
 
-int[][]@ CountMoney( Critter& cr, int moneyCount )
+int[][]@ CountMoney( Critter& cr, int moneyCount, int barter_mode)
 {
 	int[] currencyPids = { 
 		PID_DOLLAR_100, PID_PREWAR_DOLLAR_100, 
@@ -22,6 +135,11 @@ int[][]@ CountMoney( Critter& cr, int moneyCount )
 		PID_DOLLAR_5, 	PID_PREWAR_DOLLAR_5,
 		PID_PREWAR_DOLLAR_1, PID_BOTTLE_CAPS
 	};
+	
+	if( barter_mode < 2 ) 
+	{
+		currencyPids.insertAt(0, PID_REAL_BOTTLE_CAPS );
+	}
 	
 	int[][] result; //structure: { { pid, amount } }	
 	
@@ -598,7 +716,12 @@ bool PickItem( Critter& cr, Item& targetItem )
 	return true;
 }
 
-void PlayGenericSound( Map& map, uint16 hx, uint16 hy, string& sound, int distance )
+shared void PlayGenericSound( Critter& cr, string& sound, int distance ) 
+{	
+	PlayGenericSound( cr.GetMap(), cr.HexX, cr.HexY, sound, distance ); 
+}
+
+shared void PlayGenericSound( Map& map, uint16 hx, uint16 hy, string& sound, int distance )
 {
 	if( !valid( map ) )
 	{
@@ -847,4 +970,14 @@ void ChangeStat( Critter& cr, int stat = -1, int val = 0 )
 	{
 		Log( "StatChange values out of bounds! cr.Id: " + cr.Id + " stat " + stat + " val " + val );
 	}
+}
+
+void DeleteItem( Critter& cr, uint16 pid, int slot )
+{
+    Item@ item = cr.GetItem( pid, slot );
+    
+    if( valid( item ) )
+    {
+        DeleteItem( item ); 
+    }
 }

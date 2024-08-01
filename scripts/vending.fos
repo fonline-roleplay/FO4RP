@@ -2,6 +2,8 @@
 #define VENDING
 
 #include "_utils.fos"
+#include "_ltp.fos"
+#include "gathering_h.fos"
 #include "vending_h.fos"
 #include "speed_h.fos"
 
@@ -51,10 +53,10 @@ class MenuVendingMachine: CenteredMenuHandler
             return false;
         }
 		
-		for( uint i = 0, len = cash_pids.length(); i < len; i++ )
+		for( uint i = 0, len = vendMach.MONEY_TYPE == 0 ? cash_pids.length() : 1; i < len; i++ )
 		{
-			uint16 pid = cash_pids[i];
-			uint balance_change = int( cash_values[i] );
+			uint16 pid = vendMach.MONEY_TYPE == 0 ? cash_pids[i] : PID_REAL_BOTTLE_CAPS;
+			uint balance_change = vendMach.MONEY_TYPE == 0 ? int( cash_values[i] ) : 1;
 			Item@ cash = cr.GetItem( pid, -1 );			
 
 			if( menu.ButtonMsg( STR_DEVICE_INSERT_MONEY, "$balance_change" + balance_change ) )
@@ -141,12 +143,13 @@ class MenuVendingMachine: CenteredMenuHandler
 		if( menu.ButtonMsg( STR_DEVICE_TAKE_CHANGE ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			Item@ change = vendMach.GetItem( PID_BOTTLE_CAPS, 0 );
+			uint16 pid = vendMach.MONEY_TYPE == 0 ? PID_BOTTLE_CAPS : PID_REAL_BOTTLE_CAPS;
+			Item@ change = vendMach.GetItem( pid, 0 );
 			if( valid( change ) && vendMach.BALANCE > 0 )
 			{
 				int changeCount = MIN( int( change.GetCount() ), vendMach.BALANCE );
 				_SubItem( change, uint( changeCount ) );
-				cr.AddItem( PID_BOTTLE_CAPS, changeCount );
+				cr.AddItem( pid, changeCount );
 				vendMach.BALANCE -= changeCount;
 				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_COLLECTS_CHANGE );
 				return false;
@@ -158,6 +161,16 @@ class MenuVendingMachine: CenteredMenuHandler
 			}
 		}
 		
+		if(vendMach.MONEY_TYPE != 1)
+		{
+			Item@ handItem = _CritGetItemHand(cr);
+			if((valid(handItem) && handItem.GetProtoId() == PID_MULTI_TOOL) && menu.ButtonMsg(STR_CHANGE_MONEY_TYPE))
+			{
+				start_money_type(cr, vendMach);
+				return false;
+			}
+		}
+
 		if( !FLAG( vendMach.LockerCondition, LOCKER_LOCKED ) )
 		{
 			Item@[] productItm;
@@ -482,6 +495,61 @@ void StartMenuSelectProduct( Critter& cr, Item& vendMach )
 
     iMenuHandler@ handler = MenuSelectProduct( vendMach, map );
     iDialogBox@ menu = OpenMenu( cr, "Vending machine", handler );
+}
+
+bool ltp_inited=false;
+
+void ltp_init()
+{
+    LTPREG( LTP_MONEY_TYPE, process_money_type )
+
+    ltp_inited=true;
+}
+
+bool start_money_type(Critter& cr, Item& vending)
+{
+	if(!ltp_inited)
+	{
+		ltp_init();
+	}
+
+	if(!valid(cr) || !valid(vending))
+	{
+		return false;
+	}
+
+	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	uint cracking_rate = cr.Skill[ SK_LOCKPICK ] + ( cr.Stat[ ST_STRENGTH ] * 10 ) + OBJECT_DPA_BASE; 
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = uint( ceil( float( ( OBJECT_HP_BASE ) / ( CLAMP( cracking_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+
+	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+	StartProcess(cr, LTP_MONEY_TYPE, 0, vending.Id, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ]);
+	return true;
+}
+
+uint process_money_type( Critter@ cr, int& param0, int& vendId, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_MONEY_TYPE )
+
+	Item@ vending = GetItem( vendId );
+
+    if(valid(vending))
+	{
+		param0++;
+
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
+		{
+			vending.MONEY_TYPE = 1;
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+			return 0;
+		}
+
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+	}
+
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	return 0;
 }
 
 #endif // VENDING

@@ -2,7 +2,9 @@
 #define COMBAT_MODULE
 
 #include "_utils.fos"
+#include "skins_h.fos"
 #include "combat_h.fos"
+#include "combat_aiming.fos"
 #include "firestarter_h.fos"
 #include "_animation.fos"
 #include "critter_item_movement_h.fos"
@@ -44,6 +46,7 @@ class AttackStruct
     int			DmgType;
     int			BonusDmg;
     int			DrMod;
+	int			DtMod;
 	int			MinDmgMod;
 	int			MaxDmgMod;
     int			CritDmgMod;
@@ -70,6 +73,7 @@ class AttackStruct
         DmgType = original.DmgType;
         BonusDmg = original.BonusDmg;
         DrMod = original.DrMod;
+		DrMod = original.DtMod;
 		MinDmgMod = original.MinDmgMod;
 		MaxDmgMod = original.MaxDmgMod;
         CritDmgMod = original.CritDmgMod;
@@ -96,7 +100,8 @@ class AttackStruct
         DmgMax = 0;
         DmgType = 0;
         BonusDmg = 0;
-        DrMod = 1;
+        DrMod = 0;
+		DtMod = 0;
 		MinDmgMod = 100;
 		MaxDmgMod = 100;
         CritDmgMod = 100;
@@ -107,11 +112,6 @@ class AttackStruct
         ShowHitAnimForce = false;
     }
 };
-
-// AttackStruct[] delayed_attacks;
-// int add_delayed_attack( AttackStruct attack ) { return -1; }
-// AttackStruct@ get_delayed_attack( uint id ) { return null; }
-// bool erase_delayed_attack( uint id ) { return false;}
 
 void MissedShot( Map& map, Critter& attacker, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo, uint16& tx, uint16& ty, bool recursive )
 {
@@ -130,15 +130,16 @@ void MissedShot( Map& map, Critter& attacker, ProtoItem& weapon, uint8 weaponMod
 			continue;
 		}
 		
-		int hitChance = RandomTargetChance( attacker, target, ammo );
+		if( !canHit( attacker, target ) )
+		{
+			continue;
+		}
+		
+		int hitChance = to_hit( attacker, target, weapon, weaponMode, ammo, tx, ty, true );
 		if( Random( 1, 100 ) <= hitChance )
 		{
-			int toHit = to_hit( attacker, target, weapon, weaponMode, ammo, tx, ty, true );
-			if( ( toHit - Random( 1, 100 ) ) >= 0 )
-			{
-				CombatAttack( attacker, target, weapon, weaponMode, ammo, tx, ty, recursive, true );
-				return;
-			}
+			CombatAttack( attacker, target, weapon, weaponMode, ammo, tx, ty, recursive, true );
+			return;
 		}
 	}
 
@@ -162,7 +163,12 @@ Critter@ checkHitLine( Map& map, Critter& attacker, ProtoItem& weapon, uint8 wea
 			continue;
 		}
 		
-		int hitChance = RandomTargetChance( attacker, target, ammo );
+		if( !canHit( attacker, target ) )
+		{
+			continue;
+		}
+		
+		int hitChance = to_hit( attacker, target, weapon, weaponMode, ammo, tx, ty, true );
 		
 		if( Random( 1, 100 ) <= hitChance )
 		{
@@ -171,30 +177,6 @@ Critter@ checkHitLine( Map& map, Critter& attacker, ProtoItem& weapon, uint8 wea
 	}
 	
 	return null;
-}
-
-int RandomTargetChance( Critter& attacker, Critter& target, ProtoItem@ ammo )
-{
-	int hitChance = 60;
-	if( valid( ammo ) )
-	{
-		if( FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT ) )
-		{
-			hitChance = 80;
-		}
-	}
-	
-	if( target.IsKnockout() || target.Param[ CR_IS_RELAXING ] > 0 )
-	{
-		hitChance /= 2;
-	}
-	
-	if( target.Param[ PET_OWNER_ID ] == int( attacker.Id ) || target.Param[ PET_PROTECT_ID ] == int( attacker.Id ) )
-	{
-		hitChance /= 10;
-	}
-	
-	return hitChance;
 }
 
 uint[] sortByDist( uint16 x, uint16 y, Critter@[] crs )
@@ -305,6 +287,8 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		aim = attacker.Param[ CR_AUTO_AIM ];
 	}
 	
+	attacker.ParamBase[CR_AUTO_AIM_TEMP] = aim;
+	
     Item@ realWeapon = _CritGetItemHand( attacker );
 	bool validWeapon = valid( realWeapon );
 	
@@ -338,6 +322,9 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
     uint16 hy = attacker.HexY;
     uint16 tx = validTarget ? target.HexX : hexX;
     uint16 ty = validTarget ? target.HexY : hexY;
+	
+	attacker.ParamBase[ST_AIMING_HEIGHT] = getHeight( attacker, aim, target ); 
+	
     uint16 weapPid = weapon.ProtoId;
 	bool validAmmo = valid( ammo );
     uint16 ammoPid = validAmmo ? ammo.ProtoId : 0;
@@ -387,8 +374,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 	//check for accidental hit
 	if( !autohit )
 	{
-		Critter@ realTarget;
-		@realTarget = checkHitLine( map, attacker, weapon, weaponMode, ammo, tx, ty );
+		Critter@ realTarget = checkHitLine( map, attacker, weapon, weaponMode, ammo, tx, ty );
 		if( valid( realTarget ) )
 		{
 			if( validTarget )
@@ -397,6 +383,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 				{
 					@target = realTarget;
 					validTarget = valid( target );
+					aim = attacker.Param[CR_AUTO_AIM_TEMP];
 				}
 			}
 			else
@@ -404,7 +391,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 				@target = realTarget;
 				validTarget = valid( target );
 			}
-		}
+		}		
 	}
 	
 	bool hexAttack = !validTarget;
@@ -481,7 +468,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 	attack.MinDmgMod = validAmmo ? _GetWeaponMinDmgMod( weapon ) : 100;
 	attack.MaxDmgMod = validAmmo ? _GetWeaponMaxDmgMod( weapon ) : 100;
 	attack.AmmoPerk = validAmmo ? ammo.Ammo_Perk : 0;
-	attack.DrMod = validAmmo ? ammo.Ammo_DrMod : 1;
+	attack.DrMod = validAmmo ? ammo.Ammo_DrMod : 0;
     attack.CritDmgMod = 100;
     @attack.Ammo = ammo;
 	
@@ -1097,17 +1084,6 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
         targetDR /= 5;
     }
 
-	//cover mechanics
-	if( target.Param[ CR_IS_RELAXING ] == 5 && !FLAG( weaponPerk, WEAPON_PERK_IGNORE_COVER ) )
-	{
-		int coverDT = CheckCover( map, hexX, hexY, target );
-		if( coverDT > 0 )
-		{
-			targetDT += coverDT;
-			target.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_COMBAT_COVER_SAVE, "@$coverDT" + coverDT );
-		}
-	}
-
     targetDR += attack.DrMod;
     targetDR = CLAMP( targetDR, 0, 100 );
     int dmgMin = ( attack.DmgMin + attack.BonusDmg ) * attack.MinDmgMod / 100;
@@ -1136,20 +1112,30 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 			rawDmg /= 2;
 		}
 
-		if( validAttacker )
-		{
-			inform( attacker, target, "raw= " + rawDmg );
-		}
-
-		rawDmg -= targetDT;
-        rawDmg -= rawDmg * targetDR / 100;
-		
 		// Shotgun modifier
 		if( FLAG( ammoPerk, AMMO_PERK_SPREADSHOT ) )
 		{
 			rawDmg /= SHOTGUN_PELLETS;
 		}
+
+		//cover mechanics
+		int coverDT = 0;
+		if( target.Param[ CR_IS_RELAXING ] == 5 && !FLAG( weaponPerk, WEAPON_PERK_IGNORE_COVER ) )
+		{
+			coverDT = CheckCover( map, hexX, hexY, target );
+			if( coverDT > 0 )
+			{
+				target.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_COMBAT_COVER_SAVE, "@$coverDT" + coverDT );
+			}
+		}
 		
+		rawDmg -= coverDT;
+		rawDmg -= rawDmg * targetDR / 100;
+		targetDT = targetDT * ( 100 - attack.DtMod ) / 100;
+		rawDmg -= targetDT;
+		
+		float raw_after = rawDmg;
+
         if( rawDmg > 0 )
 		{
             totalDmg += rawDmg;
@@ -1166,151 +1152,147 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 		isCritical = false;
 	}
 	
-	if( isCritical || attack.ForceFlags != 0 )
+	if( attack.ForceFlags != 0 )
 	{
-        if( isCritical )
+		eff |= attack.ForceFlags;
+		isCritical = true;
+	}
+	
+	if( isCritical )
+	{
+		int aim_ = aim;
+		if( aim_ == HIT_LOCATION_NONE )
 		{
-            int aim_ = aim;
-            if( aim_ == HIT_LOCATION_NONE )
-			{
-                aim_ = HIT_LOCATION_UNCALLED;
-			}
-            aim_--;
-            
-            int MaxRoll = 100;
-            int roll = Random( 1, MaxRoll );
-			int crit_level = 0;
-			
-			if( validAttacker && attacker.Trait[ TRAIT_SADIST ] > 0 ) // TRAIT_SADIST
-			{
-				roll += 15;
-			}
-			
-            if( roll <= 15 )
-			{
-                crit_level = 0;
-            }
-			else if( roll <= 39 )
-			{
-                crit_level = 1;
-            }
-			else if( roll <= 69 )
-			{
-                crit_level = 2;
-            }
-			else if( roll <= 94 )
-			{
-                crit_level = 3;
-            }
-			else
-			{
-				crit_level = 4;
-			}
-			
-            uint offset = aim_ * ROLL_MAX_STAGE * 7 + crit_level * 7;
-
-			if( validAttacker && attacker.Trait[ TRAIT_FINESSE ] == 0 )
-			{
-				critDmgMod = CriticalTable[ offset ];
-			}
-
-            eff = CriticalTable[ offset + 1 ];
-
-            int  stat = CriticalTable[ offset + 2 ];
-            int  statMod = CriticalTable[ offset + 3 ];
-
-            uint cMessage = CriticalTable[ offset + 5 ];
-			
-            uint cFailureMessage = CriticalTable[ offset + 6 ];
-
-            extraMessage = cMessage;
-
-            string info = "";
-			if( stat != -1 )
-			{
-				int stat_roll = Random( 1, 10 );
-				info = "For stat #" + stat + " '|0xFFFF00 " + GetGameMsgStr( 100001 + stat * 10 ) + "|0x00FF00 ' [" + target.Stat[ stat ] + "] with mod [" + statMod + "].";
-				info += "\nStat roll [" + stat_roll + "], it's ";
-				
-				switch( aim )
-				{
-					case( HIT_LOCATION_LEFT_ARM ):
-					{
-						if( target.Param[ DAMAGE_LEFT_ARM ] != 0 )
-						{
-							statMod -= 2;
-						}
-						break;
-					}
-					case( HIT_LOCATION_RIGHT_ARM ):
-					{
-						if( target.Param[ DAMAGE_RIGHT_ARM ] != 0 )
-						{
-							statMod -= 2;
-						}
-						break;
-					}
-					case( HIT_LOCATION_RIGHT_LEG ):
-					{
-						if( target.Param[ DAMAGE_RIGHT_LEG ] != 0 )
-						{
-							statMod -= 2;
-						}
-						break;
-					}
-					case( HIT_LOCATION_LEFT_LEG ):
-					{
-						if( target.Param[ DAMAGE_LEFT_LEG ] != 0 )
-						{
-							statMod -= 2;
-						}
-						break;
-					}
-					default:
-						break;
-				}
-				
-                if( stat_roll > target.Stat[ stat ] + statMod )
-				{
-                    eff |= CriticalTable[ offset + 4 ];
-                    extraMessage = cFailureMessage;
-					
-					info += "|0xFF6600 FAILED.";
-                }
-				else
-				{
-					info += "|0xAAFF00 PASSED.";
-				}
-			}						
-
-            if( FLAG( weaponPerk, WEAPON_PERK_ENHANCED_KNOCKOUT ) )
-			{
-                SETFLAG( eff, HF_KNOCKOUT );
-				info += "\n Weapon gave knockout!";
-			}
-
-            if( target.Mode[ MODE_NO_KNOCK ] != 0 )
-			{
-                UNSETFLAG( eff, HF_KNOCKDOWN );
-				info += "\n Target could not be knocked down!";
-			}
-        }
-		// Small creatures instant death
-		if( isCritical )
-		{
-			if( target.CrType == CRTYPE_RAT || target.CrType == CRTYPE_MANTI || target.CrType == CRTYPE_RAT_PIGRAT || target.CrType == CRTYPE_GIANT_WASP || target.CrType == CRTYPE_GIANT_BEETLE ||
-				target.CrType == CRTYPE_DOG_SMALL || target.CrType == CRTYPE_ALIEN_EGG || target.CrType == CRTYPE_GIANT_ANT_BROWN_L || target.CrType == CRTYPE_GIANT_ANT_BROWN || 
-				target.CrType == CRTYPE_GIANT_ANT_GREEN || target.CrType == CRTYPE_GIANT_ANT_RED || target.CrType == CRTYPE_RADSCORPION_SMALL || target.CrType == CRTYPE_SPIDER )
-			{
-				eff |= HF_DEATH;
-			}
+			aim_ = HIT_LOCATION_UNCALLED;
 		}
 		
-        if( attack.ForceFlags != 0 )
+		aim_--;
+		
+		// Small creatures instant death
+		if( target.CrType == CRTYPE_RAT || target.CrType == CRTYPE_MANTI || target.CrType == CRTYPE_RAT_PIGRAT || target.CrType == CRTYPE_GIANT_WASP || target.CrType == CRTYPE_GIANT_BEETLE ||
+			target.CrType == CRTYPE_DOG_SMALL || target.CrType == CRTYPE_ALIEN_EGG || target.CrType == CRTYPE_GIANT_ANT_BROWN_L || target.CrType == CRTYPE_GIANT_ANT_BROWN || 
+			target.CrType == CRTYPE_GIANT_ANT_GREEN || target.CrType == CRTYPE_GIANT_ANT_RED || target.CrType == CRTYPE_RADSCORPION_SMALL || target.CrType == CRTYPE_SPIDER )
 		{
-            eff |= attack.ForceFlags;
-            isCritical = true;
-        }
+			eff |= HF_DEATH;
+		}
+		
+		int MaxRoll = 100;
+		int roll = Random( 1, MaxRoll );
+		int crit_level = 0;
+		
+		if( validAttacker && attacker.Trait[ TRAIT_SADIST ] > 0 ) // TRAIT_SADIST
+		{
+			roll += 15;
+		}
+		
+		if( roll <= 15 )
+		{
+			crit_level = 0;
+		}
+		else if( roll <= 39 )
+		{
+			crit_level = 1;
+		}
+		else if( roll <= 69 )
+		{
+			crit_level = 2;
+		}
+		else if( roll <= 94 )
+		{
+			crit_level = 3;
+		}
+		else
+		{
+			crit_level = 4;
+		}
+		
+		uint offset = aim_ * ROLL_MAX_STAGE * 7 + crit_level * 7;
+
+		if( validAttacker && attacker.Trait[ TRAIT_FINESSE ] == 0 )
+		{
+			critDmgMod = CriticalTable[ offset ];
+		}
+
+		eff = CriticalTable[ offset + 1 ];
+
+		int  stat = CriticalTable[ offset + 2 ];
+		int  statMod = CriticalTable[ offset + 3 ];
+
+		uint cMessage = CriticalTable[ offset + 5 ];
+		
+		uint cFailureMessage = CriticalTable[ offset + 6 ];
+
+		extraMessage = cMessage;
+
+		string info = "";
+		if( stat != -1 )
+		{
+			int stat_roll = Random( 1, 10 );
+			info = "For stat #" + stat + " '|0xFFFF00 " + GetGameMsgStr( 100001 + stat * 10 ) + "|0x00FF00 ' [" + target.Stat[ stat ] + "] with mod [" + statMod + "].";
+			info += "\nStat roll [" + stat_roll + "], it's ";
+			
+			switch( aim )
+			{
+				case( HIT_LOCATION_LEFT_ARM ):
+				{
+					if( target.Param[ DAMAGE_LEFT_ARM ] != 0 )
+					{
+						statMod -= 2;
+					}
+					break;
+				}
+				case( HIT_LOCATION_RIGHT_ARM ):
+				{
+					if( target.Param[ DAMAGE_RIGHT_ARM ] != 0 )
+					{
+						statMod -= 2;
+					}
+					break;
+				}
+				case( HIT_LOCATION_RIGHT_LEG ):
+				{
+					if( target.Param[ DAMAGE_RIGHT_LEG ] != 0 )
+					{
+						statMod -= 2;
+					}
+					break;
+				}
+				case( HIT_LOCATION_LEFT_LEG ):
+				{
+					if( target.Param[ DAMAGE_LEFT_LEG ] != 0 )
+					{
+						statMod -= 2;
+					}
+					break;
+				}
+				default:
+					break;
+			}
+			
+			if( stat_roll > target.Stat[ stat ] + statMod )
+			{
+				eff |= CriticalTable[ offset + 4 ];
+				extraMessage = cFailureMessage;
+				
+				info += "|0xFF6600 FAILED.";
+			}
+			else
+			{
+				info += "|0xAAFF00 PASSED.";
+			}
+		}
+
+		if( FLAG( weaponPerk, WEAPON_PERK_ENHANCED_KNOCKOUT ) )
+		{
+			SETFLAG( eff, HF_KNOCKOUT );
+			info += "\n Weapon gave knockout!";
+		}
+
+		if( target.Mode[ MODE_NO_KNOCK ] != 0 )
+		{
+			UNSETFLAG( eff, HF_KNOCKDOWN );
+			info += "\n Target could not be knocked down!";
+		}
 
         // in the following: in no lose limbs, then clear the effects and set msgEff
         // otherwise set msgEff first, then check for HF_RANDOM
@@ -1351,25 +1333,10 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
         }
     }
 
-    if( FLAG( weaponPerk, WEAPON_PERK_ENHANCED_KNOCKOUT ) )
+	totalDmg = totalDmg * critDmgMod / 100;
+	if( validAttacker )
 	{
-        if( validAttacker )
-		{
-            if( Random( 1, 100 ) <= ( attacker.Stat[ ST_STRENGTH ] ) - 8 )
-			{
-				SETFLAG( eff, HF_KNOCKOUT );
-			}
-		}
-    }
-
-	if( isCritical )
-	{
-		totalDmg = totalDmg * critDmgMod / 100;
-		
-		if( validAttacker )
-		{
-			inform( attacker, target, "critDmgMod = " + critDmgMod );
-		}
+		inform( attacker, target, "critDmgMod = " + critDmgMod );
 	}
 
 	if( validAttacker )
@@ -1399,19 +1366,6 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 		
         if( targetIsPlayer )
 		{
-			if( !attacker.IsNpc() && !target.IsNpc() )
-			{
-				if( attacker.Param[ ST_LEVEL ] < 2 )
-				{
-					totalDmg *= 0.5;
-				}
-				
-				if( attacker.Param[ ST_LEVEL ] > 1 && target.Param[ ST_LEVEL ] < 2 )
-				{
-					totalDmg *= 2;
-				}
-			}
-				
 			//Bullet Wound
 			if( attack.WeaponType != WS_MELEE && dmgType == DAMAGE_NORMAL && validAmmo && target.StatBase[ ST_BODY_TYPE ] != BT_ROBOT 
 				&& Random( 0, 1 ) == 0 && ( totalDmg >= ( 0.25 * target.Stat[ ST_CURRENT_HP ] ) ) && !FLAG( target.StatBase[ ST_CRSTATUS ], CR_STATUS_BULLET_OVER ) )
@@ -1435,6 +1389,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 			inform( attacker, target, "aftertotal= "+ totalDmg );
 		}
 	}
+	
 	// code for dropping weapon, adapted from critical failures
 	bool droppedWeapon = FLAG( eff, HF_DROPPED_WEAPON );
 	if( droppedWeapon )
@@ -1502,6 +1457,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 			target.AddTimeEvent( "cte_Stunned", REAL_SECOND( 0 ), CTE_STUNNED, 0 );
 		}
 	}
+
     // Knock down
     if( FLAG( eff, HF_KNOCKDOWN ) )
 	{
@@ -1512,6 +1468,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 	{
         isKo = true;
 	}
+
     // Clipped LLeg
     if( FLAG( eff, HF_CRIPPLED_LEFT_LEG ) )
 	{
@@ -1605,7 +1562,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     }
 
     bool attackFront = true;
-    uint dir = GetDirection( attack.Hx, attack.Hy, target.HexX, target.HexY );
+    uint8 dir = GetDirection( attack.Hx, attack.Hy, target.HexX, target.HexY );
     if( dir == target.Dir || ( ( dir + 1 ) % 6 ) == target.Dir || ( ( dir + 5 ) % 6 ) == target.Dir )
 	{
 		target.StatBase[ST_VAR7] = 1;
@@ -1694,21 +1651,14 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
                 if( knockDist > 0 )
 				{
                     RustyGetHexCoordWall( map, target.HexX, target.HexY, knockHx, knockHy, 180.0f, knockDist );
-                    target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( attackFront ), targetAp, knockHx, knockHy );
+                    KnockoutTarget( target, targetAp, knockHx, knockHy, attackFront );
                 } 
 			}
 			else
 			{
-				target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( attackFront ), targetAp, target.HexX, target.HexY );
+				KnockoutTarget( target, targetAp, target.HexX, target.HexY, attackFront );
 			}
 		}
-		
-		target.Wait( GetActionTime( ACTION_KNOCKOUT, target ) );
-		target.ParamBase[ CR_IS_WINDUPED ] = 0;
-		target.ParamBase[ CR_IS_RELAXING ] = 0;
-		target.ParamBase[ CR_IS_RELOADING ] = 0;
-		target.TimeoutBase[ TO_SNEAK ] = SNEAK_TIMEOUT( target );
-		target.ParamBase[ CR_SNEAKING ] = 0;
     }
 	
 	//Critter death
@@ -2021,150 +1971,121 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     }
 	
 	//Check for special weapon effects
-    if( attack.WeaponPid == PID_SOUND_BLASTER && target.ParamBase[ MODE_NO_KNOCK ] <= 0  )
+	//Knockout
+	if( validAttacker && target.ParamBase[ MODE_NO_KNOCK ] <= 0 && !target.IsDead() && !target.IsKnockout() )
 	{
-        QuakeScreen2( target );
-        if( ( Random( 12, 40 ) - target.Stat[ ST_LUCK ] ) > 10 && ( target.Timeout[ TO_STEALING ] <= int( REAL_MINUTE( 2 ) ) ) )
-		{
-            int8 roll = Random( 10, 100 ) - target.Stat[ ST_ENDURANCE ] * 10;
-            if( roll > 0 )
-			{
-				if( !target.IsDead() )
-				{
-					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll * 10, target.HexX, target.HexY );
-					target.ParamBase[ CR_IS_WINDUPED ] = 0;
-					target.ParamBase[ CR_IS_RELAXING ] = 0;
-					target.ParamBase[ CR_IS_RELOADING ] = 0;
-					target.TimeoutBase[ TO_SNEAK ] = SNEAK_TIMEOUT( target );
-					target.ParamBase[ CR_SNEAKING ] = 0;
-					SayLog( target, crInfo( target ) + " stunned by sonic weapon." );
-				}
-            }
-        }
-    }
-	
-    if( validAttacker && ( attack.WeaponPid == PID_LEG_ATTACK1 || attack.WeaponPid == PID_LEG_ATTACK2 || attack.WeaponPid == PID_LEG_ATTACK3 || attack.WeaponPid == 1032 ) &&
-        ( aim == HIT_LOCATION_RIGHT_LEG || aim == HIT_LOCATION_LEFT_LEG ) && ( target.Timeout[ TO_STEALING ] <= 0 ) )
-    {
-		int rate = target.Trait[ TRAIT_NERD ] > 0 ? 1 : 100;
-        if( ( ( Random( 10, 30 ) - target.Stat[ ST_ENDURANCE ] - target.Stat[ ST_AGILITY ] ) > 0 ) && ( ( Random( 1, 200 ) + attacker.Skill[ SK_UNARMED ] - target.Skill[ SK_UNARMED ] ) >= rate ) &&
-            ( target.Param[ ST_BODY_TYPE ] < BT_BRAHMIN ) && ( attacker.Param[ ST_BODY_TYPE ] < BT_BRAHMIN ) && ( !target.IsDead() || !target.IsKnockout() ) )
-        {
-            attacker.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, STR_EMOTE_FOOT_SWEEP );
-			SayLog( attacker, crInfo( attacker ) + " performs a foot sweep " + crInfo( target ) + "." );
-								   
-            int roll = Random( 10, 25 ) - target.Stat[ ST_ENDURANCE ];
-            if( roll > 0 )
-            {
-				if( !target.IsDead() )
-				{
-					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll * 10, target.HexX, target.HexY );
-					target.ParamBase[ CR_IS_WINDUPED ] = 0;
-					target.ParamBase[ CR_IS_RELAXING ] = 0;
-					target.ParamBase[ CR_IS_RELOADING ] = 0;
-					target.TimeoutBase[ TO_SNEAK ] = SNEAK_TIMEOUT( target );
-					target.ParamBase[ CR_SNEAKING ] = 0;
-					SayLog( target, crInfo( target ) + " falls from foot sweep." );
-				}
-				
-                target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_SECOND( 10 );
-            }
-        }
-    }
+		uint lostAp = 100;
+		string message = " KO from weapon";
 		
-    if( attack.WeaponPid == PID_CATTLE_PROD && valid( attack.Ammo ) && attack.Ammo.ProtoId != PID_CUENCELL_LOW && ( target.Timeout[ TO_STEALING ] <= int( REAL_MINUTE( 2 ) ) ) )
-    {
-        QuakeScreen2( target );
-        if( ( !target.IsDead() || !target.IsKnockout() ) && ( Random( 13, 30 ) - target.Stat[ ST_LUCK ] ) > 10 )
-        {
-            int8 roll = Random( 1, 15 ) - target.Stat[ ST_ENDURANCE ];
-            if( roll > 0 )
-            {
-				if( !target.IsDead() )
+		if( attack.WeaponPid == PID_SOUND_BLASTER )
+		{
+			QuakeScreen2( target );
+			if( ( Random( 12, 40 ) - target.Stat[ ST_LUCK ] ) > 10 && ( target.Timeout[ TO_KNOCKOUT ] <= int( REAL_MINUTE( 2 ) ) ) )
+			{
+				int8 roll = Random( 10, 100 ) - target.Stat[ ST_ENDURANCE ] * 10;
+				if( roll > 0 )
 				{
-					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ) ), roll * 10, target.HexX, target.HexY );
-					target.ParamBase[ CR_IS_WINDUPED ] = 0;
-					target.ParamBase[ CR_IS_RELAXING ] = 0;
-					target.ParamBase[ CR_IS_RELOADING ] = 0;
-					target.TimeoutBase[ TO_SNEAK ] = SNEAK_TIMEOUT( target );
-					target.ParamBase[ CR_SNEAKING ] = 0;
-					SayLog( target, crInfo( target ) + " falls from stunner hit." );
+					lostAp = roll * 10;
+					message = " stunned by sonic weapon.";
+					SayLog( target, crInfo( target ) + message );
+					KnockoutTarget( target, lostAp, target.HexX, target.HexY );
 				}
-                target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 15 );
-            }
-        }
-    }
-	
-	if( validAttacker && weaponSubtype == ITEM_SUBTYPE_WEAPON_MELEE_HAMMER && target.ParamBase[ MODE_NO_KNOCK ] <= 0 )
-    {
-        if( ( !target.IsDead() || !target.IsKnockout() ) && target.Timeout[ TO_STEALING ] <= int( REAL_MINUTE( 2 ) ) )
-        {
-            int dist = GetDistantion( attack.Hx, attack.Hy, target.HexX, target.HexY );
-            int aimmod = 0;
-            if( aim == HIT_LOCATION_HEAD || aim == HIT_LOCATION_EYES )
-			{
-                aimmod = 60;
-            }
-			else if( aim == HIT_LOCATION_UNCALLED || aim == HIT_LOCATION_NONE || aim == HIT_LOCATION_TORSO )
-			{
-                aimmod = 40;
 			}
+		}
+		
+		if( ( attack.WeaponPid == PID_LEG_ATTACK1 || attack.WeaponPid == PID_LEG_ATTACK2 || attack.WeaponPid == PID_LEG_ATTACK3 || attack.WeaponPid == PID_LEG_ATTACK4 ) &&
+			( aim == HIT_LOCATION_RIGHT_LEG || aim == HIT_LOCATION_LEFT_LEG ) && ( target.Timeout[ TO_KNOCKOUT ] <= 0 ) )
+		{
+			int rate = target.Trait[ TRAIT_NERD ] > 0 ? 1 : 100;
+			if( ( ( Random( 10, 30 ) - target.Stat[ ST_ENDURANCE ] - target.Stat[ ST_AGILITY ] ) > 0 ) 
+				&& ( ( Random( 1, 200 ) + attacker.Skill[ SK_UNARMED ] - target.Skill[ SK_UNARMED ] ) >= rate )
+				&& ( target.Param[ ST_BODY_TYPE ] < BT_BRAHMIN ) && ( attacker.Param[ ST_BODY_TYPE ] < BT_BRAHMIN ) )
+			{
+				attacker.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, STR_EMOTE_FOOT_SWEEP );
+				SayLog( attacker, crInfo( attacker ) + " performs a foot sweep " + crInfo( target ) + "." );
+									   
+				int roll = Random( 10, 25 ) - target.Stat[ ST_ENDURANCE ];
+				if( roll > 0 )
+				{
+					lostAp = roll * 10;
+					message = " falls from foot sweep.";
+					SayLog( target, crInfo( target ) + message );
+					KnockoutTarget( target, lostAp, target.HexX, target.HexY );
+					target.TimeoutBase[ TO_KNOCKOUT ] = __FullSecond + REAL_SECOND( 10 );
+				}
+			}
+		}
 			
-			if( attacker.StatBase[ ST_STRENGTH ] >= 6 )
+		if( attack.WeaponPid == PID_CATTLE_PROD && valid( attack.Ammo ) && attack.Ammo.ProtoId != PID_CUENCELL_LOW && ( target.Timeout[ TO_KNOCKOUT ] <= int( REAL_MINUTE( 2 ) ) ) )
+		{
+			QuakeScreen2( target );
+			if( ( Random( 13, 30 ) - target.Stat[ ST_LUCK ] ) > 10 )
 			{
-                aimmod += 6 + attacker.StatBase[ ST_STRENGTH ] * 2;
+				int8 roll = Random( 1, 15 ) - target.Stat[ ST_ENDURANCE ];
+				if( roll > 0 )
+				{
+					lostAp = roll * 10;
+					message = " falls from stunner hit.";
+					SayLog( target, crInfo( target ) + message );
+					KnockoutTarget( target, lostAp, target.HexX, target.HexY );
+					target.TimeoutBase[ TO_KNOCKOUT ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( 15 );
+				}
 			}
+		}
+		
+		if( weaponSubtype == ITEM_SUBTYPE_WEAPON_MELEE_HAMMER )
+		{
+			if( target.Timeout[ TO_KNOCKOUT ] <= int( REAL_MINUTE( 2 ) ) )
+			{
+				int dist = GetDistantion( attack.Hx, attack.Hy, target.HexX, target.HexY );
+				int aimmod = 0;
+				if( aim == HIT_LOCATION_HEAD || aim == HIT_LOCATION_EYES )
+				{
+					aimmod = 60;
+				}
+				else if( aim == HIT_LOCATION_UNCALLED || aim == HIT_LOCATION_NONE || aim == HIT_LOCATION_TORSO )
+				{
+					aimmod = 40;
+				}
+				
+				if( attacker.StatBase[ ST_STRENGTH ] >= 6 )
+				{
+					aimmod += 6 + attacker.StatBase[ ST_STRENGTH ] * 2;
+				}
 
-			int knock_AP = 150 - target.Stat[ ST_ENDURANCE ] * 4 - target.Stat[ ST_STRENGTH ] * 2;
-			knock_AP -= Random( 0, ( target.Stat[ ST_LUCK ] - 5 ) * knock_AP / 10 );
-			int knock_sec = ( knock_AP + 5 ) / 10;
-			
-            if( target.IsRuning && target.Stat[ ST_CURRENT_HP ] < Random( aimmod, int ( totalDmg * 4 ) + aimmod * 2 ) && dist >= 3 )
-            {
-				SayLog( target, crInfo( target ) + " drops from a trown sledge." );
+				lostAp = 150 - target.Stat[ ST_ENDURANCE ] * 4 - target.Stat[ ST_STRENGTH ] * 2;
+				lostAp -= Random( 0, ( target.Stat[ ST_LUCK ] - 5 ) * lostAp / 10 );
+				int knock_sec = ( lostAp + 5 ) / 10;
 				
-				if( !target.IsDead() )
+				if( target.IsRuning && target.Stat[ ST_CURRENT_HP ] < Random( aimmod, int ( totalDmg * 4 ) + aimmod * 2 ) && dist >= 3 )
 				{
-					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), knock_AP, target.HexX, target.HexY );
-                }
-				
-				target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( knock_sec + 15 );
-            }
-            else if( target.Stat[ ST_CURRENT_HP ] < Random( aimmod,  int ( totalDmg * 2 ) + aimmod ) && dist >= 3 )
-            {
-				SayLog( target, crInfo( target ) + " drops from a trown sledge." );
-				if( !target.IsDead() )
-				{
-					target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), knock_AP, target.HexX, target.HexY );
-					target.ParamBase[ CR_IS_WINDUPED ] = 0;
-					target.ParamBase[ CR_IS_RELAXING ] = 0;
-					target.ParamBase[ CR_IS_RELOADING ] = 0;
-					target.TimeoutBase[ TO_SNEAK ] = SNEAK_TIMEOUT( target );
-					target.ParamBase[ CR_SNEAKING ] = 0;
-				}
-				
-				target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( knock_sec + 10 );
-            }
-            else if( target.Stat[ ST_CURRENT_HP ] < Random( aimmod,  int ( totalDmg * 2 ) + aimmod ) && dist <= 2 )
-            {
-				if( target.Mode[ MODE_NO_WALK ] == 0 && target.Mode[ MODE_NO_PUSH ] == 0 )
-				{					
-					SayLog( target, crInfo( target ) + " drops from a blunt weapon." );
+					message = " drops from a trown sledge.";
+					SayLog( target, crInfo( target ) + message );
+					KnockoutTarget( target, lostAp, target.HexX, target.HexY );
 					target.SayMsg( SAY_EMOTE, TEXTMSG_GAME, STR_EMOTE_FALL_SLEDGE );
-					if( !target.IsDead() )
-					{
-						target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), knock_AP, target.HexX, target.HexY );
-						target.ParamBase[ CR_IS_WINDUPED ] = 0;
-						target.ParamBase[ CR_IS_RELAXING ] = 0;
-						target.ParamBase[ CR_IS_RELOADING ] = 0;
-						target.TimeoutBase[ TO_SNEAK ] = SNEAK_TIMEOUT( target );
-						target.ParamBase[ CR_SNEAKING ] = 0;
-					}
-					
-					target.TimeoutBase[ TO_STEALING ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( knock_sec + 15 );
+					target.TimeoutBase[ TO_KNOCKOUT ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( knock_sec + 15 );
 				}
-            }
-        }
+				else if( target.Stat[ ST_CURRENT_HP ] < Random( aimmod,  int ( totalDmg * 2 ) + aimmod ) && dist >= 3 )
+				{
+					message = " drops from a trown sledge.";
+					SayLog( target, crInfo( target ) + message );
+					KnockoutTarget( target, lostAp, target.HexX, target.HexY );
+					target.SayMsg( SAY_EMOTE, TEXTMSG_GAME, STR_EMOTE_FALL_SLEDGE );
+					target.TimeoutBase[ TO_KNOCKOUT ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( knock_sec + 10 );
+				}
+				else if( target.Stat[ ST_CURRENT_HP ] < Random( aimmod,  int ( totalDmg * 2 ) + aimmod ) && dist <= 2 )
+				{
+					if( target.Mode[ MODE_NO_WALK ] == 0 && target.Mode[ MODE_NO_PUSH ] == 0 )
+					{					
+						message = " drops from a blunt weapon.";
+						SayLog( target, crInfo( target ) + message );
+						KnockoutTarget( target, lostAp, target.HexX, target.HexY );
+						target.SayMsg( SAY_EMOTE, TEXTMSG_GAME, STR_EMOTE_FALL_SLEDGE );
+						target.TimeoutBase[ TO_KNOCKOUT ] = __FullSecond + REAL_MINUTE( 2 ) + REAL_SECOND( knock_sec + 15 );
+					}
+				}
+			}
+		}
     }
 	
 	//CRITTER ACTION FOR TAKING DAMAGE
@@ -2189,6 +2110,38 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
 			BloodManager( map, attackDir, target, aim, rounds );
 		}
 	}
+}
+
+void KnockoutTarget( Critter& target, uint lostAp, uint16 x, uint16 y ) 
+{
+	KnockoutTarget( target, lostAp, x, y, ( Random( 0, 1 ) == 1 ) );
+}
+void KnockoutTarget( Critter& target, uint lostAp, uint16 x, uint16 y, bool attackFront )
+{
+	Item@ armor = _CritGetItemArmor( target );
+	if( valid( armor ) )
+	{
+		uint armor_perk = armor.Proto.Armor_Perk;
+		if( FLAG( armor_perk, ARMOR_PERK_QUICK_STANDUP ) )
+		{
+			lostAp = lostAp * ARMOR_PERK_QUICK_STANDUP_MALUS / 100;
+		}
+		
+		if( FLAG( armor_perk, ARMOR_PERK_SLOW_STANDUP ) )
+		{
+			lostAp = lostAp * ARMOR_PERK_SLOW_STANDUP_MALUS / 100;
+		}		
+	}
+	
+	target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( attackFront ), lostAp, x, y );
+	target.Wait( GetActionTime( ACTION_KNOCKOUT, target ) );
+
+	target.TimeoutBase[ TO_SNEAK ] = SNEAK_TIMEOUT( target );
+
+	target.ParamBase[ CR_IS_WINDUPED ] = 0;
+	target.ParamBase[ CR_IS_RELAXING ] = 0;
+	target.ParamBase[ CR_IS_RELOADING ] = 0;
+	target.ParamBase[ CR_SNEAKING ] = 0;	
 }
 
 void SparkManager( uint8 attackDir, Critter& target, int aim, Item& armor, int rounds )
@@ -2480,13 +2433,14 @@ void InjureCritter( Critter& cr, uint dmg, uint dmgType, uint8 dir, int attacker
     attack.IsBurst = false;
     attack.BloodyMess = false;
     attack.CombatMessage = false;
-    attack.WeaponPerk = -1;
+    attack.WeaponPerk = 0;
     attack.WeaponType = 0;
     attack.DmgMin = dmg;
     attack.DmgMax = dmg;
     attack.DmgType = dmgType;
     attack.BonusDmg = 0;
     attack.DrMod = 0;
+	attack.DtMod = 0;
     attack.TargetId = cr.Id;
     attack.ShowHitAnimForce = true;
 
@@ -2513,7 +2467,7 @@ int FindCritterInArray( Critter@[]& crits, Critter& cr )
     return -1;
 }
 
-int attack_ap( Critter& cr, ProtoItem@ weapon, uint8 mode )
+int attack_ap( Critter& cr, ProtoItem& weapon, uint8 mode )
 {
 	mode = mode % 64;
 	
@@ -3120,7 +3074,7 @@ void _HookMelee( Item& Hook, Critter& cr, bool entered, uint8 dir )
 		}
 		
 		map.MoveHexByDir( HookHx, HookHy, revDir, 1 );
-		cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 200, HookHx, HookHy );
+		KnockoutTarget( cr, 200, HookHx, HookHy );
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_FAILED_FREE_FROM_GRAPPLE );
 		cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, STR_EMOTE_FAILED_FREE_FROM_GRAPPLE );
 		Hooker.SayMsg( SAY_EMOTE, TEXTMSG_GAME, STR_EMOTE_HOLD_GRAPPLE );
@@ -3188,11 +3142,11 @@ void _HookHold( Item& Hook, Critter& cr, bool entered, uint8 dir )
 				map.MoveHexByDir( HookHx, HookHy, revDir, 1 );
                 if( cr.IsPlayer() )
 				{
-					cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 25, HookHx, HookHy );
+					KnockoutTarget( cr, 25, HookHx, HookHy );
 				}
 				else
 				{
-					cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 50, HookHx, HookHy );
+					KnockoutTarget( cr, 50, HookHx, HookHy );
 				}
 				
 				cr.Wait( 500 );
@@ -3237,6 +3191,9 @@ uint e_DelayedAttack( uint[]@ values )
 	uint hexY = validTarget ? target.HexY : values[6];
 	uint hexAttack = values[7];
 	bool recursive = values[8] > 0;
+
+	attacker.ParamBase[CR_IS_SHOOTING] = 0;
+	
 	/*
 	Log( "attacker.Id " + attacker.Id );
 	Log( "target.Id " + ( validTarget ? target.Id : 0 ) );
@@ -3439,11 +3396,14 @@ uint e_DelayedExplosion( uint[]@ values )
 	
 	uint8 radius = weapon.Blast_Radius;
 	
+	attack.DtMod = weapon.Item_DtMod;
+	
 	ProtoItem@ ammo = GetProtoItem( values[5] );
 	if( valid( ammo ) )
 	{
 		radius = ammo.Blast_Radius;
         attack.DrMod = ammo.Ammo_DrMod;
+		attack.DtMod = ammo.Item_DtMod;
     }
 
 	attack.WeaponPid = weapon.ProtoId;
@@ -3569,7 +3529,7 @@ uint e_DelayedExplosion( uint[]@ values )
         if( weapPid == PID_FLASH_GRENADE )
 		{
 			Item@ head = _CritGetItemHead( critsHit[ k ] );
-			if( valid( head ) && head.Proto.HeadItem_Perk == HEAD_PERK_FLASHBANG_PROTECTION )
+			if( valid( head ) && FLAG( head.Proto.HeadItem_Perk, HEAD_PERK_FLASHBANG_PROTECTION ) )
 			{
 				continue;
 			}
@@ -3967,6 +3927,8 @@ bool CritRoll( int critBase, Critter& target, Map& map, uint16 hexX, uint16 hexY
 		}
 	}
 	
+	anticrit += target.ParamBase[ST_CRIT_RES];
+	
 	int critChance = critBase - anticrit;
 	
 	float roll = Random( 1, 100 );
@@ -4149,6 +4111,7 @@ void moveAimHexRandom( Critter& cr, Map& map, uint16& x, uint16& y, int alpha, i
  
     RustyGetHexCoord( map, cr.HexX, cr.HexY, x, y, angle, dist );
 }
+
 
 #endif // COMBAT_MODULE
 
