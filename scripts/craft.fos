@@ -2,6 +2,7 @@
 #define CRAFT
 
 #include "_utils.fos"
+#include "_ltp.fos"
 #include "craft_h.fos"
 #include "gathering_h.fos"
 import bool HandsTied( Critter& cr ) from "handcuffs";
@@ -9,7 +10,7 @@ import void items_crafted( Item@[]& items, uint[]& itemsCount, Item@[]& resource
 
 #define CRITTER_UNABLE_TO_CRAFT # (crafter)!valid(crafter) || crafter.IsBusy() || crafter.IsDead() || crafter.IsKnockout() || HandsTied(crafter) || IsTired(crafter) || crafter.IsInjured()
 
-const uint16[] benches = {PID_WORKBENCH, PID_AMMO_WORKBENCH, PID_PORTABLE_WORKBENCH};
+dictionary craftData;
 
 bool IsAbleCraftByParams(Critter& crafter, CraftItem& craft)
 {
@@ -40,41 +41,12 @@ bool IsAbleCraftByParams(Critter& crafter, CraftItem& craft)
 	return true;
 }
 
-void GetItemAroundRecursive(uint16 pid, Map@ map, Item@& itemPtr, uint16 hx, uint16 hy, uint count)
+void GetItemInBench(uint16 pid, Item@& itemPtr, uint count, Item@ bench)
 {
-    if( !valid( map ) )
-	{
-		return;
-	}
-
     Item@[] temp;
-    for(uint i = 0, len = benches.length(); i < len; i++)
+	if(!FLAG( bench.LockerCondition, LOCKER_LOCKED ))
 	{
-		Item@ bench = map.GetItem(hx, hy, benches[i]);
-		if(valid(bench))
-		{
-			temp.insertLast(bench);
-		}
-	}	
-	for(uint i = 0; i < 6; i++)
-	{
-		uint16 thx = hx, thy = hy;
-		map.MoveHexByDir(thx, thy, i, 1);
-		for(uint j = 0, len = benches.length(); j < len; j++)
-		{
-			Item@ bench = map.GetItem(thx, thy, benches[j]);
-			if(valid(bench))
-			{
-				temp.insertLast(bench);
-			}
-		}	
-	}
-	for(uint i = 0, len = temp.length(); i < len; i++)
-	{
-		if(!FLAG( temp[i].LockerCondition, LOCKER_LOCKED ))
-		{
-			temp[i].GetItems(-1, temp);
-		}
+		bench.GetItems(-1, temp);
 	}
 
     for(uint i = 0, len = temp.length(); i < len; i++)
@@ -87,7 +59,7 @@ void GetItemAroundRecursive(uint16 pid, Map@ map, Item@& itemPtr, uint16 hx, uin
     }
 }
 
-bool CheckHasItemsList(Critter& crafter, Item@[]@ list, uint[]@ listCount, uint16[]& resPids, uint[]& resCounts, bool[]& resOrs)
+bool CheckHasItemsList(Critter& crafter, Item@ bench, Item@[]@ list, uint[]@ listCount, uint16[]& resPids, uint[]& resCounts, bool[]& resOrs)
 {
 	for( uint i = 0, j = resPids.length(); i < j; i++ )
     {
@@ -99,15 +71,9 @@ bool CheckHasItemsList(Critter& crafter, Item@[]@ list, uint[]@ listCount, uint1
 
         if( !valid(currRes) || currRes.GetCount() < count )
 		{
-			if(!or_cmd)
+			if(!or_cmd && bench != null)
 			{
-				Map@ map = crafter.GetMap();
-				if(!valid(map))
-				{
-					return false;
-				}
-
-				GetItemAroundRecursive(resPid, map, currRes, crafter.HexX, crafter.HexY, count);
+				GetItemInBench(resPid, currRes, count, bench);
 
 				if(!valid(currRes))
 				{
@@ -186,7 +152,7 @@ void GetCraftOutput(Critter& crafter, CraftItem& craft, Item@[]& itemList, uint[
     }
 }
 
-bool TryCraft(Critter& crafter, uint craftNum)
+bool TryCraft(Critter& crafter, uint craftNum, Item@ bench)
 {
 	if( CRITTER_UNABLE_TO_CRAFT(crafter) )
 	{
@@ -211,7 +177,7 @@ bool TryCraft(Critter& crafter, uint craftNum)
 	bool[] resOrs;
 	craft.GetNeedTools(resPids, resCounts, resOrs);
 
-	if(!CheckHasItemsList(crafter, null, null, resPids, resCounts, resOrs))
+	if(!CheckHasItemsList(crafter, bench, null, null, resPids, resCounts, resOrs))
 	{
 		crafter.Say(SAY_NETMSG, "NOT ENOUGH TOOLS");
 		return false;
@@ -224,11 +190,37 @@ bool TryCraft(Critter& crafter, uint craftNum)
 	resOrs.resize(0);
 	craft.GetNeedItems(resPids, resCounts, resOrs);
 
-	if(!CheckHasItemsList(crafter, subItems, subItemsCount, resPids, resCounts, resOrs))
+	if(!CheckHasItemsList(crafter, bench, subItems, subItemsCount, resPids, resCounts, resOrs))
 	{
 		crafter.Say(SAY_NETMSG, "NOT ENOUGH RESOURCES");
 		return false;
 	}
+
+	craftData.set("" + crafter.Id + "i", @subItems);
+	craftData.set("" + crafter.Id + "c", @subItemsCount);
+	startCraftProcess( crafter, bench, craftNum );
+
+	return true;
+}
+
+void makeCraft(Critter& crafter, uint craftNum)
+{
+	CraftItem@ craft = GetCraftItem(craftNum);
+	if(!valid(craft))
+	{
+		crafter.Say(SAY_NETMSG, "INVALID CRAFT");
+		return;
+	}
+
+	Item@[]@ subItems = null;
+	uint[]@ subItemsCount = null;
+	if(!craftData.get( "" + crafter.Id + "i", @subItems ) || !craftData.get( "" + crafter.Id + "c", @subItemsCount ))
+	{
+		return;
+	}
+
+	craftData.delete("" + crafter.Id + "i");
+	craftData.delete("" + crafter.Id + "c");
 
 	Item@[] craftedItems;
 	uint[] craftedItemsCounts;
@@ -257,16 +249,61 @@ bool TryCraft(Critter& crafter, uint craftNum)
 			crafter.StatBase[ST_EXPERIENCE] += __FixBoyDefaultExperience; 
 		}
 	}
-
-	return true;
 }
 
-void DebugCraft( Critter& crafter, int craftNum, int times, int )
+// LTP SHIT GOES HERE
+
+bool ltp_inited=false;
+
+void ltp_init()
 {
-	for(int i = 0; i < times; i++)
+    LTPREG( LTP_CRAFT, process_craft );
+    ltp_inited=true;
+}
+
+void startCraftProcess( Critter& cr, Item@ bench, int craftNum )
+{
+    if(!ltp_inited) ltp_init();
+
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = 1000;
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = 10;
+	if(bench != null && !bench.Proto.GroundLevel)
 	{
-		TryCraft(crafter, craftNum);
+		cr.SetDir(GetDirection(cr.HexX, cr.HexY, bench.HexX, bench.HexY));
+		cr.SetAnims( COND_LIFE, 0, ANIM2_REPAIR);
 	}
+	else
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH);
+	}
+
+    StartProcess( cr, LTP_CRAFT, 0, craftNum, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+}
+
+void stopCraftProcess( Critter& cr, int type, int time, int param )
+{
+    StopProcess( cr, true );
+}
+
+uint process_craft( Critter@ cr, int& param0, int& craftNum, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_CRAFT )
+
+    param0++;
+    if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
+	{
+		makeCraft(cr, craftNum);
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE);
+		return 0;
+	}
+
+    return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+}
+
+void DebugCraft( Critter& crafter, int craftNum, int benchId, int )
+{
+	Item@ bench = GetItem(benchId);
+	TryCraft(crafter, craftNum, bench);
 }
 
 #endif
