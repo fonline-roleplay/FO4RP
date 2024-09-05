@@ -1,0 +1,631 @@
+#include "_client_defines.fos"
+#include "client_gui_h.fos"
+#include "sprite.fos"
+#include "_utils.fos"
+
+#define CRAFT_MIN_NUM ( 600 )
+#define CRAFT_MAX_NUM ( 9497 )
+#define FIXBOY_PAGE_LEN ( 46 )
+
+// Pre-Loaded variables
+string[] craftNames;
+uint[] craftIDs;
+
+// Runtime-Logic, or Runtime-Changed variables
+uint[] avaiableCrafts;
+int listOffset;
+uint currCraftIndex = 0;
+uint currLevel = 0;
+dictionary craftLinks;
+bool ScreenActive = false;
+
+ScreenMain@ screenPtr = null;
+
+void generateCraftList()
+{
+    for(uint i = CRAFT_MIN_NUM; i <= CRAFT_MAX_NUM; i++ )
+    {
+        CraftItem@ currCraft = GetCraftItem(i);
+        if(!valid(currCraft))
+        {
+            continue;
+        }
+        string result;
+
+        uint16[] itemPids;
+        uint[] itemCounts;
+        currCraft.GetOutItems(itemPids, itemCounts);
+        
+        for(uint j = 0, len = itemPids.length(); j < len; j++)
+        {
+            result += GetMsgStr(TEXTMSG_ITEM, itemPids[j] * 100);
+            if(itemCounts[j] > 1)
+            {
+                result += " " + itemCounts[j] + " " + GetMsgStr(TEXTMSG_GAME, STR_FIX_PIECES);
+            }
+            if(j != len - 1)
+            {
+                result += GetMsgStr(TEXTMSG_GAME, STR_AND);
+            }
+        }
+
+        craftNames.insertLast(result);
+        craftIDs.insertLast(i);
+    }
+}
+
+int FindCraftForItem(uint16& pid)
+{
+    if(craftLinks.exists("" + pid))
+    {
+        int getVal = -1;
+        craftLinks.get("" + pid, getVal);
+        return getVal;
+    }
+    
+    int retVal = -1;
+    for(uint i = 0, len = craftIDs.length(); i < len; i++)
+    {
+        CraftItem@ currCraft = GetCraftItem(craftIDs[i]);
+        if(!valid(currCraft))
+        {
+            continue;
+        }
+
+        uint16[] itemPids;
+        currCraft.GetOutItems(itemPids, null);
+        if(itemPids.find(pid) != -1)
+        {
+            retVal = i;
+            break;
+        }
+    }
+    craftLinks.set("" + pid, retVal);
+    return retVal;
+}
+
+class ScreenMain : IGUIScreenCallbackShow, IGUIScreenCallbackHide
+{
+    IGUIScreenOpt@ screenOpt;
+    FixboyRecipeBut@[] recipeBtns;
+    FixboyScrollBut@[] scrBtns;
+    FixboyCraftResBut@[] resBtns;
+    FixboyCraftResBut@[] toolsBtns;
+    FixboyCraftResBut@[] craftResult;
+    FixboyCraftText@ craftLabel;
+    FixboyCraftText@[] sectionLabels;
+    FixboyCraftText@ skillsReq;
+    FixboyCraftText@ toolsReq;
+    FixboyCraftText@ resReq;
+	
+    void OnShow( int p0, int p1, int p2 )
+    {
+        RunServerScriptUnsafe("craft@unsafe_GetAvaiableCrafts", 0, 0, 0, null, null);
+        sectionLabels[0].SetText(GetMsgStr(TEXTMSG_GAME, STR_FIX_PARAMS), COLOR_GREEN, FT_BORDERED);
+        sectionLabels[1].SetText(GetMsgStr(TEXTMSG_GAME, STR_FIX_TOOLS), COLOR_GREEN, FT_BORDERED);
+        sectionLabels[2].SetText(GetMsgStr(TEXTMSG_GAME, STR_FIX_ITEMS), COLOR_GREEN, FT_BORDERED);
+        UpdateBtns();
+    }
+
+    void OnHide( int p0, int p1, int p2 )
+    {}
+
+    void UpdateBtns()
+    {
+        for(uint i = 0; i < FIXBOY_PAGE_LEN; i++)
+        {
+            FixboyRecipeBut@ currBtn = recipeBtns[i];
+            uint index = i + listOffset;
+            if(index > craftIDs.length() - 1)
+            {
+                currBtn.index = 0;
+                currBtn.SetName("");
+            }
+            else
+            {
+                currBtn.index = index;
+                currBtn.SetName(craftNames[index]);
+            }
+        }
+    }
+
+    void ChangeLevel(uint level)
+    {
+        for(uint i = 0, len = craftResult.length(); i < len; i++)
+        {
+            craftResult[i].Options.SetVisible(false);
+        }
+        if(level == 0)
+        {
+            for(uint i = 0; i < FIXBOY_PAGE_LEN; i++)
+            {
+                recipeBtns[i].Options.SetVisible(true);
+            }
+            for(uint i = 0; i < 2; i++)
+            {
+                scrBtns[i].Options.SetVisible(true);
+            }
+            for(uint i = 0, len = resBtns.length(); i < len; i++)
+            {
+                resBtns[i].Options.SetVisible(false);
+                toolsBtns[i].Options.SetVisible(false);
+            }
+
+            for(uint i = 0, len = sectionLabels.length(); i < len; i++)
+            {
+                sectionLabels[i].Options.SetVisible(false);
+            }
+
+            skillsReq.Options.SetVisible(false);
+            toolsReq.Options.SetVisible(false);
+            resReq.Options.SetVisible(false);
+
+            craftLabel.Options.SetVisible(false);
+            currCraftIndex = 0;
+        }
+        else if(level == 1)
+        {
+            ActualizeCraftInfo();
+            for(uint i = 0; i < FIXBOY_PAGE_LEN; i++)
+            {
+                recipeBtns[i].Options.SetVisible(false);
+            }
+            for(uint i = 0; i < 2; i++)
+            {
+                scrBtns[i].Options.SetVisible(false);
+            }
+            for(uint i = 0, len = resBtns.length(); i < len; i++)
+            {
+                resBtns[i].Options.SetVisible(true);
+                toolsBtns[i].Options.SetVisible(true);
+            }
+            for(uint i = 0, len = sectionLabels.length(); i < len; i++)
+            {
+                sectionLabels[i].Options.SetVisible(true);
+            }
+
+            skillsReq.Options.SetVisible(true);
+            toolsReq.Options.SetVisible(true);
+            resReq.Options.SetVisible(true);
+
+            craftLabel.Options.SetVisible(true);
+        }
+        currLevel = level;
+    }
+
+    void ActualizeCraftInfo()
+    {
+        CraftItem@ currCraft = GetCraftItem(craftIDs[currCraftIndex]);
+            
+        uint16[] resPids;
+        uint[] resCount;
+        bool[] resOrs;
+        currCraft.GetNeedItems(resPids, resCount, resOrs);
+        uint resLen = resPids.length();
+        CritterCl@ chosen = GetChosen();
+        string resText;
+        for(uint i = 0, len = resBtns.length(); i < len; i++)
+        {
+            resBtns[i].index = 0;
+            resBtns[i].Options.SetSprite(null);
+            if(i < resLen)
+            {
+                resBtns[i].SetPicByPid(resPids[i]);
+                int index = FindCraftForItem(resPids[i]);
+                if(index != -1)
+                {
+                    resBtns[i].index = index;
+                }
+                resBtns[i].Options.Text(((resCount[i] > 1) ? "x" + resCount[i] : ""), FONT_FALLOUT, COLOR_WHITE, 0, FT_BOTTOM|FT_CENTERR );
+                resText += ((i > 0 && !resOrs[i-1]) || i == 0 ? "|0xADFF2F • " : "") + ((chosen.CountItem(resPids[i]) >= resCount[i]) ? "|0x00C800 " : "|0x7F7F7F ") + GetMsgStr(TEXTMSG_ITEM, resPids[i] * 100) + " " + 
+                            (resCount[i] > 1 ? resCount[i] + " " + GetMsgStr(TEXTMSG_GAME, STR_FIX_PIECES) : "" ) +
+                            (resOrs[i] ? "|0xABABAB " + GetMsgStr(TEXTMSG_GAME, STR_OR) : "\n");
+            }
+        }
+        resReq.SetText(resText, COLOR_GREEN, FT_BORDERED);
+
+        uint16[] toolsPids;
+        uint[] toolsCount;
+        bool[] toolsOrs;
+        currCraft.GetNeedTools(toolsPids, toolsCount, toolsOrs);
+        uint toolsLen = toolsPids.length();
+        string toolsText;
+        for(uint i = 0, len = toolsBtns.length(); i < len; i++)
+        {
+            toolsBtns[i].index = 0;
+            toolsBtns[i].Options.SetSprite(null);
+
+            if(i < toolsLen)
+            {
+                toolsBtns[i].SetPicByPid(toolsPids[i]);
+                int index = FindCraftForItem(toolsPids[i]);
+                if(index != -1)
+                {
+                    toolsBtns[i].index = index;
+                }
+                toolsBtns[i].Options.Text(((toolsCount[i] > 1) ? "x" + toolsCount[i] : ""), FONT_FALLOUT, COLOR_WHITE, 0, FT_BOTTOM|FT_CENTERR );
+                toolsText += ((i > 0 && !toolsOrs[i-1]) || i == 0 ? "|0xADFF2F • " : "") + ((chosen.CountItem(toolsPids[i]) >= toolsCount[i]) ? "|0x00C800 " : "|0x7F7F7F ") + GetMsgStr(TEXTMSG_ITEM, toolsPids[i] * 100) + " " + 
+                            (toolsCount[i] > 1 ? toolsCount[i] + " " + GetMsgStr(TEXTMSG_GAME, STR_FIX_PIECES) : "" ) +
+                            (toolsOrs[i] ? "|0xABABAB " +  GetMsgStr(TEXTMSG_GAME, STR_OR) : "\n");
+            }
+        }
+        toolsReq.SetText(toolsText, COLOR_GREEN, FT_BORDERED);
+        craftLabel.GenLabel();
+
+        uint[] skills;
+        int[] skillsVals;
+        bool[] skillsOrs;
+        currCraft.GetNeedParams(skills, skillsVals, skillsOrs);
+        string skillsText;
+        for(uint i = 0, len = skills.length(); i < len; i++)
+        {
+            skillsText += ((i > 0 && !skillsOrs[i-1]) || i == 0 ? "|0xADFF2F • " : "") + ((chosen.Param[skills[i]] > skillsVals[i]) ? "|0x00C800 " : "|0x7F7F7F ") + skillsVals[i] + " " + GetMsgStr( TEXTMSG_GAME, STR_SKILL_NAME(skills[i]) ) +
+            (skillsOrs[i] ? "|0xABABAB " + GetMsgStr(TEXTMSG_GAME, STR_OR) : "\n");
+        }
+
+        skillsReq.SetText(skillsText, COLOR_GREEN, FT_BORDERED);
+
+        uint16[] itemsPids;
+        uint[] itemsCount;
+        currCraft.GetOutItems(itemsPids, itemsCount);
+
+        for(uint i = 0, len = itemsPids.length(); i < len; i++)
+        {
+            int tempSize = ((497 / 2) - ((50 * len) / 2));
+            craftResult[i].Options.SetVisible(true);
+            craftResult[i].Options.Position(tempSize + (50 * i), 32);
+            craftResult[i].SetPicByPid(itemsPids[i]);
+            craftResult[i].Options.Text(((itemsCount[i] > 1) ? "x" + itemsCount[i] : ""), FONT_FALLOUT, COLOR_WHITE, 0, FT_BOTTOM|FT_CENTERR );
+        }
+    }
+}
+
+class TestScreenButtonShow : IGUIElementCallbackMouseClick
+{
+    void OnMouseClick( int click )
+    {
+        ::ShowScreen( CLIENT_SCREEN_NEW_FIXBOY, 30, 3, 3 );
+    }
+}
+
+class FixboyDoneBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
+{
+    IGUIElementOpt@ Options;
+    ScreenMain@ Instance;
+
+    FixboyDoneBut( ScreenMain & instance )
+    {
+        @Instance = instance;
+    }
+
+    void OnInit()
+    {
+        @Options = GUI_GetElementOptions();
+    }
+
+    void OnMouseClick( int click )
+    {
+        if(currLevel == 0)
+        {
+            ::HideScreen( 0, 0, 0, 0 );
+		    ChangeCursor( GetLastCursor() );
+        }
+        else if(currLevel == 1)
+        {
+            Instance.ChangeLevel(0);
+        }
+    }
+}
+
+class FixboyScrollBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
+{
+    IGUIElementOpt@ Options;
+    ScreenMain@ Instance;
+    bool isUp = false;
+
+    FixboyScrollBut( ScreenMain & instance, bool mode )
+    {
+        @Instance = instance;
+        isUp = mode;
+    }
+
+    void OnInit()
+    {
+        @Options = GUI_GetElementOptions();
+        Instance.scrBtns.insertLast(this);
+    }
+
+    void OnMouseClick( int click )
+    {
+        if(isUp && listOffset - FIXBOY_PAGE_LEN < 0)
+        {
+            return;
+        }
+        else if(!isUp && listOffset + FIXBOY_PAGE_LEN >= craftIDs.length())
+        {
+            return;
+        }
+
+        listOffset += (isUp ? -FIXBOY_PAGE_LEN : FIXBOY_PAGE_LEN);
+        Instance.UpdateBtns();
+    }
+}
+
+class FixboyRecipeBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
+{
+    IGUIElementOpt@ Options;
+    ScreenMain@ Instance;
+    int index = 0;
+
+    FixboyRecipeBut( ScreenMain & instance )
+    {
+        @Instance = instance;
+    }
+
+    void OnInit()
+    {
+        @Options = GUI_GetElementOptions();
+        Instance.recipeBtns.insertLast(this);
+    }
+
+    void OnMouseClick( int click )
+    {
+        if(index != 0)
+        {
+            currCraftIndex = index;
+            Instance.ChangeLevel(1);
+        }
+    }
+
+    void SetName( string name )
+    {
+		Options.Text( "" + name, FONT_FALLOUT, (avaiableCrafts.find(craftIDs[index]) != -1 ? COLOR_GREEN : COLOR_GRAY), 0, FT_BORDERED );
+    }
+}
+
+class FixboyFixBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
+{
+    IGUIElementOpt@ Options;
+    ScreenMain@ Instance;
+
+    FixboyFixBut( ScreenMain & instance )
+    {
+        @Instance = instance;
+    }
+
+    void OnInit()
+    {
+        @Options = GUI_GetElementOptions();
+    }
+
+    void OnMouseClick( int click )
+    {
+        if(currLevel == 0)
+        {
+            ::HideScreen( 0, 0, 0, 0 );
+		    ChangeCursor( GetLastCursor() );
+        }
+        else if(currLevel == 1)
+        {
+            RunServerScriptUnsafe( "craft@unsafe_StartCraft", craftIDs[currCraftIndex], 0, 0 , null, null );
+            ::HideScreen( 0, 0, 0, 0 );
+            ChangeCursor( GetLastCursor() );
+        }
+    }
+}
+
+class FixboyCraftResBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
+{
+    IGUIElementOpt@ Options;
+    ScreenMain@ Instance;
+    int index = 0;
+
+    FixboyCraftResBut( ScreenMain & instance )
+    {
+        @Instance = instance;
+    }
+
+    void OnInit()
+    {
+        @Options = GUI_GetElementOptions();
+    }
+
+    void OnMouseClick( int click )
+    {
+        if(index != 0)
+        {
+            currCraftIndex = index;
+            Instance.ChangeLevel(1);
+        }
+    }
+
+    void SetPicByPid(uint16 pid)
+    {
+        ProtoItem@ proto = GetProtoItem(pid);
+        if(!valid(proto))
+        {
+            return;
+        }
+
+        Sprite@ invPic = Sprite();
+        invPic.Load(proto.PicInv, 0);
+        Options.SetSprite(invPic);
+        Options.SetSize(40, 40);
+    }
+}
+
+class FixboyCraftText : IGUIElementCallbackInit
+{
+    IGUIElementOpt@ Options;
+    ScreenMain@ Instance;
+
+    FixboyCraftText( ScreenMain & instance )
+    {
+        @Instance = instance;
+    }
+
+    void OnInit()
+    {
+        @Options = GUI_GetElementOptions();
+    }
+
+    void SetText(string text, uint color, int flags)
+    {
+        Options.Text("" + text, FONT_FALLOUT, color, 0, flags);
+    }
+
+    void GenLabel()
+    {
+		Options.Text( "" + craftNames[currCraftIndex], FONT_FALLOUT, COLOR_GREEN, 0, FT_BORDERED|FT_CENTERX );
+    }
+}
+
+void ShowScreen( int p0, int p1, int p2, string@ p3, int[]@ p4 )
+{
+    ShowScreen( CLIENT_SCREEN_NEW_FIXBOY, 0, p1, p2 );
+}
+
+void HideScreen( int p0, int p1, int p2, string@ p3, int[]@ p4 )
+{
+    GUI_HideScreen( CLIENT_SCREEN_NEW_FIXBOY, 0, 0, 0 );
+}
+
+void SwitchCraftScreen()
+{
+    if(!ScreenActive) ShowScreen( CLIENT_SCREEN_NEW_FIXBOY, 0, 0, 0 );
+    else HideScreen( CLIENT_SCREEN_NEW_FIXBOY, 0, 0, 0 );
+    ScreenActive = !ScreenActive;
+}
+
+void UpdateAvaiableCrafts( int, int, int, string@, int[]@ newList )
+{
+    avaiableCrafts.resize(0);
+    for(uint i = 0, len = newList.length(); i < len; i++)
+    {
+        avaiableCrafts.insertLast(newList[i]);
+    }
+	screenPtr.UpdateBtns();
+}
+
+void InitFixboyScreen()
+{
+    generateCraftList();
+    ScreenMain screen();
+	@screenPtr = screen;
+    GUI_CreateScreen( CLIENT_SCREEN_NEW_FIXBOY, "fixboy_large2_en.png" )
+    .CallbackHide( screen )
+    .CallbackShow( screen )
+    .AutoCursor( true, CURSOR_DEFAULT );
+	
+	FixboyDoneBut OkButton( screen );
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 343, 536 )
+    .CallbackInit( OkButton )
+    .CallbackMouseClick( OkButton )
+    .SetSize(82, 46)
+    .DownPic( "done_dn_en.png" );
+
+    for(uint i = 0; i < 2; i++)
+    {
+        FixboyScrollBut scrollButton( screen, i > 0 );
+        GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", (i > 0 ? 81 : 120), 538 )
+        .CallbackInit( scrollButton )
+        .CallbackMouseClick( scrollButton )
+        .SetSize(36, 36)
+        .DownPic( ( i > 0 ? "fixboy_up.png" : "fixboy_down.png" ) );
+    }
+
+    FixboyFixBut fixButton(screen);
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 191, 536 )
+    .CallbackInit( fixButton )
+    .CallbackMouseClick( fixButton )
+    .SetSize(61, 46)
+    .DownPic( "fixboy_fix.png" );
+
+    FixboyCraftText craftLabel(screen);
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 30, 14 )
+    .CallbackInit( craftLabel )
+    .SetSize(440, 22);
+    @screen.craftLabel = craftLabel;
+    
+    FixboyCraftText skillLabel(screen);
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 30, 72 )
+    .CallbackInit( skillLabel )
+    .SetSize(82, 16)
+    .SetVisible(false);
+    screen.sectionLabels.insertLast(skillLabel);
+
+    FixboyCraftText toolsLabel(screen);
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 30, 172 )
+    .CallbackInit( toolsLabel )
+    .SetSize(82, 16)
+    .SetVisible(false);
+    screen.sectionLabels.insertLast(toolsLabel);
+
+    FixboyCraftText resLabel(screen);
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 30, 312 )
+    .CallbackInit( resLabel )
+    .SetSize(84, 16)
+    .SetVisible(false);
+    screen.sectionLabels.insertLast(resLabel);
+
+    FixboyCraftText skillsReq(screen);
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 30, 82 )
+    .CallbackInit( skillsReq )
+    .SetSize(272, 192)
+    .SetVisible(false);
+    @screen.skillsReq = skillsReq;
+
+    FixboyCraftText toolsReq(screen);
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 30, 181 )
+    .CallbackInit( toolsReq )
+    .SetSize(272, 192)
+    .SetVisible(false);
+    @screen.toolsReq = toolsReq;
+
+    FixboyCraftText resReq(screen);
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 30, 322 )
+    .CallbackInit( resReq )
+    .SetSize(272, 155)
+    .SetVisible(false);
+    @screen.resReq = resReq;
+
+    for(int i = 0; i < FIXBOY_PAGE_LEN; i++)
+    {
+        FixboyRecipeBut currButton( screen );
+        GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 25, 17 + (10 * i) )
+        .CallbackInit( currButton )
+        .CallbackMouseClick( currButton )
+        .SetSize(455, 7);
+    }
+    
+    int col = 0, row = 0;
+    for(uint i = 0; i < 24; i++)
+    {
+        FixboyCraftResBut currButton( screen );
+        GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "test.png", 300 + (45 * col), ((i / 12) > 0 ? 172 : 312) + (45 * row) )
+        .CallbackInit( currButton )
+        .CallbackMouseClick( currButton )
+        .SetSize(40, 40)
+        .SetVisible(false);
+        ((i / 12) > 0 ? screen.toolsBtns.insertLast(currButton) : screen.resBtns.insertLast(currButton));
+
+        col++;
+        if(i == 11){ col = 0; row = 0; }
+        if( col > 3 )
+        {
+            col = 0;
+            row++;
+        }
+    }
+
+    for(uint i = 0; i < 10; i++)
+    {
+        FixboyCraftResBut currButton( screen );
+        GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "test.png", 229, 32 )
+        .CallbackInit( currButton )
+        .CallbackMouseClick( currButton )
+        .SetSize(40, 40)
+        .SetVisible(false);
+        screen.craftResult.insertLast(currButton);
+    }
+}

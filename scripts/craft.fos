@@ -1,0 +1,396 @@
+#ifndef CRAFT
+#define CRAFT
+
+#include "_utils.fos"
+#include "_ltp.fos"
+#include "craft_h.fos"
+#include "gathering_h.fos"
+import bool HandsTied( Critter& cr ) from "handcuffs";
+import void items_crafted( Item@[]& items, uint[]& itemsCount, Item@[]& resources, Critter& crafter ) from "main";
+
+#define CRITTER_UNABLE_TO_CRAFT # (crafter)!valid(crafter) || crafter.IsBusy() || crafter.IsDead() || crafter.IsKnockout() || HandsTied(crafter) || IsTired(crafter) || crafter.IsInjured()
+#define CRAFT_MIN_NUM (600)
+#define CRAFT_MAX_NUM (9497)
+
+dictionary craftData;
+
+bool IsAbleCraftByParams(Critter& crafter, CraftItem& craft)
+{
+	uint[] params;
+	int[] paramVals;
+	bool[] paramOrs;
+	craft.GetNeedParams(params, paramVals, paramOrs);
+
+	for( uint i = 0, j = params.length(); i < j; i++ )
+    {
+        uint param = params[ i ];
+        int val = paramVals[ i ];
+        bool or_cmd = paramOrs[ i ];
+
+        if( crafter.ParamBase[ param ] < val )
+		{
+			if(!or_cmd)
+			{
+				return false;
+			}
+			continue;
+		}
+
+        // Skip or
+        if( or_cmd ) for( ; i < j - 1 && paramOrs[ i ]; i++ );
+    }
+	return true;
+}
+
+void GetItemInBench(uint16 pid, Item@& itemPtr, uint count, Item@ bench)
+{
+	ProtoItem@ benchProto = GetProtoItem(bench.GetProtoId());
+	if(benchProto.Type != ITEM_TYPE_CONTAINER)
+	{
+		return;
+	}
+
+    Item@[] temp;
+	if(!FLAG( bench.LockerCondition, LOCKER_LOCKED ))
+	{
+		bench.GetItems(-1, temp);
+	}
+
+    for(uint i = 0, len = temp.length(); i < len; i++)
+    {
+        if(temp[i].GetProtoId() == pid && temp[i].GetCount() >= count)
+        {
+            @itemPtr = temp[i];
+			return;
+        }
+    }
+}
+
+bool CheckHasItemsList(Critter& crafter, Item@ bench, Item@[]@ list, uint[]@ listCount, uint16[]& resPids, uint[]& resCounts, bool[]& resOrs)
+{
+	for( uint i = 0, j = resPids.length(); i < j; i++ )
+    {
+        uint16 resPid = resPids[ i ];
+        uint count = resCounts[ i ];
+        bool or_cmd = resOrs[ i ];
+
+		Item@ currRes = crafter.GetItem(resPid, -1);
+
+        if( !valid(currRes) || currRes.GetCount() < count )
+		{
+			if(bench != null)
+			{
+				GetItemInBench(resPid, currRes, count, bench);
+
+				if(!valid(currRes))
+				{
+					return false;
+				}
+			}
+			else if(!or_cmd)
+			{
+				return false;
+			}
+			else
+			{
+				continue;
+			}
+		}
+
+		if(list != null)
+		{
+			list.insertLast(currRes);
+		}
+		if(listCount != null)
+		{
+			listCount.insertLast(count);
+		}
+
+        // Skip or
+        if( or_cmd ) for( ; i < j - 1 && resOrs[ i ]; i++ );
+    }
+
+	return true;
+}
+
+bool ShouldGiveTimeout(Critter& crafter, CraftItem& craft)
+{
+	//For future - APAMk2
+	return true;
+}
+
+bool ShouldGiveXP(Critter& crafter, CraftItem& craft)
+{
+	//For future - APAMk2
+	return true;
+}
+
+void GetCraftOutput(Critter& crafter, CraftItem& craft, Item@[]& itemList, uint[]& countList)
+{
+	uint16[] itemPids;
+	uint[] itemCounts;
+	craft.GetOutItems(itemPids, itemCounts);
+	for( uint i = 0, j = itemPids.length(); i < j; i++ )
+    {
+        uint16 pid = itemPids[ i ];
+        uint count = itemCounts[ i ];
+		ProtoItem@ proto = GetProtoItem(pid);
+		if(!valid(proto))
+		{
+			return;
+		}
+        
+		if(proto.Stackable)
+		{
+			Item@ crafted = crafter.AddItem(pid, count);
+			if(valid(crafted))
+			{
+				itemList.insertLast(crafted);
+				countList.insertLast(count);
+			}
+			continue;
+		}
+
+		for(uint currItemCount = 0; currItemCount < count; currItemCount++)
+		{
+			Item@ crafted = crafter.AddItem(pid, 1);
+			if(valid(crafted))
+			{
+				itemList.insertLast(crafted);
+				countList.insertLast(1);
+			}
+		}
+    }
+}
+
+bool TryCraft(Critter& crafter, uint craftNum, Item@ bench)
+{
+	if( CRITTER_UNABLE_TO_CRAFT(crafter) )
+	{
+		crafter.Say(SAY_NETMSG, "NOT ABLE TO CRAFT");
+		return false;
+	}
+
+	CraftItem@ craft = GetCraftItem(craftNum);
+	if(!valid(craft))
+	{
+		crafter.Say(SAY_NETMSG, "INVALID CRAFT");
+		return false;
+	}
+
+	if(!IsAbleCraftByParams(crafter, craft))
+	{	
+		return false;
+	}
+
+	uint16[] resPids;
+	uint[] resCounts;
+	bool[] resOrs;
+	craft.GetNeedTools(resPids, resCounts, resOrs);
+
+	if(!CheckHasItemsList(crafter, bench, null, null, resPids, resCounts, resOrs))
+	{
+		crafter.Say(SAY_NETMSG, "NOT ENOUGH TOOLS");
+		return false;
+	}
+
+	Item@[] subItems;
+	uint[] subItemsCount;
+	resPids.resize(0);
+	resCounts.resize(0);
+	resOrs.resize(0);
+	craft.GetNeedItems(resPids, resCounts, resOrs);
+
+	if(!CheckHasItemsList(crafter, bench, subItems, subItemsCount, resPids, resCounts, resOrs))
+	{
+		crafter.Say(SAY_NETMSG, "NOT ENOUGH RESOURCES");
+		return false;
+	}
+
+	craftData.set("" + crafter.Id + "i", @subItems);
+	craftData.set("" + crafter.Id + "c", @subItemsCount);
+	startCraftProcess( crafter, bench, craftNum );
+
+	return true;
+}
+
+void makeCraft(Critter& crafter, uint craftNum)
+{
+	CraftItem@ craft = GetCraftItem(craftNum);
+	if(!valid(craft))
+	{
+		crafter.Say(SAY_NETMSG, "INVALID CRAFT");
+		return;
+	}
+
+	Item@[]@ subItems = null;
+	uint[]@ subItemsCount = null;
+	if(!craftData.get( "" + crafter.Id + "i", @subItems ) || !craftData.get( "" + crafter.Id + "c", @subItemsCount ))
+	{
+		return;
+	}
+
+	craftData.delete("" + crafter.Id + "i");
+	craftData.delete("" + crafter.Id + "c");
+	craftData.delete("" + crafter.Id + "b");
+
+	Item@[] craftedItems;
+	uint[] craftedItemsCounts;
+	GetCraftOutput(crafter, craft, craftedItems, craftedItemsCounts);
+
+	items_crafted( craftedItems, craftedItemsCounts, subItems, crafter );
+	for(uint i = 0, len = subItems.length(); i < len; i++)
+	{
+		_SubItem(subItems[i], subItemsCount[i]);
+	}
+
+	if(ShouldGiveTimeout(crafter, craft))
+	{
+		crafter.TimeoutBase[TO_SK_SCIENCE] = __FullSecond + REAL_SECOND(60);
+		crafter.TimeoutBase[TO_SK_REPAIR] = __FullSecond + REAL_SECOND(60);
+	}
+	
+	if(ShouldGiveXP(crafter, craft))
+	{
+		if(craft.Experience > 0)
+		{
+			crafter.StatBase[ST_EXPERIENCE] += craft.Experience; 
+		}
+		else
+		{
+			crafter.StatBase[ST_EXPERIENCE] += __FixBoyDefaultExperience; 
+		}
+	}
+}
+
+// LTP SHIT GOES HERE
+
+bool ltp_inited=false;
+
+void ltp_init()
+{
+    LTPREG( LTP_CRAFT, process_craft );
+    ltp_inited=true;
+}
+
+void startCraftProcess( Critter& cr, Item@ bench, int craftNum )
+{
+    if(!ltp_inited) ltp_init();
+
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = 1000;
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = 10;
+	if(bench != null && !bench.Proto.GroundLevel)
+	{
+		cr.SetDir(GetDirection(cr.HexX, cr.HexY, bench.HexX, bench.HexY));
+		cr.SetAnims( COND_LIFE, 0, ANIM2_REPAIR);
+	}
+	else
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH);
+	}
+
+    StartProcess( cr, LTP_CRAFT, 0, craftNum, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+}
+
+void stopCraftProcess( Critter& cr, int type, int time, int param )
+{
+    StopProcess( cr, true );
+}
+
+uint process_craft( Critter@ cr, int& param0, int& craftNum, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_CRAFT )
+
+    param0++;
+    if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
+	{
+		makeCraft(cr, craftNum);
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE);
+		return 0;
+	}
+
+    return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+}
+
+void unsafe_GetAvaiableCrafts( Critter& crafter, int, int, int, string@, int[]@ )
+{
+	int[] avaiableCrafts;
+	for(int i = CRAFT_MIN_NUM; i <= CRAFT_MAX_NUM; i++ )
+	{
+		CraftItem@ craft = GetCraftItem(i);
+		if(!valid(craft))
+		{
+			continue;
+		}
+
+		if(!IsAbleCraftByParams(crafter, craft))
+		{	
+			continue;
+		}
+
+		uint16[] resPids;
+		uint[] resCounts;
+		bool[] resOrs;
+		craft.GetNeedTools(resPids, resCounts, resOrs);
+
+		Item@ bench = null;
+		bool getBenchValid = craftData.get( "" + crafter.Id + "b", @bench );
+		if(getBenchValid)
+		{
+			if(GetDistantion(crafter.HexX, crafter.HexY, bench.HexX, bench.HexY) > 1)
+			{
+				getBenchValid = false;
+				craftData.delete("" + crafter.Id + "b");
+			}
+		}
+
+		if(!CheckHasItemsList(crafter, (getBenchValid ? bench : null), null, null, resPids, resCounts, resOrs))
+		{
+			continue;
+		}
+
+		resPids.resize(0);
+		resCounts.resize(0);
+		resOrs.resize(0);
+		craft.GetNeedItems(resPids, resCounts, resOrs);
+
+		if(!CheckHasItemsList(crafter, bench, null, null, resPids, resCounts, resOrs))
+		{
+			continue;
+		}
+		
+		avaiableCrafts.insertLast(i);
+	}
+	crafter.RunClientScript("client_screen_fixboy@UpdateAvaiableCrafts", 0, 0, 0, null, avaiableCrafts);
+}
+
+void unsafe_StartCraft( Critter& crafter, int craftNum, int, int, string@, int[]@ )
+{
+	if(!valid(crafter))
+	{
+		return;
+	}
+	Item@ bench = null;
+	bool getBenchValid = craftData.get( "" + crafter.Id + "b", @bench );
+	TryCraft(crafter, craftNum, ( getBenchValid ? bench : null ));
+}
+
+void OpenBenchCraft(Critter@ crafter, Item@ bench)
+{
+	if(bench == null)
+	{
+		return;
+	}
+
+	craftData.delete("" + crafter.Id + "b");
+	craftData.set("" + crafter.Id + "b", @bench);
+	crafter.RunClientScript("client_screen_fixboy@ShowScreen", 0, 0, 0, null, null);
+}
+
+void DebugCraft( Critter& crafter, int craftNum, int benchId, int )
+{
+	Item@ bench = GetItem(benchId);
+	TryCraft(crafter, craftNum, bench);
+}
+
+#endif
