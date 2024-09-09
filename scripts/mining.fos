@@ -11,6 +11,8 @@
 #include "combat_h.fos"
 #include "speed_h.fos"
 
+import uint8 checkCave(Map& map, uint16 tx, uint16 ty) from "qmap_cave";
+
 // Ores array search
 uint16 FindOre( Item@ targetItem )
 {
@@ -416,6 +418,18 @@ uint e_SpawnOres( int[] @ values )
 	return 0;
 }
 
+bool SpawnOre(Map& map, uint16 hx, uint16 hy, uint dna)
+{
+	if( map.IsHexPassed( hx, hy ) )
+	{	
+		Item@ BaseOre = map.AddItem( hx, hy, OreList[dna][ Random( 0, OreList[dna].length() - 2 ) ], 1 );
+		BaseOre.RESOURCE_DNA = dna;
+		return true;
+	}
+
+	return false;
+}
+
 bool SpawnOre( Map& map )
 {
 	for( int i = 0; i < ORE_SPAWNER_COUNT; i++ )
@@ -426,14 +440,81 @@ bool SpawnOre( Map& map )
 		for( int j = 0; j < entires; j++ )
 		{
 			map.GetEntireCoords( entireId, j, hx, hy );
-			if( map.IsHexPassed( hx, hy ) )
-			{	
-				Item@ BaseOre = map.AddItem( hx, hy, OreList[0][ Random( 0, OreList[0].length() - 2 ) ], 1 );
-				BaseOre.RESOURCE_DNA = ( entireId - 1000 );
-			}
+			SpawnOre(map, hx, hy, i);
 		}
 	}
 	return true;
+}
+
+// Ore Zones - APAMk2
+
+#define MAP_ID 				Val0
+#define ZONE_TIMEOUT		Val4
+#define ZONE_RANGE			Val5
+
+void SpawnOreZone( Map& map, uint16 HexX, uint16 HexY, uint timeout, uint range, uint dna, uint capacity)
+{
+	if(!valid(map))
+	{
+		return;
+	}
+
+	Item@ oreMarker = map.AddItem( HexX, HexY, PID_ORE_MARKER, 1);
+	if(!valid(oreMarker))
+	{
+		return;
+	}
+
+	oreMarker.MAP_ID = map.Id;
+	oreMarker.ZONE_TIMEOUT = timeout;
+	oreMarker.ZONE_RANGE = (range < 1 ? 1 : range);
+	oreMarker.RESOURCE_DNA = dna;
+	oreMarker.RESOURCE_CAPACITY = (capacity < 1 ? 1 : capacity);
+
+	int[] values = {oreMarker.Id};
+	oreMarker.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_processOreZone", values, true );
+}
+
+uint e_processOreZone( int[] @ values )
+{
+	Item@ zoneMarker = GetItem(values[0]);
+	if(!valid(zoneMarker))
+	{
+		return 0;
+	}
+
+	Map@ map = GetMap(zoneMarker.MAP_ID);
+	if(!valid(map))
+	{
+		return 0;
+	}
+
+	uint oreCount = 0;
+	for(uint i = 0, len = OreList[zoneMarker.RESOURCE_DNA].length(); i < len; i++)
+	{
+		Item@[] currOre;
+		map.GetItems(OreList[zoneMarker.RESOURCE_DNA][i], currOre);
+		for(uint j = 0, lenj = currOre.length(); j < lenj; j++)
+		{
+			if(GetDistantion(currOre[j].HexX, currOre[j].HexY, zoneMarker.HexX, zoneMarker.HexY) <= zoneMarker.ZONE_RANGE)
+			{
+				oreCount++;
+			}
+		}
+	}
+	
+	if(oreCount < zoneMarker.RESOURCE_CAPACITY)
+	{
+		int dividedRange = zoneMarker.ZONE_RANGE / 2;
+		uint16 hx = zoneMarker.HexX + Random(-dividedRange, dividedRange);
+		uint16 hy = zoneMarker.HexY + Random(-dividedRange, dividedRange);
+		if(checkCave(map, H2T(hx), H2T(hy)) != 0)
+		{
+			SpawnOre(map, hx, hy, zoneMarker.RESOURCE_DNA);
+		}
+	}
+	
+	return REAL_MINUTE(zoneMarker.ZONE_TIMEOUT);
 }
 
 #endif //MINING
