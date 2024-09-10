@@ -675,6 +675,7 @@ struct ProtoItem
     const uint8  LightFlags;
     const uint8  LightDistance;
     const int8   LightIntensity;
+    const uint8  ColorContour[ 3 ];
     const uint   LightColor;
     const bool   DisableEgg;
     const uint16 AnimWaitBase;
@@ -698,7 +699,6 @@ struct ProtoItem
     const uint8  BlockLines[ ITEM_MAX_BLOCK_LINES ];
     const uint16 ChildPids[ ITEM_MAX_CHILDS ];
     const uint8  ChildLines[ ITEM_MAX_CHILDS ][ ITEM_MAX_CHILD_LINES ];
-    int    ColorContour;
 
     // User data, binded with 'bindfield' pragma
     // Common
@@ -963,7 +963,6 @@ struct Item
     const uint8      Accessory;
     const bool       ViewPlaceOnMap;
     const int16      Reserved0;
-	int ColorContour;
 
     union
     {
@@ -1027,8 +1026,8 @@ struct Item
         const uint16 Charge;
         const int16  OffsetX;
         const int16  OffsetY;
-        const int16  Dir;
-        const char   Reserved[ 2 ];
+        const uint8  Dir;
+        const uint8  ColorContour [ 3 ];
     } Data;
 
     const int16        RefCounter;
@@ -1973,7 +1972,7 @@ inline void static_asserts()
     STATIC_ASSERT( sizeof( IntMap )       == 24   );
     STATIC_ASSERT( sizeof( IntSet )       == 24   );
     STATIC_ASSERT( sizeof( IntPair )      == 8    );
-    STATIC_ASSERT( sizeof( ProtoItem )    == 912  );
+    STATIC_ASSERT( sizeof( ProtoItem )    == 908  );
     STATIC_ASSERT( sizeof( Mutex )        == 24   );
     STATIC_ASSERT( sizeof( GameOptions )  == 1320 );
     STATIC_ASSERT( sizeof( SpriteInfo )   == 36   );
@@ -1987,7 +1986,7 @@ inline void static_asserts()
     STATIC_ASSERT( offsetof( TemplateVar, Flags )              == 68   );
     STATIC_ASSERT( offsetof( NpcPlane, RefCounter )            == 96   );
     STATIC_ASSERT( offsetof( GlobalMapGroup, EncounterForce )  == 64   );
-    STATIC_ASSERT( offsetof( Item, IsNotValid )                == 150  );
+    STATIC_ASSERT( offsetof( Item, IsNotValid )                == 146  );
     STATIC_ASSERT( offsetof( CritterTimeEvent, Identifier )    == 12   );
     STATIC_ASSERT( offsetof( Critter, RefCounter )             == 9340 );
     STATIC_ASSERT( offsetof( Client, LanguageMsg )             == 9408 );
