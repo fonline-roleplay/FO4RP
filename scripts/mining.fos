@@ -140,6 +140,7 @@ bool start_mining( Critter& cr, Item& tool, Item& target )
 			CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_MiningSound", values, false);
 			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
 		}
+		
 		StartProcess( cr, LTP_MINING, 0, tool.Id, target.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		return true;
 	}
@@ -342,19 +343,27 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 		{
 			Map@ map = GetMap( target.MapId );
 			uint16 hx = target.HexX, hy = target.HexY;
+			Item@ newOre = null; 
 			
 			switch( OreMod )
 			{
 				case( PID_ORE_DEPOSIT_S ):
 				case( PID_ORE_DEPOSIT_S2 ):
-					map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ OreList[target.RESOURCE_DNA].length() - 3 ], 1 );
+					@newOre = map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ OreList[target.RESOURCE_DNA].length() - 3 ], 1 );
 					break;
 				case( PID_ORE_DEPOSIT_M ):
-					map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ Random( 0, OreList[target.RESOURCE_DNA].length() - 2 ) ], 1 );
+					@newOre = map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ Random( 0, OreList[target.RESOURCE_DNA].length() - 2 ) ], 1 );
 					break;
 				case( PID_ORE_DEPOSIT_L ):
-					map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ Random( 1, OreList[target.RESOURCE_DNA].length() - 1 ) ], 1 );
+					@newOre = map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ Random( 1, OreList[target.RESOURCE_DNA].length() - 1 ) ], 1 );
 					break;
+				default:
+					break;
+			}
+			
+			if( valid( newOre ) )
+			{
+				newOre.ORE_NODE_ID = target.ORE_NODE_ID;
 			}
 			
 			DeleteItem( target );
@@ -369,6 +378,7 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 		
 		ChangeCritterSpeed( cr );
 	}
+	
 	return true;
 }
 
@@ -417,13 +427,17 @@ uint e_SpawnOres( int[] @ values )
 	return 0;
 }
 
-Item@ SpawnOre(Map& map, uint16 hx, uint16 hy, uint dna)
+Item@ OreSpawn( Map& map, uint16 hx, uint16 hy, uint dna, uint spawner_id = 0 )
 {
 	Item@ ore = null;
 	if( map.IsHexPassed( hx, hy ) )
 	{	
 		@ore = map.AddItem( hx, hy, OreList[0][ Random( 0, OreList[dna].length() - 2 ) ], 1 );
-		ore.RESOURCE_DNA = dna;
+		if( valid( ore ) )
+		{
+			ore.RESOURCE_DNA = dna;
+			ore.ORE_NODE_ID = spawner_id == 0 ? 0 : spawner_id;
+		}
 	}
 
 	return ore;
@@ -439,13 +453,14 @@ bool SpawnOre( Map& map )
 		for( int j = 0; j < entires; j++ )
 		{
 			map.GetEntireCoords( entireId, j, hx, hy );
-			Item@ BaseOre = SpawnOre(map, hx, hy, entireId - 1000);
+			Item@ BaseOre = OreSpawn( map, hx, hy, entireId - 1000 );
 			if(!valid(BaseOre))
 			{
 				return false;
 			}
 		}
 	}
+	
 	return true;
 }
 
@@ -487,29 +502,62 @@ uint e_processOreZone( int[] @ values )
 	}
 
 	int oreCount = 0;
-	for( uint i = 0, len = OreList[zoneMarker.RESOURCE_DNA].length(); i < len; i++ )
+	Item@[] OreFound;
+	Item@ ore = null;
+	uint len0 = OreList[0].length();
+	uint len1 = OreList[ zoneMarker.RESOURCE_DNA ].length();
+
+	for( uint i = 0; i < len0; i++ )
 	{
-		Item@[] currOre;
-		map.GetItems(OreList[zoneMarker.RESOURCE_DNA][i], currOre );
-		for( uint j = 0, lenj = currOre.length(); j < lenj; j++ )
-		{
-			if( int( GetDistantion(currOre[j].HexX, currOre[j].HexY, zoneMarker.HexX, zoneMarker.HexY ) ) <= zoneMarker.ZONE_RANGE )
+		map.GetItems( OreList[ 0 ][i], OreFound );
+	}
+	
+	for( uint j = 0; j < len1; j++ )
+	{
+		map.GetItems( OreList[ zoneMarker.RESOURCE_DNA ][j], OreFound );
+	}
+
+	for( uint k = 0, len = OreFound.length(); k < len; k++ )
+	{
+		@ore = OreFound[k];
+		if( valid( ore ) )
+		{	
+			if( ore.ORE_NODE_ID == int( zoneMarker.Id ) )
 			{
 				oreCount++;
 			}
 		}
 	}
 	
-	for( int i = oreCount; i < zoneMarker.RESOURCE_CAPACITY; i++)
+	int missing = zoneMarker.RESOURCE_CAPACITY - oreCount;
+
+	if( missing > 0 )
 	{
-		int radius = zoneMarker.ZONE_RANGE / 2;
-		uint16 hx = zoneMarker.HexX + Random( -radius, radius );
-		uint16 hy = zoneMarker.HexY + Random( -radius, radius );
-		if( map.IsHexPassed( hx, hy ) && checkCave( map, H2T( hx ), H2T( hy ) ) != 0 )
+		uint attempt = 0;
+		for( int i = 0; i < missing; i++ )
 		{
-			SpawnOre( map, hx, hy, zoneMarker.RESOURCE_DNA );
+			if( attemt >= MAX_ORE_SPAWN_ATTEMPTS )
+			{
+				break;
+			}
+			
+			int radius = zoneMarker.ZONE_RANGE / 2;
+			uint16 hx = zoneMarker.HexX + Random( -radius, radius );
+			uint16 hy = zoneMarker.HexY + Random( -radius, radius );
+			if( map.IsHexPassed( hx, hy ) && checkCave( map, H2T( hx ), H2T( hy ) ) != 0 )
+			{
+				OreSpawn( map, hx, hy, zoneMarker.RESOURCE_DNA, zoneMarker.Id );
+			}
+			else
+			{
+				missing++;
+				attempt++;
+				
+			}
 		}
 	}
+	
+	OreFound.resize(0);
 	
 	return REAL_MINUTE( zoneMarker.ZONE_TIMEOUT );
 }
