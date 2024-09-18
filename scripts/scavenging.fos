@@ -203,7 +203,7 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 
 		for( int i = 0; i < amount; i++ )
 		{
-			ProtoItem@ junk = GetProtoItem( JunkLootList[ Random( 0, JunkLootList.length() - 1 ) ] );
+			ProtoItem@ junk = GetProtoItem( JunkLootList[target.JUNK_TIER][ Random( 0, JunkLootList[target.JUNK_TIER].length() - 1 ) ] );
 			cr.AddItem( junk.ProtoId, 1 );
 			loot.insertLast( junk.ProtoId );
 		}
@@ -274,6 +274,25 @@ uint e_SpawnJunk( int[] @ values )
 	return 0;
 }
 
+void JunkSpawn(Map& map, uint16 hx, uint16 hy, uint nodeId = 0, uint tier = 0)
+{
+	if(!valid(map))
+	{
+		return;
+	}
+
+	Item@ junk = map.AddItem( hx, hy, PID_JUNK_SALVAGE, 1 );
+	if(!valid(junk))
+	{
+		return;
+	}
+	ProtoItem@ proto = GetProtoItem( JunkPileArtList[tier][ Random( 0, JunkPileArtList[tier].length() - 1 ) ] );
+	junk.PicMap = proto.PicMap;
+	junk.JUNK_NODE_ID = nodeId;
+	junk.JUNK_TIER = tier;
+	junk.Update();
+}
+
 bool SpawnJunk( Map& map )
 {
 	int entireId = JUNK_ENTIRE;
@@ -285,13 +304,98 @@ bool SpawnJunk( Map& map )
 		map.GetEntireCoords( entireId, j, hx, hy );
 		if( map.IsHexPassed( hx, hy ) && Random( 0, 2 ) == 2 )
 		{	
-			Item@ JunkSalvage = map.AddItem( hx, hy, PID_JUNK_SALVAGE, 1 );
-			ProtoItem@ proto = GetProtoItem(  JunkPileArtList [ Random( 0, JunkPileArtList.length() - 1 ) ] );
-			JunkSalvage.PicMap = proto.PicMap;
-			JunkSalvage.Update();
+			JunkSpawn(map, hx, hy);
 		}
 	}
 	return true;
+}
+
+void SpawnJunkZone( Map& map, uint16 hx, uint16 hy, uint timeout, uint range, uint capacity, uint tier )
+{
+	if( !valid( map ) )
+	{
+		return;
+	}
+
+	Item@ junkMarker = map.AddItem( hx, hy, PID_JUNK_MARKER, 1 );
+	if( !valid( junkMarker ) )
+	{
+		return;
+	}
+
+	junkMarker.MAP_ID = map.Id;
+	junkMarker.ZONE_TIMEOUT = timeout;
+	junkMarker.ZONE_RANGE = ( range < 1 ? 1 : range );
+	junkMarker.RESOURCE_CAPACITY = ( capacity < 1 ? 1 : capacity );
+	junkMarker.JUNK_TIER = tier;
+
+	int[] values = { junkMarker.Id };
+	junkMarker.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_processJunkZone", values, true );
+}
+
+uint e_processJunkZone( int[] @ values )
+{
+	Item@ zoneMarker = GetItem( values[0] );
+	if( !valid( zoneMarker ) )
+	{
+		return 0;
+	}
+
+	Map@ map = GetMap( zoneMarker.MAP_ID );
+	if( !valid( map ) )
+	{
+		return 0;
+	}
+
+	int junkCount = 0;
+	Item@[] junkFound;
+	Item@ junk = null;
+
+	map.GetItems( PID_JUNK_SALVAGE, junkFound );
+
+	for( uint i = 0, len = junkFound.length(); i < len; i++ )
+	{
+		@junk = junkFound[i];
+		if( valid( junk ) )
+		{	
+			if( junk.JUNK_NODE_ID == int( zoneMarker.Id ) )
+			{
+				junkCount++;
+			}
+		}
+	}
+	
+	int missing = zoneMarker.RESOURCE_CAPACITY - junkCount;
+
+	if( missing > 0 )
+	{
+		uint attempt = 0;
+		for( int i = 0; i < missing; i++ )
+		{
+			if( attempt >= MAX_RESOURCE_SPAWN_ATTEMPTS )
+			{
+				break;
+			}
+			
+			int radius = zoneMarker.ZONE_RANGE / 2;
+			uint16 hx = zoneMarker.HexX + Random( -radius, radius );
+			uint16 hy = zoneMarker.HexY + Random( -radius, radius );
+			if( map.IsHexPassed( hx, hy ) )
+			{
+				JunkSpawn( map, hx, hy, zoneMarker.Id, zoneMarker.JUNK_TIER );
+			}
+			else
+			{
+				missing++;
+				attempt++;
+				
+			}
+		}
+	}
+	
+	junkFound.resize(0);
+	
+	return REAL_MINUTE( zoneMarker.ZONE_TIMEOUT );
 }
 
 #endif //SCAVENGING
