@@ -413,7 +413,7 @@ bool TryCraft( Critter& crafter, uint craftNum, Item@ bench )
 	return true;
 }
 
-bool check_tools_n_items( Critter& crafter, CraftItem& craft, Item@ bench )
+bool check_tools( Critter& crafter, CraftItem& craft, Item@ bench )
 {
 	uint16[] resPids;
 	uint[] resCounts;
@@ -422,22 +422,38 @@ bool check_tools_n_items( Critter& crafter, CraftItem& craft, Item@ bench )
 
 	if( !CheckHasItemsList( crafter, bench, null, null, resPids, resCounts, resOrs ) )
 	{
+		return false;
+	}
+	
+	return true;
+}
+
+bool check_items( Critter& crafter, CraftItem& craft, Item@ bench )
+{
+	uint16[] resPids;
+	uint[] resCounts;
+	bool[] resOrs;
+	craft.GetNeedItems( resPids, resCounts, resOrs );
+
+	if( !CheckHasItemsList( crafter, bench, null, null, resPids, resCounts, resOrs ) )
+	{
+		return false;
+	}
+	
+	return true;
+}
+
+bool check_tools_n_items( Critter& crafter, CraftItem& craft, Item@ bench )
+{
+	if( !check_tools( crafter, craft, bench ) )
+	{
 		crafter.Say( SAY_NETMSG, "NOT ENOUGH TOOLS" );
-		delete_craft_data( crafter );
 		return false;
 	}
 
-	Item@[] subItems;
-	uint[] subItemsCount;
-	resPids.resize(0);
-	resCounts.resize(0);
-	resOrs.resize(0);
-	craft.GetNeedItems( resPids, resCounts, resOrs );
-
-	if( !CheckHasItemsList( crafter, bench, subItems, subItemsCount, resPids, resCounts, resOrs ) )
+	if( !check_items( crafter, craft, bench ) )
 	{
 		crafter.Say( SAY_NETMSG, "NOT ENOUGH RESOURCES" );
-		delete_craft_data( crafter );
 		return false;
 	}
 	
@@ -482,6 +498,16 @@ void makeCraft( Critter& crafter, int& bench_id )
 	
 	for( uint i = 0, len = subItems.length(); i < len; i++ )
 	{
+		if( !valid( subItems[i] ) )
+		{
+			Log( "!valid subItems[" + i + "] for craft #" + craftNum );
+			continue;
+		}
+		if( subItemsCount[i] == 0 )
+		{
+			Log( "subItemsCount[" + i + "] == 0 for craft #" + craftNum );
+			continue;
+		}
 		_SubItem( subItems[i], subItemsCount[i] );
 	}
 
@@ -495,14 +521,10 @@ void makeCraft( Critter& crafter, int& bench_id )
 
 void delete_craft_data( Critter& crafter )
 {
-	if( valid( crafter ) )
-	{
-		craftData.delete( "" + crafter.Id + "b" );
-		craftData.delete( "" + crafter.Id + "n" );
-	}
+	craftData.delete( "" + crafter.Id + "b" );
+	craftData.delete( "" + crafter.Id + "n" );
 }
 
-// LTP SHIT GOES HERE
 bool ltp_inited = false;
 void ltp_init()
 {
@@ -555,46 +577,34 @@ uint process_craft( Critter@ crafter, int& param0, int& bench_id, int& )
     return crafter.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 }
 
+Item@ getBench( Critter& crafter )
+{
+	Item@ bench = null;
+	craftData.get( "" + crafter.Id + "b", @bench );
+	if( valid( bench ) && GetDistantion( crafter.HexX, crafter.HexY, bench.HexX, bench.HexY ) > 1 )
+	{
+		craftData.delete( "" + crafter.Id + "b" );
+		@bench = null;
+	}
+	return bench;
+}
+
 void unsafe_GetAvaiableCrafts( Critter& crafter, int, int, int, string@, int[]@ )
 {
+	Item@ bench = getBench(crafter);
+	
 	int[] avaiableCrafts;
 	for( int i = CRAFT_MIN_NUM; i <= CRAFT_MAX_NUM; i++ )
 	{
 		CraftItem@ craft = GetCraftItem(i);
-		if( !valid( craft ) )
-		{
-			continue;
-		}
-
-		if(!IsAbleCraftByParams(crafter, craft))
-		{	
-			continue;
-		}
-
-		uint16[] resPids;
-		uint[] resCounts;
-		bool[] resOrs;
-		craft.GetNeedTools(resPids, resCounts, resOrs);
-
-		Item@ bench = null;
-		craftData.get( "" + crafter.Id + "b", @bench );
-		if( valid( bench ) && GetDistantion( crafter.HexX, crafter.HexY, bench.HexX, bench.HexY ) > 1 )
-		{
-			craftData.delete( "" + crafter.Id + "b" );
-			@bench = null;
-		}
-
-		if( !CheckHasItemsList( crafter, bench, null, null, resPids, resCounts, resOrs ) )
-		{
-			continue;
-		}
-
-		resPids.resize(0);
-		resCounts.resize(0);
-		resOrs.resize(0);
-		craft.GetNeedItems(resPids, resCounts, resOrs);
-
-		if( !CheckHasItemsList(crafter, bench, null, null, resPids, resCounts, resOrs ) )
+		
+		bool skip = !valid( craft )
+				||	!IsAbleCraftByParams( crafter, craft )
+				||	!check_tools( crafter, craft, bench )
+				||	!check_items( crafter, craft, bench )
+				;
+				
+		if( skip )
 		{
 			continue;
 		}
@@ -602,19 +612,12 @@ void unsafe_GetAvaiableCrafts( Critter& crafter, int, int, int, string@, int[]@ 
 		avaiableCrafts.insertLast(i);
 	}
 	
-	crafter.RunClientScript("client_screen_fixboy@UpdateAvaiableCrafts", 0, 0, 0, null, avaiableCrafts);
+	crafter.RunClientScript( "client_screen_fixboy@UpdateAvaiableCrafts", 0, 0, 0, null, avaiableCrafts );
 }
 
 void unsafe_StartCraft( Critter& crafter, int craftNum, int, int, string@, int[]@ )
 {
-	if( !valid( crafter ) )
-	{
-		return;
-	}
-	
-	Item@ bench = null;
-	craftData.get( "" + crafter.Id + "b", @bench );
-	TryCraft( crafter, craftNum, bench );
+	TryCraft( crafter, craftNum, getBench(crafter) );
 }
 
 void unsafe_ForgetBench( Critter& crafter, int, int, int, string@, int[]@ )
@@ -623,15 +626,10 @@ void unsafe_ForgetBench( Critter& crafter, int, int, int, string@, int[]@ )
 	unsafe_GetAvaiableCrafts( crafter, 0, 0, 0, null, null );
 }
 
-void OpenBenchCraft( Critter@ crafter, Item@ bench )
+void OpenBenchCraft( Critter& crafter, Item& bench )
 {
-	if( !valid( bench ) )
-	{
-		return;
-	}
-
-	craftData.delete("" + crafter.Id + "b");
-	craftData.set("" + crafter.Id + "b", @bench);
+	craftData.delete( "" + crafter.Id + "b" );
+	craftData.set( "" + crafter.Id + "b", @bench );
 	crafter.RunClientScript("client_screen_fixboy@ShowScreen", 0, 0, 0, null, null);
 }
 
