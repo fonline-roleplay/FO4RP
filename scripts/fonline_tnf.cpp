@@ -520,7 +520,7 @@ EXPORT int getParam_MaxCritical( CritterMutual& cr, uint )
 
 EXPORT int getParam_Ac( CritterMutual& cr, uint )
 {
-    int val = cr.Params[ TRAIT_KAMIKAZE ] ? 0 : getParam_Agility( cr, 0 ) * 5;
+    int val = cr.Params[ TRAIT_KAMIKAZE ] ? 0 : cr.Params[ ST_ARMOR_CLASS ] + cr.Params[ ST_ARMOR_CLASS_EXT ] + getParam_Agility( cr, 0 ) * 5 + cr.Params[ ST_ARMOR_CLASS ] + cr.Params[ ST_ARMOR_CLASS_EXT ];
 	if( cr.Params[ CR_DAZED ] )
 	{
 		val -= DAZED_AC_MALUS;
