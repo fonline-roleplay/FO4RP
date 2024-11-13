@@ -1,0 +1,135 @@
+#ifndef MOB_SPAWNERS
+#define MOB_SPAWNERS
+
+#include "_utils.fos"
+#include "mob_spawners_h.fos"
+
+Critter@ MobSpawn( Map& map, uint16 hx, uint16 hy, uint minMobPID, uint maxMobPID, uint teamID )
+{	
+	map.SetText( hx, hy, COLOR_LGRAY, ":rustling:" );
+	
+	Critter@ npc = map.AddNpc( Random(minMobPID, maxMobPID), hx, hy, Random( 0, 5 ), null, null, "mob@_MobInit" );
+	if( !valid( npc ) )
+	{
+		return null;
+	}
+	
+	npc.SetHomePos( npc.HexX, npc.HexY, npc.Dir );
+	npc.StatBase[ ST_TEAM_ID ] = teamID;
+	
+	for( uint i = __SkillBegin; i < __SkillEnd; i++ )
+	{
+		if( npc.SkillBase[ i ] > __SkillMaxValue )
+		{
+			npc.SkillBase[ i ] = __SkillMaxValue;
+		}
+	}
+
+	return npc;
+}
+
+void CreateMobSpawner( Map& map, uint16 hx, uint16 hy, uint teamID, uint mobCount, uint minMobPID, uint maxMobPID, uint timeout, uint range)
+{
+	if( !valid( map ) )
+	{
+		return;
+	}
+
+	Item@ mobSpawner = map.AddItem( hx, hy, PID_MOB_SPAWNER, 1 );
+	if( !valid( mobSpawner ) )
+	{
+		return;
+	}
+
+	mobSpawner.MAP_ID = map.Id;
+	mobSpawner.TEAM_ID = ( teamID == 0 ? 100 : teamID );
+	mobSpawner.MOB_COUNT = ( mobCount < 1 ? 1 : mobCount );
+	mobSpawner.MIN_MOB_PID = ( minMobPID > 999 ? 999 : minMobPID );
+	mobSpawner.MAX_MOB_PID = ( maxMobPID > 999 ? 999 : maxMobPID );
+	mobSpawner.TIMEOUT = ( timeout < 1 ? 1 : timeout );
+	mobSpawner.RANGE = ( range < 1 ? 1 : range );
+	
+	Critter@ firstMob = MobSpawn( map, hx, hy, mobSpawner.MIN_MOB_PID, mobSpawner.MAX_MOB_PID, mobSpawner.TEAM_ID );
+	if(valid(firstMob))
+	{
+		mobSpawner.CRTYPE = firstMob.CrType;
+	}
+
+	int[] values = { mobSpawner.Id };
+	mobSpawner.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_processMobSpawner", values, true );
+}
+
+uint e_processMobSpawner( int[] @ values )
+{
+	Item@ mobSpawner = GetItem( values[0] );
+	if( !valid( mobSpawner ) )
+	{
+		return 0;
+	}
+
+	Map@ map = GetMap( mobSpawner.MAP_ID );
+	if( !valid( map ) )
+	{
+		return 0;
+	}
+
+	int mobsCount = 0;
+	Critter@[] mobsFound;
+	Critter@ currMob = null;
+	uint minMobPID = mobSpawner.MIN_MOB_PID;
+	uint maxMobPID = mobSpawner.MAX_MOB_PID;
+	uint pidsLen = maxMobPID - minMobPID;
+	
+	for( uint i = 0; i < pidsLen; i++ )
+	{
+		map.GetCritters( minMobPID + i, FIND_LIFE_AND_KO | FIND_ONLY_NPC, mobsFound );
+	}
+
+	for( uint i = 0, len = mobsFound.length(); i < len; i++ )
+	{
+		@currMob = mobsFound[i];
+		if( valid( currMob ) )
+		{	
+			if( currMob.ParamBase[CR_SPAWNER_ID] == int( mobSpawner.Id ) )
+			{
+				mobsCount++;
+			}
+		}
+	}
+	
+	int missing = mobSpawner.MOB_COUNT - mobsCount;
+
+	if( missing > 0 )
+	{
+		uint attempt = 0;
+		for( int i = 0; i < missing; i++ )
+		{
+			if( attempt >= MAX_MOB_SPAWN_ATTEMPTS )
+			{
+				break;
+			}
+			
+			int range = mobSpawner.RANGE / 2;
+			uint16 hx = mobSpawner.HexX + Random( -range, range );
+			uint16 hy = mobSpawner.HexY + Random( -range, range );
+			if( map.IsHexPassed( hx, hy ) && map.GetPathLength(hx, hy, mobSpawner.HexX, mobSpawner.HexY, 1) != 0 )
+			{
+				Critter@ npc = MobSpawn( map, hx, hy, minMobPID, maxMobPID, mobSpawner.TEAM_ID );
+				if(valid(npc))
+				{
+					npc.ParamBase[CR_SPAWNER_ID] = mobSpawner.Id;
+				}
+			}
+			else
+			{
+				missing++;
+				attempt++;
+			}
+		}
+	}
+	
+	mobsFound.resize(0);
+	return REAL_MINUTE( mobSpawner.TIMEOUT );
+}
+
+#endif // MOB_SPAWNERS
