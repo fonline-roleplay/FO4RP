@@ -626,7 +626,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 			}
 			else
 			{
-				PunchBag( map, tx, ty, attacker.Id, weapPid );
+				PunchBag( attack, attacker, map, tx, ty, attacker.Id, weapPid, isHthAttack, weaponSubtype );
 			}
 		}
 		else
@@ -950,6 +950,28 @@ uint e_FlyEffect( uint[]@ vals )
 	return 0;
 }
 
+int AttackBonus( AttackStruct& attack, Critter& attacker, bool isHthAttack, bool validWeapon, uint8 weaponSubtype )
+{
+	if( validWeapon )
+	{
+		if( attack.WeaponType == WS_THROWING && ( weaponSubtype == ITEM_SUBTYPE_WEAPON_GRENADE_PRIM || weaponSubtype == ITEM_SUBTYPE_WEAPON_GRENADE_KIFE ) )
+		{
+			attack.BonusDmg = attacker.Stat[ ST_MELEE_DAMAGE ] / 2;
+		}
+		else if( isHthAttack )
+		{
+			attack.BonusDmg += attack.WeaponType == WS_UNARMED ? attacker.Skill[ SK_UNARMED ] / 10 : attacker.Skill[ SK_MELEE_WEAPONS ] / 10;
+			attack.BonusDmg += attacker.Stat[ ST_MELEE_DAMAGE ] / 2;
+		}
+	}
+	else
+	{
+		attack.BonusDmg = attacker.Stat[ ST_MELEE_DAMAGE ];
+	}
+	
+	return attack.BonusDmg;
+}
+
 void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCritical, bool intentionally, CombatRes[]& results, int hexX = 0, int hexY = 0 )
 {
 	if( !valid( target ) )
@@ -989,23 +1011,8 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     bool attackerIsPlayer = ( validAttacker ? attacker.IsPlayer() : false );
 	uint8 weaponSubtype = validWeapon ? realWeapon.Proto.Item_Subtype : 0;
 
-	if( validWeapon )
-	{
-		if( attack.WeaponType == WS_THROWING && ( weaponSubtype == ITEM_SUBTYPE_WEAPON_GRENADE_PRIM || weaponSubtype == ITEM_SUBTYPE_WEAPON_GRENADE_KIFE ) )
-		{
-			attack.BonusDmg = attacker.Stat[ ST_MELEE_DAMAGE ] / 2;
-		}
-		else if( isHthAttack )
-		{			
-			attack.BonusDmg = attacker.Stat[ ST_MELEE_DAMAGE ];
-			attack.BonusDmg += attack.WeaponType == WS_UNARMED ? attacker.Skill[ SK_UNARMED ] / 10 : attacker.Skill[ SK_MELEE_WEAPONS ] / 10;
-		}
-	}	
-	else if( isHthAttack )
-	{
-		attack.BonusDmg = attacker.Stat[ ST_MELEE_DAMAGE ];
-	}
-	
+	AttackBonus( attack, attacker, isHthAttack, validWeapon, weaponSubtype );
+
 	if( validAttacker )
 	{
 		if( hexX == 0 )
@@ -1113,7 +1120,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
     for( uint i = 0; i < rounds; i++ )
 	{
         rawDmg = Random( dmgMin, dmgMax );
-		// Boxing gloves modifier
+
 		if( validWeapon && FLAG( weaponPerk, WEAPON_PERK_NON_LETHAL ) )
 		{
 			rawDmg /= 2;
@@ -2806,8 +2813,13 @@ uint e_CollateralDamageDelay( uint[]@ values )
 }
 
 // Punchbag
-void PunchBag( Map& map, uint16 tx, uint16 ty, int attackerId, uint16 weapPid )
+void PunchBag( AttackStruct& attack, Critter& attacker, Map& map, uint16 tx, uint16 ty, int attackerId, uint16 weapPid, bool isHthAttack, uint8 weaponSubtype )
 {
+	if( !valid( attacker ) )
+	{
+		return;
+	}
+	
 	if( valid( map ) )
 	{
 		Item@ punchbag = map.GetItem( tx, ty, PID_PUNCH_BAG );
@@ -2817,57 +2829,62 @@ void PunchBag( Map& map, uint16 tx, uint16 ty, int attackerId, uint16 weapPid )
 			uint[] vals = { punchbag.Id };
 			punchbag.PUNCH_EVENT = CreateTimeEvent( AFTER( REAL_MS( 500 ) ), "combat@e_PunchBag", vals, true );
 			   
-			AttackStruct attack;
 			attack.WeaponPid = weapPid;
+			Log( "weapPid " + weapPid );
 			
-			Critter@ attacker = GetCritter( attackerId );
-			if( !valid( attacker ) )
-			{
-				return;
-			}
+			Log( "attacker.Id " + attacker.Id );
 			
 			ProtoItem@ weapon = GetProtoItem( weapPid );
 			if( !valid( weapon ) )
 			{
 				return;
 			}
+			Log( "weapon.Pid " + weapon.ProtoId );
 			
 			Item@ realWeapon = _CritGetItemHand( attacker );
 			bool validWeapon = valid( realWeapon );
 		
-			attack.WeaponPerk = weapon.Weapon_Perk;
+			Log( "WeaponPerk " + weapon.Weapon_Perk );
+			AttackBonus( attack, attacker, isHthAttack, validWeapon, weaponSubtype );
 			
 			int dmgMin = ( attack.DmgMin + attack.BonusDmg ) * attack.MinDmgMod / 100;
 			int dmgMax = ( attack.DmgMax + attack.BonusDmg ) * attack.MaxDmgMod / 100;
 
-			float rawDmg = 0;
-			float totalDmg = 0;
+			Log( "DmgMin" + attack.DmgMin + " BonusDmg " + attack.BonusDmg + " MinDmgMod " + attack.MinDmgMod + "DmgMax" + attack.DmgMax + " BonusDmg " + attack.BonusDmg + " MaxDmgMod" +  attack.MaxDmgMod );
 
+			float rawDmg = Random( dmgMin, dmgMax );
+			
+			if( validWeapon && FLAG( attack.WeaponPerk, WEAPON_PERK_NON_LETHAL ) )
+			{
+				rawDmg /= 2;
+			}
+			
+			Log( "rawDmg " + rawDmg );
+			float totalDmg = 0;
+						
 			if( ( attack.WeaponType == WS_MELEE || attack.WeaponType == WS_THROWING ) && attack.RealWeapon.IsDeteriorable() )
 			{
 				dmgMin -= int( dmgMin * ( GetDeteriorationProcent( attack.RealWeapon ) * 0.01f ) );
 				dmgMax -= int( dmgMax * ( GetDeteriorationProcent( attack.RealWeapon ) * 0.01f ) );
-				rawDmg = Random( dmgMin, dmgMax );
-				// Boxing gloves modifier
-				if( validWeapon && FLAG( attack.WeaponPerk, WEAPON_PERK_NON_LETHAL ) )
-				{
-					rawDmg /= 2;
-				}
 			}
-
+			
+			totalDmg += rawDmg;
+			
 			Critter@[] crittersAround;
 			map.GetCrittersWhoViewPath(tx, ty, tx, ty, FIND_ALL | FIND_ONLY_PLAYERS, crittersAround);
 
-			for(uint i = 0, len = crittersAround.length(); i < len; i++)
+			for( uint i = 0, len = crittersAround.length(); i < len; i++ )
 			{
 				Critter@ currCritter = crittersAround[i];
-				if(!valid(currCritter))
+				if( !valid( currCritter ) )
 				{
 					continue;
 				}
 
-				currCritter.RunClientScript("client_main@ShowPunchBagDmg", int(floor(rawDmg)), tx, ty, null, null );
+				currCritter.RunClientScript("client_main@ShowPunchBagDmg", int( floor( totalDmg ) ), tx, ty, null, null );
 			}
+			
+			crittersAround.resize(0);
 		}
 	}
 }
