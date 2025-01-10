@@ -31,19 +31,27 @@ void param_change( Critter& cr, int param, int delta, int action )
 	{
 		case( 0 ): 
 			@param_change = ParamChange( param, delta );
-			param_change.apply(cr); info += "applied "; 
+			param_change.apply(cr); info += "applied"; 
 			break;
 		case( 1 ): 
 			@param_change = ParamChange( param, delta );
-			param_change.undo(cr);  info += "reverted "; 
+			param_change.undo(cr);  info += "reverted"; 
 			break;
 		case( 2 ): 
 			@param_change = PermanentParamChange( param, delta );
-			param_change.apply(cr); info += "applied "; 
+			param_change.apply(cr); info += "applied"; 
 			break;
 		case( 3 ): 
 			@param_change = PermanentParamChange( param, delta );
-			param_change.undo(cr);  info += "reverted "; 
+			param_change.undo(cr);  info += "reverted"; 
+			break;
+		case( 4 ): 
+			@param_change = SetAddictionTimer( param, delta );
+			param_change.apply(cr);  info += "changed"; 
+			break;
+		case( 5 ): 
+			@param_change = AddAddictionTimer( param, delta );
+			param_change.apply(cr);  info += "setted"; 
 			break;
 		default:
 			info += "done nothing with ";
@@ -58,6 +66,8 @@ class ActiveDrug
 {
 	CTE cte;
 	
+	bool isReliever;
+	
 	uint pid()
 	{
 		return cte.group_id;
@@ -65,7 +75,12 @@ class ActiveDrug
 	
 	uint phase()
 	{
-		return cte.rate;
+		uint value = cte.rate;
+		if( value > DRUG_ADDICTION_PHASE )
+		{
+			value = value % DRUG_ADDICTION_PHASE;
+		}
+		return value;
 	}
 	
 	uint time_left()
@@ -81,6 +96,12 @@ class ActiveDrug
 	ActiveDrug( uint pid, uint event_id, uint phase, uint time_left ) 
 	{
 		cte = CTE( pid, event_id, phase, time_left );
+		
+		Consumable@ consumable = consumables.get( pid );
+		if( valid( consumable ) )
+		{
+			isReliever = consumable.isReliever;
+		}
 	}
 	
 	bool isOlderThan( ActiveDrug@ other )
@@ -100,17 +121,22 @@ class ActiveDrug
 			return true;
 		}
 		
+		if( this.phase() < other.phase() )
+		{
+			return false;
+		}
+		
 		if( this.time_left() <= other.time_left() )
 		{
 			return true;
 		}
-		
+
 		return false;
 	}
 	
 	string toString()
 	{
-		return "ActiveDrug(" + itemName( pid() ) + ")#" + pid() + ":" + event_id() + " at " + phase() + " phase on " + DeltaTime_HMS( time_left() );
+		return "ActiveDrug(" + itemName( pid() ) + ")#" + pid() + ":" + event_id() + " at " + phase() + " phase on " + DeltaTime_HMS( time_left() ) + " " + boolValue(isReliever,"isReliever");
 	}
 }
 
@@ -238,7 +264,7 @@ class Addiction
 		return this;
 	}	
 	
-	bool roll( Critter& cr )
+	bool roll( Critter& cr, bool isReliever )
 	{//FORMAT: Returns true if Critter have Addiction
 		if( cr.Addiction[ param ] != DRUG_ADDICTION_IS_NONE )
 		{
@@ -254,25 +280,41 @@ class Addiction
 		
 		if( Roll( 1, 100 ).failed( difficulty ) )
 		{
-			cr.AddictionBase[ param ] = DRUG_ADDICTION_IS_WAITING;
+			cr.AddictionBase[ param ] = ( isReliever ? DRUG_ADDICTION_IS_WAITING_RELIEVER : DRUG_ADDICTION_IS_WAITING );
 			return true;
 		}
 		
 		return false;
 	}
 	
-	void check( Critter& cr, bool on_drugs )
+	void check( Critter& cr, bool on_drugs, bool isReliever )
 	{ //NOTE: Look at SetParameterChangeBehaviour(AddictionBase) for more info!
 		if( cr.Addiction[ param ] == DRUG_ADDICTION_IS_NONE )
 		{
 			return;
 		}
 		
-		cr.AddictionBase[ param ] = DRUG_ADDICTION_IS_WAITING; 
+		if( !isReliever )
+		{
+			cr.AddictionBase[ param ] = DRUG_ADDICTION_IS_WAITING; 
+		}
 
+		testInfo( cr, "cr.AddictionBase[" + YELLOW + param + GREEN + "] = "
+								+ WHITE + cr.AddictionBase[ param ] + GREEN 
+								+ " " + boolValue(on_drugs,"on_drugs") 
+								+ " " + boolValue(isReliever,"isReliever") 
+				);
+		
 		if( !on_drugs )
 		{//NOTE: Starts the addiction cte if no drugs on stage 1 are present.
-			cr.AddictionBase[ param ] = DRUG_ADDICTION_IS_GOING;
+			if( cr.Addiction[ param ] == DRUG_ADDICTION_IS_WAITING )
+			{
+				cr.AddictionBase[ param ] = DRUG_ADDICTION_IS_GOING;
+			}
+			if( cr.Addiction[ param ] == DRUG_ADDICTION_IS_WAITING_RELIEVER )
+			{
+				cr.AddictionBase[ param ] = DRUG_ADDICTION_IS_GOING_RELIEVER;
+			}
 		}
 	}
 	
@@ -289,8 +331,8 @@ class noAddiction : Addiction
 		@effect = noEffect();
 	}
 	
-	bool roll( Critter& cr ) override { return false; }
-	void check( Critter& cr, bool on_drugs ) override {}
+	bool roll( Critter& cr, bool isReliever ) override { return false; }
+	void check( Critter& cr, bool on_drugs, bool isReliever ) override {}
 	string toString() override { return "[noAddiction]"; }
 }
 
@@ -388,6 +430,7 @@ class Consumable
 		isAlreadyConsumed = false;
 		hasNoPhases = true;
 		hasCooldown = true;
+		isReliever = false;
 	}	
 	
 	Sound@ sound;
@@ -505,12 +548,21 @@ class Consumable
 		return this;
 	}	
 	
+	bool isReliever;
+	Consumable@ setReliever( bool value ) 
+	{
+		isReliever = value;
+		
+		return this;
+	}
+	
 	string toString() 
 	{
 		string info = "Consumable '" + itemName(pid) + "' PID#" + pid + ": "
 					+ " sound "     + STR_INFO( sound )
 					+ " returns "   + STR_INFO( item ) 
 					+ " [" + boolValue(isAlreadyConsumed,"autoConsumable") + "]"
+					+ " [" + boolValue(isReliever,"isReliever") + "]"
 					+ " effect "    + STR_INFO( effect )
 					+ " phase1 "    + STR_INFO( phase1 )
 					+ " phase2 "    + STR_INFO( phase2 )
@@ -663,16 +715,23 @@ class Consumer
 		return this;
 	}
 	
+	Consumer@ rollAddiction()
+	{
+		consumable.group.addiction.roll( cr, consumable.isReliever );
+
+		return this;
+	}
+	
 	Consumer@ checkAddiction( uint from_phase )
 	{
-		consumable.group.addiction.check( cr, isOnDrugs(from_phase) );		
+		consumable.group.addiction.check( cr, isOnDrugs(from_phase), consumable.isReliever );		
 		
 		return this;
 	}
 	
 	bool isOnDrugs( uint from_phase )
 	{
-		if( from_phase <= 1 )
+		if( from_phase <= 1 && !consumable.isReliever )
 		{
 			return true;
 		}
@@ -680,7 +739,7 @@ class Consumer
 		ActiveDrug@[] list = getActiveDrugs();
 		for( uint i = 0, count = list.length(); i < count; i++ ) 
 		{
-			if( list[i].phase() <= 1 )
+			if( list[i].phase() <= 1 && !list[i].isReliever )
 			{
 				return true;
 			}
@@ -719,11 +778,6 @@ bool consumed( Critter& cr, uint pid, Critter& target ) //exported
 		Log( "! WARNING ! WRONG PROTOITEM SUBTYPE: " + proto.ProtoId + " PID " + proto.Item_Subtype ); 
 	}
 	
-	if( proto.Type != ITEM_TYPE_DRUG )
-	{
-		Log( "! WARNING ! WRONG ITEM TYPE (!DRUG): " + proto.ProtoId + " PID " + proto.Type );
-	}
-	
 	if( consumable.hasCooldown )
 	{
 		if( cr.IsPlayer() && cr.Timeout[ TO_SK_FIRST_AID ] > 0 )
@@ -739,9 +793,9 @@ bool consumed( Critter& cr, uint pid, Critter& target ) //exported
 	consumable.item.add(target);
 	
 	consumable.effect.apply(target);
-	consumable.group.addiction.roll(target);
 	
 	Consumer( target, consumable )
+		.rollAddiction()
 		.checkOverdose()
 		.checkPhases()
 	;
@@ -790,8 +844,10 @@ void ProcessAddiction( Critter& cr, int oldValue, uint param, DrugGroup@ group )
 	{
 		return;
 	}
+
+	testInfo( cr, "ProcessAddiction#" + YELLOW + param + " " + WHITE + oldValue + GREEN + " -> " + WHITE + newValue );
 	
-	if( oldValue == DRUG_ADDICTION_IS_GOING )
+	if( oldValue == DRUG_ADDICTION_IS_GOING || oldValue == DRUG_ADDICTION_IS_GOING_RELIEVER )
 	{
 		DropAddictionCTE( cr, group );
 	}
@@ -799,6 +855,11 @@ void ProcessAddiction( Critter& cr, int oldValue, uint param, DrugGroup@ group )
 	if( newValue == DRUG_ADDICTION_IS_GOING )
 	{
 		StartAddictionCTE( cr, group );
+	}	
+	
+	if( newValue == DRUG_ADDICTION_IS_GOING_RELIEVER )
+	{
+		StartAddictionCTE( cr, group, 0.2f );
 	}
 }
 
@@ -814,7 +875,7 @@ void DropAddictionCTE( Critter& cr, DrugGroup@ group )
 	EraseAddictionTimeEventsByPID( cr, group.name );
 }
 
-void StartAddictionCTE( Critter& cr, DrugGroup@ group )
+void StartAddictionCTE( Critter& cr, DrugGroup@ group, float percent = 1.0f )
 {
 	if( !valid( group ) )
 	{
@@ -830,7 +891,7 @@ void StartAddictionCTE( Critter& cr, DrugGroup@ group )
 		time /= 2;
 	}
 
-	cr.AddTimeEvent( "consumables@cte_addiction", REAL_MINUTE( time ), group.name, DRUG_ADDICTION_PHASE );
+	cr.AddTimeEvent( "consumables@cte_addiction", REAL_MINUTE( int( effect.time * percent ) ), group.name, DRUG_ADDICTION_PHASE );
 }
 
 uint cte_addiction( Critter& cr, int name, uint& phase )
@@ -867,6 +928,12 @@ uint cte_drug_process( Critter& cr, int pid, uint& phase )
 	switch( phase )
 	{
 		case( 1 ):
+			if( consumable.isReliever )
+			{
+				RelieverAddictionTimer@ effect = RelieverAddictionTimer( consumable.group.name );
+				effect.apply(cr);
+			}
+
 			@_new = @consumable.phase1;
 			break;
 		case( 2 ):

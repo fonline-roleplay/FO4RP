@@ -204,6 +204,99 @@ uint cte_restore_hp_pills( Critter& cr, int pid, uint& rate )
 	return 0;
 }
 
+class SetAddictionTimer : Event
+{
+	SetAddictionTimer( uint param, int value ) 
+	{ 
+		super( CLAMP( param, ITEM_SUBTYPE_DRUG_BEGIN, ITEM_SUBTYPE_DRUG_END ), CLAMP( value, -100, 100 ) );
+	}
+	
+	void apply( Critter& cr ) override 
+	{
+		testInfo( cr, YELLOW + "SetAddictionTimer( " + param + ", " + value + " )" );//DEBUG
+		
+		uint[] uid, duration, phase;
+		uint count = cr.GetTimeEvents( param, uid, duration, phase );
+		for( uint i = 0; i < count; i++ )
+		{
+			ActiveDrug@ drug = ActiveDrug( param, uid[i], phase[i], duration[i] );
+			testInfo( cr, "You had addiction[" + i + "]: " + STR_INFO( drug ) );//DEBUG
+
+			DrugGroup@ group = getDrugGroup( param );
+			if( !valid( group ) )
+			{
+				return;
+			}
+
+			uint max = REAL_MINUTE( group.addiction.effect.time ) / __TimeMultiplier;
+			uint percent = max / 100; //how much time in 1% of the base
+			uint current = drug.time_left() / __TimeMultiplier;
+			uint current_percent = current / percent + 1;
+			uint new_percent = getNewPercent( current_percent );
+			uint time_new = new_percent * percent;
+
+			cr.ChangeTimeEvent( drug.event_id(), time_new * __TimeMultiplier, drug.phase() );
+			
+			testInfo( cr, WHITE + "Output:"	//DEBUG
+								+ "\n" + YELLOW + "max " 				+ GREEN + DeltaTime_HMS( max ) 
+								+ "\n" + YELLOW + "percent " 			+ GREEN + DeltaTime_HMS( percent ) 
+								+ "\n" + YELLOW + "current " 			+ GREEN + DeltaTime_HMS( current ) 
+								+ "\n" + YELLOW + "current_percent " 	+ GREEN + current_percent
+								+ "\n" + YELLOW + "value " 				+ GREEN + value
+								+ "\n" + YELLOW + "new_percent " 		+ GREEN + new_percent
+								+ "\n" + YELLOW + "time_new " 			+ GREEN + DeltaTime_HMS( time_new ) 
+				);
+				
+		}
+	}
+	
+	uint getNewPercent( uint time_current_percent ) 
+	{
+		return value;
+	}
+	
+	string toString() override
+	{
+		return "SetAddictionTimer#" + param + " to: " + value + "%";
+	}
+}
+
+class AddAddictionTimer : SetAddictionTimer
+{
+	AddAddictionTimer( uint param, int value ) 
+	{ 
+		super( param, CLAMP( value, 0, 100 ) );
+	}
+	
+	uint getNewPercent( uint time_current_percent ) override
+	{
+		return CLAMP( time_current_percent + value, 0, 100 );
+	}
+	
+	string toString() override
+	{
+		return "AddAddictionTimer#" + param + " delta: " + SIGN(value) + "%";
+	}
+}
+
+class RelieverAddictionTimer : SetAddictionTimer
+{
+	RelieverAddictionTimer( uint param, int value = 0 ) 
+	{ 
+		super( param, CLAMP( value, RELIEVER_MINIMAL_PERCENT, 100 ) );
+	}
+	
+	uint getNewPercent( uint time_current_percent ) override
+	{
+		return MAX( uint(value), time_current_percent );
+	}
+	
+	string toString() override
+	{
+		return "RelieverAddictionTimer#" + param + " to: " + SIGN(value) + "%";
+	}
+}
+
 class Event_ParalysisPoison : Event
 {
 	Event_ParalysisPoison() {}
@@ -266,7 +359,7 @@ uint cte_antidote( Critter& cr, int pid, uint& phase )
 	{
 		drugs[i].cte.time_left /= __TimeMultiplier;
 		
-		if( drugs[i].phase() > 0 && drugs[i].phase() < min_phase )
+		if( drugs[i].pid() != PID_JET_ANTIDOTE && drugs[i].phase() > 0 && drugs[i].phase() < min_phase )
 		{
 			min_phase = drugs[i].phase();
 		}
@@ -274,6 +367,11 @@ uint cte_antidote( Critter& cr, int pid, uint& phase )
 	
 	for( uint i = 0, len = drugs.length(); i < len; i++ )
 	{
+		if( drugs[i].pid() == PID_JET_ANTIDOTE )
+		{
+			continue;
+		}
+		
 		if( drugs[i].phase() == min_phase )
 		{
 			SayLog( cr, crInfo( cr ) + " Antidote progression of " + min_phase + " phase for: " + drugs[i].toString() );
