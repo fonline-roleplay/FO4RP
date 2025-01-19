@@ -4,63 +4,73 @@
 #include "_utils.fos"
 #include "cooking_h.fos"
 #include "_ltp.fos"
-#include "gathering_h.fos"
 #include "firestarter_h.fos"
 #include "critter_skills_h.fos"
 
-// bool ltp_cooking_inited=false;
-// void ltp_cooking_init()
-// {
-//     LTPREG( LTP_COOKING, process_cooking )
+bool ltp_cooking_inited=false;
+void ltp_cooking_init()
+{
+	LTPREG( LTP_COOKING, process_cooking )
+    ltp_cooking_inited = true;
+}
 
-//     ltp_cooking_inited=true;
-// }
-
-// void start_cooking( Critter& cr, bool standing )
-// {
-//     if( !ltp_cooking_inited )
-// 	{
-//         ltp_cooking_inited();
-// 	}
-
-// 	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-//   	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
-//   	cr.ParamBase[ ST_LTP_SEQUENCE ] = CalcSequence( cr, null );
-
-// 	if(!standing)
-// 	{
-// 		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
-// 	}
-// 	else
-// 	{
-// 		cr.SetAnims( COND_LIFE, 0, ANIM2_LEANING1 );
-// 	}
+void start_cooking( Critter& cr, Item& fire, uint index, bool standing )
+{
+	if( !ltp_cooking_inited )
+	{
+		ltp_cooking_init();
+	}
 	
-// 	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, "" );
-	
-// 	StartProcess( cr, LTP_COOKING, 0, 0, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
-// }
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = 10000;
+   	cr.ParamBase[ ST_LTP_SEQUENCE ] = 0;
 
-// uint process_cooking( Critter@ cr, int& param0, int& param1, int& param2 )
-// {
-//     LTPROCESSD( LTP_COOKING )
+ 	if( !standing )
+ 	{
+ 		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+	}
+ 	else
+ 	{
+ 		cr.SetAnims( COND_LIFE, 0, ANIM2_LEANING1 );
+	}
 	
-//     param0++;
+	uint16 pid = fryDataProtoIds[index][0];
+	
+	cr.DeleteItem( pid, 1 );
+		
+	cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_FRYING_BEGIN );
+	
+	Map@ map = cr.GetMap();
+	if( valid( map ) )
+	{
+		PlayGenericSound( map, cr.HexX, cr.HexY, "frying.mp3", 10 );
+	}
+	
+ 	StartProcess( cr, LTP_COOKING, 0, fire.Id, index, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+ }
+
+uint process_cooking( Critter@ cr, int& param0, int& fireId, int& index )
+{
+	LTPROCESSD( LTP_COOKING )
+	param0++;
     
-//     if( param0 > cr.Param[ ST_LTP_SEQUENCE ] )
-//     {
-//       cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_FINISH_REPAINT );
-//       //Result( cr );
-//       cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
-//       return 0;
-//     }
+	if( param0 > cr.Param[ ST_LTP_SEQUENCE ] )
+	{
+		Item@ result = cr.AddItem( fryDataProtoIds[index][1], fryDataProtoIds[index][2] );
+		if( valid(result) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FRY_SUCCESS, "$name" + STR_INSERT_ITEM_LINE( result.GetProtoId() * 100 ) );
+			if( Random( 1, 100 ) <= fryCookingSkillChanceUp )
+			{
+				raiseSkill( cr, SK_COOKING );
+			}
+		}
+		
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+		return 0;
+	}
     
-//     uint[] values = { cr.Id };
-//     //CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepaiSound", values, true);
-//     CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
-
-//     return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
-// }
+	return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+}
 
 void AskCooking( Critter& cr, Item& fire, bool standing )
 {
@@ -70,7 +80,7 @@ void AskCooking( Critter& cr, Item& fire, bool standing )
         return;
     }
 
-    iMenuHandler@ handler = CookingMenuMain( map, fire );
+    iMenuHandler@ handler = CookingMenuMain( map, fire, standing );
     iDialogBox@ menu = OpenMenu( cr, "", handler );
 }
 
@@ -79,18 +89,21 @@ class CookingMenuMain: CenteredMenuHandler
     uint map_id;
 	uint level;
 	uint fire_id;
+	bool stand;
 	
-    CookingMenuMain( Map& map, Item& fire )
+    CookingMenuMain( Map& map, Item& fire, bool standing )
 	{
         map_id = map.Id;
 		level = 0;
 		fire_id = fire.Id;
+		stand = standing;
 	}
 
 	bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
         Map@ map = GetMap( map_id );
 		Item@ fire = GetItem( fire_id );
+
 		if( menu.ButtonMsg( STR_FURNITURE_MENU_CRAFT ) )
 		{
 			GetCraftToken( cr, fire );
@@ -106,8 +119,8 @@ class CookingMenuMain: CenteredMenuHandler
 		
 		if( menu.ButtonMsg( STR_FIRE_MENU_FRY ) )
 		{
-			FastFrying( cr );	
-			return true;
+			PrepareFrying( cr, fire, stand );	
+			return false;
 		}
 		
 		return true;
@@ -128,7 +141,6 @@ class CookingMenuMain: CenteredMenuHandler
 		return null;
     }	
 }
-
 
 bool GetCraftToken( Critter& cr, Item& fire )
 {
@@ -160,41 +172,31 @@ bool GetCraftToken( Critter& cr, Item& fire )
 	{
 		cr.AddItem( PID_FIREPLACE_TOKEN, 1 );
 	}
+	
 	cr.RunClientScript( "client_screen_fixboy@ShowScreen", 0, 0, 0, null, null );
 	return true;
 }
 
-bool FastFrying(Critter& cr)
+void PrepareFrying( Critter& cr, Item& fire, bool standing )
 {
-    Item@ item = _CritGetItemHand(cr);
-    if (!valid(item))
+    Item@ item = _CritGetItemHand( cr );
+    if( !valid( item ) )
     {
-        cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, STR_HOLD_MEAT);
-        return true;
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HOLD_MEAT );
+        return;
     }
 
-    for (uint i = 0, len = fryDataProtoIds.length(); i < len; i++)
+    for( uint i = 0, len = fryDataProtoIds.length(); i < len; i++ )
     {
-        if (item.GetProtoId() == fryDataProtoIds[i][0])
+        if( item.GetProtoId() == fryDataProtoIds[i][0] )
         {
-			//start_cooking();
-			/*Item@ crafted = cr.AddItem(fryDataProtoIds[i][1], fryDataProtoIds[i][2]);
-			if( valid(crafted))
-			{
-				SayLog(cr, crInfo(cr) + " fries "  + ".");            
-				cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, STR_FRY_SUCCESS, "$name" + STR_INSERT_ITEM_LINE(item.GetProtoId() * 100));
-				if (Random(1, 100) <= fryCookingSkillChanceUp)
-				{
-					raiseSkill(cr, SK_COOKING);
-				}
-				_SubItem(item, 1);
-				return true;
-			}*/
+			
+			start_cooking( cr, fire, i, standing );
+			return;
         }
     }
 
     cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, STR_WRONG_ITEM_TO_FRY);
-    return true;
 }
 
 bool BurnMeal(int skill, int value)
@@ -305,6 +307,8 @@ class CookingMenu: CenteredMenuHandler
 		return null;
     }	
 }
+
+
 
 /*
 bool CookingMenuOld( Critter& cr )
