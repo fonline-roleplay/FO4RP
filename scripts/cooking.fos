@@ -3,6 +3,7 @@
 
 #include "_utils.fos"
 #include "cooking_h.fos"
+#include "cooking.fosh"
 #include "_ltp.fos"
 #include "firestarter_h.fos"
 #include "critter_skills_h.fos"
@@ -16,7 +17,7 @@ void ltp_cooking_init()
     ltp_cooking_inited = true;
 }
 
-void start_cooking( Critter& cr, Item& fire, uint index, bool standing )
+void start_cooking( Critter& cr, Item& fire, uint index, uint16 pid, bool standing )
 {
 	if( !ltp_cooking_inited )
 	{
@@ -32,15 +33,33 @@ void start_cooking( Critter& cr, Item& fire, uint index, bool standing )
 	}
  	else
  	{
- 		cr.SetAnims( COND_LIFE, 0, ANIM2_LEANING1 );
+ 		cr.SetAnims( COND_LIFE, 0, ANIM2_COOKING );
 	}
 	
-	uint16 pid = fryDataProtoIds[index][0];
+	if( pid == 0 )
+	{
+		pid = fryDataProtoIds[index][0];
+		cr.DeleteItem( pid, 1 );
+	}
+	else
+	{
+		index = pid;
+		Recipe@ recipe = GetRecipeByPid( index );
+		if( valid( recipe ) )
+		{
+			for (uint c = 0; c < recipe.ingredients.length(); c++)
+			{
+				cr.DeleteItem(recipe.ingredients[c], recipe.ingredientsAmount[c]);
+			}
+
+			for (uint d = 0; d < recipe.wasteItems.length(); d++)
+			{
+				cr.AddItem(recipe.wasteItems[d], recipe.wasteItemsAmount[d]);
+			}
+		}
+	}
 	
-	cr.DeleteItem( pid, 1 );
-		
 	cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_FRYING_BEGIN );
-	
 	Map@ map = cr.GetMap();
 	if( valid( map ) )
 	{
@@ -54,20 +73,30 @@ uint process_cooking( Critter@ cr, int& param0, int& fireId, int& index )
 {
 	LTPROCESSD( LTP_COOKING )
 	param0++;
-    
+    Item@ result = null;
 	if( param0 > cr.Param[ ST_LTP_SEQUENCE ] )
 	{
-		Item@ result = cr.AddItem( fryDataProtoIds[index][1], fryDataProtoIds[index][2] );
-		if( valid(result) )
+		if( index < 100 ) //shitcode for checking frying because all cooking meals have pid higher than 100
 		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FRY_SUCCESS, "$name" + STR_INSERT_ITEM_LINE( result.GetProtoId() * 100 ) );
-			if( Random( 1, 100 ) <= fryCookingSkillChanceUp )
+			@ result = cr.AddItem( fryDataProtoIds[index][1], fryDataProtoIds[index][2] );
+			if( valid(result) )
 			{
-				raiseSkill( cr, SK_COOKING );
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FRY_SUCCESS, "$name" + STR_INSERT_ITEM_LINE( result.GetProtoId() * 100 ) );
+				if( Random( 1, 100 ) <= fryCookingSkillChanceUp )
+				{
+					raiseSkill( cr, SK_COOKING );
+				}
 			}
 		}
-		
-		Item@ item = _CritGetItemHand( cr );
+		else
+		{
+			Recipe@ recipe = GetRecipeByPid( index );
+			if( valid( recipe ) )
+			{
+				ProcessRecipe( cr, recipe, SK_COOKING );
+			}
+		}
+
 		Item@ fire = GetItem( fireId );
 		bool standing = true;
 		if( valid( fire ) )
@@ -78,10 +107,7 @@ uint process_cooking( Critter@ cr, int& param0, int& fireId, int& index )
 				standing = false;
 			}
 			
-			if( valid( item ) )
-			{
-				AskCooking( cr, fire, standing );
-			}
+			AskCooking( cr, fire, standing );
 		}
 
 		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
@@ -156,7 +182,7 @@ void PrepareFrying( Critter& cr, Item& fire, bool standing )
     {
         if( item.GetProtoId() == fryDataProtoIds[i][0] )
         {			
-			start_cooking( cr, fire, i, standing );
+			start_cooking( cr, fire, i, 0, standing );
 			return;
         }
     }
@@ -170,23 +196,11 @@ bool BurnMeal(int skill, int value)
     return (delta < 50) && (Random(1, 50) > delta);
 }
 
-void StartCookingMenu( Critter& cr )
-{
-    Map@ map = cr.GetMap();
-    if( !valid(map) )
-	{
-        return;
-    }
-
-    iMenuHandler@ handler = CookingMenu( map );
-    iDialogBox@ menu = OpenMenu( cr, "Cooking Book", handler );
-}
-
 bool CheckIngredients(Critter& cr, Recipe& recipe)
 {
-    for (uint b = 0; b < recipe.ingredients.length(); b++)
+    for(uint b = 0; b < recipe.ingredients.length(); b++ )
     {
-        if (cr.CountItem(recipe.ingredients[b]) == 0)
+        if( cr.CountItem( recipe.ingredients[b] ) == 0 )
         {
             cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, recipe.missingMessages[b]);
             return false;
@@ -197,19 +211,9 @@ bool CheckIngredients(Critter& cr, Recipe& recipe)
 
 void ProcessRecipe(Critter& cr, Recipe& recipe, int skill)
 {
-    for (uint c = 0; c < recipe.ingredients.length(); c++)
-    {
-        cr.DeleteItem(recipe.ingredients[c], recipe.ingredientsAmount[c]);
-    }
-    
-	for (uint d = 0; d < recipe.wasteItems.length(); d++)
-	{
-		cr.AddItem(recipe.wasteItems[d], recipe.wasteItemsAmount[d]);
-	}
-   
-    bool isFailed = BurnMeal(skill, recipe.skillRequirement);
+    bool isFailed = BurnMeal( skill, recipe.skillRequirement );
 
-    if (isFailed)
+    if( isFailed )
     {
         cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, recipe.failMessage);
     }
@@ -250,7 +254,7 @@ class CookingMenuMain: CenteredMenuHandler
 		
 		if( menu.ButtonMsg( STR_RECIPE_MENU ) )
 		{
-			CookingMenu@ menu_cooking = CookingMenu( map );
+			CookingMenu@ menu_cooking = CookingMenu( map, fire );
 			menu_cooking.level = level + 1;
 			return menu.OpenChild( "Level " + menu_cooking.level, menu_cooking );
 		}
@@ -285,13 +289,15 @@ class CookingMenu: CenteredMenuHandler
     uint map_id;
 	uint level;
 	bool isFailed = false;
-	int skill;	
+	int skill;
+	Item@ fireitm = null;
 	
-    CookingMenu( Map& map )
+    CookingMenu( Map& map, Item& fire )
 	{
         map_id = map.Id;
 		level = 1;
 		skill = 0;
+		@fireitm = fire;
 	}
 
 	bool MenuUpdate(Critter& cr, iDialogBox& menu)
@@ -305,19 +311,30 @@ class CookingMenu: CenteredMenuHandler
 			recipes_inited = true;
 		}
 		
-		for (uint i = 0; i < recipes.length(); i++)
+		for( uint i = 0, len = recipes.length(); i < len; i++ )
 		{
 			Recipe recipe = recipes[i];
-			if (recipe.skillRequirement > skill)
+			if( recipe.skillRequirement > skill )
 			{
 				continue;
 			}
 			
-			if (menu.ButtonMsg(recipe.foodName))
+			if( menu.ButtonMsg( recipe.foodName ) )
 			{
-				if (CheckIngredients(cr, recipe))
+				if( CheckIngredients( cr, recipe ) )
 				{
-					ProcessRecipe(cr, recipe, skill);
+					bool standing = true;
+					if( valid( fireitm ) )
+					{
+						uint16 pid = fireitm.GetProtoId();
+						if( pid == PID_FIREPLACE2 || pid == PID_CHOPPED_FIREWOOD )
+						{
+							standing = false;
+						}
+						
+						start_cooking( cr, fireitm, 0, recipe.resultFood, standing );
+						return false;
+					}
 				}
 			}
 		}
