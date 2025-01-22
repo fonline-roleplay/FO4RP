@@ -1,0 +1,225 @@
+//Author: APAMk2
+//January 2025
+//Bulletin Board System, not stupid BBS fuckers from Fo2
+#ifndef BBS_MODULE
+#define BBS_MODULE
+
+#include "_utils.fos"
+#include "BBS_h.fos"
+#include "furniture_h.fos"
+
+import bool TryReadHolodisk(Item@ holodisk, Critter@ cr) from "item";
+
+bool TryAddPaperToBBS(Critter& cr, Item& board, Item& paper)
+{
+	if(!valid(board) || (board.BBS_GM_ADD_ONLY > 0 && !isGM(cr)))
+	{
+		return false;
+	}
+
+	if(uint(ContainmentVolume( board )) >= board.Proto.Container_Volume)
+	{
+		return false;
+	}
+
+	MoveItem(paper, paper.GetCount(), board, 0);
+	cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_ADD_PAPER );
+
+	return true;
+}
+
+void StartMenuBBS( Critter& cr, Item& board )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuBBS( board, map );
+    iDialogBox@ menu = OpenMenu( cr, "BBS", handler );
+}
+
+void StartMenuPaper( Critter& cr, Item& bbs, Item& paper )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuPaper( bbs, map, paper );
+    iDialogBox@ menu = OpenMenu( cr, "Paper", handler );
+}
+
+class MenuBBS: CenteredMenuHandler
+{
+	Item@ BBS;
+	Map@ Map;
+	Item@[] Papers;
+	uint PapersLen;
+	
+	uint level;
+	uint page = 0;
+		
+	MenuBBS( Item& bbs, Map& map )
+	{
+		@this.BBS = @bbs;
+        @this.Map = @map;
+		if(valid(bbs))
+		{
+			PapersLen = bbs.GetItems( uint(-1), Papers );
+			Papers.reverse();
+		}
+		level = 0;
+	}
+
+	bool MenuUpdate( Critter& cr, iDialogBox& menu ) 
+	{
+		if( !valid(BBS) || !valid(Map) )
+		{
+			return false;
+		}
+		
+		if( locked_in_place( BBS ) )
+		{
+			uint currMin = 4 * page;
+			uint currMax = CLAMP(PapersLen, currMin, 4 * (page + 1) );
+			for(uint i = currMin; i < currMax; i++)
+			{
+				Item@ currPaper = Papers[i];
+				if(currPaper.GetProtoId() != PID_HOLODISK || !FLAG(currPaper.Flags, ITEM_HOLODISK))
+				{
+					continue;
+				}
+				
+				if( menu.ButtonMsg( TEXTMSG_HOLO, currPaper.HolodiskNumber * 10) )
+				{
+					StartMenuPaper( cr, BBS, currPaper);
+					return false;
+				}
+			}
+
+			if( page > 0 && menu.ButtonMsg( STR_PREVIOUS ) )
+			{
+				page--;
+			}
+
+			if( ( currMax % 4 == 0 && currMax != PapersLen ) && menu.ButtonMsg( STR_NEXT ) )
+			{
+				page++;
+			}
+		}
+
+		if( menu.ButtonMsg( STR_TERMINAL_MENU_END_SESSION ) )
+		{
+			return false;
+		}
+		
+		return true;
+	}
+
+	int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_HEAL_MENU_DESC_MENU;
+	}
+
+	string@ Description( Critter& cr ) 
+	{
+		if( !valid( BBS ) )
+		{
+			return null;
+		}
+		
+		string info = "$descMenu" + STR_INSERT_TEXT_LINE( STR_BBS_MENU_LABEL )
+					+ "$paperCount" + PapersLen
+					+ "$currPage" + (page + 1)
+					+ "$maxPage" + ( (PapersLen / 4) + ((PapersLen % 4 != 0) ? 1 : 0));
+
+		return info;
+	}
+	
+	bool ShouldRedraw( Critter& cr )
+	{
+		if( !valid( BBS ) || GetDistantion( cr.HexX, cr.HexY, BBS.HexX, BBS.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+}
+
+class MenuPaper: CenteredMenuHandler
+{
+	Item@ BBS;
+	Item@ Paper;
+	Map@ Map;
+	
+	uint level;
+		
+	MenuPaper( Item& bbs, Map& map, Item& paper )
+	{
+		@this.BBS = @bbs;
+        @this.Map = @map;
+		@this.Paper = @paper;
+		level = 1;
+	}
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+		if( !valid(BBS) || !valid(Map) || !valid( Paper ) )
+		{ 
+			return false; 
+		}
+		
+		if( menu.ButtonMsg( STR_TERMINAL_READ_DATA ) )
+		{
+			TryReadHolodisk(Paper, cr);
+			return false;
+		}
+
+		if( BBS.BBS_READ_ONLY == 0 && menu.ButtonMsg( STR_BBS_MENU_REMOVE_PAPER ) )
+		{
+			MoveItem(Paper, Paper.GetCount(), cr);
+			PlayGenericSound( Map, cr.HexX, cr.HexY, "paper.ogg", 5 );
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_REMOVE_PAPER );
+			
+			return false;
+		}
+		
+		if( menu.ButtonMsg( STR_CLOSE_MENU_BUTTON ) )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_CHOOSE_YOUR_ACTION;
+	}
+	
+	bool ShouldRedraw( Critter& cr )
+	{
+		if( !valid( BBS ) || GetDistantion( cr.HexX, cr.HexY, BBS.HexX, BBS.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+}
+
+#endif //BBS_MODULE
