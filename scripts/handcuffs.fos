@@ -4,6 +4,8 @@
 #include "_utils.fos"
 #include "handcuffs_h.fos"
 #include "speed_h.fos"
+#include "effects_h.fos"
+#include "critter_status_h.fos"
 
 class BondageItem
 {
@@ -566,12 +568,12 @@ class MenuSCollar: CenteredMenuHandler
 			return menu.OpenChild( "Level " + menu_collars_ctrl.level, menu_collars_ctrl );
 		}
 		
-		if( menu.ButtonMsg( STR_HANDCUFFS_MENU_ASSIGN_COLLARS ) )
+		if( menu.ButtonMsg( STR_HANDCUFFS_MENU_MASS_COLLARS ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			MenuSelectCollars@ select_collars = MenuSelectCollars( remote, map );
-			select_collars.level = level + 1;
-			return menu.OpenChild( "Level " + select_collars.level, select_collars );
+			MenuMassCollarCtrl@ mass_collars = MenuMassCollarCtrl( remote, map );
+			mass_collars.level = level + 1;
+			return menu.OpenChild( "Level " + mass_collars.level, mass_collars );
 		}
 		
 		if( menu.ButtonMsg( STR_HANDCUFFS_MENU_SET_FREQUENCY ) ) 
@@ -639,7 +641,7 @@ class MenuCollarsCtrl: CenteredMenuHandler
 				@ collar = collars[i];
 				if( valid( collar ) )
 				{
-					if( collar.GetProtoId() == PID_SLAVE_COLLAR && collar.KEY_BONDAGE_ID == int( remote.Id ) && collar.BONDAGE_STATE == BONDAGE_STATE_ON )
+					if( collar.GetProtoId() == PID_SLAVE_COLLAR && collar.BOND_FREQUENCY == remote.BOND_FREQUENCY && collar.BONDAGE_STATE == BONDAGE_STATE_ON )
 					{
 						if( menu.ButtonMsg( STR_HANDCUFFS_MENU_COLLAR_ID,  "$idCollar" + collar.Id ) )
 						{
@@ -689,7 +691,7 @@ class MenuCollarsCtrl: CenteredMenuHandler
 				@ collar = collars[i];
 				if( valid( collar ) )
 				{
-					if( collar.BOND_FREQUENCY == remote.BOND_FREQUENCY && collar.KEY_BONDAGE_ID == int( remote.Id ) && collar.BONDAGE_STATE == BONDAGE_STATE_ON )
+					if( collar.BOND_FREQUENCY == remote.BOND_FREQUENCY && collar.BONDAGE_STATE == BONDAGE_STATE_ON )
 					{
 						num ++;
 					}
@@ -736,7 +738,7 @@ class MenuSingleCollarCtrl: CenteredMenuHandler
         }
 		
 		Item@ collar = GetItem( collar_id );
-		if( valid( collar ) && collar.KEY_BONDAGE_ID == int( remote.Id ) )
+		if( valid( collar ) )
 		{
 			Critter@ slave = GetCritter( uint( collar.BOND_SLAVE_ID ) );
 			if( valid( slave ) )
@@ -749,6 +751,7 @@ class MenuSingleCollarCtrl: CenteredMenuHandler
 					slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_PAIN );
 					slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
 					slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] * 10 / 100 );
+					FlushScreen( slave, COLOR_RED, 0, 5000 );
 					PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
 					slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 115, slave.HexX, slave.HexY );
 					return true;
@@ -761,6 +764,8 @@ class MenuSingleCollarCtrl: CenteredMenuHandler
 					slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_HARM );
 					slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
 					slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] * 50 / 100 );
+					ChangeStatus( slave, CR_STATUS_HEAVY_DMG, 0, true );
+					FlushScreen( slave, COLOR_RED, 0, 5000 );
 					PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
 					slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 130, slave.HexX, slave.HexY );
 					return true;
@@ -774,6 +779,8 @@ class MenuSingleCollarCtrl: CenteredMenuHandler
 					slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_INJURE );
 					slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
 					slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] ) + 1;
+					ChangeStatus( slave, CR_STATUS_HEAVY_DMG, 0, true );
+					FlushScreen( slave, COLOR_RED, 0, 5000 );
 					PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
 					slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 160, slave.HexX, slave.HexY );
 					return true;
@@ -786,7 +793,10 @@ class MenuSingleCollarCtrl: CenteredMenuHandler
 					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_EXECUTE_SLAVE );
 					slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_DEATH );
 					PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+					FlushScreen( slave, COLOR_RED, 0, 5000 );
 					slave.ToDead( ANIM2_DEAD_PULSE, cr );
+					slave.StatBase[ ST_CURRENT_HP ] = -666;
+					slave.ParamBase[ CR_DEATH_STAGE ] = 50;
 					DeleteItem( collar );
 					return false;
 				}
@@ -828,6 +838,170 @@ class MenuSingleCollarCtrl: CenteredMenuHandler
 
 }
 
+// Menu Mass collar control
+class MenuMassCollarCtrl: CenteredMenuHandler
+{
+    uint remote_id;
+    uint map_id;
+	uint level;
+	
+    MenuMassCollarCtrl( Item& remote, Map& map )
+	{
+        remote_id = remote.Id;
+        map_id = map.Id;
+		level = 1;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+		if( !valid( map ) )
+		{
+            return false;
+        }
+		
+		Item@ remote = GetItem( remote_id );
+		if( !valid( remote ) )
+		{
+            return false;
+        }
+		
+		Item@[] collars;
+		Item@ collar = null;
+		Critter@ slave = null;
+		GetAllItems( PID_SLAVE_COLLAR, collars );
+		for( uint j = 0, len = collars.length(); j < len; j ++ ) 
+		{
+			@ collar = collars[j];
+			if( valid( collar ) && collar.BOND_FREQUENCY == remote.BOND_FREQUENCY && collar.BONDAGE_STATE == BONDAGE_STATE_ON )
+			{
+				@ slave = GetCritter( uint( collar.BOND_SLAVE_ID ) );
+				if( valid( slave ) )
+				{
+					if( menu.ButtonMsg( STR_HANDCUFFS_MENU_PUNISH ) ) 
+					{
+						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+						cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
+						slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_PAIN );
+						slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
+						slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] * 10 / 100 );
+						FlushScreen( slave, COLOR_RED, 0, 5000 );
+						PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+						slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 115, slave.HexX, slave.HexY );
+						return true;
+					}
+					
+					if( menu.ButtonMsg( STR_HANDCUFFS_MENU_WOUND ) ) 
+					{
+						cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
+						slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_HARM );
+						slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
+						slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] * 50 / 100 );
+						ChangeStatus( slave, CR_STATUS_HEAVY_DMG, 0, true );
+						FlushScreen( slave, COLOR_RED, 0, 5000 );
+						PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+						slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 130, slave.HexX, slave.HexY );
+						return true;
+					}
+					
+					if( menu.ButtonMsg( STR_HANDCUFFS_MENU_MAIM ) ) 
+					{
+						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+						cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUNUSH_SLAVE );
+						slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_INJURE );
+						slave.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_AGONY );
+						slave.StatBase[ ST_CURRENT_HP ] -= ( slave.Stat[ ST_CURRENT_HP ] ) + 1;
+						ChangeStatus( slave, CR_STATUS_HEAVY_DMG, 0, true );
+						FlushScreen( slave, COLOR_RED, 0, 5000 );
+						PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+						slave.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 160, slave.HexX, slave.HexY );
+						return true;
+					}
+					
+					if( menu.ButtonMsg( STR_HANDCUFFS_MENU_KILL ) ) 
+					{
+						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+						cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_EXECUTE_SLAVE );
+						slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_COLLAR_DEATH );
+						PlayGenericSound( map, slave.HexX, slave.HexY, "MASRATBH.mp3", 10 );
+						FlushScreen( slave, COLOR_RED, 0, 5000 );
+						slave.ToDead( ANIM2_DEAD_PULSE, cr );
+						slave.StatBase[ ST_CURRENT_HP ] = -666;
+						slave.ParamBase[ CR_DEATH_STAGE ] = 50;
+						DeleteItem( collar );
+						return false;
+					}
+					
+					if( menu.ButtonMsg( STR_HANDCUFFS_MENU_RELEASE ) ) 
+					{
+						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+						cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_PRESS_BUTTON );
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SLAVE_FREED );
+						slave.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_RELEASED_FROM_COLLAR );
+						ReleaseTarget( cr, slave, collar );
+						return false;
+					}
+				}
+				collars.resize(0);
+			}
+		}
+		
+		if( menu.ButtonMsg( STR_RETURN ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			return false;
+		}
+		return true;
+    }
+
+	int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_HANDCUFFS_MENU_COLLAR_CONTROL_DESC;
+	}
+	
+	string@ Description( Critter& cr )
+	{
+		Map@ map = GetMap( map_id );
+		Item@ remote = GetItem( remote_id );
+		
+		uint num = 0;
+		if( FindCollars( remote ) )
+		{
+			Item@[] collars;
+			Item@ collar = null;
+			GetAllItems( PID_SLAVE_COLLAR, collars );
+			for( uint i = 0, len = collars.length(); i < len; i ++ )
+			{
+				@ collar = collars[i];
+				if( valid( collar ) )
+				{
+					if( collar.BOND_FREQUENCY == remote.BOND_FREQUENCY && collar.BONDAGE_STATE == BONDAGE_STATE_ON )
+					{
+						num ++;
+					}
+				}
+			}
+			
+			collars.resize(0);
+		}
+		return "$idRemote" + remote.Id  
+			 + "$stateCollar" + STR_INSERT_TEXT_LINE( STR_HANDCUFFS_MENU_ACTIVE_DESC )
+			 + "$num" + num;
+	}
+}
+
+
+
+/*
 class MenuSelectCollars: CenteredMenuHandler
 {
     uint remote_id;
@@ -936,7 +1110,7 @@ class MenuSelectCollars: CenteredMenuHandler
 	}
 		
 }
-
+*/
 
 bool FindCollars( Item& remote )
 {
@@ -948,7 +1122,7 @@ bool FindCollars( Item& remote )
 		@ collar = collars[i];
 		if( valid( collar ) )
 		{
-			if( collar.BOND_FREQUENCY == remote.BOND_FREQUENCY && ( collar.KEY_BONDAGE_ID == int( remote.Id ) || collar.KEY_BONDAGE_ID == 0 ) )
+			if( collar.BOND_FREQUENCY == remote.BOND_FREQUENCY )
 			{
 				return true;
 			}
