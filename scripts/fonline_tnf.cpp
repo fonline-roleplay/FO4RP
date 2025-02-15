@@ -814,18 +814,15 @@ uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode )
 		}
 	}
 
-    const Item* armor = cr.ItemSlotArmor;
-    if( armor->GetId() && armor->IsArmor() )
+	if( cr.Params[ CR_ARMOR_BRISK_EQUIPPED ] > 0 )
 	{
-        if(ISFLAG(armor->Proto->Armor_Perk, ARMOR_PERK_BRISK))
-        {
-            apCost = (apCost * ARMOR_PERK_BRISK_BONUS) / 100;
-        }
-        if(ISFLAG(armor->Proto->Armor_Perk, ARMOR_PERK_SLUGGISH))
-        {
-            apCost = (apCost * ARMOR_PERK_SLUGGISH_MALUS) / 100;
-        }
-    }
+		apCost = ( apCost * ARMOR_PERK_BRISK_BONUS) / 100;
+	}
+	
+	if( cr.Params[ CR_ARMOR_SLUGGISH_EQUIPPED ] > 0 )
+	{
+		apCost = ( apCost * ARMOR_PERK_SLUGGISH_MALUS) / 100;
+	}
     
 	if( apCost < 1 )
 	{
