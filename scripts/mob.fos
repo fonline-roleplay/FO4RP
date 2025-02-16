@@ -9,9 +9,8 @@
 
 import uint CountMapPlayers( Map@ map ) from "manager";
 
-#define DISTANCE_GROUP_RADIUS		( 15 )
-#define DISTANCE_AGGRO				# (cr)	( ( cr.StatBase[ ST_PERCEPTION ] + 2 ) * 2 )
-#define DISTANCE_UNAGGRO			# (cr)	( ( cr.StatBase[ ST_PERCEPTION ] + 2 ) * 4 )
+#define DISTANCE_AGGRO				# (cr)	( ( cr.Stat[ ST_PERCEPTION ] + 2 ) * 2 )
+#define DISTANCE_UNAGGRO			# (cr)	( ( cr.Stat[ ST_PERCEPTION ] + 2 ) * 4 )
 
 #define VarWandering             StatBase[ ST_VAR5 ]
 
@@ -157,9 +156,6 @@ void _CritterOutOfAggroRange( Critter& self, Critter& target )
 	{
 		return;
 	}
-	
-	//self.EraseEnemyFromStack( target.Id );
-	//EraseAttackPlane( self, target );
 }
 
 // CRITTER_EVENT_DEAD
@@ -182,7 +178,7 @@ void _Respawn( Critter& npc )
 }
 
 // ENEMY DOWN
-void _TargetDown( Critter& self, Critter& player, uint anim2begin, uint anim2idle, uint anim2end, uint lostAp, uint knockDist )
+void _TargetDown( Critter& self, Critter& enemy, uint anim2begin, uint anim2idle, uint anim2end, uint lostAp, uint knockDist )
 {
 	if( !valid( self ) )
 	{
@@ -194,19 +190,20 @@ void _TargetDown( Critter& self, Critter& player, uint anim2begin, uint anim2idl
 		return;
 	}
 	
-	if( !valid( player ) )
+	if( !valid( enemy ) )
 	{
 		return;
 	}
 	
-	if( player.IsDead() )
+	if( enemy.IsDead() )
 	{
 		return;
 	}
 	
-	if( player.IsPlayer() && player.StatBase[ ST_CURRENT_HP ] <= 0 )
+	if( enemy.Stat[ ST_CURRENT_HP ] <= 0 )
 	{
-		EraseAttackPlane( self, player );
+		self.EraseEnemyFromStack( enemy.Id );
+		EraseAttackPlane( self, enemy );
 	}
 }
 
@@ -238,19 +235,19 @@ void _ShowTarget( Critter& npc, Critter& target )
         return;
 	}
 	
-    if( npc.StatBase[ ST_BASE_CRTYPE ] == target.StatBase[ ST_BASE_CRTYPE ] )
+    if( npc.Stat[ ST_BASE_CRTYPE ] == target.Stat[ ST_BASE_CRTYPE ] )
 	{
 		return;
 	}
 
-	if( int( target.Id ) == npc.StatBase [ST_FOLLOW_CRIT] || isGM( target ) )
+	if( int( target.Id ) == npc.Stat[ ST_FOLLOW_CRIT ] || isGM( target ) )
 	{
         npc.EraseEnemyFromStack( target.Id );
         EraseAttackPlane( npc, target );
 		return;
 	}
 	
-	if( npc.StatBase[ ST_BODY_TYPE ] == BT_DOG )  //Dogs.
+	if( npc.Stat[ ST_BODY_TYPE ] == BT_DOG )  //Dogs.
 	{
 		uint dist = GetDistantion( target.HexX, target.HexY, npc.HexX, npc.HexY );
 		if( int( dist ) > 4 ) 
@@ -327,6 +324,18 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 			return;
 		}
 		
+		uint[] enemies;
+		uint enemy_id = 0;
+		npc.GetEnemyStack( enemies );
+		for( uint i = 0, len = enemies.length(); i < len; i++ )
+		{
+			enemy_id = enemies[ i ];
+			if( enemy_id == target.Id )
+			{
+				return;
+			}
+		}
+		
 		AttackOrFind( npc, target );
 	}
 }
@@ -334,7 +343,7 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 // CRITTER_EVENT_IDLE
 void _Idle( Critter& npc )
 {
-	if( npc.StatBase [ ST_FOLLOW_CRIT ] != 0 )
+	if( npc.Stat[ ST_FOLLOW_CRIT ] != 0 )
 	{
 		npc.DropPlanes();
 		return;
@@ -419,7 +428,7 @@ void _Idle( Critter& npc )
 	}
 	
 	// DOG BEHAVIOUR
-	if( npc.StatBase[ ST_BODY_TYPE ] == BT_DOG )
+	if( npc.Stat[ ST_BODY_TYPE ] == BT_DOG )
 	{
 		Critter@[] players;
 		uint len2 = map.GetCrittersHex( npc.HexX, npc.HexY, 15, FIND_ONLY_PLAYERS | FIND_LIFE, players );
@@ -555,11 +564,6 @@ int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Ite
 				}
                 return PLANE_KEEP;
             }
-			/*else if( target.Stat[ ST_CURRENT_HP ] < -20 )
-			{
-				npc.EraseEnemyFromStack( target.Id );
-				return PLANE_DISCARD;
-			}*/
             else
             {
                 return PLANE_DISCARD;
@@ -692,25 +696,36 @@ bool _Attacked( Critter& npc, Critter& attacker )
 		return false;
 	}
 	
-	if( int( attacker.Id ) == npc.StatBase [ST_FOLLOW_CRIT] )
+	if( int( attacker.Id ) == npc.Stat[ ST_FOLLOW_CRIT ] )
 	{
         npc.EraseEnemyFromStack( attacker.Id );
-        EraseAttackPlane( npc, attacker );
+		EraseAttackPlane( npc, attacker );
 		return true;
+	}
+	
+	NpcPlane@ plane = npc.GetCurPlane();
+    plane.Type = AI_PLANE_ATTACK;
+	if( plane.Type == AI_PLANE_ATTACK )
+	{
+		uint[] enemies;
+		npc.GetEnemyStack( enemies );
+		Critter@ enemy = GetCritter( enemies[ enemies.length() -1 ] );
+		if( valid( enemy ) )
+		{
+			if( enemy.Stat[ ST_CURRENT_HP ] <= 0 )
+			{
+				EraseAttackPlane( npc, enemy );
+			}
+		}
 	}
 	
 	npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
 	AttackOrFind( npc, attacker );
-    return true;     // Handle attacked processing
+    return true;
 }
 
 void AttackOrFind( Critter& self, Critter& target )
 {
-	if( !valid( self ) )
-	{
-		return;
-	}
-	
 	if( self.IsDead() )
 	{
 		return;
@@ -727,13 +742,36 @@ void AttackOrFind( Critter& self, Critter& target )
 		EraseAttackPlane( self, target );
 	}
 	
-	if( self.IsSee( target ) )
+	NpcPlane@ plane = self.GetCurPlane();
+	if( plane.Type == AI_PLANE_ATTACK )
 	{
-		AddAttackPlane( self, 0, target );
+		uint[] enemies;
+		self.GetEnemyStack( enemies );
+		Critter@ enemy = GetCritter( enemies[ enemies.length() -1 ] );
+		if( valid( enemy ) )
+		{
+			if( target.Id != enemy.Id && self.IsSee( enemy ) )
+			{ 		
+				uint target_dist = GetDistantion( self.HexX, self.HexY, target.HexX, target.HexY );
+				uint enemy_dist = GetDistantion( self.HexX, self.HexY, enemy.HexX, enemy.HexY );
+				if( target_dist > enemy_dist )
+				{
+					EraseAttackPlane( self, target );
+					AddAttackPlane( self, 0, enemy );
+				}
+			}
+		}
 	}
 	else
 	{
-		AddWalkPlane( self, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, Random( 0, 5 ), true, 1 );
+		if( self.IsSee( target ) )
+		{
+			AddAttackPlane( self, 0, target );
+		}
+		else
+		{
+			AddWalkPlane( self, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, Random( 0, 5 ), true, 1 );
+		}
 	}
 }
 
