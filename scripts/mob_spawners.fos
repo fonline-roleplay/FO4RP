@@ -60,20 +60,69 @@ void CreateMobSpawner( Map& map, uint16 hx, uint16 hy, uint teamID, uint mobCoun
 	mobSpawner.SPAWNER_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_processMobSpawner", values, true );
 }
 
-uint e_processMobSpawner( int[] @ values )
+//~run mob_spawners _RefreshMobSpawners 0 0 0
+void _RefreshMobSpawners( Critter& player, int param0, int param1, int param2 )
 {
-	Item@ mobSpawner = GetItem( values[0] );
-	if( !valid( mobSpawner ) )
+	if(!isGM(player)) return;
+
+	Item@[] spawners;
+	GetAllItems(PID_MOB_SPAWNER, spawners);
+
+	for(uint i = 0, len = spawners.length(); i < len; i++)
 	{
-		return 0;
+		Item@ currSpawner = spawners[i];
+		if( !valid( currSpawner ) )
+		{
+			continue;
+		}
+
+		Map@ currMap = GetMap( currSpawner.MAP_ID );
+		if( !valid( currMap ) )
+		{
+			continue;
+		}
+
+		uint duration = 0;
+		uint[] values;
+		if( !GetTimeEvent( currSpawner.SPAWNER_EVENT, duration, values ) )
+		{ 
+			Log("WARNING: Mob Spawner with broken TE, at map" + currMap.GetProtoId() + ", at hex " + currSpawner.HexX + " " + currSpawner.HexY + "\n");
+			continue;
+		}
+		duration = REAL_MINUTE( currSpawner.TIMEOUT );
+		SetTimeEvent( currSpawner.SPAWNER_EVENT, duration, values );
+
+		DespawnMobs(currMap, currSpawner);
+		ProcessRespawnMobs(currMap, currSpawner);
+	}
+}
+
+void DespawnMobs(Map@ map, Item@ mobSpawner)
+{
+	Critter@[] mobsFound;
+	
+	uint minMobPID = mobSpawner.MIN_MOB_PID;
+	uint maxMobPID = mobSpawner.MAX_MOB_PID;
+	uint pidsLen = 1 + maxMobPID - minMobPID;
+	
+	for( uint i = 0; i < pidsLen; i++ )
+	{
+		map.GetCritters( minMobPID + i, FIND_LIFE_AND_KO | FIND_ONLY_NPC, mobsFound );
 	}
 
-	Map@ map = GetMap( mobSpawner.MAP_ID );
-	if( !valid( map ) )
+	for( uint i = 0, len = mobsFound.length(); i < len; i++ )
 	{
-		return 0;
+		Critter@ currMob = mobsFound[i];
+		if( valid( currMob ) && currMob.Param[CR_SPAWNER_ID] == int( mobSpawner.Id ) )
+		{	
+			currMob.ParamBase[CR_SPAWNER_ID] = 0; // Not so much time passes between Despawn & Respawn, so we need to unmark mob as valid for respawn somehow - APAMk2
+			DeleteNpc(currMob);
+		}
 	}
+}
 
+void ProcessRespawnMobs(Map@ map, Item@ mobSpawner)
+{
 	int mobsCount = 0;
 	Critter@[] mobsFound;
 	Critter@ currMob = null;
@@ -89,12 +138,9 @@ uint e_processMobSpawner( int[] @ values )
 	for( uint i = 0, len = mobsFound.length(); i < len; i++ )
 	{
 		@currMob = mobsFound[i];
-		if( valid( currMob ) )
+		if( valid( currMob ) && currMob.Param[CR_SPAWNER_ID] == int( mobSpawner.Id ) )
 		{	
-			if( currMob.Param[CR_SPAWNER_ID] == int( mobSpawner.Id ) )
-			{
-				mobsCount++;
-			}
+			mobsCount++;
 		}
 	}
 	
@@ -129,6 +175,24 @@ uint e_processMobSpawner( int[] @ values )
 	}
 	
 	mobsFound.resize(0);
+}
+
+uint e_processMobSpawner( int[] @ values )
+{
+	Item@ mobSpawner = GetItem( values[0] );
+	if( !valid( mobSpawner ) )
+	{
+		return 0;
+	}
+
+	Map@ map = GetMap( mobSpawner.MAP_ID );
+	if( !valid( map ) )
+	{
+		return 0;
+	}
+
+	ProcessRespawnMobs(map, mobSpawner);
+	
 	return REAL_MINUTE( mobSpawner.TIMEOUT );
 }
 
