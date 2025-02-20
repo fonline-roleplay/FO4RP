@@ -333,6 +333,108 @@ void SpawnJunkZone( Map& map, uint16 hx, uint16 hy, uint timeout, uint range, ui
 	junkMarker.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_processJunkZone", values, true );
 }
 
+//~run scavenging _RefreshJunkSpawners 0 0 0
+void _RefreshJunkSpawners( Critter& player, int param0, int param1, int param2 )
+{
+	if(!isGM(player)) return;
+
+	Item@[] spawners;
+	GetAllItems(PID_JUNK_MARKER, spawners);
+
+	for(uint i = 0, len = spawners.length(); i < len; i++)
+	{
+		Item@ currSpawner = spawners[i];
+		if( !valid( currSpawner ) )
+		{
+			continue;
+		}
+
+		Map@ currMap = GetMap( currSpawner.MAP_ID );
+		if( !valid( currMap ) )
+		{
+			continue;
+		}
+
+		uint duration = 0;
+		uint[] values;
+		if( !GetTimeEvent( currSpawner.EVENT, duration, values ) )
+		{ 
+			Log("WARNING: Junk Spawner with broken TE, at map" + currMap.GetProtoId() + ", at hex " + currSpawner.HexX + " " + currSpawner.HexY + "\n");
+			continue;
+		}
+		duration = REAL_MINUTE( currSpawner.ZONE_TIMEOUT );
+		SetTimeEvent( currSpawner.EVENT, duration, values );
+
+		DespawnJunk(currMap, currSpawner);
+		ProcessRespawnJunk(currMap, currSpawner);
+	}
+}
+
+void DespawnJunk(Map@ map, Item@ junkSpawner)
+{
+	Item@[] junkFound;
+
+	map.GetItems( PID_JUNK_SALVAGE, junkFound );
+
+	for( uint i = 0, len = junkFound.length(); i < len; i++ )
+	{
+		Item@ junk = junkFound[i];
+		if( valid( junk ) && junk.JUNK_NODE_ID == int( junkSpawner.Id ) )
+		{
+			junk.JUNK_NODE_ID = 0;
+			DeleteItem(junk);
+		}
+	}
+	
+	junkFound.resize(0);
+}
+
+void ProcessRespawnJunk(Map@ map, Item@ junkSpawner)
+{
+	int junkCount = 0;
+	Item@[] junkFound;
+
+	map.GetItems( PID_JUNK_SALVAGE, junkFound );
+
+	for( uint i = 0, len = junkFound.length(); i < len; i++ )
+	{
+		Item@ junk = junkFound[i];
+		if( valid( junk ) && junk.JUNK_NODE_ID == int( junkSpawner.Id ) )
+		{
+			junkCount++;
+		}
+	}
+	
+	int missing = junkSpawner.RESOURCE_CAPACITY - junkCount;
+
+	if( missing > 0 )
+	{
+		uint attempt = 0;
+		for( int i = 0; i < missing; i++ )
+		{
+			if( attempt >= MAX_RESOURCE_SPAWN_ATTEMPTS )
+			{
+				break;
+			}
+			
+			int radius = junkSpawner.ZONE_RANGE / 2;
+			uint16 hx = junkSpawner.HexX + Random( -radius, radius );
+			uint16 hy = junkSpawner.HexY + Random( -radius, radius );
+			if( map.IsHexPassed( hx, hy ) )
+			{
+				JunkSpawn( map, hx, hy, junkSpawner.Id, junkSpawner.JUNK_TIER );
+			}
+			else
+			{
+				missing++;
+				attempt++;
+			}
+		}
+	}
+	
+	junkFound.resize(0);
+}
+
 uint e_processJunkZone( int[] @ values )
 {
 	Item@ zoneMarker = GetItem( values[0] );
@@ -347,53 +449,7 @@ uint e_processJunkZone( int[] @ values )
 		return 0;
 	}
 
-	int junkCount = 0;
-	Item@[] junkFound;
-	Item@ junk = null;
-
-	map.GetItems( PID_JUNK_SALVAGE, junkFound );
-
-	for( uint i = 0, len = junkFound.length(); i < len; i++ )
-	{
-		@junk = junkFound[i];
-		if( valid( junk ) )
-		{	
-			if( junk.JUNK_NODE_ID == int( zoneMarker.Id ) )
-			{
-				junkCount++;
-			}
-		}
-	}
-	
-	int missing = zoneMarker.RESOURCE_CAPACITY - junkCount;
-
-	if( missing > 0 )
-	{
-		uint attempt = 0;
-		for( int i = 0; i < missing; i++ )
-		{
-			if( attempt >= MAX_RESOURCE_SPAWN_ATTEMPTS )
-			{
-				break;
-			}
-			
-			int radius = zoneMarker.ZONE_RANGE / 2;
-			uint16 hx = zoneMarker.HexX + Random( -radius, radius );
-			uint16 hy = zoneMarker.HexY + Random( -radius, radius );
-			if( map.IsHexPassed( hx, hy ) )
-			{
-				JunkSpawn( map, hx, hy, zoneMarker.Id, zoneMarker.JUNK_TIER );
-			}
-			else
-			{
-				missing++;
-				attempt++;
-				
-			}
-		}
-	}
-	
-	junkFound.resize(0);
+	ProcessRespawnJunk(map, zoneMarker);
 	
 	return REAL_MINUTE( zoneMarker.ZONE_TIMEOUT );
 }
