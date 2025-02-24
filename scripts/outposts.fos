@@ -1,0 +1,280 @@
+#ifndef OUTPOSTS
+#define OUTPOSTS
+
+#include "_utils.fos"
+#include "outposts_h.fos"
+#include "_global_events.fos"
+
+#define GMAP_COORD_X		( 955 )
+#define GMAP_COORD_Y		( 955 )
+
+class COutpost
+{
+	uint LocId = 0;
+	uint[] AllowedCritters;
+
+	bool IsInited = false;
+
+	COutpost(uint16 locPID, uint[] crittersIds )
+	{
+		AddCritters(crittersIds);
+		Critter@[] critters;
+		for(uint i = 0, len = crittersIds.length(); i < len; i++)
+		{
+			Critter@ currCritter = GetCritter(crittersIds[i]);
+			if(!valid(currCritter)) continue;
+			critters.insertLast(currCritter);
+		}
+
+		this.LocId = CreateLocation(locPID, GMAP_COORD_X, GMAP_COORD_Y, critters);
+		this.IsInited = true;
+	}
+
+	bool IsCritterAllowed(uint crId)
+	{
+		return this.AllowedCritters.find( crId ) != -1;
+	}
+
+	bool IsCritterAllowed(Critter@ cr)
+	{
+		if(!valid(cr)) return false;
+		return this.IsCritterAllowed(cr.Id);
+	}
+
+	void AddCritter(uint crId)
+	{
+		if(crId == 0) return;
+		if(!valid(GetPlayerName(crId))) return; //Checking that such player ID really exists - APAMk2
+		if(this.AllowedCritters.find( crId ) == -1)
+		{
+			this.AllowedCritters.insertLast(crId);
+		}
+	}
+
+	void AddCritter(Critter@ cr)
+	{
+		if(!valid(cr)) return;
+		AddCritter(cr.Id);
+	}
+
+	void AddCritters(uint[] crIds)
+	{
+		for(uint i = 0, len = crIds.length(); i < len; i++)
+		{
+			AddCritter(crIds[i]);
+		}
+	}
+
+	void AddCritters(Critter@[] crs)
+	{
+		for(uint i = 0, len = crs.length(); i < len; i++)
+		{
+			if(!valid(crs[i])) continue;
+			AddCritter(crs[i]);
+		}
+	}
+
+	bool HasAnyPlayers()
+	{
+		return this.AllowedCritters.length() > 0;
+	}
+
+	string Serialize()
+	{
+		string result = "";
+		result += "LocId = " + LocId + "\n";
+
+		result += "AllowedCritters = ";
+		for(uint i = 0, len = AllowedCritters.length(); i < len; i++)
+		{
+			result += AllowedCritters[i];
+			if(i != len - 1)
+			{
+				result += ", ";
+			}
+		}
+		result += "\n";
+
+		return result;
+	}
+}
+
+class OutpostManager : iManagerModule, iManager_world_save
+{	
+	COutpost@[] List;
+
+	bool manager_init() override
+	{			
+		Log( "Load factions" );
+		LoadOutposts();
+		return true;
+	}
+	
+	bool global_world_save() override
+	{
+		if(List.length() == 0) return true;
+		filesystem fs;
+		file f;
+		fs.deleteFile(".\\save\\outposts.bak");
+		fs.move(".\\save\\outposts.fo", ".\\save\\outposts.bak");
+		if( f.open("./save/outposts.fo", "w")!=0 )
+		{
+			return false;
+		}
+		
+		for( uint i = 0, len = List.length(); i < len; i++ )
+		{
+			f.writeString( "[Outpost]\n" );
+			f.writeString( List[i].Serialize() + "\n" );
+		}
+		f.close();
+		
+		return true;
+	}
+	
+	void LoadOutposts() //exported
+	{
+		clear();
+		uint start = GetTick();			
+		LoadOutposts( LoadFile("./save/outposts.fo" ) );
+		Log("Loaded " + List.length() + " outposts in " + ( GetTick() - start ) + " milliseconds." );
+	}
+	
+	Map@ GetMyOutpostMap(Critter@ cr)
+	{
+		if(!valid(cr)) return null;
+
+		for(uint i = 0, len = List.length(); i < len; i++)
+		{
+			COutpost@ currOutpost = List[i];
+			if( currOutpost.IsCritterAllowed(cr) )
+			{
+				Location@ loc = GetLocation(currOutpost.LocId);
+				if(!valid(loc)) continue;
+				Map@ map = loc.GetMapByIndex(0);
+				if(!valid(map)) continue;
+
+				return map;
+			}
+		}
+
+		return null;
+	}
+
+	private void LoadOutposts( string@ txt )
+	{
+		if( !valid(txt) )
+			return;
+
+		string@[] lines = splitEx( txt, "\n" );
+		string@ currentLine = null;
+		string@[]@ data = null, check = null;
+		COutpost@ outpost = null;
+		int tempi = -1;
+		uint tempu = 0, countLine = lines.length();
+		
+		for( uint i = 0; i < countLine; i++ )
+		{
+			@currentLine = lines[i];
+			if( !valid(currentLine) || currentLine.length() == 0  )
+				continue;
+			if( currentLine[0] == '#' )
+				continue;
+			
+			@data = splitEx( currentLine, "#" );
+			if( data.length() > 1 )
+				@currentLine = data[0];
+			data = splitEx( currentLine, "=" );
+
+			if( data.length() == 1)
+			{
+				if( data[0] == "[Outpost]" )
+				{
+					set( outpost );
+					@outpost = COutpost();
+				}
+			}
+			else if( data.length() == 2 )
+			{
+				if( !valid(outpost) )
+				{
+					Log( "Error parse faction file, faction not valid <line:N." + i + ":#" + currentLine + ">" );
+				}
+				else if( data[0] == "AllowedCritters" )
+				{
+					@check = splitEx( data[1], ", " );
+					tempu = check.length();
+					for( uint iPlayers = 0; iPlayers < tempu; iPlayers++ )
+					{
+						StrToInt( check[iPlayers], tempi );
+						outpost.AddCritter( tempi );
+					}
+				}
+				else if( data[0] == "LocId" )
+				{
+					StrToInt( data[1], tempi );
+					outpost.LocId = tempi;
+				}
+			}
+		}
+		
+		set( outpost );
+	}
+	
+	private void set( COutpost@ outpost )
+	{
+		if( valid(outpost) && outpost.HasAnyPlayers() )
+		{
+			List.insertLast(outpost);
+			outpost.IsInited = true;
+		}
+	}
+	
+	void Create( uint16 locPID, uint[] crittersIds )
+	{
+		set( COutpost( locPID, crittersIds ) );
+	}
+
+	private string@ LoadFile(string@ fileName)
+	{
+		file f;
+		if(f.open(fileName, "r") != -1)
+		{
+			string txt = "";
+			f.readString( f.getSize(), txt); 
+			f.close();
+			return @txt;
+		}
+		Log("Error loading outposts! Can't open file.");
+		return null;
+	}
+	
+	private void clear()
+	{
+		List.resize(0);
+	}
+}
+
+OutpostManager manager;
+
+void ModuleInit( )
+{
+	manager_add_module( manager, "outposts", 0);
+}
+
+Map@ GetMyOutpostMap(Critter@ cr)
+{
+	if(!valid(cr)) return null;
+	
+	Map@ map = manager.GetMyOutpostMap(cr);
+
+	if(!valid(map))
+	{
+		manager.Create(LOCATION_PLAYER_ROOM, array<uint> = {cr.Id});
+		@map = manager.GetMyOutpostMap(cr);
+	}
+
+	return map;
+}
+
+#endif OUTPOSTS
