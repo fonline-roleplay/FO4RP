@@ -1245,12 +1245,42 @@ void GetHexProtos( Map@ map, uint16 hexX, uint16 hexY, FindData@[]& array )
 
 }
 
-void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ param3, int[] @ param4 ) 
+void offsetItem( Item& item, int[] data )
+{
+	float zoom = data[4] / 1000.0f;
+	int hx = item.HexX - data[2];
+	int hy = item.HexY - data[3];
+	int dx = int( data[0] * zoom ) - ( hy * 15 );
+	int dy = int( data[1] * zoom ) - ( hy * 12 );
+	
+	int min = MIN( data[2], item.HexX );
+	int max = MAX( data[2], item.HexX );
+	int sign = ( hx > 0 ? +1 : -1 );
+	for( int x = min; x < max; x++ )
+	{
+		if( ( hx > 0 ) && ( x % 2 != 0 ) )
+		{
+			dx += 15 * sign;
+			dy -= 6 * sign;
+		}
+		else
+		{
+			dx += 30 * sign;					
+		}
+	}
+	
+	offset( item, dx, dy );
+}
+
+void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ param3, int[]@ data ) 
 {
 	if( player.IsBusy() || player.Stat[ ST_CURRENT_AP ] < 50 )
 	{
 		return;
 	}
+	
+	bool precise_throw = ( precision != 0 );
+	bool offsetting = true;
 	
 	uint16 tx = hx, ty = hy;
 	uint distance = GetDistantion( player.HexX, player.HexY, hx, hy );
@@ -1263,6 +1293,13 @@ void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ par
 	}
 	
 	RustyGetHexCoord( currentMap, player.HexX,  player.HexY, tx, ty,  0.0f, distance );
+
+	bool obstructed_path = ( ( int(tx) != hx ) || ( int(ty) != hy ) );
+	if( obstructed_path && !isGM(player) )
+	{
+		offsetting = false;
+		precise_throw = false;
+	}
 	
 	Critter@ target = currentMap.GetCritter( tx, ty );
 
@@ -1278,7 +1315,7 @@ void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ par
 		}
 	}
 	
-	if( !currentMap.IsHexPassed( tx, ty ) && !valid(target) && !valid(container) )
+	if( precise_throw || ( !currentMap.IsHexPassed( tx, ty ) && !valid(target) && !valid(container) ) )
 	{
 		RustyGetHexCoordWall( currentMap, player.HexX,  player.HexY, tx, ty,  0.0f, distance );
 	}
@@ -1305,12 +1342,13 @@ void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ par
 		bool targetFreeHands = !valid(_CritGetItemHand ( target ));
 		if( targetFreeHands && CanCatch( target, itemInHand ) && !( target is player ) && !target.IsNpc() )
 		{
-			MoveItem( itemInHand, 1, target);
+			MoveItem( itemInHand, 1, target );
 			target.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_CATCHES );
 		}
 		else
 		{
-			MoveItem( itemInHand, 1, currentMap, tx, ty);
+			MoveItem( itemInHand, 1, currentMap, tx, ty );
+			if( offsetting ) offsetItem( itemInHand, data ); else offset( itemInHand, 0, 0 );
 			if( !( target is player ) ) 
 			{ 
 				target.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_CATCH_FAIL );
@@ -1340,18 +1378,20 @@ void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ par
 				}
 				else
 				{
-					currentMap.AddItem( tx, ty, PID_ROSETTE, 1 );
+					Item@ item = currentMap.AddItem( tx, ty, PID_ROSETTE, 1 );
+					if( offsetting ) offsetItem( item, data ); else offset( item, 0, 0 );				
 				}
 				_SubItem( itemInHand , 1 );
 			}
 			else
 			{
 				MoveItem( itemInHand, 1, currentMap, tx, ty );
+				if( offsetting ) offsetItem( itemInHand, data ); else offset( itemInHand, 0, 0 );
 			}
 		}
 		else if ( pid == PID_OIL_LAMP && itemInHand.Val0 != 0 )
 		{
-			_SubItem( itemInHand , 1 );
+			_SubItem( itemInHand, 1 );
 			GenerateFire( currentMap, tx, ty, 1, 1, player.Id );
 		}
 		else
@@ -1360,12 +1400,17 @@ void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ par
 			{
 				_SubItem( itemInHand, 1 );
 				Item@ thrownItem = currentMap.AddItem( tx, ty, pid, 1 );
-				uint[] values = { thrownItem.Id };
-				CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "critter_item_movement@e_stack_items", values, true );
+				if( offsetting ) offsetItem( thrownItem, data );				
+				else
+				{
+					uint[] values = { thrownItem.Id };
+					CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "critter_item_movement@e_stack_items", values, true );
+				}
 			}
 			else
 			{
 				MoveItem( itemInHand, 1, currentMap, tx, ty );
+				if( offsetting ) offsetItem( itemInHand, data ); else offset( itemInHand, 0, 0 );
 			}
 		}
 	}
