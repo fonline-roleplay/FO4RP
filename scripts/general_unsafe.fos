@@ -1245,30 +1245,51 @@ void GetHexProtos( Map@ map, uint16 hexX, uint16 hexY, FindData@[]& array )
 
 }
 
+#define hex_width ( 16 )
+#define hex_height ( 12 )
 void offsetItem( Item& item, int[] data )
 {
-	float zoom = data[4] / 1000.0f;
-	int hx = item.HexX - data[2];
-	int hy = item.HexY - data[3];
-	int dx = int( data[0] * zoom ) - ( hy * 15 );
-	int dy = int( data[1] * zoom ) - ( hy * 12 );
+	float zoom = data[0] / 1000.0f;
+	int dx = int( data[1] * zoom );
+	int dy = int( data[2] * zoom );
 	
-	int min = MIN( data[2], int( item.HexX ) );
-	int max = MAX( data[2], int( item.HexX ) );
-	int sign = ( hx > 0 ? +1 : -1 );
-	for( int x = min; x < max; x++ )
+	int hx = data[3];
+	if( int( item.HexX ) != hx )
 	{
-		if( ( hx > 0 ) && ( x % 2 != 0 ) )
+		int dHx = item.HexX - hx;
+		
+		int sign = ( dHx > 0 ? +1 : -1 );
+		int min = MIN( hx, int( item.HexX ) );
+		int max = MAX( hx, int( item.HexX ) );
+		
+		int delta = ( max - min );
+		int pairs = int( delta / 2 );
+		dx += pairs * hex_width * 3 * sign;
+		dy -= pairs * hex_height * sign;
+		
+		if( delta % 2 != 0 )
 		{
-			dx += 15 * sign;
-			dy -= 6 * sign;
-		}
-		else
-		{
-			dx += 30 * sign;					
+			if( max % 2 == 0 )
+			{
+				dx += hex_width * sign;
+				dy -= hex_height * sign;
+			}
+			else
+			{
+				dx += hex_width * 2 * sign;					
+			}
 		}
 	}
-	
+		
+	int hy = data[4];
+	if( int( item.HexY ) != hy )
+	{
+		int dHy = item.HexY - hy;
+		
+		dx -= ( dHy * hex_width );
+		dy -= ( dHy * hex_height );
+	}
+
 	offset( item, dx, dy );
 }
 
@@ -1279,14 +1300,20 @@ void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ p
 		return;
 	}
 	
-	bool precise_throw = ( precision != 0 );
 	bool offsetting = true;
+	bool IsGM = isGM(player);
+	bool precise_throw = ( precision != 0 ) || IsGM;
 	
 	uint16 tx = hx, ty = hy;
 	uint distance = GetDistantion( player.HexX, player.HexY, hx, hy );
+	if( distance > 3 && !IsGM )
+	{
+		precise_throw = false;
+	}
+	
 	Map@ currentMap = player.GetMap();
 
-	if( !valid( currentMap ) || player.IsDead() || player.IsKnockout() || distance > uint( player.Stat [ ST_STRENGTH ] * 2 ) )
+	if( !valid( currentMap ) || player.IsDead() || player.IsKnockout() || ( !IsGM && distance > uint( player.Stat [ ST_STRENGTH ] * 2 ) ) )
 	{
 		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_FAR_TO_THROW );
 		return;
@@ -1295,7 +1322,7 @@ void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ p
 	RustyGetHexCoord( currentMap, player.HexX,  player.HexY, tx, ty,  0.0f, distance );
 
 	bool obstructed_path = ( ( int(tx) != hx ) || ( int(ty) != hy ) );
-	if( obstructed_path && !isGM(player) )
+	if( obstructed_path && !IsGM )
 	{
 		offsetting = false;
 		precise_throw = false;
@@ -1317,7 +1344,24 @@ void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ p
 	
 	if( precise_throw || ( !currentMap.IsHexPassed( tx, ty ) && !valid(target) && !valid(container) ) )
 	{
-		RustyGetHexCoordWall( currentMap, player.HexX,  player.HexY, tx, ty,  0.0f, distance );
+		obstructed_path = true;
+		
+		uint target_item_id = data[5];
+		if( target_item_id != 0 )
+		{
+			Item@ target_item = GetItem( target_item_id );
+			if( valid( target_item ) )
+			{
+				tx = target_item.HexX;
+				ty = target_item.HexY;
+				obstructed_path = false;
+			}
+		}
+		
+		if( obstructed_path )
+		{
+			RustyGetHexCoordWall( currentMap, player.HexX,  player.HexY, tx, ty,  0.0f, distance );			
+		}
 	}
 	
 	Item@ itemInHand = _CritGetItemHand( player );
@@ -1347,8 +1391,7 @@ void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ p
 		}
 		else
 		{
-			MoveItem( itemInHand, 1, currentMap, tx, ty );
-			if( offsetting ) offsetItem( itemInHand, data ); else offset( itemInHand, 0, 0 );
+			throw_on_ground( player, itemInHand, currentMap, tx, ty, pid, offsetting, data );
 			if( !( target is player ) ) 
 			{ 
 				target.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_CATCH_FAIL );
@@ -1364,7 +1407,7 @@ void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ p
 			CheckCartPicMap( container );
 		}
 		
-		if( find_any_glass( itemInHand ) != 0 || itemInHand.Proto.Material == MATERIAL_GLASS )
+		if( !precise_throw && ( find_any_glass( itemInHand ) != 0 || itemInHand.Proto.Material == MATERIAL_GLASS ) )
 		{
 			uint break_chance = Random( 1, 100 );
 			if ( break_chance >= 20 )
@@ -1385,8 +1428,7 @@ void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ p
 			}
 			else
 			{
-				MoveItem( itemInHand, 1, currentMap, tx, ty );
-				if( offsetting ) offsetItem( itemInHand, data ); else offset( itemInHand, 0, 0 );
+				throw_on_ground( player, itemInHand, currentMap, tx, ty, pid, offsetting, data );
 			}
 		}
 		else if ( pid == PID_OIL_LAMP && itemInHand.Val0 != 0 )
@@ -1396,31 +1438,38 @@ void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ p
 		}
 		else
 		{
-			if( itemInHand.IsStackable() )
-			{
-				_SubItem( itemInHand, 1 );
-				Item@ thrownItem = currentMap.AddItem( tx, ty, pid, 1 );
-				if( offsetting ) offsetItem( thrownItem, data );				
-				else
-				{
-					uint[] values = { thrownItem.Id };
-					CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "critter_item_movement@e_stack_items", values, true );
-				}
-			}
-			else
-			{
-				MoveItem( itemInHand, 1, currentMap, tx, ty );
-				if( offsetting ) offsetItem( itemInHand, data ); else offset( itemInHand, 0, 0 );
-			}
+			throw_on_ground( player, itemInHand, currentMap, tx, ty, pid, offsetting, data );
 		}
 	}
 	
+	if( IsGM ) return;
+
 	currentMap.RunFlyEffect( _WeaponEffect( GetProtoItem(PID_FRAG_GRENADE), _WeaponModeUse (0) ), player, target, player.HexX, player.HexY, tx, ty );
-	_CritAnimateThrow( player );
+	_CritAnimateThrow( player );	
 	player.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_THROW );
 	player.Wait( 200 * 5 ); 
 	player.ParamBase[ ST_CURRENT_AP ] -= 50 * 100;
 	ChangeCritterSpeed( player );
+}
+
+void throw_on_ground( Critter& player, Item& itemInHand, Map& currentMap, uint16 tx, uint16 ty, uint pid, bool offsetting, int[]@ data )
+{
+	if( itemInHand.IsStackable() )
+	{
+		_SubItem( itemInHand, 1 );
+		Item@ thrownItem = currentMap.AddItem( tx, ty, pid, 1 );
+		if( offsetting ) offsetItem( thrownItem, data );				
+		else
+		{
+			uint[] values = { thrownItem.Id };
+			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "critter_item_movement@e_stack_items", values, true );
+		}
+	}
+	else
+	{
+		MoveItem( itemInHand, 1, currentMap, tx, ty );
+		if( offsetting ) offsetItem( itemInHand, data ); else offset( itemInHand, 0, 0 );
+	}	
 }
 
 void unsafe_setAFK( Critter& player, int param0, int param1, int param2, string@ text, int[]@ param4 )
