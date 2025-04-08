@@ -27,7 +27,7 @@
 #include "stdlib_h.fos"
 
 import void Actions( Critter& cr, uint8 actionType, uint16 pickType ) from "context_callback";
-
+import bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen ) from "main";
 import void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo ) from "main";
 import void LookDataRefresh( Critter& cr ) from "main";
 
@@ -83,29 +83,45 @@ void unsafe_OpenDoor( Critter& player, int param0, int param1, int param2, strin
 	{
 		hexX = player.HexX;
 		hexY = player.HexY;
-		dir = ( player.Dir + i + 2 ) % 6;
+		dir = ( player.Dir + i ) % 6;
 		map.MoveHexByDir( hexX, hexY, dir, 1 );
-		Item@ door = map.GetDoor( hexX, hexY );
-		if( valid( door ) )
+		Item@ item = map.GetDoor( hexX, hexY );
+		if( !valid( item ) )
 		{
-			if( FLAG( door.Flags, ITEM_CAN_USE ))
+			Item@[] items;
+			uint count = map.GetItems( hexX, hexY, items );
+			if( count > 0 )
 			{
-				if( !Action( player, null, door, null ) )
-				{
-					break;
-				}
-				
-				player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
-				UseSkillOnLocker( player, door, SKILL_PICK_ON_GROUND );
-				player.StatBase[ ST_CURRENT_AP ] -= __RtApCostPickItem * 10;
-				break;
-			}
-			else if( !FLAG( door.Flags, ITEM_CAN_USE ) )
-			{
-				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_HINGE );
-				break;
+				@item = @items[ Random( 0, count - 1 ) ];
 			}
 		}
+		
+		if( !valid( item ) )
+		{
+			continue;
+		}
+		
+		if( FLAG( item.Flags, ITEM_CAN_USE ) || FLAG( item.Flags, ITEM_CAN_PICKUP ) )
+		{
+			if( !Action( player, null, item, null ) )
+			{
+				continue;
+			}
+			
+			if( !item.EventSkill( player, SKILL_PICK_ON_GROUND ) )
+			{
+				critter_use_skill( player, SKILL_PICK_ON_GROUND, null, item, null );
+			}
+			
+			player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
+			player.StatBase[ ST_CURRENT_AP ] -= __RtApCostPickItem * 100;
+			break;
+		}
+		// else
+		// {
+			// player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_HINGE );
+			// break;
+		// }
 	}
 }
 
@@ -1306,7 +1322,7 @@ void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ p
 	
 	uint16 tx = hx, ty = hy;
 	uint distance = GetDistantion( player.HexX, player.HexY, hx, hy );
-	if( distance > 3 && !IsGM )
+	if( distance > 10 && !IsGM )
 	{
 		precise_throw = false;
 	}
@@ -1322,7 +1338,7 @@ void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ p
 	RustyGetHexCoord( currentMap, player.HexX,  player.HexY, tx, ty,  0.0f, distance );
 
 	bool obstructed_path = ( ( int(tx) != hx ) || ( int(ty) != hy ) );
-	if( obstructed_path && !IsGM )
+	if( obstructed_path && distance > 10 && !IsGM )
 	{
 		offsetting = false;
 		precise_throw = false;
@@ -1344,23 +1360,18 @@ void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ p
 	
 	if( precise_throw || ( !currentMap.IsHexPassed( tx, ty ) && !valid(target) && !valid(container) ) )
 	{
-		obstructed_path = true;
-		
-		uint target_item_id = data[5];
+		RustyGetHexCoordWall( currentMap, player.HexX, player.HexY, tx, ty,  0.0f, distance );
+				
+		uint32 target_item_id = MAKELONG( data[5], data[6] );
 		if( target_item_id != 0 )
 		{
 			Item@ target_item = GetItem( target_item_id );
+			
 			if( valid( target_item ) )
 			{
 				tx = target_item.HexX;
 				ty = target_item.HexY;
-				obstructed_path = false;
 			}
-		}
-		
-		if( obstructed_path )
-		{
-			RustyGetHexCoordWall( currentMap, player.HexX,  player.HexY, tx, ty,  0.0f, distance );			
 		}
 	}
 	
