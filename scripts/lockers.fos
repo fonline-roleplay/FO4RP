@@ -584,84 +584,91 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
 	}
 }
 
-bool takeKey( Critter& cr, Item& locker )
+void takeKey( Critter& cr, Item& locker )
 {
 	Map@ map = cr.GetMap();
 	if( !valid( map ) )
 	{
-		return false;
+		return;
 	}
 	
 	Item@[] list = getItemsAround( locker );
+	Item@ key = null;
 	for( uint i = 0, len = list.length(); i < len; i++ )
 	{
-		if( list[i].GetType() == ITEM_TYPE_KEY && list[i].LockerId == locker.LockerId )
+		@key = list[i];
+		if( valid( key ) )
 		{
-			if( list[i].KEY_EVENT != 0 )
+			if( key.GetType() == ITEM_TYPE_KEY && key.LockerId == locker.LockerId )
 			{
-				EraseTimeEvent( list[i].KEY_EVENT );
-				list[i].KEY_EVENT = 0;
+				if( key.KEY_EVENT != 0 )
+				{
+					EraseTimeEvent( key.KEY_EVENT );
+					key.KEY_EVENT = 0;
+				}
+				
+				MoveItem( key, 1, cr );
+				UNSETFLAG( key.Flags, ITEM_HIDDEN );
+				key.KEY_CYCLE = 0;
+				key.Update();
+				PlayGenericSound( map, cr.HexX, cr.HexY, "ui_lockpicking_enter.wav", 6 );
+				cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_EJECT_KEY );
 			}
-			
-			MoveItem( list[i], 1, cr );
-			UNSETFLAG( list[i].Flags, ITEM_HIDDEN );
-			list[i].Update();
-			PlayGenericSound( map, cr.HexX, cr.HexY, "ui_lockpicking_enter.wav", 6 );
-			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_EJECT_KEY );
-			return true;
 		}
 	}
-	return false;
+	
+	list.resize(0);
 }
 
-bool putKey( Critter& cr, Item& locker )
+void putKey( Critter& cr, Item& locker )
 {
 	Map@ map = cr.GetMap();
 	if( !valid( map ) )
 	{
-		return false;
+		return;
 	}
 	
 	Item@[] keys;
 	Item@ key = null;
 	cr.GetItemsByType( ITEM_TYPE_KEY, keys );
-	uint len = keys.length();
-	if( len > 0 )
+	for( uint i = 0, len = keys.length(); i < len; i ++ )
 	{
-		for( uint i = 0; i < len; i ++ )
+		@key = keys[i];
+		if( valid( key ) )
 		{
-			if( keys[i].LockerId != locker.LockerId )
+			if( key.LockerId != locker.LockerId )
 			{
+				@key = null;
 				continue;
-			}
-			else
-			{
-				@key = keys[i];
 			}
 		}
 	}
+
+	keys.resize(0);
 	
 	if( !valid( key ) )
 	{
-		return false;
+		return;
 	}
 	
 	MoveItem( key, 1, map, cr.HexX, cr.HexY );
 	SETFLAG( key.Flags, ITEM_HIDDEN );
+	key.KEY_CYCLE = 0;
+	
 	uint[] vals = { key.Id, locker.Id };
-	key.KEY_EVENT = CreateTimeEvent( AFTER( REAL_DAY( 3 ) ), "e_KeyRust", vals, true );
+	key.KEY_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_KeyRust", vals, true );
 
 	key.Update();
 	PlayGenericSound( map, cr.HexX, cr.HexY, "ui_lockpicking_enter.wav", 6 );
 	cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_INJECTS_KEY );
-	#ifdef KEY_IS_CRIME
+	
+#ifdef KEY_IS_CRIME
 	int crime_TO = GetGvar(GVAR_crime_TO);
 	if( crime_TO > 0 && cr.Timeout[ TO_REMOVE_FROM_GAME ] < REAL_HOUR( crime_TO ) )
 	{
 		cr.TimeoutBase[ TO_REMOVE_FROM_GAME ] = __FullSecond + REAL_HOUR( crime_TO );
 	}
-	#endif // KEY_IS_CRIME
-	return true;
+#endif // KEY_IS_CRIME
 }
 
 uint e_KeyRust( uint[]@ values )
@@ -679,20 +686,28 @@ uint e_KeyRust( uint[]@ values )
 	}
 	
 	Map@ map = GetMap( key.MapId );
-	
 	if( !valid( map ) || !FLAG( key.Flags, ITEM_HIDDEN ) )
 	{
 		return 0;
 	}
 	
-	UNSETFLAG( key.Flags, ITEM_HIDDEN );
+	if( key.KEY_CYCLE == RUST_CYCLE_LIMIT )
+	{
+		UNSETFLAG( key.Flags, ITEM_HIDDEN );
 	
-	uint16 x = key.HexX, y = key.HexY;
-	map.MoveHexByDir( x, y, GetDirection( door.HexX, door.HexY, key.HexX, key.HexY ), 1 );
+		uint16 x = key.HexX, y = key.HexY;
+		map.MoveHexByDir( x, y, GetDirection( door.HexX, door.HexY, key.HexX, key.HexY ), 1 );
+		
+		MoveItem( key, 1, map, x, y ); 
+		key.KEY_EVENT = 0;
+		key.KEY_CYCLE = 0;
+		key.Update();
+		
+		return 0;
+	}
 	
-	MoveItem( key, 1, map, x, y ); 
-	
-	return 0;
+	key.KEY_CYCLE ++;
+	return REAL_HOUR( 1 );
 }
 
 void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
