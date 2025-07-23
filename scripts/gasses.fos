@@ -8,7 +8,7 @@
 import uint CountMapPlayers( Map@ map ) from "manager";
 
 //~run gasses test gas_type 0 0
-void test( Critter& cr, int gas_type, int used_air, int )
+void test( Critter& cr, int gas_type, int, int )
 {
 	string breathing = flagValue( canBreathe( cr, gas_type ), WHITE + "can", RED + "can't" ) + GREEN + " breathe";
 	string protection = flagValue( hasProtection( cr ), WHITE + "have", RED + "haven't" ) + GREEN + " protection";
@@ -16,16 +16,15 @@ void test( Critter& cr, int gas_type, int used_air, int )
 	string tank = flagValue( CheckAirTank( cr ), WHITE + "have", RED + "haven't" ) + GREEN + " air tank";
 	string filter = flagValue( CheckAirFilter( cr ), WHITE + "have", RED + "haven't" ) + GREEN + " filter";
 	cr.Say( SAY_NETMSG, "You " + breathing + ", " + protection + ": " + mask + ", " + tank + ", " + filter + "." );
-	UseAirTank( cr, used_air );
 }
 
 string[] gas_type_names = { "respirator", "no oxygen" };
-string gasTypeName( int type )
+string gasTypeName( int type ) //exported
 {
 	return gas_type_names[ CLAMP( uint(type), 0, gas_type_names.length() ) ];
 }
 
-void GasHex( Critter& cr, int mapID, int hx, int hy, int gas_strength, int gas_time, int gas_radius, int gas_type )
+void GasHex( Critter& cr, int mapID, int hx, int hy, int gas_strength, int gas_time, int gas_radius, int gas_type ) //exported
 {
 	if( gas_strength < 0 || gas_time < 0 || gas_radius < 0 )
 	{
@@ -87,7 +86,7 @@ uint e_gasFlow( uint[]@ values )
 	return REAL_SECOND( gasMarker.GAS_TICK );
 }
 
-void DypsneaCr( Critter& cr, uint rate, uint type )
+void DypsneaCr( Critter& cr, uint rate, uint type ) //exported
 {
 	uint[] indexes;
 	uint[] durations;
@@ -106,12 +105,63 @@ void DypsneaCr( Critter& cr, uint rate, uint type )
 	{
 		switch( type )
 		{
-			case GAS_TYPE_DEFAULT: 	cr.AddTimeEvent( "gasses@cte_Dyspnea", 0, CTE_DYSPNEA, rate ); break;
+			case GAS_TYPE_DEFAULT: 		cr.AddTimeEvent( "gasses@cte_Dyspnea", 0, CTE_DYSPNEA, rate ); break;
 			case GAS_TYPE_NO_OXYGEN:	cr.AddTimeEvent( "gasses@cte_NoOxygen", 0, CTE_DYSPNEA, rate ); break;
 		}		
 	}
 }
 
+bool useAirTank( Critter& cr, Item& item ) //exported
+{
+	if( cr.ParamBase[ CR_AIR_TANK_ID ] != 0 && uint( cr.ParamBase[ CR_AIR_TANK_ID ] ) != item.Id )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_OTHER_TANK_FIRST );			
+		useAirTank( cr, GetItem( cr.ParamBase[ CR_AIR_TANK_ID ] ) );
+		return false;
+	}
+	
+	if( item.ITEM_STATE == STATE_ON )
+	{
+		cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_OXYGEN_OFF );
+		item.ITEM_STATE = STATE_OFF;
+		cr.EraseTimeEvents( CTE_BREATHING );
+		cr.ParamBase[ CR_AIR_TANK_ID ] = 0;
+		cr.ParamBase[ CR_AIR_TANK_CHARGE ] = 0;
+		return true;
+	}
+
+	if( item.ITEM_STATE == STATE_OFF )
+	{
+		if( item.ITEM_CHARGE == 0 )
+		{			
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_OXYGEN_NO_OXYGEN );			
+			cr.Say( SAY_NETMSG, "Tere is no oxygen in the tank." );
+			return true;
+		}
+		
+		item.ITEM_STATE = STATE_ON;
+		cr.ParamBase[ CR_AIR_TANK_ID ] = item.Id;
+		cr.ParamBase[ CR_AIR_TANK_CHARGE ] = item.ITEM_CHARGE;
+		PlayGenericSound( cr.GetMap(), cr.HexX, cr.HexY, "jet.ogg", 4 );
+		cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_OXYGEN_ON );
+		cr.AddTimeEvent( "gasses@cte_Breathing", 0, CTE_BREATHING, 0 );
+		return true;
+	}
+	
+	return false;
+}
+
+uint cte_Breathing( Critter& cr, int identifier, uint& rate )
+{
+	if( CheckAirTank( cr ) )
+	{
+		UseAirTank( cr );
+		return REAL_SECOND( 1 );
+	}
+	
+	return 0;
+}
+	
 uint cte_Dyspnea( Critter& cr, int identifier, uint& rate )
 {
 	return process_dyspnea( cr, rate, GAS_TYPE_DEFAULT );
@@ -142,7 +192,7 @@ uint process_dyspnea( Critter& cr, uint& rate, uint gas_type )
 	bool freshAir = ( rate <= 0 );
 	if( freshAir || canBreathe( cr, gas_type ) )
 	{		
-		return take_breath( cr, rate, freshAir );
+		return take_breath( cr, rate );
 	}
 	
 	return suffocation_progress( cr, rate );
@@ -156,13 +206,8 @@ uint suffocation_progress( Critter& cr, uint& rate )
     return REAL_SECOND( 10 );
 }
 
-uint take_breath( Critter& cr, uint& rate, bool freshAir )
+uint take_breath( Critter& cr, uint& rate )
 {
-	if( !freshAir )
-	{
-		UseAirTank( cr );
-	}
-	
 	cr.StatBase[ ST_DYSPNEA ] -= cr.Stat[ ST_ENDURANCE ] * 10;
 	rate = 0;
 	
@@ -185,7 +230,7 @@ bool CheckGasMask( Critter& cr )
 	if( valid( respirator ) )
 	{
 		uint det = GetDeteriorationProcent( respirator );
-		if( det < 5 && FLAG( respirator.Proto.Item_Perk, HEAD_PERK_GASMASK ) )
+		if( det < 5 && FLAG( respirator.Proto.HeadItem_Perk, HEAD_PERK_GASMASK ) )
 		{
 			return true;
 		}
@@ -195,22 +240,44 @@ bool CheckGasMask( Critter& cr )
 
 bool CheckAirTank( Critter& cr )
 {
-	Item@ item = _CritGetItemBack( cr );
-	if( valid( item ) && FLAG( item.Proto.Item_Perk, BACK_PERK_AIR_TANK ) )
-	{		
-		uint air = 100 - GetDeteriorationProcent( item );
-		return air > 0;
+	if( cr.ParamBase[ CR_AIR_TANK_ID ] == 0 )
+	{
+		return false;
 	}
-	return false;
+	
+	Item@ item = cr.GetItemById( cr.ParamBase[ CR_AIR_TANK_ID ] );
+	if( !valid( item ) )
+	{		
+		@item = GetItem( cr.ParamBase[ CR_AIR_TANK_ID ] );		
+		if( valid( item ) )
+		{
+			item.ITEM_STATE = STATE_OFF;
+			item.Update();
+		}
+		cr.ParamBase[ CR_AIR_TANK_ID ] = 0;
+		cr.ParamBase[ CR_AIR_TANK_CHARGE ] = 0;
+		cr.EraseTimeEvents( CTE_BREATHING );
+		return false;
+	}
+	
+	return item.ITEM_STATE == STATE_ON && item.ITEM_CHARGE > 0;
 }
 
-void UseAirTank( Critter& cr, int used_air = 1 )
+void UseAirTank( Critter& cr, int used_charge = 1 )
 {
-	Item@ item = _CritGetItemBack( cr );
-	if( valid( item ) && FLAG( item.Proto.Item_Perk, BACK_PERK_AIR_TANK ) )
+	Item@ item = cr.GetItemById( cr.ParamBase[ CR_AIR_TANK_ID ] );
+	if( valid( item ) && isAirtank( item ) && item.ITEM_STATE == STATE_ON )
 	{		
-		uint det = GetDeteriorationProcent( item );
-		SetDeterioration( item, det + used_air );
+		item.ITEM_CHARGE = CLAMP( item.ITEM_CHARGE - used_charge, 0, ITEM_CHARGE_MAX );
+		cr.ParamBase[ CR_AIR_TANK_CHARGE ] = item.ITEM_CHARGE;
+		if( item.ITEM_CHARGE == 0 )
+		{
+			item.ITEM_STATE = STATE_OFF;
+			cr.ParamBase[ CR_AIR_TANK_ID ] = 0;
+			
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_OXYGEN_DEPLETED );
+		}
+		item.Update();
 	}
 }
 	
