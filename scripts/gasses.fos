@@ -7,7 +7,25 @@
 
 import uint CountMapPlayers( Map@ map ) from "manager";
 
-void GasHex( Critter& cr, int mapID, int hx, int hy, int gas_strength, int gas_time, int gas_radius )
+//~run gasses test gas_type 0 0
+void test( Critter& cr, int gas_type, int used_air, int )
+{
+	string breathing = flagValue( canBreathe( cr, gas_type ), WHITE + "can", RED + "can't" ) + GREEN + " breathe";
+	string protection = flagValue( hasProtection( cr ), WHITE + "have", RED + "haven't" ) + GREEN + " protection";
+	string mask = flagValue( CheckGasMask( cr ), WHITE + "have", RED + "haven't" ) + GREEN + " gas mask";
+	string tank = flagValue( CheckAirTank( cr ), WHITE + "have", RED + "haven't" ) + GREEN + " air tank";
+	string filter = flagValue( CheckAirFilter( cr ), WHITE + "have", RED + "haven't" ) + GREEN + " filter";
+	cr.Say( SAY_NETMSG, "You " + breathing + ", " + protection + ": " + mask + ", " + tank + ", " + filter + "." );
+	UseAirTank( cr, used_air );
+}
+
+string[] gas_type_names = { "respirator", "no oxygen" };
+string gasTypeName( int type )
+{
+	return gas_type_names[ CLAMP( uint(type), 0, gas_type_names.length() ) ];
+}
+
+void GasHex( Critter& cr, int mapID, int hx, int hy, int gas_strength, int gas_time, int gas_radius, int gas_type )
 {
 	if( gas_strength < 0 || gas_time < 0 || gas_radius < 0 )
 	{
@@ -26,11 +44,12 @@ void GasHex( Critter& cr, int mapID, int hx, int hy, int gas_strength, int gas_t
 		gasMarker.GAS_STRENGTH = gas_strength;
 		gasMarker.GAS_TICK = gas_time;
 		gasMarker.GAS_DISTANCE = gas_radius;
+		gasMarker.GAS_TYPE = gas_type;
 		gasMarker.Update();
 		
 		uint[] values = { gasMarker.Id };
 		gasMarker.GAS_EVENT = CreateTimeEvent( __FullSecond, "gasses@e_gasFlow", values, true );
-		cr.Say( SAY_NETMSG, "Gas source set at X: " + hx + " Y: " + hy + " , strength: "+ gas_strength + " , tick: "+ gas_time + " minutes, radius: " + gas_radius + " hex " );
+		cr.Say( SAY_NETMSG, "The [" + gasTypeName(gas_type) + "] Gas source set at X: " + hx + " Y: " + hy + " , strength: "+ gas_strength + " , tick: "+ gas_time + " minutes, radius: " + gas_radius + " hex " );
 	}
 }
 
@@ -61,14 +80,14 @@ uint e_gasFlow( uint[]@ values )
 	{
 		for( uint i = 0; i < count; i++ )
 		{
-			DypsneaCr( critters[i], gasMarker.GAS_STRENGTH );
+			DypsneaCr( critters[i], gasMarker.GAS_STRENGTH, gasMarker.GAS_TYPE );
 		}
 	}
 	
 	return REAL_SECOND( gasMarker.GAS_TICK );
 }
 
-void DypsneaCr( Critter& cr, uint rate )
+void DypsneaCr( Critter& cr, uint rate, uint type )
 {
 	uint[] indexes;
 	uint[] durations;
@@ -76,7 +95,7 @@ void DypsneaCr( Critter& cr, uint rate )
 	{
 		if( rate > 0 )
 		{
-			if( isGM( cr ) || CheckGasMask( cr ) )
+			if( isGM( cr ) )
 			{		
 				return;
 			}
@@ -85,51 +104,127 @@ void DypsneaCr( Critter& cr, uint rate )
 	}
 	else
 	{
-		cr.AddTimeEvent( "gasses@cte_Dyspnea", 0, CTE_DYSPNEA, rate );
+		switch( type )
+		{
+			case GAS_TYPE_DEFAULT: 	cr.AddTimeEvent( "gasses@cte_Dyspnea", 0, CTE_DYSPNEA, rate ); break;
+			case GAS_TYPE_NO_OXYGEN:	cr.AddTimeEvent( "gasses@cte_NoOxygen", 0, CTE_DYSPNEA, rate ); break;
+		}		
 	}
 }
 
 uint cte_Dyspnea( Critter& cr, int identifier, uint& rate )
 {
-	if( rate <= 0 || CheckGasMask( cr ) )
-	{		
-		cr.StatBase[ ST_DYSPNEA ] -= cr.Stat[ ST_ENDURANCE ] * 10;
-		rate = 0;
-		if ( cr.StatBase[ ST_DYSPNEA ] <= 0 ) 
-		{
-			return 0;
-		}
-		return REAL_SECOND( 10 );
+	return process_dyspnea( cr, rate, GAS_TYPE_DEFAULT );
+}
+	
+uint cte_NoOxygen( Critter& cr, int identifier, uint& rate )
+{
+	return process_dyspnea( cr, rate, GAS_TYPE_NO_OXYGEN );
+}
+
+bool canBreathe( Critter& cr, uint gas_type )
+{
+	if( gas_type == GAS_TYPE_DEFAULT && CheckGasMask( cr ) )
+	{
+		return true;
+	}
+
+	if( CheckAirTank( cr ) || CheckAirFilter( cr ) ) //allows to ignore all types of gas markers
+	{
+		return true;
 	}
 	
+	return false;
+}
+
+uint process_dyspnea( Critter& cr, uint& rate, uint gas_type )
+{
+	bool freshAir = ( rate <= 0 );
+	if( freshAir || canBreathe( cr, gas_type ) )
+	{		
+		return take_breath( cr, rate, freshAir );
+	}
+	
+	return suffocation_progress( cr, rate );
+}
+
+uint suffocation_progress( Critter& cr, uint& rate )
+{
 	cr.StatBase[ ST_DYSPNEA ] += rate;
 	rate = 0;
+	
     return REAL_SECOND( 10 );
+}
+
+uint take_breath( Critter& cr, uint& rate, bool freshAir )
+{
+	if( !freshAir )
+	{
+		UseAirTank( cr );
+	}
+	
+	cr.StatBase[ ST_DYSPNEA ] -= cr.Stat[ ST_ENDURANCE ] * 10;
+	rate = 0;
+	
+	if ( cr.StatBase[ ST_DYSPNEA ] <= 0 ) 
+	{
+		return 0;
+	}
+	
+	return REAL_SECOND( 10 );
+}
+
+bool hasProtection( Critter& cr )
+{
+	return CheckGasMask( cr ) || CheckAirTank( cr ) || CheckAirFilter( cr );
 }
 
 bool CheckGasMask( Critter& cr )
 {
-	uint det = 0;
 	Item@ respirator = _CritGetItemHead( cr );
 	if( valid( respirator ) )
 	{
-		det = GetDeteriorationProcent( respirator );
-		if( det < 5 && FLAG( respirator.Proto.HeadItem_Perk, HEAD_PERK_GASMASK ))
+		uint det = GetDeteriorationProcent( respirator );
+		if( det < 5 && FLAG( respirator.Proto.Item_Perk, HEAD_PERK_GASMASK ) )
 		{
 			return true;
 		}
 	}
+	return false;
+}
+
+bool CheckAirTank( Critter& cr )
+{
+	Item@ item = _CritGetItemBack( cr );
+	if( valid( item ) && FLAG( item.Proto.Item_Perk, BACK_PERK_AIR_TANK ) )
+	{		
+		uint air = 100 - GetDeteriorationProcent( item );
+		return air > 0;
+	}
+	return false;
+}
+
+void UseAirTank( Critter& cr, int used_air = 1 )
+{
+	Item@ item = _CritGetItemBack( cr );
+	if( valid( item ) && FLAG( item.Proto.Item_Perk, BACK_PERK_AIR_TANK ) )
+	{		
+		uint det = GetDeteriorationProcent( item );
+		SetDeterioration( item, det + used_air );
+	}
+}
 	
+bool CheckAirFilter( Critter& cr )
+{
 	Item@ armor = _CritGetItemArmor( cr );
 	if( valid( armor ) )
 	{
-		det = GetDeteriorationProcent( armor );
-		if( det < 5 && FLAG( armor.Proto.Armor_Perk, ARMOR_PERK_AIR_FILTER ))
+		uint det = GetDeteriorationProcent( armor );
+		if( det < 5 && FLAG( armor.Proto.Armor_Perk, ARMOR_PERK_AIR_FILTER ) )
 		{
 			return true;			
 		}
-	}
-	
+	}	
 	return false;
 }
 
