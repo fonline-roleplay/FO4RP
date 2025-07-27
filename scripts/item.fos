@@ -44,6 +44,158 @@ void _DescWalk( Item& marker, Critter& cr, bool entered, uint8 dir )
 	}
 }
 
+// Motion Sensor
+bool TryUseSensor( Critter& cr, Item@ sensor )
+{
+	if( !valid( cr ) )
+	{
+		return false;
+	}
+	
+	if( !valid( sensor ) )
+	{
+		return false;
+	}
+
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return false;
+	}
+
+	PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN2.mp3", 4 );
+
+	if( sensor.ITEM_STATE == 0 && sensor.ITEM_CHARGE > 0 )
+    {
+        Item@ hand_ext = _CritGetItemHandExt( cr );
+
+        if( valid( hand_ext ) && hand_ext.Id != sensor.Id )
+		{
+			cr.MoveItem( hand_ext.Id, hand_ext.GetCount(), SLOT_INV );
+		}
+		
+		cr.MoveItem( sensor.Id, sensor.GetCount(), SLOT_HAND2 );
+		
+		sensor.ITEM_STATE = 1;
+		uint[] values = { sensor.Id, map.Id, cr.Id };
+		sensor.ITEM_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "item@e_DepleteSensorCharge", values, true );
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_SENSOR_ENABLE );
+		
+		sensor.PicInv = GetStrHash( "art\\inven\\motionon.frm" );
+		
+		sensor.SetEvent( ITEM_EVENT_MOVE, "e_SensorMove" );
+		sensor.SetEvent( ITEM_EVENT_DROP, "e_SensorDrop" );
+		
+	}
+	else if( sensor.ITEM_STATE == 0 && sensor.ITEM_CHARGE == 0 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SENSOR_NO_CHARGE );
+		return false;
+	}
+	else
+	{
+		Sensor_off( sensor );
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_SENSOR_DISABLE );
+	}
+	
+	return true;
+}
+
+// Sensor charge depletion
+uint e_DepleteSensorCharge( uint[]@ values )
+{
+	Item@ sensor = GetItem( values[0] );
+	if( valid( sensor ) )
+	{
+		if( sensor.ITEM_CHARGE > 0 )
+		{
+			sensor.ITEM_CHARGE--;
+			sensor.Update();
+			
+			Map@ map = GetMap( values[1] );
+			if( valid( map ) )
+			{
+				uint crId = values[ 2 ];
+				Critter@ cr = GetCritter( crId );
+				if( valid( cr ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "motion.mp3", 4 );
+					Critter@[] critters;
+					uint len = map.GetCrittersHex( cr.HexX, cr.HexY, SENSOR_RADIUS, FIND_LIFE_AND_KO, critters );
+					Critter@ blip = null;
+					for( uint i = 0; i < len; i++ )
+					{
+						uint contact = 0;
+						@ blip = critters[ i ];
+						if( valid( blip ) )
+						{
+							if( isGM( blip ) || blip.Id == cr.Id || blip.Stat[ ST_BODY_TYPE ] == BT_ROBOT )
+							{
+								continue;
+							}
+							
+							contact++;
+							if( contact == 1 && Random( 0, 1 ) == 1 )
+							{
+								PlayGenericSound( map, cr.HexX, cr.HexY, "motion_ping.mp3", 6 );
+							}
+							
+							cr.RunClientScript( "client_main@ShowSensorBlip", blip.HexX, blip.HexY, 0, null, null );
+						}
+					}
+					
+					critters.resize(0);
+				}
+			}
+			
+			return REAL_MS( 500 );
+		}
+		
+		Sensor_off( sensor );
+	}
+
+	return 0;
+}
+
+//Motion Sensor charging
+bool ChargeSensor( Critter& cr, Item& battery, Item& sensor )
+{
+	Map@ map = cr.GetMap();
+	if( valid( map ) )
+	{
+		PlayGenericSound( map, cr.HexX, cr.HexY, "WRJ1XXX1.mp3", 6 );
+	}
+	
+	sensor.ITEM_CHARGE = 200;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_RELOAD_FLASHLIGHT );
+	_SubItem( battery, 1 );
+	sensor.Update();
+	return true;
+}
+
+void e_SensorMove( Item& sensor, Critter& cr, uint8 fromSlot )
+{
+    Sensor_off( sensor );
+}
+
+void e_SensorDrop( Item& sensor, Critter& cr )
+{
+    Sensor_off( sensor );
+}
+
+void Sensor_off( Item& sensor )
+{
+	sensor.ITEM_STATE = 0;
+	EraseTimeEvent( sensor.ITEM_EVENT );
+	sensor.ITEM_EVENT = 0;
+	sensor.PicInv = GetStrHash( "art\\inven\\motion.frm" );
+	sensor.SetEvent( ITEM_EVENT_MOVE, "" );
+	sensor.SetEvent( ITEM_EVENT_DROP, "" );
+	
+	sensor.Update();
+}
+
+
 // Stealth Boy
 bool TryUseStealthboy( Critter@ cr, Item@ stealthboy )
 {
@@ -139,7 +291,7 @@ bool TryUseStealthboy( Critter@ cr, Item@ stealthboy )
 	}
 	else
 	{
-		stealthboy_off( cr, stealthboy );
+		Stealthboy_off( cr, stealthboy );
 	}
 	
 	return true;
@@ -147,12 +299,12 @@ bool TryUseStealthboy( Critter@ cr, Item@ stealthboy )
 
 void e_StealthboyMove( Item& stealthboy, Critter& cr, uint8 fromSlot )
 {
-    stealthboy_off( cr, stealthboy );
+    Stealthboy_off( cr, stealthboy );
 }
 
 void e_StealthboyDrop( Item& stealthboy, Critter& cr )
 {
-    stealthboy_off( cr, stealthboy );
+    Stealthboy_off( cr, stealthboy );
 }
 
 // Stealthboy item charge depletion
@@ -189,14 +341,14 @@ uint e_DepleteStealthboyCharge( uint[]@ values )
 				return REAL_SECOND( 1 );
 			}
 			
-			stealthboy_off( cr, stealthboy );
+			Stealthboy_off( cr, stealthboy );
 		}
 	}
 	
 	return 0;
 }
 
-void stealthboy_off( Critter& cr, Item& stealthboy )
+void Stealthboy_off( Critter& cr, Item& stealthboy )
 {
 	stealthboy.ITEM_STATE = 0;
 	stealthboy.ITEM_CHARGE = 0;
