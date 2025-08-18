@@ -17,6 +17,7 @@ dictionary availableItems;
 int listOffset;
 uint currCraftIndex = 0;
 uint currLevel = 0;
+int hoverIndex = -1;
 int craftIterations = 1;
 dictionary craftLinks;
 bool ScreenActive = false;
@@ -384,11 +385,12 @@ class FixboyScrollBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
     }
 }
 
-class FixboyRecipeBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
+class FixboyRecipeBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick, IGUIElementCallbackDraw
 {
     IGUIElementOpt@ Options;
     ScreenMain@ Instance;
     int index = 0;
+    string name = "";
 
     FixboyRecipeBut( ScreenMain & instance )
     {
@@ -410,9 +412,24 @@ class FixboyRecipeBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
         }
     }
 
+    void OnDraw( int posX, int posY, int w, int h )
+    {
+        
+        if( (__MouseX >= posX && __MouseX <= posX + w) &&
+            (__MouseY >= posY && __MouseY <= posY + h) )
+        {
+            Options.Text( "" + name, FONT_FALLOUT, (availableCrafts.find(craftIDs[index]) != -1 ? COLOR_DGREEN : COLOR_GRAY), 0, FT_BORDERED );
+            hoverIndex = index;
+        }
+        else
+        {
+            Options.Text( "" + name, FONT_FALLOUT, (availableCrafts.find(craftIDs[index]) != -1 ? COLOR_GREEN : COLOR_LGRAY), 0, FT_BORDERED );
+        }
+    }
+
     void SetName( string name )
     {
-		Options.Text( "" + name, FONT_FALLOUT, (availableCrafts.find(craftIDs[index]) != -1 ? COLOR_GREEN : COLOR_GRAY), 0, FT_BORDERED );
+		this.name = name;
     }
 }
 
@@ -480,10 +497,13 @@ class FixboyCraftResBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
             return;
         }
 
+        int w = 40, h = 40;
+        Options.GetSize(w, h);
+
         Sprite@ invPic = Sprite();
         invPic.Load(proto.PicInv, 0);
         Options.SetSprite(invPic);
-        Options.SetSize(40, 40);
+        Options.SetSize(w, h);
     }
 }
 
@@ -510,6 +530,296 @@ class FixboyCraftText : IGUIElementCallbackInit
     void GenLabel()
     {
 		Options.Text( "" + craftNames[currCraftIndex], FONT_FALLOUT, COLOR_GREEN, 0, FT_BORDERED|FT_CENTERX );
+    }
+}
+
+class FixboyHoverInfo : IGUIElementCallbackInit, IGUIElementCallbackDraw
+{
+    IGUIElementOpt@ Options;
+    ScreenMain@ Instance;
+    FixboyCraftResBut@ ItemIcon;
+    int lastIndex = -1;
+
+    FixboyHoverInfo( ScreenMain& instance )
+    {
+        @Instance = instance;
+    }
+
+    void OnInit()
+    {
+        @Options = GUI_GetElementOptions();
+    }
+
+    void OnDraw( int posX, int posY, int w, int h )
+    {
+        if(lastIndex == hoverIndex || hoverIndex == -1) return;
+
+        Options.Text("" + GetHoverText(), FONT_FALLOUT, COLOR_GREEN, 0, 0);
+        
+        lastIndex = hoverIndex;
+    }
+
+    string GetHoverText()
+    {
+        CraftItem@ currCraft = GetCraftItem(craftIDs[hoverIndex]);
+        if(!valid(currCraft))
+        {
+            return "";
+        }
+
+        uint16[] itemPids;
+        uint[] itemCounts;
+        currCraft.GetOutItems(itemPids, itemCounts);
+
+        ProtoItem@ item = GetProtoItem(itemPids[0]);
+        int itemCount = itemCounts[0];
+        string itemName = checkNull( GetMsgStr( TEXTMSG_ITEM, item.ProtoId * 100 ) );
+
+        ItemIcon.SetPicByPid(itemPids[0]);
+
+        string result = protoColor( item ) + itemName + COLOR_NETMSG;
+		result += "\n-----------------------\n";
+
+        result += "\n\n\n\n\n\n";
+
+        if( item.Type == ITEM_TYPE_WEAPON )
+        {
+            // Strength Requirement
+            result += "\n-----------------------\n";
+            string str;
+            str = GetMsgStr( TEXTMSG_GAME, STR_INV_STR_REQ );
+            str = ReplaceText( str, "VALUE", item.Weapon_MinStrength  );
+            result += str;
+            
+            //Weapon Skill
+            int skillNum = _WeaponSkill( item, 0 );
+            if( skillNum != 0 )
+            {
+                str = GetMsgStr( TEXTMSG_TEXT, STR_SKILL_USED );
+                string value = GetMsgStr( TEXTMSG_GAME, STR_SKILL_NAME(skillNum) );
+                result += "\n" + ReplaceText( str, "VALUE", value );
+            }
+            
+            // Weapon Perk
+            result += "\n" + GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK_TITLE );
+            string perksInfo = "";
+            str = GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK );
+            int count = 0;
+            for( int i = 0; i < 32; i ++ )
+            {
+                if( ISBIT( item.Weapon_Perk, i ) )
+                {
+                    string perkStr = GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK_NAME( i + 1 ) );
+                    count ++;
+                    if( perksInfo != "" )
+                    {
+                        perksInfo += GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK_SPACING );
+                    }
+                    
+                    perksInfo += perkStr;
+                }
+            }
+            
+            if( perksInfo != "" )
+            {
+                result += ReplaceText( str, "VALUE", perksInfo );
+            }
+            else
+            {
+                result += GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK_NAME( 0 ) );
+            }
+            
+            //  Custom object speed
+            if( FLAG( item.Flags, ITEM_CAN_USE ) || FLAG( item.Flags, ITEM_CAN_USE_ON_SMTH ) || item.Type == ITEM_TYPE_WEAPON )
+            {
+                result += "\n";
+                string str2 = GetMsgStr( TEXTMSG_GAME, STR_INV_WAIT_TIME );
+                uint val = _GetProtoWindupTime( item );
+
+                str2 = ReplaceText( str2, "VALUE", val );
+                result += str2;
+            }
+            
+            //  Custom AP cost
+            if( FLAG(item.Flags, ITEM_CAN_USE) || FLAG(item.Flags, ITEM_CAN_USE_ON_SMTH ) || item.Type == ITEM_TYPE_WEAPON )
+            {
+                result += "\n";
+                uint val = _WeaponApCost( item, 0);
+
+                string str_a = GetMsgStr( TEXTMSG_GAME, STR_INV_AP_COST );
+                str_a = ReplaceText( str_a, "VALUE", val );
+                result += str_a;
+            }
+            
+            // Ammo & Reload info
+            if( item.Weapon_MaxAmmoCount > 0 )
+            {
+                // Custom Reload AP cost
+                result += "\n";
+                string str_b = GetMsgStr( TEXTMSG_GAME, STR_INV_RELOAD_COST );
+                str_b = ReplaceText( str_b, "VALUE", item.Weapon_ReloadAp );
+                
+                // Ammo load
+                string str2 = GetMsgStr( TEXTMSG_GAME, STR_INV_HAS_SHOTS );
+                str2 = ReplaceText( str2, "VALUE",     item.Weapon_MaxAmmoCount );
+                str2 = ReplaceText( str2, "MAX_VALUE", item.Weapon_MaxAmmoCount );
+                
+                // Caliber
+                string str3 = GetMsgStr( TEXTMSG_GAME, STR_INV_CALIBER_MSG );
+                str3 = ReplaceText( str3, "AMMO", GetMsgStr( TEXTMSG_GAME, STR_CALIBER( item.Weapon_Caliber ) ) );
+
+                string modMin = GetMsgStr( TEXTMSG_GAME, STR_INV_MIN_DMG_MOD );
+                int mod1 = item.Weapon_MinDmgMod - 100;
+                modMin = ReplaceText( modMin, "MINMOD", mod1 );
+                string modMax = GetMsgStr( TEXTMSG_GAME, STR_INV_MAX_DMG_MOD );
+                int mod2 = item.Weapon_MaxDmgMod - 100;
+                modMax = ReplaceText( modMax, "MAXMOD", mod2 );
+                
+                result += str_b + "\n" + str2 + "\n" + str3 + "\n" + modMin + "\n" + modMax;
+            }
+            else
+            {
+                string DtMod = GetMsgStr( TEXTMSG_GAME, STR_INV_DTMOD );
+                DtMod = ReplaceText( DtMod, "DTMOD", item.Item_DtMod );
+                result += "\n" + DtMod;
+            }
+            
+        }
+        else if( item.Type == ITEM_TYPE_ARMOR )
+        {
+            result += "\n\n-----------------------";
+            string str;
+            
+            // Armor Perk
+            result += "\n" + GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK_TITLE );
+            string perksInfo = "";
+            str = GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK );
+            int count = 0;
+            for( int i = 0; i < 32; i ++ )
+            {
+                if( ISBIT( item.Armor_Perk, i ) )
+                {
+                    string perkStr = GetMsgStr( TEXTMSG_TEXT, STR_ARMOR_PERK_NAME( i + 1 ) );
+                    count ++;
+                    if( perksInfo != "" )
+                    {
+                        perksInfo += GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK_SPACING );
+                    }
+                    
+                    perksInfo += perkStr;
+                }
+            }
+            
+            if( perksInfo != "" )
+            {
+                result += ReplaceText( str, "VALUE", perksInfo );
+            }
+            else
+            {
+                result += GetMsgStr( TEXTMSG_TEXT, STR_ARMOR_PERK_NAME( 0 ) );
+            }
+        }
+        else if( item.Type == ITEM_TYPE_AMMO )
+        {
+            // Ammo stats
+            result += "\n-----------------------";
+            string ammoACMod = GetMsgStr( TEXTMSG_GAME, STR_INV_AMMO_ACMOD );
+            ammoACMod = ReplaceText( ammoACMod, "ACMOD", item.Ammo_AcMod);
+            string ammoMult  = GetMsgStr( TEXTMSG_GAME, STR_INV_AMMO_DAMAGE  );
+            ammoMult  = ReplaceText( ammoMult,  "MINDMG", item.Ammo_DmgMin );
+            ammoMult  = ReplaceText( ammoMult,  "MAXDMG", item.Ammo_DmgMax );
+            string ammoDRMod = GetMsgStr( TEXTMSG_GAME, STR_INV_AMMO_DRMOD );
+            ammoDRMod = ReplaceText( ammoDRMod, "DRMOD", item.Ammo_DrMod );
+            string ammoDTMod = GetMsgStr( TEXTMSG_GAME, STR_INV_AMMO_DTMOD );
+            ammoDTMod = ReplaceText( ammoDTMod, "DTMOD", item.Item_DtMod );
+            
+            string perk = GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK_TITLE );
+            string perksInfo = "";
+            string str = GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK );
+            int count = 0;
+            for( int i = 0; i < 32; i ++ )
+            {
+                if( ISBIT( item.Ammo_Perk, i ) )
+                {
+                    string perkStr = GetMsgStr( TEXTMSG_TEXT, STR_AMMO_PERK_NAME( i + 1 ) );
+                    count ++;
+                    if( perksInfo != "" )
+                    {
+                        perksInfo += GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK_SPACING );
+                    }
+                    
+                    perksInfo += perkStr;
+                }
+            }
+            
+            if( perksInfo != "" )
+            {
+                perk += ReplaceText( str, "VALUE", perksInfo );
+            }
+            else
+            {
+                perk += GetMsgStr( TEXTMSG_TEXT, STR_AMMO_PERK_NAME( 0 ) );
+            }
+            
+            ammoDRMod = ReplaceText( ammoDRMod, "DRMOD", item.Ammo_DrMod );
+            string ammoCal = GetMsgStr( TEXTMSG_GAME, STR_INV_CALIBER_MSG );
+            ammoCal = ReplaceText( ammoCal, "AMMO", GetMsgStr( TEXTMSG_GAME, STR_CALIBER( item.Ammo_Caliber ) ) );
+
+            result += "\n" + ammoACMod + "\n" + ammoMult + "\n" + ammoDRMod + "\n" + ammoDTMod + "\n" + perk + "\n" + ammoCal;
+        }
+        else if( item.Type == ITEM_TYPE_DRUG )
+        {
+            result += "\n-----------------------";
+            string str = GetMsgStr( TEXTMSG_TEXT, STR_DRUG_TYPE ) + "|0xFFFF00  " + GetMsgStr( TEXTMSG_TEXT, item.Item_Subtype ) + "|0x3CF800 .";
+            result += str;
+        }
+        else if( item.Slot == SLOT_HEAD )
+        {
+            result += "\n\n-----------------------";
+            string str;
+            
+            // Headgear Perk
+            result += "\n" + GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK_TITLE );
+            string perksInfo = "";
+            str = GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK );
+            int count = 0;
+            for( int i = 0; i < 32; i ++ )
+            {
+                if( ISBIT( item.HeadItem_Perk, i ) )
+                {
+                    string perkStr = GetMsgStr( TEXTMSG_TEXT, STR_HEADGEAR_PERK_NAME( i + 1 ) );
+                    count ++;
+                    if( perksInfo != "" )
+                    {
+                        perksInfo += GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK_SPACING );
+                    }
+                    
+                    perksInfo += perkStr;
+                }
+            }
+            
+            if( perksInfo != "" )
+            {
+                result += ReplaceText( str, "VALUE", perksInfo );
+            }
+            else
+            {
+                result += GetMsgStr( TEXTMSG_TEXT, STR_WPN_PERK_NAME( 0 ) );
+            }
+        }
+
+        result += "\n-----------------------";
+        
+        // Weight
+        result += "\n" + ReplaceText( GetMsgStr( TEXTMSG_GAME, STR_ITEM_WEIGHT_GRAMM ), "VALUE", item.Weight * itemCount );
+
+        // Volume
+        result += "\n" + ReplaceText( GetMsgStr( TEXTMSG_GAME, STR_INV_VOLUME ), "VALUE", item.Volume * itemCount );
+        
+        // Material
+        result += "\n" + ReplaceText( GetMsgStr( TEXTMSG_GAME, STR_INV_MATERIAL ), "VALUE", GetMsgStr( TEXTMSG_GAME, item.Material + 170 ) );
+
+        return result;
     }
 }
 
@@ -677,6 +987,7 @@ void InitFixboyScreen()
         GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 25, 17 + (10 * i) )
         .CallbackInit( currButton )
         .CallbackMouseClick( currButton )
+        .CallbackDraw( currButton )
         .SetSize(455, 7);
     }
     
@@ -710,4 +1021,18 @@ void InitFixboyScreen()
         .SetVisible(false);
         screen.craftResult.insertLast(currButton);
     }
+
+    FixboyHoverInfo hoverInfo( screen );
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 521, 39 )
+    .CallbackInit( hoverInfo )
+    .CallbackDraw( hoverInfo )
+    .SetSize(164, 280);
+    
+    FixboyCraftResBut hoverIcon( screen );
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 521, 54 )
+    .CallbackInit( hoverIcon )
+    .CallbackMouseClick( hoverIcon )
+    .SetSize(160, 87);
+
+    @hoverInfo.ItemIcon = hoverIcon;
 }
