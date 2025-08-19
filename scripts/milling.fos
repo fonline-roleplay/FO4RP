@@ -1,0 +1,310 @@
+#ifndef MILLING
+#define MILLING
+
+#include "_utils.fos"
+#include "milling_h.fos"
+#include "_ltp.fos"
+#include "gathering_h.fos"
+#include "speed_h.fos"
+#include "combat_h.fos"
+#include "furniture_h.fos"
+
+class MenuMill: CenteredMenuHandler
+{
+    uint mill_id;
+    uint map_id;
+	
+    MenuMill( Item& mill, Map& map )
+	{
+        mill_id = mill.Id;
+        map_id = map.Id;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+        if( !valid( map ) )
+		{
+            return false;
+        }
+		
+        Item@ mill = GetItem( mill_id );
+        if( !valid( mill ) )
+		{
+            return false;
+        }
+		
+		if( locked_in_place( mill ) )
+		{
+			if( menu.ButtonMsg( STR_ANVIL_MENU_SMITH ) )
+			{
+				PrepareMilling( cr, mill );
+				return false;
+			}
+
+			if( menu.ButtonMsg( STR_FURNITURE_MENU_EXAMINE ) )
+			{
+				ShowContainer( cr, mill, TRANSFER_HEX_CONT_UP );
+				return false;
+			}
+			
+			if( menu.ButtonMsg( STR_FURNITURE_MENU_DETACH ) )
+			{
+				LockInPlace( cr, mill );
+				return true;
+			}
+		}
+		else
+		{
+			if( menu.ButtonMsg( STR_FURNITURE_MENU_ANCHOR ) )
+			{
+				LockInPlace( cr, mill );
+				return true;
+			}
+
+			if( menu.ButtonMsg( STR_FURNITURE_MENU_PICKUP ) )
+			{
+				PickItem( cr, mill );
+				ChangeCritterSpeed( cr );
+				return false;
+			}			
+		}
+		
+		return true;
+    }
+	
+	int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_ANVIL_MENU_MAIN;
+	}
+	
+    string@ Description( Critter& cr )
+	{
+	
+		string info;
+		Item@ mill = GetItem( mill_id );
+		
+		Item@[] MaterialsCheck;
+		uint count = mill.GetItems( uint( -1 ), MaterialsCheck );
+		Item@ material = null;
+		info += "$contains";
+		uint16 materialPid = 0;
+		if( count == 0 )
+		{ 
+			info += STR_INSERT_TEXT_LINE( STR_EMPTY );
+		}
+		else
+		{
+			for( uint i = 0; i < MaterialsCheck.length(); i ++ )
+			{
+				materialPid = MaterialsCheck[i].GetProtoId();
+				if( MillMaterialList.find( materialPid ) != -1 )
+				{
+					@material = MaterialsCheck[i];
+					break;
+				}
+			}
+			
+			if( !valid( material ) )
+			{ 
+				info += STR_INSERT_TEXT_LINE( STR_ANVIL_MENU_NO_METAL );
+			}
+			else
+			{
+				info += STR_INSERT_TEXT_LINE( STR_ANVIL_MENU_CONTAINS )
+					 + "$item" + STR_INSERT_ITEM_LINE( materialPid * 100 )
+					 + "$amount" + material.GetCount();
+			}
+		}		
+
+		return info;
+    }
+}
+
+void StartMenuMill( Critter& cr, Item& mill )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuMill( mill, map );
+    iDialogBox@ menu = OpenMenu( cr, "mill", handler );
+}
+
+bool ltp_milling_inited = false;
+void ltp_milling_init()
+{
+	LTPREG( LTP_MILLING, process_Milling )
+	ltp_milling_inited = true;
+}
+
+bool PrepareMilling( Critter& cr, Item& mill )
+{
+	if( !valid( cr ) )
+	{
+		return false;
+	}	
+	
+	Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+		return false;
+	}
+	
+	if( !valid( mill ) )
+	{
+		return false;
+	}	
+
+	if( IsTired( cr ) )
+	{
+		return false;
+	}
+	
+	if( cr.IsDmgTwoArm() || cr.IsDmgTwoLeg() )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_CANT_WORK );
+		return false; 
+	}
+	
+	Item@[] MaterialsCheck;
+	mill.GetItems( uint( -1 ), MaterialsCheck );
+	Item@ material = null;
+	uint16 materialPid;
+	if( MaterialsCheck.length() == 0 )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ANVIL_EMPTY ); 
+		return false; 
+	}
+	else
+	{
+		for( uint i = 0; i < MaterialsCheck.length(); i ++ )
+		{
+			materialPid = MaterialsCheck[i].GetProtoId();
+			if( MillMaterialList.find( materialPid ) != -1 )
+			{
+				@material = MaterialsCheck[i];
+				break;
+			}
+		}
+		
+		if( !valid( material ) )
+		{ 
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_INGOT ); 
+			return false; 
+		}
+	}
+	
+	start_Milling( cr, mill, material );
+	return true;
+}
+
+bool start_Milling( Critter& cr, Item& mill, Item@ material )
+{
+	if( !ltp_milling_inited )
+	{
+		ltp_milling_init();
+	}
+	
+	if( valid( mill ) )
+	{	
+		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint smithing_rate = ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( 1000 / ( CLAMP( smithing_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		
+		uint[] values = { cr.Id };
+		
+		_CritAnimateSwing( cr );
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_MillingSound", values, false);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
+
+		mill.MILLING_STATE = STATE_ON;
+		mill.PicMap = PIC_MILL_ANIM_ON;
+		UNSETFLAG( mill.Flags, ITEM_SHOW_ANIM_EXT );
+		mill.Update();
+
+		StartProcess( cr, LTP_MILLING, 0, mill.Id, material.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+		return true;
+	}
+	return false;
+}
+
+uint process_Milling( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_MILLING )
+	
+    Item@ mill = GetItem( param1 );
+  	Item@ material = GetItem( param2 );
+  	if( valid( mill ) && valid( material ) )
+    {
+		param0++;
+		
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
+		{
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_FINISH_SMITHING );
+			Profit( cr, mill, material );
+			mill.PicMap = mill.Proto.PicMap;
+			SETFLAG( mill.Flags, ITEM_SHOW_ANIM_EXT );
+			mill.Update();
+			
+			return 0;
+		}
+		
+		uint[] values = { cr.Id };
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_MillingSound", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
+
+		_CritAnimateSwing( cr );
+		
+		if( cr.IsInjured() )
+		{
+			uint damage = INJURED_HP_DAMAGE - cr.Stat[ ST_ENDURANCE ];
+			hurt( cr, damage );
+		}
+		
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+	}
+	
+	mill.PicMap = mill.Proto.PicMap;
+	SETFLAG( mill.Flags, ITEM_SHOW_ANIM_EXT );
+	mill.Update();
+	
+	return 0;
+}
+
+uint e_MillingSound( uint[]@ values )
+{
+	Critter@ cr = GetCritter(values[0]);
+	Map@ map = cr.GetMap();
+	PlayGenericSound( map, cr.HexX, cr.HexY, _GetOneRandom( MillSounds ), 10 );
+	return 0;
+}
+
+void Profit( Critter& cr, Item& mill, Item& material )
+{
+	if( !valid( mill) && !valid( material ) )
+	{
+		return;
+	}
+	
+	uint16 materialPid = material.GetProtoId();
+	uint8 index = MillMaterialList.find( materialPid );
+	uint16 resultPid = MillResultList[ index ];
+	uint8 amount = MillAmount[index];
+	cr.AddItem( resultPid, amount );
+	_SubItem( material, 1 );
+	
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_CRAFTED_PID, "$proto@msg item " +  ( resultPid * 100 ) + "@$amount" + amount + "\n" );
+
+	cr.StatBase[ ST_EXPERIENCE ] += 10;
+}
+
+#endif //MILLING
