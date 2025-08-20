@@ -22,6 +22,8 @@ int craftIterations = 1;
 dictionary craftLinks;
 bool ScreenActive = false;
 
+uint[] DisplayIndices;
+
 ScreenMain@ screenPtr = null;
 
 void generateCraftList()
@@ -87,6 +89,16 @@ int FindCraftForItem(uint16& pid)
     return retVal;
 }
 
+void ResetDisplayIndices()
+{
+    listOffset = 0;
+    DisplayIndices.resize(craftIDs.length());
+    for(uint i = 0, len = craftIDs.length(); i < len; i++)
+    {
+        DisplayIndices[i] = i;
+    }
+}
+
 class ScreenMain : IGUIScreenCallbackShow, IGUIScreenCallbackHide
 {
     IGUIScreenOpt@ screenOpt;
@@ -111,6 +123,8 @@ class ScreenMain : IGUIScreenCallbackShow, IGUIScreenCallbackHide
             generateCraftList();
         }
 
+        ResetDisplayIndices();
+
         RunServerScriptUnsafe("craft@unsafe_GetAvailableCrafts", 0, 0, 0, null, null);
         RunServerScriptUnsafe("craft@unsafe_GetAvailableItems", 0, 0, 0, null, null);
         sectionLabels[0].SetText(GetMsgStr(TEXTMSG_GAME, STR_FIX_PARAMS), COLOR_GREEN, FT_BORDERED);
@@ -124,16 +138,18 @@ class ScreenMain : IGUIScreenCallbackShow, IGUIScreenCallbackHide
     void OnHide( int p0, int p1, int p2 )
     {
 		ScreenActive = false;
+        hoverIndex = -1;
 	}
 
     void UpdateElements(uint level)
     {
         if(level == 0)
         {
-            for(uint i = 0; i < FIXBOY_PAGE_LEN; i++)
+            for(uint i = listOffset, len = FIXBOY_PAGE_LEN + listOffset; i < len; i++)
             {
-                FixboyRecipeBut@ currBtn = recipeBtns[i];
-                uint index = i + listOffset;
+                FixboyRecipeBut@ currBtn = recipeBtns[i - listOffset];
+
+                uint index = (i < DisplayIndices.length()) ? DisplayIndices[i] : craftIDs.length();
                 if(index > craftIDs.length() - 1)
                 {
                     currBtn.index = 0;
@@ -145,7 +161,7 @@ class ScreenMain : IGUIScreenCallbackShow, IGUIScreenCallbackHide
                     currBtn.SetName(craftNames[index]);
                 }
             }
-            counterScrn.SetText("Page: " + ((listOffset / FIXBOY_PAGE_LEN) + 1) + "/" + ((craftIDs.length() / FIXBOY_PAGE_LEN) + 1), COLOR_GREEN, FT_BORDERED|FT_CENTERXY);
+            counterScrn.SetText("Page: " + ((listOffset / FIXBOY_PAGE_LEN) + 1) + "/" + ((DisplayIndices.length() / FIXBOY_PAGE_LEN) + 1), COLOR_GREEN, FT_BORDERED|FT_CENTERXY);
         }
         else if(level == 1)
         {
@@ -361,7 +377,7 @@ class FixboyScrollBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
             {
                 return;
             }
-            else if(!isUp && listOffset + FIXBOY_PAGE_LEN >= int(craftIDs.length()))
+            else if(!isUp && listOffset + FIXBOY_PAGE_LEN >= int(DisplayIndices.length()))
             {
                 return;
             }
@@ -418,12 +434,12 @@ class FixboyRecipeBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick, 
         if( (__MouseX >= posX && __MouseX <= posX + w) &&
             (__MouseY >= posY && __MouseY <= posY + h) )
         {
-            Options.Text( "" + name, FONT_FALLOUT, (availableCrafts.find(craftIDs[index]) != -1 ? COLOR_DGREEN : COLOR_GRAY), 0, FT_BORDERED );
+            Options.Text( "" + name, FONT_FALLOUT, (availableCrafts.find(craftIDs[index]) != -1 ? COLOR_DGREEN : COLOR_LGRAY), 0, FT_BORDERED );
             hoverIndex = index;
         }
         else
         {
-            Options.Text( "" + name, FONT_FALLOUT, (availableCrafts.find(craftIDs[index]) != -1 ? COLOR_GREEN : COLOR_LGRAY), 0, FT_BORDERED );
+            Options.Text( "" + name, FONT_FALLOUT, (availableCrafts.find(craftIDs[index]) != -1 ? COLOR_GREEN : COLOR_GRAY), 0, FT_BORDERED );
         }
     }
 
@@ -823,6 +839,70 @@ class FixboyHoverInfo : IGUIElementCallbackInit, IGUIElementCallbackDraw
     }
 }
 
+class FixboySearch : IGUIElementCallbackInit, IGUIElementCallbackDraw, IGUIElementCallbackKeyPress
+{
+    IGUIElementOpt@ Options;
+    ScreenMain@ Instance;
+    bool needProcess = true;
+    uint lastTick = 0;
+
+    FixboySearch( ScreenMain& instance )
+    {
+        @Instance = instance;
+    }
+
+    void OnInit()
+    {
+        @Options = GUI_GetElementOptions();
+    }
+
+    void OnDraw( int posX, int posY, int w, int h )
+    {
+        if(!needProcess) return;
+        if(GetTick() < lastTick + (3 * 1000) ) return;
+        Message("KTO BLYA"); 
+        ProcessSearch();
+    }
+
+    void OnKeyPress( uint8 key, uint8 letter )
+    {
+        Message("HELLO????");
+        if( key == DIK_ESCAPE || key == DIK_RETURN || __ConsoleActive ) return;
+        lastTick = GetTick();
+        needProcess = true;
+    }
+
+    void ProcessSearch()
+    {
+        uint[] result;
+
+        string searchQuery = Options.GetText();
+        if(!valid(searchQuery) || searchQuery.length() < 3 || searchQuery == "Search here")
+        {
+            ResetDisplayIndices();
+            Instance.UpdateElements(currLevel);
+            needProcess = false;
+            return;
+        }
+
+        searchQuery = strlwr(searchQuery);
+
+        for(uint i = 0, len = craftNames.length(); i < len; i++)
+        {
+            string currName = strlwr(craftNames[i]);
+            if(findFirst(currName, searchQuery) != -1)
+            {
+                result.insertLast(i);
+            }
+        }
+
+        DisplayIndices = result;
+
+        needProcess = false;
+        Instance.UpdateElements(currLevel);
+    }
+}
+
 void ShowScreen( int p0, int p1, int p2, string@ p3, int[]@ p4 )
 {
 	ScreenActive = true;
@@ -1035,4 +1115,13 @@ void InitFixboyScreen()
     .SetSize(128, 70);
 
     @hoverInfo.ItemIcon = hoverIcon;
+
+    FixboySearch search( screen );
+    GUI_AddScreenElement( CLIENT_SCREEN_NEW_FIXBOY, "", 360, 506 )
+    .CallbackInit( search )
+    .CallbackDraw( search )
+    .CallbackKeyPress( search )
+    .SetSize(111, 14)
+    .Text( "Search here", FONT_FALLOUT, COLOR_DGREEN, COLOR_RED, FT_CENTERY )
+    .TextInput(true, 40, COLOR_LGREEN);
 }
