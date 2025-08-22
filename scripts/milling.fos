@@ -36,7 +36,7 @@ class MenuMill: CenteredMenuHandler
 		
 		if( locked_in_place( mill ) )
 		{
-			if( menu.ButtonMsg( STR_ANVIL_MENU_SMITH ) )
+			if( menu.ButtonMsg( STR_MILL_MENU_MILL ) )
 			{
 				PrepareMilling( cr, mill );
 				return false;
@@ -80,7 +80,7 @@ class MenuMill: CenteredMenuHandler
 
 	int getDescriptionLine()
 	{
-		return STR_ANVIL_MENU_MAIN;
+		return STR_MILL_MENU_MAIN;
 	}
 	
     string@ Description( Critter& cr )
@@ -112,11 +112,11 @@ class MenuMill: CenteredMenuHandler
 			
 			if( !valid( material ) )
 			{ 
-				info += STR_INSERT_TEXT_LINE( STR_ANVIL_MENU_NO_METAL );
+				info += STR_INSERT_TEXT_LINE( STR_MILL_MENU_NO_RESOURCE );
 			}
 			else
 			{
-				info += STR_INSERT_TEXT_LINE( STR_ANVIL_MENU_CONTAINS )
+				info += STR_INSERT_TEXT_LINE( STR_MILL_MENU_CONTAINS )
 					 + "$item" + STR_INSERT_ITEM_LINE( materialPid * 100 )
 					 + "$amount" + material.GetCount();
 			}
@@ -165,6 +165,7 @@ bool PrepareMilling( Critter& cr, Item& mill )
 
 	if( IsTired( cr ) )
 	{
+		MillFinish( mill );
 		return false;
 	}
 	
@@ -180,7 +181,7 @@ bool PrepareMilling( Critter& cr, Item& mill )
 	uint16 materialPid;
 	if( MaterialsCheck.length() == 0 )
 	{ 
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ANVIL_EMPTY ); 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MILL_NO_RESOURCE ); 
 		return false; 
 	}
 	else
@@ -197,7 +198,7 @@ bool PrepareMilling( Critter& cr, Item& mill )
 		
 		if( !valid( material ) )
 		{ 
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_INGOT ); 
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MILL_NO_RESOURCE ); 
 			return false; 
 		}
 	}
@@ -218,22 +219,23 @@ bool start_Milling( Critter& cr, Item& mill, Item@ material )
 		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
 		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
 		uint smithing_rate = ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE ) + OBJECT_DPA_BASE; 
-		cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( 1000 / ( CLAMP( smithing_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( 1000 / ( CLAMP( smithing_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) ) * material.GetCount();
 		
 		uint[] values = { cr.Id };
 		
 		_CritAnimateSwing( cr );
-		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_MillingSound", values, false);
-		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
-
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);
+		Map@ map = cr.GetMap();
+		PlayGenericSound( map, cr.HexX, cr.HexY, "mill.mp3", 10 );
 		mill.MILLING_STATE = STATE_ON;
 		mill.PicMap = PIC_MILL_ANIM_ON;
 		UNSETFLAG( mill.Flags, ITEM_SHOW_ANIM_EXT );
 		mill.Update();
-
+		_CritAnimateUse( cr );
 		StartProcess( cr, LTP_MILLING, 0, mill.Id, material.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		return true;
 	}
+	
 	return false;
 }
 
@@ -243,26 +245,44 @@ uint process_Milling( Critter@ cr, int& param0, int& param1, int& param2 )
 	
     Item@ mill = GetItem( param1 );
   	Item@ material = GetItem( param2 );
+	Map@ map = cr.GetMap();
+		
+	if( IsTired( cr ) )
+	{
+		MillFinish( mill );
+		return 0;
+	}
+	
   	if( valid( mill ) && valid( material ) )
     {
 		param0++;
 		
-		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] / material.GetCount() )
 		{
-			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_FINISH_SMITHING );
 			Profit( cr, mill, material );
-			mill.PicMap = mill.Proto.PicMap;
-			SETFLAG( mill.Flags, ITEM_SHOW_ANIM_EXT );
-			mill.Update();
+			
+			if( valid( material ) )
+			{
+				uint[] values = { cr.Id };
+				PlayGenericSound( map, cr.HexX, cr.HexY, "mill.mp3", 10 );
+				CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
+				_CritAnimateUse( cr );
+				MillFinish( mill );
+				return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+			}
+			
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_FINISH_MILLING );
+			
+			MillFinish( mill );
 			
 			return 0;
 		}
 		
 		uint[] values = { cr.Id };
-		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_MillingSound", values, true);
+		PlayGenericSound( map, cr.HexX, cr.HexY, "mill.mp3", 10 );
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
 
-		_CritAnimateSwing( cr );
+		_CritAnimateUse( cr );
 		
 		if( cr.IsInjured() )
 		{
@@ -273,19 +293,16 @@ uint process_Milling( Critter@ cr, int& param0, int& param1, int& param2 )
 		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 	}
 	
-	mill.PicMap = mill.Proto.PicMap;
-	SETFLAG( mill.Flags, ITEM_SHOW_ANIM_EXT );
-	mill.Update();
+	MillFinish( mill );
 	
 	return 0;
 }
 
-uint e_MillingSound( uint[]@ values )
+void MillFinish( Item& mill )
 {
-	Critter@ cr = GetCritter(values[0]);
-	Map@ map = cr.GetMap();
-	PlayGenericSound( map, cr.HexX, cr.HexY, _GetOneRandom( MillSounds ), 10 );
-	return 0;
+	mill.PicMap = mill.Proto.PicMap;
+	SETFLAG( mill.Flags, ITEM_SHOW_ANIM_EXT );
+	mill.Update();
 }
 
 void Profit( Critter& cr, Item& mill, Item& material )
