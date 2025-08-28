@@ -14,7 +14,7 @@ class MenuFurnace: CenteredMenuHandler
 	string furnace_id_str;
 	
 
-    MenuFurnace( Item& furnace, Map& map, int furnace_type ) 
+    MenuFurnace( Item& furnace, Map& map, int furnace_type )
 	{
 		furnace_id = furnace.Id;
 		map_id = map.Id;
@@ -139,6 +139,7 @@ class MenuFurnace: CenteredMenuHandler
     {
     	return TEXTMSG_TEXT;
     }
+	
 	int getDescriptionLine()
 	{
 		if( furnace_type == FURNACE_ENERGY_TYPE )
@@ -159,7 +160,8 @@ class MenuFurnace: CenteredMenuHandler
 		uint items_count = furnace.GetItems( uint( -1 ), MaterialsCheck );
 		Item@ material = null;
 		int check_kg = 0;
-
+		Map@ map = GetMap( map_id );
+		
 		if( furnace.MAX_FUEL == 0 )
 		{
             furnace.MAX_FUEL = 24000;
@@ -167,7 +169,7 @@ class MenuFurnace: CenteredMenuHandler
 		
 		if( furnace_type == FURNACE_ENERGY_TYPE )
 		{
-			if( MapPowered( map_id ) )
+			if( MapHasPower( map ) )
 			{
 				info += STR_CHECK_DEVICE_FLAG( "powerStatus", true );
 			}
@@ -177,8 +179,12 @@ class MenuFurnace: CenteredMenuHandler
 			}
 		}
 		
- 		info += "$fuel" + furnace.CURRENT_FUEL * 100 / furnace.MAX_FUEL 
-			 + "$temp" + furnace.FIRE_STRENGTH;
+		if( furnace_type == FURNACE_WOOD_TYPE )
+		{
+			info += "$fuel" + furnace.CURRENT_FUEL * 100 / furnace.MAX_FUEL;
+		}
+ 		
+		info += "$temp" + furnace.FIRE_STRENGTH;
 
 		info += "$iron";
 		if( furnace.FURN_IRON > 0 )
@@ -196,11 +202,11 @@ class MenuFurnace: CenteredMenuHandler
 			check_kg++; 
 		}
 
-		info += "$NF_METAL";
+		info += "$nf_metal";
 		if( furnace.FURN_NF_METAL > 0 )
 		{
 			info += STR_INSERT_TEXT_LINE( STR_FURNACE_MENU_NF_METAL_WEIGHT ) + "\n"
-			     + "$NF_METALW" + ( furnace.FURN_NF_METAL / 1000.0f ); 
+			     + "$nf_metalW" + ( furnace.FURN_NF_METAL / 1000.0f ); 
 			check_kg++;
 		}
 
@@ -240,10 +246,12 @@ bool enableFurnace( Item& furnace )
 		return false;
 	}
 	
-	if( MapPowered( furnace.MapId ) )
+	Map@ map = GetMap( furnace.MapId );
+	
+	if( MapHasPower( map ) )
 	{
 		furnace.STATE = STATE_BURNING;
-		uint[] values = { furnace.Id, furnace.MapId };
+		uint[] values = { furnace.Id, map.Id };
 		
 		if( furnace.FIRE_EVENT != 0 )
 		{
@@ -252,8 +260,10 @@ bool enableFurnace( Item& furnace )
 		
 		furnace.FIRE_EVENT = CreateTimeEvent( AFTER( REAL_MS( 1500 ) ),"furnace@e_FurnaceWork", values, true );
 		setAnimState( furnace );
+		
 		return true;
 	}
+	
 	return false;
 }
 
@@ -269,43 +279,6 @@ void DisableFurnace( Item& furnace )
 	furnace.STATE = STATE_EXTINGUISHED;
 	setAnimState( furnace );
 }
-
-bool MapPowered( uint& map_id )
-{
-	Map@ map = GetMap ( map_id );
-	Item@[] generators;
-	Item@ generator = null;
-	bool is_power_found = false;
-	
-	map.GetItems( PID_POWER_NODE, generators );
-	
-	if( generators.length() > 0)
-	{
-		is_power_found = true;
-	}
-	
-	if( !is_power_found )
-	{
-		map.GetItems( PID_COAL_POWERGEN, generators );
-	
-		for( uint index = 0; index < generators.length(); index++ )
-		{
-			@ generator = generators[index];
-			if( valid( generator ) )
-			{
-				if( generator.STATE == STATE_BURNING )
-				{
-					is_power_found = true;
-					break;
-				}
-			}
-		}
-	}
-	
-	generators.resize(0);
-	return is_power_found;
-}
-
 
 int CheckFurnaceType( Item& furnace )
 {
@@ -402,7 +375,7 @@ void FurnaceStage( Item& furnace )
 		furnace_off += 1;
 	}
 	
-	if( furnace.STATE == STATE_BURNING && furnace_type == FURNACE_ENERGY_TYPE  && !MapPowered( furnace.MapId ) )
+	if( furnace.STATE == STATE_BURNING && furnace_type == FURNACE_ENERGY_TYPE  && !MapHasPower( map ) )
 	{
 		DisableFurnace( furnace );
 		furnace_off += 1;
@@ -543,7 +516,7 @@ uint e_FurnaceWork( uint[]@ values )
 	Item@ furnace = GetItem( values[0] );
 	if( valid( furnace ) )  
 	{
-		if( furnace.STATE != STATE_BURNING || ( CheckFurnaceType( furnace ) == FURNACE_ENERGY_TYPE && MapPowered( map.Id ) != true )  )
+		if( furnace.STATE != STATE_BURNING || ( CheckFurnaceType( furnace ) == FURNACE_ENERGY_TYPE && MapHasPower( map ) != true )  )
 		{
 			FurnaceStage( furnace );
 			return 0;
@@ -559,12 +532,12 @@ uint e_FurnaceWork( uint[]@ values )
 uint e_CoolDown( uint[]@ values )
 {
 	Item@ furnace = GetItem( values[0] );
-	int furnace_type = CheckFurnaceType( furnace );
-	
 	if( !valid( furnace ) )
 	{
 		return 0;
 	}
+
+	int furnace_type = CheckFurnaceType( furnace );
 	
 	if( furnace.STATE == STATE_BURNING )
 	{
@@ -716,7 +689,7 @@ void BurnItem( Item& furnace, Item& resource, uint16 type )
 	return;
 }
 
-void BlockArcFurnace ( Item& furnace )
+void BlockArcFurnace ( Item& furnace, bool block )
 {
 	uint16 hx = 0, hy = 0;
 	Map@ map = furnace.GetMapPosition( hx, hy );
@@ -725,96 +698,212 @@ void BlockArcFurnace ( Item& furnace )
 		return;
 	}
 	
-	/*DIR 4 - 3 - 5 - 0 - 0 - 0 - 0 - 2 - 2 - 2 - 3
-	M - main block cell
-	0-10 - generated block cell
-	  X  X  X  X  X  X
-	y			  6
-	           5  
-	y       4     7
-	     3        
-	y 2           8
-	     0      
-	Y 1		M     9
-	
-	Y		   10
-	*/
+	if( block )
+	{
+		UNSETFLAG( furnace.Flags, ITEM_NO_BLOCK );
+		UNSETFLAG( furnace.Flags, ITEM_CAN_PICKUP );
+	}
+	else
+	{
+		SETFLAG( furnace.Flags, ITEM_NO_BLOCK );
+		SETFLAG( furnace.Flags, ITEM_CAN_PICKUP );
+	}
 	
 	map.MoveHexByDir( hx, hy, 4, 1 );
-	Item@ blocker0 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
-	if( valid( blocker0 ) )
+	if( block )
 	{
-		blocker0.PARENT_ITM_ID = furnace.Id;
+		Item@ blocker0 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
+		if( valid( blocker0 ) )
+		{
+			blocker0.PARENT_ITM_ID = furnace.Id;
+		}	
+	}
+	else
+	{
+		Item@ blocker0 = map.GetItem( hx, hy, PID_METAL_BLOCKER );
+		if( valid( blocker0 ) )
+		{
+			DeleteItem( blocker0 );
+		}
 	}
 	
 	map.MoveHexByDir( hx, hy, 3, 1 );
-	Item@ blocker1 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
-	if( valid( blocker1 ) )
+	if( block )
 	{
-		blocker1.PARENT_ITM_ID = furnace.Id;
+		Item@ blocker1 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
+		if( valid( blocker1 ) )
+		{
+			blocker1.PARENT_ITM_ID = furnace.Id;
+		}
 	}
-	
+	else
+	{
+		Item@ blocker1 = map.GetItem( hx, hy, PID_METAL_BLOCKER );
+		if( valid( blocker1 ) )
+		{
+			DeleteItem( blocker1 );
+		}
+	}
 	map.MoveHexByDir( hx, hy, 5, 1 );
-	Item@ blocker2 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
-	if( valid( blocker2 ) )
+	if( block )
 	{
-		blocker2.PARENT_ITM_ID = furnace.Id;
+		Item@ blocker2 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
+		if( valid( blocker2 ) )
+		{
+			blocker2.PARENT_ITM_ID = furnace.Id;
+		}
+	}
+	else
+	{
+		Item@ blocker2 = map.GetItem( hx, hy, PID_METAL_BLOCKER );
+		if( valid( blocker2 ) )
+		{
+			DeleteItem( blocker2 );
+		}
 	}
 	
 	map.MoveHexByDir( hx, hy, 0, 1 );
-	Item@ blocker3 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
-	if( valid( blocker3 ) )
+	if( block )
 	{
-		blocker3.PARENT_ITM_ID = furnace.Id;
+		Item@ blocker3 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
+		if( valid( blocker3 ) )
+		{
+			blocker3.PARENT_ITM_ID = furnace.Id;
+		}
+	}
+	else
+	{
+		Item@ blocker3 = map.GetItem( hx, hy, PID_METAL_BLOCKER );
+		if( valid( blocker3 ) )
+		{
+			DeleteItem( blocker3 );
+		}
 	}
 	
 	map.MoveHexByDir( hx, hy, 0, 1 );
-	Item@ blocker4 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
-	if( valid( blocker4 ) )
+	if( block )
 	{
-		blocker4.PARENT_ITM_ID = furnace.Id;
+		Item@ blocker4 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
+		if( valid( blocker4 ) )
+		{
+			blocker4.PARENT_ITM_ID = furnace.Id;
+		}
+	}
+	else
+	{
+		Item@ blocker4 = map.GetItem( hx, hy, PID_METAL_BLOCKER );
+		if( valid( blocker4 ) )
+		{
+			DeleteItem( blocker4 );
+		}
 	}
 	
 	map.MoveHexByDir( hx, hy, 0, 1 );
-	Item@ blocker5 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
-	if( valid( blocker5 ) )
+	if( block )
 	{
-		blocker5.PARENT_ITM_ID = furnace.Id;
+		Item@ blocker5 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
+		if( valid( blocker5 ) )
+		{
+			blocker5.PARENT_ITM_ID = furnace.Id;
+		}
+	}
+	else
+	{
+		Item@ blocker5 = map.GetItem( hx, hy, PID_METAL_BLOCKER );
+		if( valid( blocker5 ) )
+		{
+			DeleteItem( blocker5 );
+		}
 	}
 	
 	map.MoveHexByDir( hx, hy, 0, 1 );
-	Item@ blocker6 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
-	if( valid( blocker6 ) )
+	if( block )
 	{
-		blocker6.PARENT_ITM_ID = furnace.Id;
+		Item@ blocker6 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
+		if( valid( blocker6 ) )
+		{
+			blocker6.PARENT_ITM_ID = furnace.Id;
+		}
+	}
+	else
+	{
+		Item@ blocker6 = map.GetItem( hx, hy, PID_METAL_BLOCKER );
+		if( valid( blocker6 ) )
+		{
+			DeleteItem( blocker6 );
+		}
 	}
 	
 	map.MoveHexByDir( hx, hy, 2, 1 );
-	Item@ blocker7 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
-	if( valid( blocker7 ) )
+	if( block )
 	{
-		blocker7.PARENT_ITM_ID = furnace.Id;
+		Item@ blocker7 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
+		if( valid( blocker7 ) )
+		{
+			blocker7.PARENT_ITM_ID = furnace.Id;
+		}
+	}
+	else
+	{
+		Item@ blocker7 = map.GetItem( hx, hy, PID_METAL_BLOCKER );
+		if( valid( blocker7 ) )
+		{
+			DeleteItem( blocker7 );
+		}
 	}
 	
 	map.MoveHexByDir( hx, hy, 2, 1 );
-	Item@ blocker8 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
-	if( valid( blocker8 ) )
+	if( block )
 	{
-		blocker8.PARENT_ITM_ID = furnace.Id;
+		Item@ blocker8 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
+		if( valid( blocker8 ) )
+		{
+			blocker8.PARENT_ITM_ID = furnace.Id;
+		}
+	}
+	else
+	{
+		Item@ blocker8 = map.GetItem( hx, hy, PID_METAL_BLOCKER );
+		if( valid( blocker8 ) )
+		{
+			DeleteItem( blocker8 );
+		}
 	}
 	
 	map.MoveHexByDir( hx, hy, 2, 1 );
-	Item@ blocker9 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
-	if( valid( blocker9 ) )
+	if( block )
 	{
-		blocker9.PARENT_ITM_ID = furnace.Id;
+		Item@ blocker9 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
+		if( valid( blocker9 ) )
+		{
+			blocker9.PARENT_ITM_ID = furnace.Id;
+		}
+	}
+	else
+	{
+		Item@ blocker9 = map.GetItem( hx, hy, PID_METAL_BLOCKER );
+		if( valid( blocker9 ) )
+		{
+			DeleteItem( blocker9 );
+		}
 	}
 	
 	map.MoveHexByDir( hx, hy, 3, 1 );
-	Item@ blocker10 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
-	if( valid( blocker10 ) )
+	if( block )
 	{
-		blocker10.PARENT_ITM_ID = furnace.Id;
+		Item@ blocker10 = map.AddItem( hx, hy, PID_METAL_BLOCKER, 1 );
+		if( valid( blocker10 ) )
+		{
+			blocker10.PARENT_ITM_ID = furnace.Id;
+		}
+	}
+	else
+	{
+		Item@ blocker10 = map.GetItem( hx, hy, PID_METAL_BLOCKER );
+		if( valid( blocker10 ) )
+		{
+			DeleteItem( blocker10 );
+		}
 	}
 	
 	furnace.SetEvent( ITEM_EVENT_FINISH, "furniture@_DeleteBlockers" );
