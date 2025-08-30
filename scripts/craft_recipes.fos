@@ -4,6 +4,7 @@
 #include "_utils.fos"
 #include "json_h.fos"
 #include "serializator.fos"
+#include "strtoint.fos"
 
 class CraftRecipe
 {
@@ -63,36 +64,6 @@ class CraftRecipe
 		this.Tier = tier;
 		return this;
 	}
-
-#ifdef __SERVER
-	int[] Serialize()
-	{
-		Serializator serializator;
-
-		serializator.Set(Tools);
-		serializator.Set(Resources);
-		serializator.Set(ResourcesCount);
-		serializator.Set(Output);
-		serializator.Set(OutputCount);
-		serializator.Set(Profession);
-		serializator.Set(Tier);
-		
-		return serializator.Buff2Int();
-	}
-#endif // __SERVER
-
-#ifdef __CLIENT
-	void Deserialize(Serializator& buff)
-	{
-		buff.Get(Tools);
-		buff.Get(Resources);
-		buff.Get(ResourcesCount);
-		buff.Get(Output);
-		buff.Get(OutputCount);
-		buff.Get(Profession);
-		buff.Get(Tier);
-	}
-#endif // __CLIENT
 }
 
 class CraftList
@@ -116,10 +87,6 @@ class CraftList
 
 bool isMainCraftListInited = false;
 CraftList MainCraftList;
-int crc32Sum = 0;
-
-#ifdef __SERVER
-int[] CraftListBin;
 
 void InitCraftList()
 {
@@ -130,17 +97,7 @@ void InitCraftList()
 	JSON@ craftJson = JSONParse(craftList);
 	_JSON_ForEach(craftJson, @ParseCraft);
 
-	crc32Sum = crc32b(CraftListBin);
-
 	isMainCraftListInited = true;
-}
-
-void PushCraftToBin(int[] craft)
-{
-	for(uint i = 0, len = craft.length(); i < len; i++)
-	{
-		CraftListBin.insertLast(craft[i]);
-	}
 }
 
 void ParseCraft(JSON@ craft, uint index)
@@ -153,112 +110,106 @@ void ParseCraft(JSON@ craft, uint index)
 		if(!craft["Tools"][i].isString()) continue;
 		string toolString = "";
 		craft["Tools"][i] >> toolString;
-		int toolPid = GetProtoIdByName(toolString);
+		toolString = substring(toolString, 1, toolString.length() - 2);
+		
+		uint16 toolPid = 0;
+		StrToInt(toolString, toolPid);
 		if(toolPid == 0) continue;
 
 		toolPids.insertLast(toolPid);
 	}
 	currRecipe.SetToolPids(toolPids);
 
+	uint16[] resPids;
+	uint[] resCounts;
+
+	string[] resKeys = craft["Resources"].getKeys();
+	for(uint i = 0, len = resKeys.length(); i < len; i++)
+	{	
+		uint16 pid = 0;
+
+		string currKey = resKeys[i];
+		string pidStr = substring(currKey, 1, currKey.length() - 2);
+		StrToInt(pidStr, pid);
+		
+		uint count = 0;
+		craft["Resources"][currKey] >> count;
+
+		if(pid == 0 || count == 0) continue;
+		resPids.insertLast(pid);
+		resCounts.insertLast(count);
+	}
+	currRecipe.SetResourcesPids(resPids);
+	currRecipe.SetResourcesCounts(resCounts);
+
+	uint16[] outPids;
+	uint[] outCounts;
+
+	string[] outKeys = craft["Output"].getKeys();
+	for(uint i = 0, len = outKeys.length(); i < len; i++)
+	{	
+		uint16 pid = 0;
+
+		string currKey = outKeys[i];
+		string pidStr = substring(currKey, 1, currKey.length() - 2);
+		StrToInt(pidStr, pid);
+		
+		uint count = 0;
+		craft["Output"][currKey] >> count;
+
+		if(pid == 0 || count == 0) continue;
+		outPids.insertLast(pid);
+		outCounts.insertLast(count);
+	}
+	currRecipe.SetOutputPids(outPids);
+	currRecipe.SetOutputCounts(outCounts);
+
+	string profStr = "";
+	craft["Profession"] >> profStr;
+	profStr = substring(profStr, 1, profStr.length() - 2);
+	uint prof = 0;
+	StrToInt(profStr, prof);
+	currRecipe.SetProfession(prof);
+
+	uint tier = 0;
+	craft["Tier"] >> tier;
+	currRecipe.SetTier(tier);
+	
+	#ifdef __CLIENT
+
+	string toolsStr = "";
 	for(uint i = 0, len = currRecipe.Tools.length(); i < len; i++)
 	{
-		Log("" + currRecipe.Tools[i] + "\n");
+		toolsStr += " " + currRecipe.Tools[i];
+	}
+	string resStr = "";
+	for(uint i = 0, len = currRecipe.Resources.length(); i < len; i++)
+	{
+		resStr += " " + currRecipe.Resources[i];
+	}
+	for(uint i = 0, len = currRecipe.ResourcesCount.length(); i < len; i++)
+	{
+		resStr += " " + currRecipe.ResourcesCount[i];
+	}
+	string outStr = "";
+	for(uint i = 0, len = currRecipe.Output.length(); i < len; i++)
+	{
+		outStr += " " + currRecipe.Output[i];
+	}
+	for(uint i = 0, len = currRecipe.OutputCount.length(); i < len; i++)
+	{
+		outStr += " " + currRecipe.OutputCount[i];
 	}
 
-	PushCraftToBin(currRecipe.Serialize());
+	Message("Tools: " + toolsStr + 
+			"\nRes: " + resStr + 
+			"\nOut: " + outStr + 
+			"\nProf: " + currRecipe.Profession + 
+			"\nTier: " + currRecipe.Tier );
+	
+	#endif
+
 	MainCraftList.Add(currRecipe);
 }
-
-void unsafe_CompareCRC32( Critter& player, int clientCRC32, int, int, string@, int[]@ )
-{
-	if(clientCRC32 == crc32Sum) return;
-
-	player.RunClientScript( "craft_recipes@RecvCraftList", 0, 0, 0, null, CraftListBin );
-}
-
-void unsafe_PleaseSendCraftList( Critter& player, int, int, int, string@, int[]@ )
-{
-	player.RunClientScript( "craft_recipes@RecvCraftList", 0, 0, 0, null, CraftListBin );
-}
-
-#endif // __SERVER
-
-#ifdef __CLIENT
-bool ShouldAskServerForCrafts = false;
-
-void TryGetNewCraftList()
-{
-	if(!ShouldAskServerForCrafts)
-	{
-		RunServerScriptUnsafe( "craft_recipes@unsafe_CompareCRC32", crc32Sum, 0, 0, null, null );
-	}
-	else
-	{
-		RunServerScriptUnsafe( "craft_recipes@unsafe_PleaseSendCraftList", crc32Sum, 0, 0, null, null );
-	}
-}
-
-void RecvCraftList( int, int, int, string@, int[]@ craftList )
-{
-	Serializator netRead(craftList);
-
-	while(!netRead.IsEOF())
-	{
-		CraftRecipe currRecipe;
-		currRecipe.Deserialize(netRead);
-		MainCraftList.Add(currRecipe);
-	}
-
-	netRead.SetCurPos(0);
-	crc32Sum = crc32b(netRead.Buff2Int());
-
-	string binPath = "data\\cache\\" + __Host + "." + __Port + "\\crafts.bin";
-	netRead.SaveFile(binPath);
-	ShouldAskServerForCrafts = false;
-}
-
-bool TryParseCraftBin()
-{
-	string binPath = "data\\cache\\" + __Host + "." + __Port + "\\crafts.bin";
-	
-	Serializator fileRead;
-	if(!fileRead.LoadFile(binPath))
-	{
-		return false;
-	}
-
-	while(!fileRead.IsEOF())
-	{
-		CraftRecipe currRecipe;
-		currRecipe.Deserialize(fileRead);
-		MainCraftList.Add(currRecipe);
-
-		for(uint i = 0, len = currRecipe.Tools.length(); i < len; i++)
-		{
-			Message("" + currRecipe.Tools[i] + "\n");
-		}
-	}
-
-	fileRead.SetCurPos(0);
-	crc32Sum = crc32b(fileRead.Buff2Int());
-
-	return true;
-}
-
-void InitCraftList()
-{
-	if(isMainCraftListInited) return;
-
-	if(!TryParseCraftBin())
-	{
-		Log("Failed to load crafts from cache. Will try to download when connect to server.");
-		ShouldAskServerForCrafts = true;
-	}
-	else
-	{
-		isMainCraftListInited = true;
-	}
-}
-#endif // __CLIENT
 
 #endif // CRAFT_RECIPES
