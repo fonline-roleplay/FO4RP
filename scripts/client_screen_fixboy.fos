@@ -2,14 +2,11 @@
 #include "client_gui_h.fos"
 #include "sprite.fos"
 #include "_utils.fos"
+#include "craft_recipes.fosh"
 
 #define CRAFT_MIN_NUM ( 600 )
 #define CRAFT_MAX_NUM ( 9498 )
 #define FIXBOY_PAGE_LEN ( 46 )
-
-// Pre-Loaded variables
-string[] craftNames;
-uint[] craftIDs;
 
 // Runtime-Logic, or Runtime-Changed variables
 uint[] availableCrafts;
@@ -26,39 +23,6 @@ uint[] DisplayIndices;
 
 ScreenMain@ screenPtr = null;
 
-void generateCraftList()
-{
-    for(uint i = CRAFT_MIN_NUM; i <= CRAFT_MAX_NUM; i++ )
-    {
-        CraftItem@ currCraft = GetCraftItem(i);
-        if(!valid(currCraft))
-        {
-            continue;
-        }
-        string result;
-
-        uint16[] itemPids;
-        uint[] itemCounts;
-        currCraft.GetOutItems(itemPids, itemCounts);
-        
-        for(uint j = 0, len = itemPids.length(); j < len; j++)
-        {
-            result += GetMsgStr(TEXTMSG_ITEM, itemPids[j] * 100);
-            if(itemCounts[j] > 1)
-            {
-                result += " " + itemCounts[j] + " " + GetMsgStr(TEXTMSG_GAME, STR_FIX_PIECES);
-            }
-            if(j != len - 1)
-            {
-                result += GetMsgStr(TEXTMSG_GAME, STR_AND);
-            }
-        }
-
-        craftNames.insertLast(result);
-        craftIDs.insertLast(i);
-    }
-}
-
 int FindCraftForItem(uint16& pid)
 {
     if(craftLinks.exists("" + pid))
@@ -69,17 +33,12 @@ int FindCraftForItem(uint16& pid)
     }
     
     int retVal = -1;
-    for(uint i = 0, len = craftIDs.length(); i < len; i++)
+    for(uint i = 0, len = GetMaxCraftsCount(); i < len; i++)
     {
-        CraftItem@ currCraft = GetCraftItem(craftIDs[i]);
-        if(!valid(currCraft))
-        {
-            continue;
-        }
+        CraftRecipe@ currRecipe = GetCraftByPID(i);
+        if(!valid(currRecipe)) continue;
 
-        uint16[] itemPids;
-        currCraft.GetOutItems(itemPids, null);
-        if(itemPids.find(pid) != -1)
+        if(currRecipe.Output.find(pid) != -1)
         {
             retVal = i;
             break;
@@ -92,8 +51,8 @@ int FindCraftForItem(uint16& pid)
 void ResetDisplayIndices()
 {
     listOffset = 0;
-    DisplayIndices.resize(craftIDs.length());
-    for(uint i = 0, len = craftIDs.length(); i < len; i++)
+    DisplayIndices.resize(GetMaxCraftsCount());
+    for(uint i = 0, len = GetMaxCraftsCount(); i < len; i++)
     {
         DisplayIndices[i] = i;
     }
@@ -117,11 +76,6 @@ class ScreenMain : IGUIScreenCallbackShow, IGUIScreenCallbackHide
     void OnShow( int p0, int p1, int p2 )
     {
 		ScreenActive = true;
-
-        if(craftNames.length() < 1)
-        {
-            generateCraftList();
-        }
 
         ResetDisplayIndices();
 
@@ -149,16 +103,19 @@ class ScreenMain : IGUIScreenCallbackShow, IGUIScreenCallbackHide
             {
                 FixboyRecipeBut@ currBtn = recipeBtns[i - listOffset];
 
-                uint index = (i < DisplayIndices.length()) ? DisplayIndices[i] : craftIDs.length();
-                if(index > craftIDs.length() - 1)
+                uint index = (i < DisplayIndices.length()) ? DisplayIndices[i] : GetMaxCraftsCount();
+                if(index > GetMaxCraftsCount() - 1)
                 {
-                    currBtn.index = 0;
+                    currBtn.index = -1;
                     currBtn.SetName("");
                 }
                 else
                 {
+                    CraftRecipe@ currRecipe = GetCraftByPID(index);
+                    if(!valid(currRecipe)) continue;
+
                     currBtn.index = index;
-                    currBtn.SetName(craftNames[index]);
+                    currBtn.SetName(currRecipe.CraftName);
                 }
             }
             counterScrn.SetText("Page: " + ((listOffset / FIXBOY_PAGE_LEN) + 1) + "/" + ((DisplayIndices.length() / FIXBOY_PAGE_LEN) + 1), COLOR_GREEN, FT_BORDERED|FT_CENTERXY);
@@ -229,13 +186,10 @@ class ScreenMain : IGUIScreenCallbackShow, IGUIScreenCallbackHide
 
     void ActualizeCraftInfo()
     {
-        CraftItem@ currCraft = GetCraftItem(craftIDs[currCraftIndex]);
-            
-        uint16[] resPids;
-        uint[] resCount;
-        bool[] resOrs;
-        currCraft.GetNeedItems(resPids, resCount, resOrs);
-        uint resLen = resPids.length();
+        CraftRecipe@ currRecipe = GetCraftByPID(currCraftIndex);
+        if(!valid(currRecipe)) return;
+
+        uint resLen = currRecipe.Resources.length();
         CritterCl@ chosen = GetChosen();
         string resText;
         for(uint i = 0, len = resBtns.length(); i < len; i++)
@@ -244,25 +198,20 @@ class ScreenMain : IGUIScreenCallbackShow, IGUIScreenCallbackHide
             resBtns[i].Options.SetSprite(null);
             if(i < resLen)
             {
-                resBtns[i].SetPicByPid(resPids[i]);
-                int index = FindCraftForItem(resPids[i]);
+                resBtns[i].SetPicByPid(currRecipe.Resources[i]);
+                int index = FindCraftForItem(currRecipe.Resources[i]);
                 if(index != -1)
                 {
                     resBtns[i].index = index;
                 }
-                resBtns[i].Options.Text(((resCount[i] > 1) ? "x" + resCount[i] : ""), FONT_FALLOUT, COLOR_WHITE, 0, FT_BOTTOM|FT_CENTERR );
-                resText += ((i > 0 && !resOrs[i-1]) || i == 0 ? "|0xADFF2F • " : "") + ( hasItem( resPids[i], resCount[i] ) ? "|0x00C800 " : "|0x7F7F7F " ) + GetMsgStr(TEXTMSG_ITEM, resPids[i] * 100) + " " + 
-                            (resCount[i] > 1 ? resCount[i] + " " + GetMsgStr(TEXTMSG_GAME, STR_FIX_PIECES) : "" ) +
-                            (resOrs[i] ? "|0xABABAB " + GetMsgStr(TEXTMSG_GAME, STR_OR) : "\n");
+                resBtns[i].Options.Text(((currRecipe.ResourcesCount[i] > 1) ? "x" + currRecipe.ResourcesCount[i] : ""), FONT_FALLOUT, COLOR_WHITE, 0, FT_BOTTOM|FT_CENTERR );
+                resText +=  "|0xADFF2F â€¢ " + ( hasItem( currRecipe.Resources[i], currRecipe.ResourcesCount[i] ) ? "|0x00C800 " : "|0x7F7F7F " ) + GetMsgStr(TEXTMSG_ITEM, currRecipe.Resources[i] * 100) + " " + 
+                            (currRecipe.ResourcesCount[i] > 1 ? currRecipe.ResourcesCount[i] + " " + GetMsgStr(TEXTMSG_GAME, STR_FIX_PIECES) : "" ) + "\n";
             }
         }
         resReq.SetText(resText, COLOR_GREEN, FT_BORDERED);
 
-        uint16[] toolsPids;
-        uint[] toolsCount;
-        bool[] toolsOrs;
-        currCraft.GetNeedTools(toolsPids, toolsCount, toolsOrs);
-        uint toolsLen = toolsPids.length();
+        uint toolsLen = currRecipe.Tools.length();
         string toolsText;
         for(uint i = 0, len = toolsBtns.length(); i < len; i++)
         {
@@ -271,45 +220,28 @@ class ScreenMain : IGUIScreenCallbackShow, IGUIScreenCallbackHide
 
             if(i < toolsLen)
             {
-                toolsBtns[i].SetPicByPid(toolsPids[i]);
-                int index = FindCraftForItem(toolsPids[i]);
+                toolsBtns[i].SetPicByPid(currRecipe.Tools[i]);
+                int index = FindCraftForItem(currRecipe.Tools[i]);
                 if(index != -1)
                 {
                     toolsBtns[i].index = index;
                 }
-                toolsBtns[i].Options.Text(((toolsCount[i] > 1) ? "x" + toolsCount[i] : ""), FONT_FALLOUT, COLOR_WHITE, 0, FT_BOTTOM|FT_CENTERR );
-                toolsText += ((i > 0 && !toolsOrs[i-1]) || i == 0 ? "|0xADFF2F • " : "") + ( hasItem( toolsPids[i], toolsCount[i] ) ? "|0x00C800 " : "|0x7F7F7F ") + GetMsgStr(TEXTMSG_ITEM, toolsPids[i] * 100) + " " + 
-                            (toolsCount[i] > 1 ? toolsCount[i] + " " + GetMsgStr(TEXTMSG_GAME, STR_FIX_PIECES) : "" ) +
-                            (toolsOrs[i] ? "|0xABABAB " +  GetMsgStr(TEXTMSG_GAME, STR_OR) : "\n");
+                toolsBtns[i].Options.Text("", FONT_FALLOUT, COLOR_WHITE, 0, FT_BOTTOM|FT_CENTERR );
+                toolsText += "|0xADFF2F â€¢ " + ( hasItem( currRecipe.Tools[i], 1 ) ? "|0x00C800 " : "|0x7F7F7F ") + GetMsgStr(TEXTMSG_ITEM, currRecipe.Tools[i] * 100) + "\n";
             }
         }
         toolsReq.SetText(toolsText, COLOR_GREEN, FT_BORDERED);
         craftLabel.GenLabel();
 
-        uint[] skills;
-        int[] skillsVals;
-        bool[] skillsOrs;
-        currCraft.GetNeedParams(skills, skillsVals, skillsOrs);
-        string skillsText;
-        for(uint i = 0, len = skills.length(); i < len; i++)
-        {
-            skillsText += ((i > 0 && !skillsOrs[i-1]) || i == 0 ? "|0xADFF2F • " : "") + ((chosen.Param[skills[i]] >= skillsVals[i]) ? "|0x00C800 " : "|0x7F7F7F ") + skillsVals[i] + " " + GetMsgStr( TEXTMSG_GAME, STR_SKILL_NAME(skills[i]) ) +
-            (skillsOrs[i] ? "|0xABABAB " + GetMsgStr(TEXTMSG_GAME, STR_OR) : "\n");
-        }
+        //skillsReq.SetText(skillsText, COLOR_GREEN, FT_BORDERED);
 
-        skillsReq.SetText(skillsText, COLOR_GREEN, FT_BORDERED);
-
-        uint16[] itemsPids;
-        uint[] itemsCount;
-        currCraft.GetOutItems(itemsPids, itemsCount);
-
-        for(uint i = 0, len = itemsPids.length(); i < len; i++)
+        for(uint i = 0, len = currRecipe.Output.length(); i < len; i++)
         {
             int tempSize = ((497 / 2) - ((50 * len) / 2));
             craftResult[i].Options.SetVisible(true);
             craftResult[i].Options.Position(tempSize + (50 * i), 32);
-            craftResult[i].SetPicByPid(itemsPids[i]);
-            craftResult[i].Options.Text(((itemsCount[i] > 1) ? "x" + itemsCount[i] : ""), FONT_FALLOUT, COLOR_WHITE, 0, FT_BOTTOM|FT_CENTERR );
+            craftResult[i].SetPicByPid(currRecipe.Output[i]);
+            craftResult[i].Options.Text(((currRecipe.OutputCount[i] > 1) ? "x" + currRecipe.OutputCount[i] : ""), FONT_FALLOUT, COLOR_WHITE, 0, FT_BOTTOM|FT_CENTERR );
         }
     }
 }
@@ -405,7 +337,7 @@ class FixboyRecipeBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick, 
 {
     IGUIElementOpt@ Options;
     ScreenMain@ Instance;
-    int index = 0;
+    int index = -1;
     string name = "";
 
     FixboyRecipeBut( ScreenMain & instance )
@@ -421,7 +353,7 @@ class FixboyRecipeBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick, 
 
     void OnMouseClick( int click )
     {
-        if(index != 0)
+        if(index != -1)
         {
             currCraftIndex = index;
             Instance.ChangeLevel(1);
@@ -434,12 +366,12 @@ class FixboyRecipeBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick, 
         if( (__MouseX >= posX && __MouseX <= posX + w) &&
             (__MouseY >= posY && __MouseY <= posY + h) )
         {
-            Options.Text( "" + name, FONT_FALLOUT, (availableCrafts.find(craftIDs[index]) != -1 ? COLOR_DGREEN : COLOR_LGRAY), 0, FT_BORDERED );
+            Options.Text( "" + name, FONT_FALLOUT, (availableCrafts.find(index) != -1 ? COLOR_DGREEN : COLOR_LGRAY), 0, FT_BORDERED );
             hoverIndex = index;
         }
         else
         {
-            Options.Text( "" + name, FONT_FALLOUT, (availableCrafts.find(craftIDs[index]) != -1 ? COLOR_GREEN : COLOR_GRAY), 0, FT_BORDERED );
+            Options.Text( "" + name, FONT_FALLOUT, (availableCrafts.find(index) != -1 ? COLOR_GREEN : COLOR_GRAY), 0, FT_BORDERED );
         }
     }
 
@@ -473,7 +405,7 @@ class FixboyFixBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
         }
         else if(currLevel == 1)
         {
-            RunServerScriptUnsafe( "craft@unsafe_StartCraft", craftIDs[currCraftIndex], craftIterations, 0 , null, null );
+            RunServerScriptUnsafe( "craft@unsafe_StartCraft", currCraftIndex, craftIterations, 0 , null, null );
             ::HideScreen( 0, 0, 0, 0 );
             ChangeCursor( GetLastCursor() );
         }
@@ -484,7 +416,7 @@ class FixboyCraftResBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
 {
     IGUIElementOpt@ Options;
     ScreenMain@ Instance;
-    int index = 0;
+    int index = -1;
 
     FixboyCraftResBut( ScreenMain & instance )
     {
@@ -498,7 +430,7 @@ class FixboyCraftResBut : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
 
     void OnMouseClick( int click )
     {
-        if(index != 0)
+        if(index != -1)
         {
             currCraftIndex = index;
             Instance.ChangeLevel(1);
@@ -548,7 +480,10 @@ class FixboyCraftText : IGUIElementCallbackInit
 
     void GenLabel()
     {
-		Options.Text( "" + craftNames[currCraftIndex], FONT_FALLOUT, COLOR_GREEN, 0, FT_BORDERED|FT_CENTERX );
+        CraftRecipe@ currRecipe = GetCraftByPID(currCraftIndex);
+        if(!valid(currRecipe)) return;
+
+		Options.Text( currRecipe.CraftName, FONT_FALLOUT, COLOR_GREEN, 0, FT_BORDERED|FT_CENTERX );
     }
 }
 
@@ -580,21 +515,14 @@ class FixboyHoverInfo : IGUIElementCallbackInit, IGUIElementCallbackDraw
 
     string GetHoverText()
     {
-        CraftItem@ currCraft = GetCraftItem(craftIDs[hoverIndex]);
-        if(!valid(currCraft))
-        {
-            return "";
-        }
+        CraftRecipe@ currRecipe = GetCraftByPID(hoverIndex);
+        if(!valid(currRecipe)) return "";
 
-        uint16[] itemPids;
-        uint[] itemCounts;
-        currCraft.GetOutItems(itemPids, itemCounts);
-
-        ProtoItem@ item = GetProtoItem(itemPids[0]);
-        int itemCount = itemCounts[0];
+        ProtoItem@ item = GetProtoItem(currRecipe.Output[0]);
+        int itemCount = currRecipe.OutputCount[0];
         string itemName = checkNull( GetMsgStr( TEXTMSG_ITEM, item.ProtoId * 100 ) );
 
-        ItemIcon.SetPicByPid(itemPids[0]);
+        ItemIcon.SetPicByPid(currRecipe.Output[0]);
 
         string result = protoColor( item ) + itemName + COLOR_NETMSG;
 		result += "\n-----------------------\n";
@@ -888,9 +816,12 @@ class FixboySearch : IGUIElementCallbackInit, IGUIElementCallbackDraw, IGUIEleme
 
         searchQuery = strlwr(searchQuery);
 
-        for(uint i = 0, len = craftNames.length(); i < len; i++)
+        for(uint i = 0, len = GetMaxCraftsCount(); i < len; i++)
         {
-            string currName = strlwr(craftNames[i]);
+            CraftRecipe@ currRecipe = GetCraftByPID(i);
+            if(!valid(currRecipe)) continue;
+
+            string currName = strlwr(currRecipe.CraftName);
             if(findFirst(currName, searchQuery) != -1)
             {
                 result.insertLast(i);
