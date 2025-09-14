@@ -1033,6 +1033,16 @@ EXPORT uint Critter_GetUID(Critter& cr, uint8 num)
 
 uint GetTiles( Map& map, uint16 hexX, uint16 hexY, bool is_roof, vector< uint >& finded )
 {
+    if( &map == NULL )
+    {
+        Log("GetTiles: map is NULL");
+        return 0;
+    }
+    if( map.Proto == NULL )
+    {
+        Log("GetTiles: map.Proto is NULL");
+        return 0;
+    }
     ProtoMap::TileVec& tiles = const_cast< ProtoMap::TileVec& >( map.Proto->Tiles );
 
     for( uint i = 0, j = tiles.size(); i < j; i++ )

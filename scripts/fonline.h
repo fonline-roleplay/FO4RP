@@ -631,7 +631,11 @@ EXPORT_UNINITIALIZED GameOptions* FOnline;
 
 struct Mutex
 {
+#if defined ( FO_X86 )
     const int Locker[ 6 ];      // CRITICAL_SECTION, include Windows.h
+#else // FO_X64
+    const int Locker[ 10 ];
+#endif
 };
 
 struct Spinlock
@@ -1984,7 +1988,6 @@ inline int GetDistantion( int x1, int y1, int x2, int y2 )
     }
 }
 
-
 inline void static_asserts()
 {
     STATIC_ASSERT( sizeof( char )        == 1 );
@@ -1998,7 +2001,7 @@ inline void static_asserts()
     STATIC_ASSERT( sizeof( uint64 )      == 8 );
     STATIC_ASSERT( sizeof( bool )        == 1 );
 
-    #if defined ( _M_IX86 )
+    #if defined ( FO_X86 )
     STATIC_ASSERT( sizeof( string )       == 24   );
     STATIC_ASSERT( sizeof( IntVec )       == 12   );
     STATIC_ASSERT( sizeof( IntMap )       == 24   );
@@ -2033,7 +2036,12 @@ inline void static_asserts()
     # ifdef __SERVER
     STATIC_ASSERT( offsetof( ProtoMap, HexFlags )              == 304  );
     # endif
-    #endif // defined(_M_IX86)
+    #else // FO_X64
+    STATIC_ASSERT( sizeof( Mutex )        == 40   );
+    //int array[offsetof( Map, HexFlags )];
+    //int error = 1 / &array;
+    STATIC_ASSERT( offsetof( Map, Proto )       == 688  );
+    #endif
 }
 
 #endif     // __FONLINE__
