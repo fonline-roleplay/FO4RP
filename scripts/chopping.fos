@@ -3,6 +3,7 @@
 
 #include "_utils.fos"
 #include "_ltp.fos"
+#include "chopping_h.fos"
 #include "gathering_h.fos"
 #include "critter_skills_h.fos"
 #include "combat_h.fos"
@@ -522,6 +523,320 @@ void ChopItem( Item& target )
 		_SubItem( target, 1 );
 	}
 }
+
+// Sawhorse
+class MenuSawhorse: CenteredMenuHandler
+{
+    uint sawhorse_id;
+    uint map_id;
+	
+    MenuSawhorse( Item& sawhorse, Map& map )
+	{
+        sawhorse_id = sawhorse.Id;
+        map_id = map.Id;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+        if( !valid( map ) )
+		{
+            return false;
+        }
+		
+        Item@ sawhorse = GetItem( sawhorse_id );
+        if( !valid( sawhorse ) )
+		{
+            return false;
+        }
+		
+		if( locked_in_place( sawhorse ) )
+		{
+			if( hasItems( cr, SawTools, SLOT_HAND1 ) && menu.ButtonMsg( STR_ANVIL_MENU_SMITH ) )
+			{
+				Item@ tool = _CritGetItemHand( cr );
+				PrepareSmithing( cr, tool, sawhorse );
+				return false;
+			}
+
+			if( menu.ButtonMsg( STR_FURNITURE_MENU_EXAMINE ) )
+			{
+				ShowContainer( cr, sawhorse, TRANSFER_HEX_CONT_UP );
+				return false;
+			}
+			
+			if( menu.ButtonMsg( STR_FURNITURE_MENU_DETACH ) )
+			{
+				LockInPlace( cr, sawhorse );
+				return true;
+			}
+		}
+		else
+		{
+			if( menu.ButtonMsg( STR_FURNITURE_MENU_ANCHOR ) )
+			{
+				LockInPlace( cr, sawhorse );
+				return true;
+			}
+
+			if( menu.ButtonMsg( STR_FURNITURE_MENU_PICKUP ) )
+			{
+				PickItem( cr, sawhorse );
+				ChangeCritterSpeed( cr );
+				return false;
+			}			
+		}
+		return true;
+    }
+	
+	int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_ANVIL_MENU_MAIN;
+	}
+	
+    string@ Description( Critter& cr )
+	{
+	
+		string info;
+		Item@ sawhorse = GetItem( sawhorse_id );
+		
+		Item@[] MaterialsCheck;
+		uint count = sawhorse.GetItems( uint( -1 ), MaterialsCheck );
+		Item@ material = null;
+		info += "$contains";
+		uint16 materialPid = 0;
+		if( count == 0 )
+		{ 
+			info += STR_INSERT_TEXT_LINE( STR_EMPTY );
+		}
+		else
+		{
+			for( uint i = 0; i < MaterialsCheck.length(); i ++ )
+			{
+				materialPid = MaterialsCheck[i].GetProtoId();
+				if( SawMaterialList.find( materialPid ) != -1 )
+				{
+					@material = MaterialsCheck[i];
+					break;
+				}
+			}
+			
+			if( !valid( material ) )
+			{ 
+				info += STR_INSERT_TEXT_LINE( STR_ANVIL_MENU_NO_METAL );
+			}
+			else
+			{
+				info += STR_INSERT_TEXT_LINE( STR_ANVIL_MENU_CONTAINS )
+					 + "$item" + STR_INSERT_ITEM_LINE( materialPid * 100 )
+					 + "$amount" + material.GetCount();
+			}
+		}		
+
+		return info;
+    }
+}
+
+void StartMenuSawhorse( Critter& cr, Item@ sawhorse )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuSawhorse( sawhorse, map );
+    iDialogBox@ menu = OpenMenu( cr, "sawhorse", handler );
+}
+
+bool ltp_smithing_inited = false;
+void ltp_smithing_init()
+{
+	LTPREG( LTP_SMITHING, process_Smithing )
+	ltp_smithing_inited = true;
+}
+
+bool PrepareSmithing( Critter& cr, Item@ tool, Item@ sawhorse ) 
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+		return false;
+	}
+	
+	if( !valid( tool ) )
+	{
+		return false;
+	}
+	
+	if( !valid( sawhorse ) )
+	{
+		return false;
+	}	
+	
+	if( sawhorse.GetProtoId() != PID_SAWHORSE )
+	{
+		return false;
+	}
+	
+	if( !hasItems( cr, SawTools, SLOT_HAND1 ) )
+	{
+		return false;
+	}
+
+	if( IsTired( cr ) )
+	{
+		return false;
+	}
+	
+	if( cr.IsDmgTwoArm() || cr.IsDmgTwoLeg() )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_CANT_WORK );
+		return false; 
+	}
+	
+	Item@[] MaterialsCheck;
+	sawhorse.GetItems( uint( -1 ), MaterialsCheck );
+	Item@ material = null;
+	uint16 materialPid;
+	if( MaterialsCheck.length() == 0 )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ANVIL_EMPTY ); 
+		return false; 
+	}
+	else
+	{
+		for( uint i = 0; i < MaterialsCheck.length(); i ++ )
+		{
+			materialPid = MaterialsCheck[i].GetProtoId();
+			if( SawMaterialList.find( materialPid ) != -1 )
+			{
+				@material = MaterialsCheck[i];
+				break;
+			}
+		}
+		
+		if( !valid( material ) )
+		{ 
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_INGOT ); 
+			return false; 
+		}
+	}
+	
+	start_Smithing( cr, tool, sawhorse, material );
+	return true;
+}
+
+bool start_Smithing( Critter& cr, Item& tool, Item& sawhorse, Item@ material )
+{
+	if(!ltp_smithing_inited)
+	{
+		ltp_smithing_init();
+	}
+	
+	if( valid( tool ) && valid( sawhorse ) )
+	{	
+		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint smithing_rate = ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( 3000 / ( CLAMP( smithing_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		
+		uint[] values = { cr.Id };
+		
+		_CritAnimateSwing( cr );
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_SmithingSound", values, false);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
+
+		StartProcess( cr, LTP_SMITHING, 0, sawhorse.Id, material.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+		return true;
+	}
+	return false;
+}
+
+uint process_Smithing( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_SMITHING )
+	
+    Item@ sawhorse = GetItem( param1 );
+  	Item@ material = GetItem( param2 );
+  	if( valid( sawhorse ) && valid( material ) )
+    {
+		param0++;
+		
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
+		{
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_FINISH_SMITHING );
+			Result( cr, sawhorse, material );
+			int skillNum = SK_REPAIR;
+			Accident( cr, skillNum );
+			return 0;
+		}
+		
+		uint[] values = { cr.Id };
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_SmithingSound", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
+
+		_CritAnimateSwing( cr );
+		
+		if( cr.IsInjured() )
+		{
+			uint damage = INJURED_HP_DAMAGE - cr.Stat[ ST_ENDURANCE ];
+			hurt( cr, damage );
+		}
+		
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+	}
+	return 0;
+}
+
+uint e_SmithingSound( uint[]@ values )
+{
+	Critter@ cr = GetCritter(values[0]);
+	Map@ map = cr.GetMap();
+	PlayGenericSound( map, cr.HexX, cr.HexY, _GetOneRandom( SawingSounds ), 10 );
+	return 0;
+}
+
+void Result( Critter& cr, Item& sawhorse, Item& material )
+{
+	if( !valid( sawhorse) && !valid( material ) )
+	{
+		return;
+	}
+	
+	uint16 materialPid = material.GetProtoId();
+	uint8 index = SawMaterialList.find( materialPid );
+	uint16 resultPid = SawResultList[ index ];
+	uint8 amount = SawAmount[index];
+	cr.AddItem( resultPid, amount );
+	_SubItem( material, 1 );
+	
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_CRAFTED_PID, "$proto@msg item " +  ( resultPid * 100 ) + "@$amount" + amount + "\n" );
+
+	cr.StatBase[ ST_EXPERIENCE ] += 25;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 /*
 //ONE-TIME LIVE SERVER TREE UPGRADE
 void _TreeUpgrade( Critter& player, int param0, int param1, int param2 )
