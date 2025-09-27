@@ -83,6 +83,7 @@ void ScriptFileSystem::Release() const
 unsigned int ScriptFileSystem::GetFiles( ScriptString& outStr, ScriptString& separator ) const
 {
 	unsigned int count = 0;
+#if defined(_WIN32)
 	WIN32_FIND_DATA ffd;
     HANDLE          hFind = INVALID_HANDLE_VALUE;
 
@@ -103,6 +104,31 @@ unsigned int ScriptFileSystem::GetFiles( ScriptString& outStr, ScriptString& sep
     }
     while( FindNextFile( hFind, &ffd ) != 0 );
     FindClose( hFind );
+#else
+	dirent *ent = 0;
+	DIR *dir = opendir(currentPath.c_str());
+	while( (ent = readdir(dir)) != NULL ) 
+	{
+		const string filename = ent->d_name;
+
+		// Skip . and ..
+		if( filename[0] == '.' )
+			continue;
+
+		// Skip sub directories
+		const string fullname = currentPath + "/" + filename;
+		struct stat st;
+		if( stat(fullname.c_str(), &st) == -1 )
+			continue;
+		if( (st.st_mode & S_IFDIR) != 0 )
+			continue;
+
+		if( count++ != 0 )
+			outStr += separator.c_str();
+        outStr += filename.c_str();
+	}
+	closedir(dir);
+#endif
     return count;
 }
 
@@ -160,7 +186,7 @@ CScriptArray *ScriptFileSystem::GetDirs() const
 			continue;
 
 		// Add the dir to the array
-		array->InsertLast( &ScriptString::Create( filename ) );
+		array->InsertLast( &ScriptString::Create( filename.c_str() ) );
 	}
 	closedir(dir);
 #endif
