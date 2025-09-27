@@ -144,7 +144,9 @@ namespace FOFMOD
 				unsigned int cur = ftell( this->handle );
 				rewind( this->handle );
 
-				result = mz_zip_reader_extract_to_heap( &this->zipFile, symbol->index, size, 0 );
+				size_t t_size = *size;
+				result = mz_zip_reader_extract_to_heap( &this->zipFile, symbol->index, &t_size, 0 );
+				*size = t_size;
 
 				fseek( this->handle, cur, SEEK_SET );
 			}
