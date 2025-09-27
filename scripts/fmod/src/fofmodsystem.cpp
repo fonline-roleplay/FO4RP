@@ -236,6 +236,21 @@ namespace FOFMOD
 		return result;
 	}
 
+	#ifdef FO_GCC
+	char* _strlwr(char* x)
+	{
+		int b;
+		for(b=0;x[b]!='\0';b++)
+		{
+			if(x[b]>='A'&&x[b]<='Z')
+			{
+				x[b]=x[b]-'A'+'a';
+			}
+		}
+		return x;
+	}
+	#endif
+
 	bool System::TouchArchive( const std::string& filename )
 	{
 		FOFMOD_DEBUG_LOG("Touch archive file at path <%s>. \n", filename.c_str() );

@@ -161,39 +161,19 @@ bool DMO64_insertLast( CScriptArray* array, CScriptArray* from_array )
 
 int uint16ToInt( uint16 val1, uint16 val2 )
 {
-    int t = 0;
-    _asm {
-        mov ax, val2
-        sal             eax, 16
-        mov             ax, val1
-        mov             t, eax
-    }
-    /*_asm{
-            mov		eax, [t]
-            mov		bx,	val1
-            mov		word ptr [eax], bx
-            mov		bx,	val2
-            mov		word ptr [eax+4], bx
-       }*/
+    uint t = val2;
+    t <<= 16;
+    t |= val1;
     return t;
 }
 
 uint DMO64_makeHex( uint16 hexX, uint16 hexY, uint8 layer )
 {
-    uint t;
-    _asm {
-        xor             eax,    eax
-        mov             ah,             layer
-        sal             eax,    4
-        mov             bx,             hexY
-        and             bx,             0xFFF
-        or              ax,             bx
-        sal             eax,    12
-        mov             bx,             hexX
-        and             bx,             0xFFF
-        or              ax,             bx
-        mov             t,              eax
-    }
+    uint t = layer;
+    t <<= 4;
+    t |= hexY & 0xFFF;
+    t <<= 12;
+    t |= hexX & 0xFFF;
     return t;
 }
 
