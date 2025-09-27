@@ -124,16 +124,24 @@ int GetServerHour( )
 {
     tm timeinfo;
     time_t rawtime = GetTime( );
+#ifdef FO_GCC
+    localtime_r( &rawtime, &timeinfo );
+#else
     localtime_s( &timeinfo, &rawtime );
+#endif
     return timeinfo.tm_hour;
 }
 
 #ifdef __CLIENT
 
+#ifdef FO_WINDOWS
 #include <Windows.h>
+#endif
 
 bool CBPaste( ScriptString& str )
 {
+    bool result = false;
+    #ifdef FO_WINDOWS
     HGLOBAL hglb;
     LPTSTR  lptstr;
 
@@ -151,17 +159,21 @@ bool CBPaste( ScriptString& str )
         }
     }
     CloseClipboard();
-    return str.length() > 0;
+    result = str.length() > 0;
+    #endif
+    return result;
 }
 
 uint GetHardware()
 {
+    uint hardwareId = 0;
+    #ifdef FO_WINDOWS
     SYSTEM_INFO siSysInfo;
 
     // Копируем информацию о железе в структуру SYSTEM_INFO.
 
     GetSystemInfo( &siSysInfo );
-    uint hardwareId = siSysInfo.dwOemId;
+    hardwareId = siSysInfo.dwOemId;
 
     // Отображаем содержимое структуры SYSTEM_INFO.
 
@@ -177,7 +189,7 @@ uint GetHardware()
        siSysInfo.lpMaximumApplicationAddress);
        printf("  Active processor mask: %u\n",
        siSysInfo.dwActiveProcessorMask);*/
-
+    #endif
     return hardwareId;
 }
 
@@ -994,11 +1006,12 @@ EXPORT void Item_SetMapPic( Item& item, uint hash )
 
 #ifdef __SERVER
 
+// TODO: burn it with fire
 struct ClientEx : Client
 {
 	uint UID[5];
 	volatile int Sock; // in fact, SOCKET
-	sockaddr_in From;
+	// sockaddr_in From;
 };
 
 
