@@ -1,0 +1,463 @@
+#ifndef DECRAFT
+#define DECRAFT
+
+#include "_utils.fos"
+#include "_ltp.fos"
+#include "gathering_h.fos"
+#include "handcuffs_h.fos"
+#include "repair_h.fos"
+#include "decraft.fosh"
+#include "craft_recipes.fosh"
+
+dictionary DecraftList;
+dictionary decraftItems; //Global variable for decraft ingredients
+
+class DecraftOutput
+{
+    uint16 Pid = 0;
+    uint Count = 0;
+
+    DecraftOutput(uint16 pid, uint count)
+    {
+        if(pid == 0 || count == 0) return;
+        this.Pid = pid;
+        this.Count = count;
+    }
+}
+
+class DecraftOutputArray
+{
+    DecraftOutput@[] DecraftOutputs;
+	dictionary pidAssosiateList;
+	uint Tier = 1;
+    
+    void Add(uint16 pid, uint count)
+    {
+        if(pid == 0 || count == 0) return;
+
+		uint index;
+		if( pidAssosiateList.get( ""+pid, index ) )
+		{
+			DecraftOutputs[index].Count += count;
+			return;
+		}
+
+        DecraftOutput@ newElem = DecraftOutput(pid, count);
+        Add(newElem);
+		pidAssosiateList.set(""+pid, this.length() - 1);
+    }
+
+    void Add(DecraftOutput@ newElem)
+    {
+        DecraftOutputs.insertLast(newElem);
+    }
+
+	uint length()
+	{
+		return DecraftOutputs.length();
+	}
+
+    DecraftOutput@ get_opIndex(int index) 
+    {
+        if(index >= int(this.length())) return null;
+        return DecraftOutputs[index];
+    }
+}
+
+DecraftOutputArray@ ProcessDecraftRecipe(CraftRecipe@ recipe)
+{
+	if( !valid( recipe ) ) 
+		return null;
+	
+	DecraftOutputArray@ Decraft;
+
+	if( DecraftList.exists( ""+recipe.Output[0] ) )
+	{
+		DecraftList.get(""+recipe.Output[0], @Decraft);
+		return Decraft;
+	}
+	@Decraft = DecraftOutputArray();
+	Decraft.Tier = recipe.Tier;
+
+	for(uint i = 0, len = recipe.Resources.length(); i < len; i++)
+	{
+		uint16 pid = recipe.Resources[i];
+		uint count = recipe.ResourcesCount[i];
+		if( NonDecraftableResources.find( pid ) != -1 ) continue;
+
+		CraftRecipe@ ComponentRecipe = GetCraftByItemPID( pid );
+		if( !valid( ComponentRecipe ) || (ComponentRecipe.Resources.length() == 1 && ComponentRecipe.ResourcesCount[0] == 1) ) 
+		{
+			Decraft.Add(pid, count);
+			continue;
+		}
+
+		DecraftOutputArray@ ComponentDecraft = ProcessDecraftRecipe(ComponentRecipe);
+		if(!valid(ComponentDecraft)) continue;
+
+		for(uint j = 0, jlen = ComponentDecraft.length(); j < jlen; j++)
+		{
+			DecraftOutput@ currCompDecraftRes = ComponentDecraft[j];
+			if(!valid(currCompDecraftRes)) continue;
+			Decraft.Add(currCompDecraftRes.Pid, currCompDecraftRes.Count * count);
+		}
+	}
+
+	if(Decraft.length() > 0)
+		DecraftList.set( ""+recipe.Output[0], Decraft );
+	
+	return Decraft;
+}
+
+void AddManualDecraftList()
+{
+	DecraftOutputArray@ Decraft;
+
+	// Example
+	@Decraft = DecraftOutputArray();
+	Decraft.Add(PID_TUBE, 1);
+	DecraftList.set( ""+PID_SUN, Decraft );
+}
+
+void InitDecraft()
+{
+	AddManualDecraftList();
+
+	Log("1");
+	for(uint i = 0, len = GetMaxCraftsCount(); i < len; i++)
+	{
+		CraftRecipe@ currRecipe = GetCraftByPID(i);
+		if(!valid(currRecipe)) continue;
+		ProcessDecraftRecipe(currRecipe);
+	}
+	Log("2");
+}
+
+bool TryDisassembleItem( Critter& cr, Item& item )
+{
+	if( !valid( item ) )
+	{
+		return false;
+	}
+	
+	if( IsTired( cr ) )
+	{
+		return false;
+	}
+	
+	if( HandsTied( cr ) )
+	{
+		return false;
+	}
+	
+	if( cr.IsInjured() )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_TO_DECRAFT );
+		return false;
+	}
+
+	uint16 Pid = item.GetProtoId();
+	uint8 Item_Subtype = item.Proto.Item_Subtype;
+	bool hasAmmo = ( item.Proto.Weapon_MaxAmmoCount != 0 );
+	
+	int repair = 0;
+	int science = 0;
+
+	uint16[] tools;
+	uint16[] parts;
+	
+    switch( Pid )
+    {
+		case( PID_PLANT_CORN_DEAD ):
+		case( PID_PLANT_FIVELEAF_DEAD ):
+			tools.insertLast( PID_KNIFE ); 
+			tools.insertLast( PID_THROWING_KNIFE ); 
+			tools.insertLast( PID_SWITCHBLADE ); 
+			tools.insertLast( PID_COMBAT_KNIFE ); 
+			tools.insertLast( PID_REVKNIFE2 );
+			parts.insertLast( PID_PLANT_FIBERS ); parts.insertLast( 5 );
+			break;		
+		case( PID_PLANT_RADCVET_DEAD ):
+			tools.insertLast( PID_KNIFE ); 
+			tools.insertLast( PID_THROWING_KNIFE ); 
+			tools.insertLast( PID_SWITCHBLADE ); 
+			tools.insertLast( PID_COMBAT_KNIFE ); 
+			tools.insertLast( PID_REVKNIFE2 );
+			parts.insertLast( PID_PLANT_FIBERS ); parts.insertLast( 1 );
+			break;
+		case( PID_PLANTBARREL_EMPTY ):
+			parts.insertLast( PID_BARREL_GENERIC ); parts.insertLast( 1 );
+			parts.insertLast( PID_SAND ); parts.insertLast( 3 );
+			break;
+		case( PID_SHIT_BAREL_FULL ):
+		case( PID_BAREL_EMPTY ):
+			parts.insertLast( PID_BARREL_GENERIC ); parts.insertLast( 1 );
+			break;
+		case( PID_TOWEL ):
+		case( PID_OLD_TOWEL ):
+			tools.insertLast( PID_KNIFE ); 
+			tools.insertLast( PID_THROWING_KNIFE ); 
+			tools.insertLast( PID_SWITCHBLADE ); 
+			tools.insertLast( PID_COMBAT_KNIFE ); 
+			tools.insertLast( PID_REVKNIFE2 );
+			parts.insertLast( PID_CLOTH ); parts.insertLast( 5 );
+			break;
+		case( PID_MOUSE_SKIN ): 
+			tools.insertLast( PID_KNIFE ); 
+			tools.insertLast( PID_THROWING_KNIFE ); 
+			tools.insertLast( PID_SWITCHBLADE ); 
+			tools.insertLast( PID_COMBAT_KNIFE ); 
+			tools.insertLast( PID_REVKNIFE2 );
+			parts.insertLast( PID_CLOTH ); parts.insertLast( 1 );  
+			break;
+		case( PID_WOLF_FUR ): 
+		case( PID_GECKO_PELT ): 
+			tools.insertLast( PID_KNIFE ); 
+			tools.insertLast( PID_THROWING_KNIFE ); 
+			tools.insertLast( PID_SWITCHBLADE ); 
+			tools.insertLast( PID_COMBAT_KNIFE ); 
+			tools.insertLast( PID_REVKNIFE2 );
+			parts.insertLast( PID_CLOTH ); parts.insertLast( 2 );  
+			break;
+		case( PID_PELT3 ): 	
+		case( PID_GOLDEN_GECKO_PELT ): 
+			tools.insertLast( PID_KNIFE ); 
+			tools.insertLast( PID_THROWING_KNIFE ); 
+			tools.insertLast( PID_SWITCHBLADE ); 
+			tools.insertLast( PID_COMBAT_KNIFE ); 
+			tools.insertLast( PID_REVKNIFE2 );
+			parts.insertLast( PID_LEATHER ); parts.insertLast( 2 );  
+			break;
+		case( PID_FIRE_GECKO_PELT ): 
+			tools.insertLast( PID_KNIFE ); 
+			tools.insertLast( PID_THROWING_KNIFE ); 
+			tools.insertLast( PID_SWITCHBLADE ); 
+			tools.insertLast( PID_COMBAT_KNIFE ); 
+			tools.insertLast( PID_REVKNIFE2 );
+			parts.insertLast( PID_LEATHER ); parts.insertLast( 3 );  
+			break;
+		case( PID_BRAHMIN_SKIN ):
+		case( PID_DEATHCLAW_HIDE ):
+			tools.insertLast( PID_KNIFE ); 
+			tools.insertLast( PID_THROWING_KNIFE ); 
+			tools.insertLast( PID_SWITCHBLADE ); 
+			tools.insertLast( PID_COMBAT_KNIFE ); 
+			tools.insertLast( PID_REVKNIFE2 );
+			parts.insertLast( PID_LEATHER ); parts.insertLast( 5 ); 
+			break;
+		case( PID_SCOPED_HUNTING_RIFLE ):
+			tools.insertLast( PID_MULTI_TOOL );
+			tools.insertLast( PID_SCREWDRIVER );
+			parts.insertLast( PID_HUNTING_RIFLE ); parts.insertLast( 1 );
+			parts.insertLast( PID_optics1 ); parts.insertLast( 1 );
+			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
+			break;
+		case( PID_10MM_PISTOL_FLASHLIGHT ):
+			tools.insertLast( PID_MULTI_TOOL );
+			tools.insertLast( PID_SCREWDRIVER );
+			parts.insertLast( PID_10MM_PISTOL ); parts.insertLast( 1 );
+			parts.insertLast( PID_FLASHLIGHT_OFF ); parts.insertLast( 1 );
+			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
+			break;
+		case( PID_ASSAULT_RIFLE_OPT ):
+			tools.insertLast( PID_MULTI_TOOL );
+			tools.insertLast( PID_SCREWDRIVER );
+			parts.insertLast( PID_ASSAULT_RIFLE ); parts.insertLast( 1 );
+			parts.insertLast( PID_optics3 ); parts.insertLast( 1 );
+			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
+			break;
+		case( PID_M4_OPT ):
+			tools.insertLast( PID_MULTI_TOOL );
+			tools.insertLast( PID_SCREWDRIVER );
+			parts.insertLast( PID_M4 ); parts.insertLast( 1 );
+			parts.insertLast( PID_optics3 ); parts.insertLast( 1 );
+			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
+			break;
+		case( PID_ASSAULT_RIFLE_EXT_MAG_OPT ):
+			tools.insertLast( PID_MULTI_TOOL );
+			tools.insertLast( PID_SCREWDRIVER );
+			parts.insertLast( PID_ASSAULT_RIFLE_EXT_MAG ); parts.insertLast( 1 );
+			parts.insertLast( PID_optics3 ); parts.insertLast( 1 );
+			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
+			break;
+		case( PID_ASSAULT_RIFLE_EXT_XXL_MAG_OPT ):
+			tools.insertLast( PID_MULTI_TOOL );
+			tools.insertLast( PID_SCREWDRIVER );
+			parts.insertLast( PID_ASSAULT_RIFLE_EXT_XXL_MAG ); parts.insertLast( 1 );
+			parts.insertLast( PID_optics3 ); parts.insertLast( 1 );
+			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
+			break;
+	}
+	
+	if( !( tools.length() == 0 && parts.length() == 0 ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_IDEA );
+		return false;
+	}
+	
+	if( repair > cr.Skill[ SK_REPAIR ]	|| science > cr.Skill[ SK_SCIENCE ] )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LACK_SKILL );
+		return true;
+	}
+	
+	if ( ( tools.length() > 0 ) && ( !valid( _CritGetItemHand( cr ) ) || tools.find( _CritGetItemHand( cr ).GetProtoId() ) == -1 ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_HOLD_TOOL );
+	    for( uint j = 0; j < tools.length(); j++ )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_HOLD_TOOL_PID, "$proto@msg item " + ( tools[j] * 100 ) + "@" );
+		}
+
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GAINED_PARTS );
+		for( uint jj = 0; jj < parts.length(); jj+=2 )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GAINED_PARTS_PID, "$proto@msg item " + ( parts[jj] * 100 ) + "@" );
+		}
+		return true;
+	}
+	
+	if( item.GetType() == ITEM_TYPE_WEAPON && item.Proto.Weapon_MaxAmmoCount > 0 )
+	{
+		uint ammoCount = item.AmmoCount;
+		
+		if( ammoCount > 0 )
+		{
+			Item@ ammo = cr.AddItem( item.AmmoPid, ammoCount );
+			item.AmmoCount = 0;
+			item.Update();
+			
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_AMMO_EJECTED, "$proto@msg item " + ( ammo.Proto.ProtoId * 100 + 2 ) + "@$count" + ammoCount );
+		}
+	}
+	
+	decraftItems.set( ""+cr.Id, parts );
+	uint amount = parts.length();
+	start_decraft( cr, item, amount );
+    return true;
+}
+
+bool ltp_decraft_inited = false;
+void ltp_decraft_init()
+{
+	LTPREG( LTP_DECRAFT, process_decraft )
+	ltp_decraft_inited = true;
+}
+
+bool start_decraft( Critter& cr, Item& item, uint amount )
+{
+	if( !ltp_decraft_inited )
+	{
+		ltp_decraft_init();
+	}
+	
+	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	int decraft_rate = ( cr.Skill[SK_REPAIR] ) + ( cr.Stat[ST_AGILITY] * 10 ) + ( cr.Stat[ST_INTELLECT] * 10 ) + OBJECT_DPA_BASE; 
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( ( amount * 200 ) / ( CLAMP( decraft_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+	
+	uint[] values = { cr.Id };
+	
+	CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
+	CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);	
+
+	_CritAnimateUse( cr );
+
+	StartProcess( cr, LTP_DECRAFT, 0, amount, item.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+	return true;
+}
+
+uint process_decraft( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+	LTPROCESS( cr, param0, LTP_DECRAFT )
+  	
+	uint amount = param1;
+	Item@ item = GetItem( param2 );
+	
+	if( valid( item ) )
+    {
+		param0++;
+		
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
+		{
+			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_FINISH_DECRAFT );
+			DecraftResult( cr, item );
+			return 0;
+		}
+		
+		uint[] values = { cr.Id };
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
+
+		_CritAnimateUse( cr );
+		
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+	}
+	
+	return 0;
+}
+
+bool DecraftResult( Critter& cr, Item& item ) 
+{
+	uint16[]@ parts;
+	decraftItems.get( ""+cr.Id, @parts );
+	
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GAINED_DECRAFT, "$proto@msg item " + ( item.Proto.ProtoId * 100 ) + "@" );
+    for( uint8 i = 0; i < parts.length(); i += 2 )
+	{
+		Item@ gainedItem = cr.AddItem( parts[ i ], parts[ i + 1 ] );
+		if( valid( gainedItem ) )
+		{
+			if( gainedItem.Proto.Weapon_MaxAmmoCount > 0 )
+			{
+				gainedItem.AmmoCount = 0;
+			}
+			
+			if( item.IsDeteriorable() && gainedItem.IsDeteriorable() )
+			{
+				SetDeterioration( gainedItem, GetDeteriorationProcent( item ) );
+			}
+			
+			gainedItem.Update();
+		}
+		
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GAINED_DECRAFT_PID, "$proto@msg item " + ( gainedItem.Proto.ProtoId * 100 ) + "@$count" + parts[ i + 1 ] );
+	}
+
+	decraftItems.delete ( "" + cr.Id );
+	
+	if ( item.GetCount() > 1 )
+	{
+		item.SetCount(item.GetCount() - 1);
+		StartMenuAskAction( cr, item );
+	}
+	else
+	{
+		DeleteItem( item );
+	}
+	
+	return true;
+}
+
+//~run decraft _GetDecraftOutput pid 0 0
+void _GetDecraftOutput( Critter& player, int param0, int param1, int param2 )
+{
+	if(param0 <= 0) return;
+	if( !DecraftList.exists( ""+param0 ) ) return;
+
+	DecraftOutputArray@ Decraft;
+	DecraftList.get(""+param0, @Decraft);
+
+	if(!valid(Decraft)) return;
+
+	player.Say(SAY_NETMSG, "Output for pid " + param0 + " is:");
+	for(uint i = 0, len = Decraft.length(); i < len; i++)
+	{
+		DecraftOutput@ currOut = Decraft[i];
+		if(!valid(currOut)) continue;
+
+		player.Say(SAY_NETMSG, "PID " + GetConstantName(CONSTANTS_ITEM, currOut.Pid) + ", Count " + currOut.Count);
+	}
+}
+
+#endif // DECRAFT
