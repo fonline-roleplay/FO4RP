@@ -920,11 +920,21 @@ class CellWorld : iManagerModule, iManager_map_critter_in, iManager_map_critter_
         cr.StatBase[ ST_LOCALMAP_PID ] = map.GetProtoId();
         cr.StatBase[ ST_LOCALMAP_DIR ] = -1;
 
+        uint16 zeroHexX = 0, zeroHexY = 0;
+
+        if( map.GetEntireCoords( MAP_EDGE_ENTIRE, 0, zeroHexX, zeroHexY ) )
+        {
+            cr.StatBase[ ST_LOCALMAP_ZEROHEXX ] = zeroHexX;
+            cr.StatBase[ ST_LOCALMAP_ZEROHEXY ] = zeroHexY;
+        }     
+
         return true;
     }
     bool global_map_critter_out( Map& map, Critter& cr )
     {
         cells_critter_shift( map, cr, true );
+        cr.StatBase[ ST_LOCALMAP_ZEROHEXX ] = 0; 
+        cr.StatBase[ ST_LOCALMAP_ZEROHEXY ] = 0;
         return true;
     }
 
@@ -1572,26 +1582,6 @@ void global_process( int processType, Critter& cr, Item@ car, float& curX, float
 // If mapId != 0 than group enter to it.
 void global_invite( Critter& leader, Item@ car, uint encounterDescriptor, int combatMode, uint& mapId, uint16& hexX, uint16& hexY, uint8& dir )
 {
-    // Enter to map under group
-    /*if(encounterDescriptor == uint(-1))
-       {
-            Location@[] locations;
-            if(GetLocations(leader.WorldX, leader.WorldY, 0, locations) != 0)
-            {
-                    Location@ loc = locations[0];
-                    Map@ map = loc.GetMapByIndex(0);
-                    if(valid(map) && map.GetEntireCoords(0, 0, hexX, hexY))
-                    {
-                            mapId = map.Id;
-                            dir = 0xFF;
-                    }
-            }
-            return;
-
-       // Find encounter
-       InviteToEncounter(leader.GetGlobalGroup(), car, encounterDescriptor, combatMode, mapId, hexX, hexY, dir);
-     */
-
     Cell@ cell = world.GetCell( leader );
     if( !valid(cell) )
         return;
@@ -1650,7 +1640,6 @@ void global_invite( Critter& leader, Item@ car, uint encounterDescriptor, int co
             mapId = map.Id;
         }
     }
-
 }
 
 void ScanZone( Critter@[]& group, int zx, int zy )
@@ -1691,18 +1680,6 @@ void ScanZone( Critter@[]& group, int zx, int zy )
                 }
             }
         }
-
-        // Find new locations
-        /*uint[]@ locIds = lookLen == 1 ? locIds1 : locIds2;
-           for(uint j = 0; j < locIds.length(); j++)
-           {
-                uint locId = locIds[j];
-                if(!cr.IsKnownLoc(true, locId))
-                {
-                        Location@ loc = GetLocation(locId);
-                        if(valid(loc)) cr.SetKnownLoc(true, locId);
-                }
-           }*/
     }
 }
 
@@ -2402,40 +2379,86 @@ void unsafe_GetMapPid( Critter& cr, int hexX, int hexY, int protoId, string@ par
         Cell @ cell = world.GetCell( cr );
         if( valid( cell ) && valid( cell.Content ) )
         {
-            int8 offsetCellX = 0;
-			int8 offsetCellY = 0;
-			int8 level = GetMapLevelByPid( baseMap.GetProtoId() );
-			
-            uint8  direction = baseMap.GetScenParam( hexX, hexY, protoId, 0 );
-            uint16 destCellX = cell.X, destCellY = cell.Y, oldHexX = 0, oldHexY = 0;
+            int8 level = GetMapLevelByPid( baseMap.GetProtoId() );
 
-			if( cell.Content.MapId[ CELL_LEVEL_DEFAULT + level ] == 0 ) // no map
+            if( cell.Content.MapId[ CELL_LEVEL_DEFAULT + level ] == 0 ) // no map
 			{
+                cr.StatBase[ ST_LOCALMAP_PID ] = 0;
 				return;
 			}
-			
-            if( !GetMap( cell.Content.MapId[ CELL_LEVEL_DEFAULT + level ] ).GetEntireCoords( MAP_EDGE_ENTIRE, 0, oldHexX, oldHexY ) )
+
+            int8 offsetCellX = 0, offsetCellY = 0;
+            uint8 direction = baseMap.GetScenParam( hexX, hexY, protoId, 0 );
+            uint16 destCellX = cell.X, destCellY = cell.Y, oldHexX = 0, oldHexY = 0;
+
+            uint16 objX = sceneryGrid.HexX;
+            uint16 objY = sceneryGrid.HexY;
+
+            if( !baseMap.GetEntireCoords( MAP_EDGE_ENTIRE, 0, oldHexX, oldHexY ) )
             {
-                cr.Say( SAY_NETMSG, "no ent" );
+                cr.StatBase[ ST_LOCALMAP_PID ] = 0;
                 return;
             }
 
-            oldHexX = sceneryGrid.HexX - oldHexX;
-            oldHexY = sceneryGrid.HexY - oldHexY;
+            offsetCellX = ( ( objX - oldHexX ) / REGULAR_MAP_SIZE );
+            offsetCellY = ( ( objY - oldHexY ) / REGULAR_MAP_SIZE );
+
+            SetMapDirection( direction, destCellX, destCellY, offsetCellX, offsetCellY );
+            
+            Cell@ transitCell = world.GetCell( destCellX, destCellY );
+
+            if( cell.SizeX > 1 || cell.SizeY > 1 )
+            {
+                uint8 tempHexX = ( ( objX - oldHexX ) / REGULAR_MAP_SIZE );
+                uint8 tempHexY = ( ( objY - oldHexY ) / REGULAR_MAP_SIZE );
+                if( objX > 1)
+                {
+                    if( transitCell.SizeX > 1 )
+                    {
+                        objX -= ( tempHexX );
+                    }
+                    else
+                    {
+                        objX -= ( tempHexX ) * REGULAR_MAP_SIZE;
+                    }
+                }
+                
+                if( objY > 1 )
+                {
+                    if( transitCell.SizeY > 1 )
+                    {
+                        objY -= ( tempHexY );
+                    }
+                    else 
+                    {
+                        objY -= ( tempHexY ) * REGULAR_MAP_SIZE;
+                    }
+                }
+            }
+
+            int _oldHexX = oldHexX;
+            int _oldHexY = oldHexY;
+            oldHexX = ABS( int(objX - oldHexX) );
+            oldHexY = ABS( int(objY - oldHexY) );
 
             cr.StatBase[ ST_LOCALMAP_DIR ] = direction;
-            if( SetMapDirection( direction, destCellX, destCellY, offsetCellX, offsetCellY ) )
+
+            // generator
+            if( !valid(transitCell) || !valid(transitCell.Content) )
             {
-                int mapId = GetCellMap( destCellX * 10, destCellY * 10, level );
-				
-                if( mapId != -1 )
+                cr.StatBase[ ST_LOCALMAP_PID ] = 0;
+                return;
+            }
+
+            int mapId = transitCell.Content.MapId[ CELL_LEVEL_DEFAULT + level ];
+
+            if( mapId != 0 )
+            {
+                Map@ map = GetMap( mapId );
+                if( valid( map ) )
                 {
-                    Map@ map = GetMap( mapId );
-                    if( valid( map ) )
-                    {
-                        cr.StatBase[ ST_LOCALMAP_PID ] = map.GetProtoId();
-                        return;
-                    }
+                    cr.StatBase[ ST_LOCALMAP_PID ] = map.GetProtoId();
+                    return;
                 }
             }
         }
