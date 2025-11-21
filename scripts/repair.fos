@@ -11,6 +11,85 @@
 #include "craft_recipes.fosh"
 #include "decraft.fosh"
 
+dictionary RepairHardList;
+
+void InitRepairList()
+{
+	ItemPartArray@ Repair;
+
+	@Repair = ItemPartArray();
+	Repair.Add( PID_FLINT, 1 );
+	RepairHardList.set( "" + PID_KNIFE, Repair );
+}
+
+ItemPartArray@ GetRepairParts(uint16 pid)
+{
+	ItemPartArray@ Repair;
+	if( RepairHardList.get(""+pid, @Repair) )
+	{
+		return Repair;
+	}
+
+	ProtoItem@ ItemProto = GetProtoItem(pid);
+
+	if(valid(ItemProto) && (ItemProto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_KNIFE || 
+							ItemProto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_LONG_KNIFE ||
+							ItemProto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_SPEAR ||
+							ItemProto.Item_Subtype == ITEM_SUBTYPE_WEAPON_GRENADE_KIFE) )
+	{
+		if( RepairHardList.get(""+PID_KNIFE, @Repair) )
+		{
+			return Repair;
+		}
+	}
+	
+	return GetItemParts(pid);
+}
+
+void ShowRepairInfo( Critter& cr, Item& item )
+{
+	if( !valid( item ) || !valid (cr ) )
+	{
+		return;
+	}
+
+	ItemPartArray@ Repair = GetRepairParts( item.GetProtoId() );
+	if( !valid( Repair ) )
+	{
+		return;
+	}
+
+	ShowRepairInfo( cr, Repair, item );
+}
+
+void ShowRepairInfo( Critter& cr, ItemPartArray@ Repair, Item& item )
+{
+	if(!valid(cr) || !valid(Repair)) return;
+
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, ( FLAG(Repair.Tools, TOOL_MULTITOOL) ? STR_NEED_HOLD_TOOL_AND_MULTITOOL : STR_NEED_HOLD_TOOL ) );
+	for( int i = 0; i < 32; i ++ )
+	{
+		if( i == 2 ) // TOOL_MULTITOOL
+		{
+			continue;
+		}
+		if( ISBIT( Repair.Tools, i ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_HOLD_TOOL_PID, "$proto@msg item " + ( ProtoToolPids[i] * 100 ) + "@" );
+		}
+	}
+
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GAINED_PARTS );
+	for( uint i = 0, len = Repair.length(); i < len; i++ )
+	{
+		uint count = Repair[i].Count;
+		if( !FLAG( item.BrokenFlags, BI_BROKEN ) )
+			count = uint(Repair[i].Count / 100.0f * GetDeteriorationProcent( item ));
+		count = MAX(count, 1);
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GAINED_PARTS_PID, "$proto@msg item " + ( Repair[i].Pid * 100 ) + "@$amount" + count );
+	}
+}
+
 bool TryRepairItem( Critter& cr, Item& item )
 {
     if( !item.IsDeteriorable() && item.Proto.Item_Subtype != ITEM_SUBTYPE_BONDAGE )
@@ -57,7 +136,7 @@ bool TryRepairItem( Critter& cr, Item& item )
 	uint8 Item_Subtype = item.Proto.Item_Subtype;
 	bool isNonReparable = item.BrokenCount > MAX_BROKENS;
 	bool hasAmmo = ( item.Proto.Weapon_MaxAmmoCount != 0 );
-	ItemPartArray@ RepairParts = GetItemParts(Pid);
+	ItemPartArray@ RepairParts = GetRepairParts(Pid);
 
 	if( !valid(RepairParts) || isNonReparable )
 	{
@@ -67,10 +146,11 @@ bool TryRepairItem( Critter& cr, Item& item )
 
 	uint firstTool = FindFirstTool(RepairParts.Tools);
 	bool isMultitool = FLAG(RepairParts.Tools, TOOL_MULTITOOL) ? HasTool(cr, 2) : true;
+	bool isNeedRepair = GetDeteriorationProcent( item ) > 0;
 
-	if ( !HasTool(cr, firstTool) || !isMultitool )
+	if ( !HasTool(cr, firstTool) || !isMultitool || !isNeedRepair )
 	{
-		ShowDecraftInfo(cr, RepairParts);
+		ShowRepairInfo(cr, RepairParts, item);
 		return true;
 	}
 
@@ -81,11 +161,12 @@ bool TryRepairItem( Critter& cr, Item& item )
 
 		uint count = currPart.Count;
 		if( !FLAG( item.BrokenFlags, BI_BROKEN ) )
-			count = currPart.Count / 100 * item.Deterioration;
+			count = uint(currPart.Count / 100.0f * GetDeteriorationProcent( item ));
+		count = MAX(count, 1);
 
 		if( cr.CountItem( currPart.Pid ) < count )
 		{
-			ShowDecraftInfo(cr, RepairParts);
+			ShowRepairInfo(cr, RepairParts, item);
 			return true;
 		}
 	}
@@ -179,6 +260,7 @@ void HandcuffsRepairResult(Critter& cr, Item& item)
 		default:
 			break;
 	}
+
 	item.Update();
 }
 
@@ -188,7 +270,7 @@ void BrokenRepairResult(Critter& cr, Item& item)
 		return;
 
 	uint16 Pid = item.GetProtoId();
-	ItemPartArray@ RepairParts = GetItemParts(Pid);
+	ItemPartArray@ RepairParts = GetRepairParts(Pid);
 
 	if( !valid(RepairParts) )
 		return;
@@ -259,7 +341,7 @@ void ServiceRepairResult(Critter& cr, Item& item)
 		return;
 
 	uint16 Pid = item.GetProtoId();
-	ItemPartArray@ RepairParts = GetItemParts(Pid);
+	ItemPartArray@ RepairParts = GetRepairParts(Pid);
 
 	if( !valid(RepairParts) )
 		return;
@@ -314,6 +396,8 @@ void ServiceRepairResult(Critter& cr, Item& item)
 		cr.StatBase[ ST_EXPERIENCE ] += 20;
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_REPAIR_SUCC );
 	}
+
+	item.Update();
 }
 
 void RepairResult( Critter& cr, Item& item )
