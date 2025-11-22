@@ -37,7 +37,6 @@ int to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem& weapon, u
 	uint skillNum = _WeaponSkill( weapon, use );
 	if( skillNum == 0 )
 	{
-		Log( "_WeaponSkill( " + weapon.ProtoId + ", " + use + " ) == 0" );
 		return 0;
 	}
 	
@@ -57,6 +56,7 @@ int to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem& weapon, u
 	int faloff = 0;
 	int weaponPerk = weapon.Weapon_Perk;
 	int coverBonus = 0;
+	int obstuctMod = 0;
 	
 	if( valid( target ) )
 	{
@@ -106,11 +106,66 @@ int to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem& weapon, u
 		{
 			reach = ( wpnMaxDist - 1 ) * REACH_BONUS;
 		}
+		
+		CritterMutual@[] critters;
+		
+		#ifdef __SERVER
+			Map@ map = attacker.GetMap();
+			map.GetCrittersPath( attacker.HexX, attacker.HexY, target.HexX, target.HexY, 0.0f, dist, FIND_LIFE_AND_KO, critters );
+		#endif //__SERVER
+		
+		#ifdef __CLIENT
+			GetCrittersPath( attacker.HexX, attacker.HexY, target.HexX, target.HexY, 0.0f, dist, FIND_LIFE_AND_KO, critters );
+		#endif //__CLIENT
+		
+		bool obstucted = false;
+		uint[] IDs = SortByDist( attacker.HexX, attacker.HexY, critters );
+		uint ID = 0;
+		for( uint i = 0, l = IDs.length(); i < l; i++ )
+		{
+			ID = IDs[i];
+			if( ID == attacker.Id )
+			{
+				continue;
+			}
+			
+			if( ID == target.Id )
+			{
+				continue;
+			}
+			
+			CritterMutual@ obstruct = GetCritter( ID );
+			if( valid( obstruct ) )
+			{
+				if( obstruct.IsDead() )
+				{
+					continue;
+				}
+				
+				if( !CanHit( attacker, aim, obstruct, false ) )
+				{
+					continue;
+				}
+				else
+				{
+							#ifdef __CLIENT
+					//Message( "obstruct" + obstruct.Id );
+		#endif //__CLIENT
+					obstucted = true;
+					break;
+				}
+			}
+		}
+		
+		if( obstucted )
+		{
+			obstuctMod += OBSTRUCT_MALLUS;
+		}
 	}
 	else
 	{
 		dist = GetDistantion( attacker.HexX, attacker.HexY, hexX, hexY );
-		acMod += 50;
+		acMod += HEX_ATTACK_MALLUS;
 	}
 
 	if( valid( ammo ) )
@@ -186,9 +241,9 @@ int to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem& weapon, u
 		aimModifier = aimMod( aim );
 	}
 	
- 	//Log( "baseHitChance " + baseHitChance + " acMod "  + acMod + " aimModifier " + aimModifier + " toHitMod " + toHitMod +  " reach " + reach + " injureMod " + injureMod + " attacker.Param[ ST_DRUNK ] " + attacker.Param[ ST_DRUNK ] + " coverBonus " + coverBonus );
+ 	//Log( "baseHitChance " + baseHitChance + " acMod "  + acMod + " aimModifier " + aimModifier + " toHitMod " + toHitMod +  " reach " + reach + " injureMod " + injureMod + " attacker.Param[ ST_DRUNK ] " + attacker.Param[ ST_DRUNK ] + " coverBonus " + coverBonus + " obstuctMod " + obstuctMod );
 	
-	int hitChance = baseHitChance - acMod - aimModifier + toHitMod + reach - injureMod - attacker.Param[ ST_DRUNK ] - coverBonus;
+	int hitChance = baseHitChance - acMod - aimModifier + toHitMod + reach - injureMod - attacker.Param[ ST_DRUNK ] - coverBonus - obstuctMod;
 	
 #ifndef __CLIENT
 	if( attacker.ParamBase[ QST_GAMEMODE ] == GAME_TEST )
@@ -204,6 +259,38 @@ int to_hit( CritterMutual& attacker, CritterMutual@ target, ProtoItem& weapon, u
 	}
 	
 	return CLAMP( hitChance, min_hit_chance, MAX_HITCHANCE );
+}
+
+uint[] SortByDist( uint16 x, uint16 y, Critter@[] crs )
+{
+	uint[] result;
+	while( result.length() < crs.length() )
+	{
+		uint min_dist = 250, n = 0;
+		for( uint i = 0, l = crs.length(); i < l; i++ )
+		{
+			if( !valid( crs[i] ) )
+			{
+				continue;
+			}
+			
+			uint distance = GetDistantion( x, y, crs[i].HexX, crs[i].HexY );	
+			if( distance < min_dist )
+			{
+				min_dist = distance;
+				n = i;
+			}
+		}
+		
+		if( result.find( crs[n].Id ) == -1 )
+		{
+			result.insertLast( crs[n].Id );
+		}
+		
+		@crs[n] = null;		
+	}
+	
+	return result;
 }
 
 int aimMod( uint8 aim )
@@ -267,6 +354,76 @@ int BaseHitChance( int distance, int optimal, int faloff )
 	int hitChance = int( MIN_HITCHANCE + ( cos( ( distance - optimal ) * 3.14f / faloff ) + 1 ) / 2 * ( MAX_HITCHANCE - MIN_HITCHANCE ) );
 	
 	return hitChance;
+}
+
+int AimToHeight( uint8 aim )
+{
+	switch( aim ) 
+	{
+		case( HIT_LOCATION_HEAD ):
+		case( HIT_LOCATION_EYES ):
+			return AIM_HIGH;
+		case( HIT_LOCATION_GROIN ):
+		case( HIT_LOCATION_RIGHT_LEG ):
+		case( HIT_LOCATION_LEFT_LEG ):
+			return AIM_LOW;
+	}
+	
+	return AIM_MIDDLE;
+}
+
+int GetAimHeight( CritterMutual& attacker, uint8 aim, CritterMutual@ target )
+{
+	int aim_hight = AimToHeight( aim );
+	
+	if( !valid( target ) )
+	{
+		return 0;
+	}
+	
+	int atk_size = attacker.Stat[ ST_HEIGHT_GROUP ];
+	
+	aim_hight += atk_size;
+
+	return CLAMP( aim_hight, HEIGHT_GROUND, HEIGHT_SKY );
+}
+
+bool CanHit( CritterMutual& attacker, uint8 aim, CritterMutual& target, bool miss )
+{
+	int aim_hight;
+	if( !miss )
+	{
+		aim_hight = GetAimHeight( attacker, aim, target );
+	}
+	else
+	{
+		aim_hight = attacker.Param[ CR_AIMING_HEIGHT ];
+	}
+	
+	int trg_size = target.Stat[ ST_HEIGHT_GROUP ];
+	if( trg_size == HEIGHT_SKY )
+	{
+		trg_size = HEIGHT_SKY;
+	}
+	
+	if( isLaying( target ) )
+	{	
+		trg_size = HEIGHT_GROUND;
+	}
+	
+	if( isSitting( target ) )
+	{
+		trg_size --;
+	}
+	
+	trg_size = CLAMP( trg_size, HEIGHT_GROUND, HEIGHT_SKY );
+	
+	bool obscured = _Contains( SizeList[ CLAMP( trg_size, HEIGHT_GROUND, HEIGHT_SKY ) ], aim_hight );
+
+	//Log( "aim_hight " + aim_hight + " trg_size " + trg_size + " obscured "+ obscured + " : targetId " + target.Id );
+	//Log( "aim_hight" + aim_hight + "aim_hight_cl" + aim_hight_cl );
+	//Log( "Bool " + _Contains( SizeList[ CLAMP( trg_size, HEIGHT_GROUND, HEIGHT_SKY ) ], attacker.Stat[ ST_AIMING_HEIGHT ] ) );
+	return obscured;
 }
 
 
