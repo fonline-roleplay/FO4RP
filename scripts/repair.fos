@@ -95,13 +95,24 @@ void ShowRepairInfo( Critter& cr, ItemPartArray@ Repair, Item& item )
 	}
 
 	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_PARTS );
+
+	uint resCount = 0;
 	for( uint i = 0, len = Repair.length(); i < len; i++ )
 	{
-		uint count = Repair[i].Count;
-		if( !FLAG( item.BrokenFlags, BI_BROKEN ) )
-			count = uint(Repair[i].Count / 100.0f * GetDeteriorationProcent( item ));
-		count = MAX(count, 1);
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_PARTS_PID, "$proto@msg item " + ( Repair[i].Pid * 100 ) + "@$amount" + count );
+		resCount += Repair[i].Count;
+	}
+
+	if( !FLAG( item.BrokenFlags, BI_BROKEN ) )
+		resCount = uint(resCount / 100.0f * GetDeteriorationProcent( item ));
+	resCount = MAX(resCount, 1);
+
+	for( uint i = 0, len = Repair.length(); i < len; i++ )
+	{
+		if(resCount <= 0) break;
+		uint currCount = resCount > Repair[i].Count ? Repair[i].Count : resCount;
+		
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_PARTS_PID, "$proto@msg item " + ( Repair[i].Pid * 100 ) + "@$amount" + currCount );
+		resCount -= currCount;
 	}
 }
 
@@ -169,21 +180,39 @@ bool TryRepairItem( Critter& cr, Item& item )
 		return true;
 	}
 
+	uint resCount = 0;
 	for( uint i = 0, len = RepairParts.length(); i < len; i++ )
 	{
 		ItemPart@ currPart = RepairParts[i];
 		if(!valid(currPart)) continue;
+		resCount += currPart.Count;
+	}
 
-		uint count = currPart.Count;
-		if( !FLAG( item.BrokenFlags, BI_BROKEN ) )
-			count = uint(currPart.Count / 100.0f * GetDeteriorationProcent( item ));
-		count = MAX(count, 1);
+	if( !FLAG( item.BrokenFlags, BI_BROKEN ) )
+		resCount = uint(resCount / 100.0f * GetDeteriorationProcent( item ));
+	resCount = MAX(resCount, 1);
 
-		if( cr.CountItem( currPart.Pid ) < count )
+	for( uint i = 0, len = RepairParts.length(); i < len; i++ )
+	{
+		if(resCount <= 0) break;
+
+		ItemPart@ currPart = RepairParts[i];
+		if(!valid(currPart)) continue;
+
+		uint currCount = resCount > currPart.Count ? currPart.Count : resCount;
+
+		if( cr.CountItem( currPart.Pid ) < currCount )
 		{
-			ShowRepairInfo(cr, RepairParts, item);
-			return true;
+			break;
 		}
+
+		resCount -= currCount;
+	}
+
+	if(resCount > 0)
+	{
+		ShowRepairInfo(cr, RepairParts, item);
+		return true;
 	}
 
 	start_repair( cr, item );
@@ -400,16 +429,30 @@ void ServiceRepairResult(Critter& cr, Item& item)
 		item.BrokenCount++;
 		if( item.BrokenCount >= MAX_BROKENS )
 			SETFLAG( item.BrokenFlags, BI_NOTRESC );
-
+		
+		uint resCount = 0;
 		for(uint i = 0, len = RepairParts.length(); i < len; i++)
 		{
 			ItemPart@ PartToDelete = RepairParts[i];
-			if(!valid(PartToDelete) || cr.CountItem(PartToDelete.Pid) < PartToDelete.Count)
+			if(!valid(PartToDelete))
+				continue;
+			resCount += PartToDelete.Count;
+		}
+
+		resCount = uint(resCount / 100.0f * GetDeteriorationProcent( item ));
+		resCount = MAX(resCount, 1);
+
+		for(uint i = 0, len = RepairParts.length(); i < len; i++)
+		{
+			if(resCount <= 0) break;
+			ItemPart@ PartToDelete = RepairParts[i];
+			uint currCount = resCount > PartToDelete.Count ? PartToDelete.Count : resCount;
+			if(!valid(PartToDelete) || cr.CountItem(PartToDelete.Pid) < currCount)
 				continue;
 
-			uint count = uint(PartToDelete.Count / 100.0f * GetDeteriorationProcent( item ));
-			count = MAX(count, 1);
-			cr.DeleteItem(PartToDelete.Pid, count);
+			cr.DeleteItem(PartToDelete.Pid, currCount);
+
+			resCount -= currCount;
 		}
 
 		item.Deterioration = 0;
