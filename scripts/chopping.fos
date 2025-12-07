@@ -851,6 +851,366 @@ void BlockSawhorse( Item& sawhorse )
 }
 
 
+//WOOD CUTTER
+void StartMenuWoodCutter( Critter& cr, Item& woodCutter )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuWoodCutter( woodCutter, map );
+    iDialogBox@ menu = OpenMenu( cr, "SawMachine", handler );
+}
+
+class MenuWoodCutter: CenteredMenuHandler
+{
+    uint woodCutter_id;
+    uint map_id;
+	
+    MenuWoodCutter( Item& woodCutter, Map& map )
+	{
+		woodCutter_id = woodCutter.Id;
+        map_id = map.Id;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+        if( !valid( map ) )
+		{
+            return false;
+        }
+
+        Item@ woodCutter = GetItem( woodCutter_id );
+        if( !valid( woodCutter ) )
+		{
+            return false;
+        }
+
+		if( locked_in_place( woodCutter ) )
+		{
+			if( woodCutter.CUTTING_STATE == STATE_OFF )
+			{
+				if( menu.ButtonMsg( STR_FURNITURE_MENU_EXAMINE ) )
+				{
+					PlayGenericSound( map, woodCutter.HexX, woodCutter.HexY, "CLANK1.mp3", 15 );
+					ShowContainer( cr, woodCutter, TRANSFER_HEX_CONT_UP );
+					return false;
+				}
+				
+				if( menu.ButtonMsg( STR_DEVICE_ACTIVATE ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					if( MapHasPower( map ) )
+					{
+						woodCutter.CUTTING_STATE = STATE_ON;
+						woodCutter.PicMap = PIC_SAW_MACHINE_ANIM_ON;
+						UNSETFLAG( woodCutter.Flags, ITEM_SHOW_ANIM_EXT );
+						woodCutter.Update();
+						
+						uint[] vals = { woodCutter.Id, map.Id };
+						woodCutter.CUTTING_EVENT = CreateTimeEvent( AFTER( REAL_MS( 1500 ) ),"e_woodCutterWork", vals, true );
+					}
+					
+					return true;
+				}
+			}
+			else
+			{
+				if( menu.ButtonMsg( STR_DEVICE_DEACTIVATE ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					SawDeactivate( woodCutter, map );
+					return true;
+				}
+			}
+		}
+		
+		if( woodCutter.CUTTING_STATE == STATE_OFF && menu.ButtonMsg( STR_FURNITURE_MENU_BUTTON ) )
+		{
+			{
+				_InitFurniture( woodCutter, true );
+				woodCutter.Update();
+				StartMenuFurniture( cr, woodCutter );
+				return false;
+			}		
+		}
+		
+		if( menu.ButtonMsg( STR_CLOSE_MENU_BUTTON ) )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+	
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_CRUSHER_MENU_MAIN;
+	}
+	
+    string@ Description( Critter& cr )
+	{
+		Map@ map = GetMap( map_id );
+		Item@ woodCutter = GetItem( woodCutter_id );
+		
+		Item@[] MaterialsCheck;
+		uint count = woodCutter.GetItems( uint( -1 ), MaterialsCheck );
+		Item@ material = null;
+		
+		string info;
+		if( MapHasPower( map ) )
+		{
+			info += STR_CHECK_DEVICE_FLAG( "powerStatus", true );
+		}
+		else
+		{
+			info += STR_CHECK_DEVICE_FLAG( "powerStatus", false );
+		}
+		
+		info += "$contains";
+		uint16 materialPid;
+		
+		if( count == 0 )
+		{ 
+			info += STR_INSERT_TEXT_LINE( STR_CRUSHER_MENU_EMPTY ); 
+		}
+		else
+		{
+			for( uint i = 0; i < MaterialsCheck.length(); i ++ )
+			{
+				materialPid = MaterialsCheck[i].GetProtoId();
+				if( SawMaterialList.find( materialPid ) != -1 )
+				{
+					@material = MaterialsCheck[i];
+					break;
+				}
+			}
+			
+			if( !valid( material ) )
+			{ 
+				info += STR_INSERT_TEXT_LINE( STR_CRUSHER_MENU_CONTAINS_JUNK );
+			}
+			else
+			{
+				info += STR_INSERT_TEXT_LINE( STR_CRUSHER_MENU_CONTAINS )
+					 + "$item" + STR_INSERT_ITEM_LINE( materialPid * 100 )
+					 + "$amount" + material.GetCount();
+			}
+		}		
+	
+		return info;
+    }
+	
+	bool ShouldRedraw( Critter& cr )
+	{
+		Item@ woodCutter = GetItem( woodCutter_id );
+
+		if( !valid( woodCutter ) || GetDistantion( cr.HexX, cr.HexY, woodCutter.HexX, woodCutter.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+}
+
+void SawDeactivate( Item& woodCutter, Map& map )
+{
+	if( !valid( woodCutter ) || !valid( map ) )
+	{
+		return;
+	}
+	
+	woodCutter.CUTTING_STATE = STATE_OFF;
+	EraseTimeEvent( woodCutter.CUTTING_EVENT );
+	woodCutter.CUTTING_EVENT = 0;
+	woodCutter.PicMap = woodCutter.Proto.PicMap;
+	SETFLAG( woodCutter.Flags, ITEM_SHOW_ANIM_EXT );
+	woodCutter.Update();
+	PlayGenericSound( map, woodCutter.HexX, woodCutter.HexY, "STEAM.mp3", 30 );
+}
+
+uint e_woodCutterWork( uint[]@ values )
+{
+	Map@ map = GetMap( values[1] );
+	if( !valid( map ) )
+	{
+		return 0;
+	}
+
+	Item@ woodCutter = GetItem( values[0] );
+	if( valid( woodCutter ) )    
+	{
+		if( woodCutter.CUTTING_STATE == STATE_OFF )
+		{
+			return 0;
+		}
+		
+		PlayGenericSound( map, woodCutter.HexX, woodCutter.HexY, "wood_saw_work.mp3", 30 );
+		
+		Item@[] stuff;
+		woodCutter.GetItems( uint( -1 ), stuff );
+		if( stuff.length() > 0 )
+		{
+			SawIt( woodCutter, stuff[0], map );
+		}
+		
+		return SAW_MACHINE_CYCLE_TIME;
+	}
+	return 0;
+}
+
+void SawIt( Item& woodCutter, Item& sawed, Map& map )
+{
+	if( !valid( woodCutter) && !valid( sawed ) )
+	{
+		return;
+	}
+	
+	uint16 materialPid = sawed.GetProtoId();
+	
+	if( SawMaterialList.find( materialPid ) == -1 )
+	{
+		SawJam( woodCutter, map );
+		return;
+	}
+	
+	uint8 index = SawMaterialList.find( materialPid );
+
+	uint16 resultPid = SawResultList[ index ];
+	uint8 amount = SawAmount[index];
+
+	if( resultPid > 0 && amount > 0 )
+	{
+		uint16 hx = woodCutter.HexX, hy = woodCutter.HexY;
+		map.MoveHexByDir( hx, hy, 2, 2 );
+		map.MoveHexByDir( hx, hy, 1, 1 );
+
+		Item@ container;
+		@ container = map.GetItem( hx, hy, PID_IBOX_O );
+		if( !valid( container ) )
+		{
+			@ container = map.GetItem( hx, hy, PID_IBOX_N );
+		}
+		
+		Item@ product = map.AddItem( hx, hy, resultPid, amount );
+		if( valid( product ) )
+		{
+			if( valid( container ) )
+			{
+				MoveItem( product, amount, container, 0 );
+				PlayGenericSound( map, woodCutter.HexX, woodCutter.HexY, "CLANK1.mp3", 15 );
+			}
+			else if( product.IsStackable() )
+			{
+				uint[] values = { product.Id };
+				CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "critter_item_movement@e_stack_items", values, true );
+			}
+		}
+	}
+	
+	PlayGenericSound( map, woodCutter.HexX, woodCutter.HexY, "wood_saw_cut.mp3", 30 );
+	_SubItem( sawed, 1 );
+}
+
+void SawJam( Item& woodCutter, Map& map )
+{
+	SawDeactivate( woodCutter, map );
+}
+
+void BlockWoodCutter( Item& woodCutter )
+{
+	uint16 hx = 0, hy = 0;
+	Map@ map = woodCutter.GetMapPosition( hx, hy );
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	UNSETFLAG( woodCutter.Flags, ITEM_NO_BLOCK );
+	UNSETFLAG( woodCutter.Flags, ITEM_CAN_PICKUP );
+	
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker0 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker0 ) )
+	{
+		blocker0.PARENT_ITM_ID = woodCutter.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker1 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker1 ) )
+	{
+		blocker1.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 1, 1 );
+	Item@ blocker2 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker2 ) )
+	{
+		blocker2.PARENT_ITM_ID = woodCutter.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 5, 1 );
+	Item@ blocker3 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker3 ) )
+	{
+		blocker3.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 5, 1 );
+	Item@ blocker4 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker4 ) )
+	{
+		blocker4.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 5, 1 );
+	Item@ blocker5 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker5 ) )
+	{
+		blocker5.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 3, 1 );
+	Item@ blocker6 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker6 ) )
+	{
+		blocker6.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 4, 1 );
+	Item@ blocker7 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker7 ) )
+	{
+		blocker7.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker8 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker8 ) )
+	{
+		blocker8.PARENT_ITM_ID = woodCutter.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 1, 1 );
+	Item@ blocker9 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker9 ) )
+	{
+		blocker9.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	woodCutter.SetEvent( ITEM_EVENT_FINISH, "furniture@_DeleteBlockers" );
+}
+
 /*
 //ONE-TIME LIVE SERVER TREE UPGRADE
 void _TreeUpgrade( Critter& player, int param0, int param1, int param2 )
