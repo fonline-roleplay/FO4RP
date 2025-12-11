@@ -10,7 +10,7 @@
 
 
 FOFMOD::System* FMODSystem = NULL;
-const char* STR_INIT_ERROR = "Use of unitialized FMOD system \n";
+const char* STR_INIT_ERROR = "Use of uninitialized FMOD system \n";
 
 #define NONE
 #define FMOD_DEFAULT_CHANNEL_COUNT ( 32 )
@@ -28,6 +28,7 @@ const char* STR_INIT_ERROR = "Use of unitialized FMOD system \n";
 void RegisterASInterface();
 
 bool FMOD_Initialize( unsigned int channelCount );
+void FMOD_Finish();
 void FMOD_Update();
 bool FMOD_TouchArchive( ScriptString& filename );
 // void FMOD_PreloadSounds( ScriptString& dir );
@@ -87,6 +88,16 @@ bool FMOD_Initialize( unsigned int channelCount )
 		Log("FMOD Initialized.\n");
 
 	return result;
+}
+
+// Not thread safe, can and probably will crash on MT async calls
+void FMOD_Finish()
+{
+	if(FMODSystem)
+	{
+		delete FMODSystem;
+		FMODSystem = NULL;
+	}
 }
 
 // void FMOD_PreloadSounds( ScriptString& dir )
@@ -465,11 +476,12 @@ void RegisterASInterface()
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::DropEffect", r );
 
-
-
 		r = ASEngine->RegisterGlobalFunction("bool FMOD_Initialize(uint channelCount)", 					asFUNCTION(FMOD_Initialize), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_Initialize", r );
+		r = ASEngine->RegisterGlobalFunction("void FMOD_Finish()", 													asFUNCTION(FMOD_Finish), 			asCALL_CDECL );
+		if( !r )
+			Log(STR_BIND_ERROR, "FMOD_Finish", r );
 		r = ASEngine->RegisterGlobalFunction("void FMOD_Update()", 													asFUNCTION(FMOD_Update), 			asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_Update", r );
