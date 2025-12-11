@@ -1,0 +1,197 @@
+#include "_utils.fos"
+#include "craft_recipes.fosh"
+
+class ItemPart
+{
+    uint16 Pid = 0;
+    uint Count = 0;
+
+    ItemPart(uint16 pid, uint count)
+    {
+        if( pid == 0 || count == 0 )
+        {
+            return;
+        }
+        
+        this.Pid = pid;
+        this.Count = count;
+    }
+}
+
+class ItemPartArray
+{
+    ItemPart@[] ItemParts;
+    dictionary pidAssosiateList;
+    uint Tier = 1;
+    uint Tools = 0;
+    uint CalcCost = 0;
+    uint ProtoCost = 0;
+    
+    void Add(uint16 pid, uint count)
+    {
+        if( pid == 0 || count == 0 )
+        {
+            return;
+        }
+        
+        uint index;
+        if( pidAssosiateList.get( ""+pid, index ) )
+        {
+            ItemParts[index].Count += count;
+            return;
+        }
+
+        ItemPart@ newElem = ItemPart(pid, count);
+        Add(newElem);
+        pidAssosiateList.set(""+pid, this.length() - 1);
+    }
+
+    void Add(ItemPart@ newElem)
+    {
+        ItemParts.insertLast(newElem);
+    }
+
+    uint length()
+    {
+        return ItemParts.length();
+    }
+
+    ItemPart@ get_opIndex(int index) 
+    {
+        if( index >= int( this.length() ) )
+        {
+            return null;
+        }
+        
+        return ItemParts[index];
+    }
+}
+
+dictionary EconomyList;
+
+ItemPartArray@ ProcessDecraftRecipe(CraftRecipe@ recipe)
+{
+	if( !valid( recipe ) )
+	{
+		return null;
+	}
+	
+	ItemPartArray@ Decraft;
+
+	if( EconomyList.exists( ""+recipe.Output[0] ) )
+	{
+		EconomyList.get(""+recipe.Output[0], @Decraft);
+		return Decraft;
+	}
+	
+	@Decraft = ItemPartArray();
+	Decraft.Tier = recipe.Tier;
+	Decraft.Tools = recipe.Tools;
+
+	ProtoItem@ proto = GetProtoItem(recipe.Output[0]);
+
+    if( valid( proto ) )
+    {
+        Decraft.ProtoCost = proto.Cost;
+        if( ( proto.Type == ITEM_TYPE_ARMOR || proto.Type == ITEM_TYPE_WEAPON ) )
+        {
+            SETFLAG(Decraft.Tools, TOOL_MULTITOOL);
+        }
+    }
+
+	for(uint i = 0, len = recipe.Resources.length(); i < len; i++)
+	{
+		uint16 pid = recipe.Resources[i];
+		uint count = recipe.ResourcesCount[i];
+		ProtoItem@ ResourceProto = GetProtoItem(pid);
+		if(!valid(ResourceProto))
+		{
+			continue;
+		}
+
+		CraftRecipe@ ResourceRecipe = GetCraftByItemPID(pid);
+		
+		CraftRecipe@ ComponentRecipe = GetCraftByItemPID( pid );
+		if( !valid( ComponentRecipe ) ) 
+		{
+            Decraft.CalcCost += ResourceProto.Cost * count;
+			Decraft.Add(pid, count);
+			continue;
+		}
+
+		ItemPartArray@ ComponentDecraft = ProcessDecraftRecipe(ComponentRecipe);
+		if(!valid(ComponentDecraft))
+		{
+			continue;
+		}
+
+        Decraft.CalcCost += ComponentDecraft.CalcCost;
+
+		for(uint j = 0, jlen = ComponentDecraft.length(); j < jlen; j++)
+		{
+			ItemPart@ currCompDecraftRes = ComponentDecraft[j];
+			if(!valid(currCompDecraftRes))
+			{
+				continue;
+			}
+			
+			Decraft.Add(currCompDecraftRes.Pid, currCompDecraftRes.Count * count);
+		}
+	}
+
+	if(Decraft.length() > 0)
+	{
+		EconomyList.set( ""+recipe.Output[0], Decraft );
+	}
+	
+	return Decraft;
+}
+
+void InitEconomy()
+{
+	Log("Generating economy list...");
+	for(uint i = 0, len = GetMaxCraftsCount(); i < len; i++)
+	{
+		CraftRecipe@ currRecipe = GetCraftByPID(i);
+		if(!valid(currRecipe)) continue;
+		ProcessDecraftRecipe(currRecipe);
+	}
+	Log("Generating economy list complete.");
+}
+
+void CreateEconomyList()
+{
+	file file_data;
+	if( file_data.open( "economy.csv", "w" ) != 0 )
+	{
+		return;
+	}
+
+	file_data.writeString( "NAME,PID,PID_COST,CALC_COST\n" );
+
+	for(uint i = 0, len = GetMaxCraftsCount(); i < len; i++)
+    {
+        CraftRecipe@ currRecipe = GetCraftByPID(i);
+        if(!valid(currRecipe)) continue;
+		uint16 pid = currRecipe.Output[0];
+
+		ItemPartArray@ currParts = GetItemParts(pid);
+		if(!valid(currParts)) continue;
+
+		string name = ReplaceText(GetMsgStr( TEXTMSG_ITEM, pid * 100 ), ",", "");
+
+        file_data.writeString( "" + name + "," + pid + "," + currParts.ProtoCost + "," + currParts.CalcCost + "\n" );
+    }
+
+	file_data.close();
+}
+
+ItemPartArray@ GetItemParts(uint16 pid)
+{
+	ItemPartArray@ Decraft;
+	if( EconomyList.get(""+pid, @Decraft) )
+	{
+		return Decraft;
+	}
+	return null;
+}
