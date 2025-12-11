@@ -1,0 +1,298 @@
+#ifndef GASSES
+#define GASSES
+
+#include "_utils.fos"
+#include "gasses_h.fos"
+#include "repair_h.fos"
+
+import uint CountMapPlayers( Map@ map ) from "manager";
+
+//~run gasses test gas_type 0 0
+void test( Critter& cr, int gas_type, int, int )
+{
+	string breathing = flagValue( canBreathe( cr, gas_type ), WHITE + "can", RED + "can't" ) + GREEN + " breathe";
+	string protection = flagValue( hasProtection( cr ), WHITE + "have", RED + "haven't" ) + GREEN + " protection";
+	string mask = flagValue( CheckGasMask( cr ), WHITE + "have", RED + "haven't" ) + GREEN + " gas mask";
+	string tank = flagValue( CheckAirTank( cr ), WHITE + "have", RED + "haven't" ) + GREEN + " air tank";
+	string filter = flagValue( CheckAirFilter( cr ), WHITE + "have", RED + "haven't" ) + GREEN + " filter";
+	cr.Say( SAY_NETMSG, "You " + breathing + ", " + protection + ": " + mask + ", " + tank + ", " + filter + "." );
+}
+
+string[] gas_type_names = { "respirator", "no oxygen" };
+string gasTypeName( int type ) //exported
+{
+	return gas_type_names[ CLAMP( uint(type), 0, gas_type_names.length() ) ];
+}
+
+void GasHex( Critter& cr, int mapID, int hx, int hy, int gas_strength, int gas_time, int gas_radius, int gas_type ) //exported
+{
+	if( gas_strength < 0 || gas_time < 0 || gas_radius < 0 )
+	{
+		return;
+	}
+	
+	Map@ map = GetMap( mapID );
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	Item@ gasMarker = map.AddItem( hx, hy, PID_GAS_MARKER, 1 );
+	if( valid( gasMarker ) )
+	{
+		gasMarker.GAS_STRENGTH = gas_strength;
+		gasMarker.GAS_TICK = gas_time;
+		gasMarker.GAS_DISTANCE = gas_radius;
+		gasMarker.GAS_TYPE = gas_type;
+		gasMarker.Update();
+		
+		uint[] values = { gasMarker.Id };
+		gasMarker.GAS_EVENT = CreateTimeEvent( __FullSecond, "gasses@e_gasFlow", values, true );
+		cr.Say( SAY_NETMSG, "The [" + gasTypeName(gas_type) + "] Gas source set at X: " + hx + " Y: " + hy + " , strength: "+ gas_strength + " , tick: "+ gas_time + " minutes, radius: " + gas_radius + " hex " );
+	}
+}
+
+uint e_gasFlow( uint[]@ values )
+{
+    Item@ gasMarker = GetItem( values[0] );
+
+    if( !valid( gasMarker ) )
+	{
+		return 0;
+	}
+	
+	Map@ map = GetMap( gasMarker.MapId );
+    if( !valid( map ) )
+	{
+		DeleteItem( gasMarker );
+		return 0;
+	}
+	
+	if( CountMapPlayers( map ) == 0 )
+	{
+		return REAL_SECOND( gasMarker.GAS_TICK );
+	}
+	
+	Critter@[] critters;
+    uint count = map.GetCrittersHex( gasMarker.HexX, gasMarker.HexY, gasMarker.GAS_DISTANCE, FIND_LIFE_AND_KO | FIND_ONLY_PLAYERS, critters );
+	if( count > 0 )
+	{
+		for( uint i = 0; i < count; i++ )
+		{
+			DypsneaCr( critters[i], gasMarker.GAS_STRENGTH, gasMarker.GAS_TYPE );
+		}
+	}
+	
+	return REAL_SECOND( gasMarker.GAS_TICK );
+}
+
+void DypsneaCr( Critter& cr, uint rate, uint type ) //exported
+{
+	uint[] indexes;
+	uint[] durations;
+	if( cr.GetTimeEvents( CTE_DYSPNEA, indexes, durations, null ) > 0 )
+	{
+		if( rate > 0 )
+		{
+			if( isGM( cr ) )
+			{		
+				return;
+			}
+			cr.ChangeTimeEvent( indexes[0], 0, rate );
+		}
+	}
+	else
+	{
+		switch( type )
+		{
+			case GAS_TYPE_DEFAULT: 		cr.AddTimeEvent( "gasses@cte_Dyspnea", 0, CTE_DYSPNEA, rate ); break;
+			case GAS_TYPE_NO_OXYGEN:	cr.AddTimeEvent( "gasses@cte_NoOxygen", 0, CTE_DYSPNEA, rate ); break;
+		}		
+	}
+}
+
+bool useAirTank( Critter& cr, Item& item ) //exported
+{
+	if( cr.ParamBase[ CR_AIR_TANK_ID ] != 0 && uint( cr.ParamBase[ CR_AIR_TANK_ID ] ) != item.Id )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_OTHER_TANK_FIRST );			
+		useAirTank( cr, GetItem( cr.ParamBase[ CR_AIR_TANK_ID ] ) );
+		return false;
+	}
+	
+	if( item.ITEM_STATE == STATE_ON )
+	{
+		cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_OXYGEN_OFF );
+		item.ITEM_STATE = STATE_OFF;
+		cr.EraseTimeEvents( CTE_BREATHING );
+		cr.ParamBase[ CR_AIR_TANK_ID ] = 0;
+		cr.ParamBase[ CR_AIR_TANK_CHARGE ] = 0;
+		return true;
+	}
+
+	if( item.ITEM_STATE == STATE_OFF )
+	{
+		if( item.ITEM_CHARGE == 0 )
+		{			
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_OXYGEN_NO_OXYGEN );			
+			cr.Say( SAY_NETMSG, "Tere is no oxygen in the tank." );
+			return true;
+		}
+		
+		item.ITEM_STATE = STATE_ON;
+		cr.ParamBase[ CR_AIR_TANK_ID ] = item.Id;
+		cr.ParamBase[ CR_AIR_TANK_CHARGE ] = item.ITEM_CHARGE;
+		PlayGenericSound( cr.GetMap(), cr.HexX, cr.HexY, "jet.ogg", 4 );
+		cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_OXYGEN_ON );
+		cr.AddTimeEvent( "gasses@cte_Breathing", 0, CTE_BREATHING, 0 );
+		return true;
+	}
+	
+	return false;
+}
+
+uint cte_Breathing( Critter& cr, int identifier, uint& rate )
+{
+	if( CheckAirTank( cr ) )
+	{
+		UseAirTank( cr );
+		return REAL_SECOND( 1 );
+	}
+	
+	return 0;
+}
+	
+uint cte_Dyspnea( Critter& cr, int identifier, uint& rate )
+{
+	return process_dyspnea( cr, rate, GAS_TYPE_DEFAULT );
+}
+	
+uint cte_NoOxygen( Critter& cr, int identifier, uint& rate )
+{
+	return process_dyspnea( cr, rate, GAS_TYPE_NO_OXYGEN );
+}
+
+bool canBreathe( Critter& cr, uint gas_type )
+{
+	if( gas_type == GAS_TYPE_DEFAULT && CheckGasMask( cr ) )
+	{
+		return true;
+	}
+
+	if( CheckAirTank( cr ) || CheckAirFilter( cr ) ) //allows to ignore all types of gas markers
+	{
+		return true;
+	}
+	
+	return false;
+}
+
+uint process_dyspnea( Critter& cr, uint& rate, uint gas_type )
+{
+	bool freshAir = ( rate <= 0 );
+	if( freshAir || canBreathe( cr, gas_type ) )
+	{		
+		return take_breath( cr, rate );
+	}
+	
+	return suffocation_progress( cr, rate );
+}
+
+uint suffocation_progress( Critter& cr, uint& rate )
+{
+	cr.StatBase[ ST_DYSPNEA ] += rate;
+	rate = 0;
+	
+    return REAL_SECOND( 10 );
+}
+
+uint take_breath( Critter& cr, uint& rate )
+{
+	cr.StatBase[ ST_DYSPNEA ] -= cr.Stat[ ST_ENDURANCE ] * 10;
+	rate = 0;
+	
+	if ( cr.StatBase[ ST_DYSPNEA ] <= 0 ) 
+	{
+		return 0;
+	}
+	
+	return REAL_SECOND( 10 );
+}
+
+bool hasProtection( Critter& cr )
+{
+	return CheckGasMask( cr ) || CheckAirTank( cr ) || CheckAirFilter( cr );
+}
+
+bool CheckGasMask( Critter& cr )
+{
+	Item@ respirator = _CritGetItemHead( cr );
+	if( valid( respirator ) )
+	{
+		uint det = GetDeteriorationProcent( respirator );
+		if( det < 5 && FLAG( respirator.Proto.HeadItem_Perk, HEAD_PERK_GASMASK ) )
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool CheckAirTank( Critter& cr )
+{
+	if( cr.ParamBase[ CR_AIR_TANK_ID ] == 0 )
+	{
+		return false;
+	}
+	
+	Item@ item = cr.GetItemById( cr.ParamBase[ CR_AIR_TANK_ID ] );
+	if( !valid( item ) )
+	{		
+		@item = GetItem( cr.ParamBase[ CR_AIR_TANK_ID ] );		
+		if( valid( item ) )
+		{
+			item.ITEM_STATE = STATE_OFF;
+			item.Update();
+		}
+		cr.ParamBase[ CR_AIR_TANK_ID ] = 0;
+		cr.ParamBase[ CR_AIR_TANK_CHARGE ] = 0;
+		cr.EraseTimeEvents( CTE_BREATHING );
+		return false;
+	}
+	
+	return item.ITEM_STATE == STATE_ON && item.ITEM_CHARGE > 0;
+}
+
+void UseAirTank( Critter& cr, int used_charge = 1 )
+{
+	Item@ item = cr.GetItemById( cr.ParamBase[ CR_AIR_TANK_ID ] );
+	if( valid( item ) && isAirtank( item ) && item.ITEM_STATE == STATE_ON )
+	{		
+		item.ITEM_CHARGE = CLAMP( item.ITEM_CHARGE - used_charge, 0, ITEM_CHARGE_MAX );
+		cr.ParamBase[ CR_AIR_TANK_CHARGE ] = item.ITEM_CHARGE;
+		if( item.ITEM_CHARGE == 0 )
+		{
+			item.ITEM_STATE = STATE_OFF;
+			cr.ParamBase[ CR_AIR_TANK_ID ] = 0;
+			
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_OXYGEN_DEPLETED );
+		}
+		item.Update();
+	}
+}
+	
+bool CheckAirFilter( Critter& cr )
+{
+	Item@ armor = _CritGetItemArmor( cr );
+	if( valid( armor ) )
+	{
+		uint det = GetDeteriorationProcent( armor );
+		if( det < 5 && FLAG( armor.Proto.Armor_Perk, ARMOR_PERK_AIR_FILTER ) )
+		{
+			return true;			
+		}
+	}	
+	return false;
+}
+
+#endif // GASSES

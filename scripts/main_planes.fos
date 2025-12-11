@@ -9,6 +9,8 @@
 #include "repair_h.fos"
 #include "lockers_h.fos"
 #include "combat_h.fos"
+#include "hitchance_h.fos"
+#include "speed_h.fos"
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Called on some plane added.
@@ -41,10 +43,17 @@ bool npc_plane_begin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr
 // REASON_GAG_CRITTER            someCr as Enemy
 // REASON_GAG_ITEM               someItem as Item
 // REASON_NO_UNARMED
+
 bool npc_plane_end( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem )
 {
-    // Log("npc_plane_end "+reason + "npcId" + npc.Id);
-    if( reason == REASON_CANT_WALK && npc.IsNoPlanes() )
+	if( plane.Type == AI_PLANE_ATTACK && npc.Param[ CR_AUTO_ROUNDS_FIRED ] > 0 )
+	{
+		//Log( "plane end!" );
+		npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+	}
+		
+	// Log("npc_plane_end "+reason + "npcId" + npc.Id);	
+	if( reason == REASON_CANT_WALK && npc.IsNoPlanes() )
 	{
         npc.Wait( Random( 1000, 2000 ) );
     }
@@ -93,21 +102,35 @@ bool npc_plane_end( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, 
 	{
         if( valid( someItem ) )
 		{
-            if( someItem.GetType() == ITEM_TYPE_DOOR && !FLAG( someItem.LockerCondition, LOCKER_ISOPEN ) &&
-                AI_CAN_OPEN_DOORS( npc.Stat[ ST_AI_ID ] ) && IsKeyAviable( npc, someItem.LockerId ) )
+            if( someItem.GetType() == ITEM_TYPE_DOOR && !FLAG( someItem.LockerCondition, LOCKER_ISOPEN ) && !FLAG(someItem.LockerCondition, LOCKER_ELECTRO) && AI_CAN_OPEN_DOORS( npc.Stat[ ST_AI_ID ] ) )
 			{
-					
-                NpcPlane@ child = CreatePlane();
-                child.Type = AI_PLANE_PICK;
-                child.Priority = 0;
-                child.Pick_HexX = someItem.HexX;
-                child.Pick_HexY = someItem.HexY;
-                child.Pick_Pid = someItem.GetProtoId();
-                child.Pick_UseItemId = GetKeyId( npc, someItem.LockerId );
-                child.Pick_ToOpen = true;
-                child.Run = plane.Run;
-                plane.SetChild( child );
-                return false;                 // Cancel deleting
+                if(FLAG( someItem.LockerCondition, LOCKER_LOCKED ) && IsKeyAviable( npc, someItem.LockerId ))
+                {
+                    NpcPlane@ child = CreatePlane();
+                    child.Type = AI_PLANE_PICK;
+                    child.Priority = 0;
+                    child.Pick_HexX = someItem.HexX;
+                    child.Pick_HexY = someItem.HexY;
+                    child.Pick_Pid = someItem.GetProtoId();
+                    child.Pick_UseItemId = GetKeyId( npc, someItem.LockerId );
+                    child.Pick_ToOpen = true;
+                    child.Run = plane.Run;
+                    plane.SetChild( child );
+                    return false;                 // Cancel deleting
+                }
+                else if(!FLAG( someItem.LockerCondition, LOCKER_LOCKED ))
+                {
+                    NpcPlane@ child = CreatePlane();
+                    child.Type = AI_PLANE_PICK;
+                    child.Priority = 0;
+                    child.Pick_HexX = someItem.HexX;
+                    child.Pick_HexY = someItem.HexY;
+                    child.Pick_Pid = someItem.GetProtoId();
+                    child.Pick_ToOpen = true;
+                    child.Run = plane.Run;
+                    plane.SetChild( child );
+                    return false;                 // Cancel deleting
+                }
 			}
             /* WIP need to find a way to animate critter without dropping plane stack */
             else if( someItem.Proto.Material == MATERIAL_WOOD && someItem.Proto.Item_Subtype == ITEM_SUBTYPE_FURNITURE )
@@ -165,7 +188,7 @@ bool npc_plane_end( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, 
             for( uint i = 0; i < 5; i++ )
 			{
                 uint16 hx = baseHx, hy = baseHy;
-                map.GetHexCoord( npc.HexX, npc.HexY, hx, hy, angle, awayDist );
+                RustyGetHexCoord( map, npc.HexX, npc.HexY, hx, hy, angle, awayDist );
                 if( GetDistantion( npc.HexX, npc.HexY, hx, hy ) > 1 )
 				{
                     AddWalkPlane( npc, 100, hx, hy, 6, true, 0 );
@@ -192,66 +215,61 @@ bool npc_plane_end( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, 
         }
         npc.Wait( 10000 );
     }
+	
     return true;
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
-// Called on some plane runs, to manuality some steps.
-// REASON_ATTACK_WEAPON
-//  In: r0 target id, r1 0, r2 0
-//  Out: r0 weapon id, r1 use index, r2 proto id of unarmed attack (if r0==0)
-// REASON_ATTACK_DISTANTION
-//  In: r0 target id, r1 0, r2 0
-//  Out: r0 best dist, r1 min dist, r2 max dist (if == 0 than run away)
-// REASON_ATTACK_USE_AIM
-//  In: r0 target id, r1 0, r2 0
-//  Out: r0 use, r1 aim, r2 disable attack and wait this time (in ms)
+// Called on some plane runs, to manuality manage some steps.
+
 bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r1, uint& r2 )
 {
-    // Log("npc_plane_run "+reason);
+    //Log( "npc_plane_run " + reason );
+	int npc_AI = npc.Stat[ ST_AI_ID ];
     if( reason == REASON_ATTACK_WEAPON )
+	//  In: r0 target id, r1 0, r2 0
+	//  Out: r0 weapon id, r1 use index, r2 proto id of unarmed attack (if r0==0)
 	{
         // Special weapons
         uint16 npcPid = npc.GetProtoId();
-        if( npcPid == NPC_PID_FireGecko )
+        if( npcPid == NPC_PID_FIRE_GECKO || npcPid == NPC_PID_FIRE_GECKO_ALPHA || npcPid ==  NPC_PID_FIRE_GECKO_SP )
 		{
             Item@ weap = npc.GetItem( PID_FIRE_GECKO_FLAME_WEAPON, -1 );
             if( valid( weap ) && weap.AmmoCount > 0 )
 			{
-                r0 = weap.Id;
+				r0 = weap.Id;
                 r1 = 0;
+				npc.Wait( _GetProtoWindupTime( weap.Proto ) );
                 return true;
             }
         }
 		else if( npc.StatBase[ ST_BODY_TYPE ] == BT_PLANT )
 		{
             Critter@ target = GetCritter( r0 );
-            if( GetCrittersDistantion( npc, target ) > 2 )
+
+			Item@ weap = npc.GetItem( PID_PLANT_SPIKE, -1 );
+			if( valid( weap ) )
 			{
-                Item@ weap = npc.GetItem( PID_PLANT_SPIKE, -1 );
-                if( valid( weap ) )
-				{
-                    r0 = weap.Id;
-                    r1 = 0;
-                    return true;
-                }
-            }
+				r0 = weap.Id;
+				r1 = GetCrittersDistantion( npc, target ) > 1 ? 0 : 1;
+				npc.Wait( _GetProtoWindupTime( weap.Proto ) );
+				return true;
+			}
         }
 
         // Default weapons
         r0 = 0;       // Use unarmed by default
         r1 = 0;
-        r2 = ( Random( 0, 4 ) == 0 ? 1000 : 1020 );
+        r2 = ( Random( 0, 3 ) == 0 ? 1000 : 1020 );
 
         // Damaged two arms
-        if( npc.Damage[ DAMAGE_LEFT_ARM ] != 0 && npc.Damage[ DAMAGE_RIGHT_ARM ] != 0 )
+        if( npc.IsDmgTwoArm() )
 		{
             return true;
 		}
 		
         // No use weapon
-        uint aiId = npc.Stat[ ST_AI_ID ];
-        int  bestWeapon = AI_BEST_WEAPON( aiId );
+        int bestWeapon = AI_BEST_WEAPON( npc_AI );
         if( bestWeapon == BW_Never )
 		{
             return true;
@@ -284,7 +302,7 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
         r1 = 0;
 
         // Sort skills
-        int[] skillsNum = { SK_SMALL_GUNS, SK_BIG_GUNS, SK_ENERGY_WEAPONS, SK_UNARMED, SK_MELEE_WEAPONS, SK_THROWING };
+        int[] skillsNum = { SK_SMALL_GUNS, SK_MEDIUM_GUNS, SK_BIG_GUNS, SK_UNARMED, SK_MELEE_WEAPONS, SK_THROWING };
         uint skillsCount = skillsNum.length();
         SkillsSort( npc, skillsNum, 0, skillsCount );
 
@@ -294,6 +312,7 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
 			case( BW_NoPref ):
 				break;
 			case( BW_Random ):
+			{
 				for( uint i = 0; i < skillsCount; i++ )
 				{
 					int i0 = Random( 0, skillsCount - 1 );
@@ -306,32 +325,33 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
 					}
 				}
 				break;
+			}
 			case( BW_Unarmed ):
 				SkillToBegin( skillsNum, SK_UNARMED );
 				break;
 			case( BW_RangedOvMelee ):
-				SkillToBegin( skillsNum, SK_UNARMED );        // 5
-				SkillToBegin( skillsNum, SK_MELEE_WEAPONS );  // 4
-				SkillToBegin( skillsNum, SK_THROWING );       // 3
-				SkillToBegin( skillsNum, SK_ENERGY_WEAPONS ); // 2
-				SkillToBegin( skillsNum, SK_BIG_GUNS );       // 1
-				SkillToBegin( skillsNum, SK_SMALL_GUNS );     // 0
-				SkillsSort( npc, skillsNum, 0, 4 );           // Sort 0, 1, 2, 3
-				SkillsSort( npc, skillsNum, 4, 2 );           // Sort 4, 5
+				SkillToBegin( skillsNum, SK_UNARMED );			// 5
+				SkillToBegin( skillsNum, SK_MELEE_WEAPONS );	// 4
+				SkillToBegin( skillsNum, SK_THROWING );			// 3
+				SkillToBegin( skillsNum, SK_BIG_GUNS );			// 2
+				SkillToBegin( skillsNum, SK_MEDIUM_GUNS );		// 1
+				SkillToBegin( skillsNum, SK_SMALL_GUNS );		// 0
+				SkillsSort( npc, skillsNum, 0, 4 );				// Sort 0, 1, 2, 3
+				SkillsSort( npc, skillsNum, 4, 2 );				// Sort 4, 5
 				break;
 			case( BW_MeleeOvRanged ):
-				SkillToBegin( skillsNum, SK_THROWING );       // 5
-				SkillToBegin( skillsNum, SK_ENERGY_WEAPONS ); // 4
-				SkillToBegin( skillsNum, SK_BIG_GUNS );       // 3
-				SkillToBegin( skillsNum, SK_SMALL_GUNS );     // 2
-				SkillToBegin( skillsNum, SK_UNARMED );        // 1
-				SkillToBegin( skillsNum, SK_MELEE_WEAPONS );  // 0
-				SkillsSort( npc, skillsNum, 0, 2 );           // Sort 0, 1
-				SkillsSort( npc, skillsNum, 2, 4 );           // Sort 2, 3, 4, 5
+				SkillToBegin( skillsNum, SK_THROWING );			// 5
+				SkillToBegin( skillsNum, SK_BIG_GUNS );			// 4
+				SkillToBegin( skillsNum, SK_MEDIUM_GUNS );		// 3
+				SkillToBegin( skillsNum, SK_SMALL_GUNS );		// 2
+				SkillToBegin( skillsNum, SK_UNARMED );			// 1
+				SkillToBegin( skillsNum, SK_MELEE_WEAPONS );	// 0
+				SkillsSort( npc, skillsNum, 0, 2 );				// Sort 0, 1
+				SkillsSort( npc, skillsNum, 2, 4 );				// Sort 2, 3, 4, 5
 				break;
 			case( BW_UnarmOvThrown ):
-				SkillToBegin( skillsNum, SK_THROWING );       // 1
-				SkillToBegin( skillsNum, SK_UNARMED );        // 0
+				SkillToBegin( skillsNum, SK_THROWING );			// 1
+				SkillToBegin( skillsNum, SK_UNARMED );			// 0
 				break;
 			default:
 				break;
@@ -342,7 +362,7 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
         npc.GetItemsByType( ITEM_TYPE_WEAPON, allWeapons );
         for( uint i = 0, j = allWeapons.length(); i < j; i++ )
 		{
-            if( not CheckBattleWeapon( npc, allWeapons[ i ] ) )
+            if( !CheckBattleWeapon( npc, allWeapons[ i ] ) )
 			{
                 @allWeapons[ i ] = null;
 			}
@@ -354,16 +374,14 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
             for( uint k = 0, l = allWeapons.length(); k < l; k++ )
 			{
                 @weapon = allWeapons[ k ];
-                if( not valid( weapon ) )
+                if( !valid( weapon ) )
 				{
                     continue;
 				}
 				
                 for( int u = 0; u < 3; u++ )
 				{
-                    if( ( u == 0 && not _WeaponIsPrimaryAviable( weapon.Proto ) ) ||
-                        ( u == 1 && not _WeaponIsSecondaryAviable( weapon.Proto ) ) ||
-                        ( u == 2 && not _WeaponIsThirdAviable( weapon.Proto ) ) )
+                    if( ( u == 0 && !_WeaponIsPrimaryAviable( weapon.Proto ) ) || ( u == 1 && !_WeaponIsSecondaryAviable( weapon.Proto ) ) || ( u == 2 && !_WeaponIsThirdAviable( weapon.Proto ) ) )
 					{
                         continue;
 					}
@@ -382,55 +400,62 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
         // Not found, hands used
         return true;
     }
+	
 	else if( reason == REASON_ATTACK_DISTANTION )
+	//  In: r0 target id, r1 0, r2 0
+	//  Out: r0 best dist, r1 min dist, r2 max dist (if == 0 than run away)
 	{
+		//Log( "attack_dist" );
         Critter@ target = GetCritter( r0 );
         uint8 mode = 0;
         ProtoItem@ weapon = npc.GetSlotProto( SLOT_HAND1, mode );
         int use = _WeaponModeUse( mode );
+        int ap = _WeaponApCost( weapon, use );
+		int skillNum = _WeaponSkill( weapon, use );
         ProtoItem@ ammo = ( weapon.Weapon_MaxAmmoCount > 0 && weapon.Weapon_Caliber != 0 ? GetProtoItem( _CritGetItemHand( npc ).AmmoPid ) : null );
-        int wpnDist = _WeaponMaxDist( weapon, use );
-        int multihex = npc.GetMultihex() + target.GetMultihex();
+		bool validAmmo = valid( ammo );
+        int optimalDist = _WeaponMaxDist( weapon, use );
+		int wpnMaxDist = optimalDist;
+		bool isSniper = ( FLAG( weapon.Weapon_Perk, WEAPON_PERK_SCOPE_RANGE ) && npc.Param[ CR_IS_WINDUPED ] > 0 );
 
-        if( not npc.IsCanWalk() )
+		if( skillNum == SK_SMALL_GUNS || skillNum == SK_MEDIUM_GUNS || skillNum == SK_BIG_GUNS )
 		{
-            int dist = GetDistantion( npc.HexX, npc.HexY, target.HexX, target.HexY );
-            if( wpnDist < dist )
+			if( isSniper )
 			{
-                dist = wpnDist;
+				optimalDist *= 2;
+				wpnMaxDist *= 2;
 			}
-            dist += multihex;
-            r0 = r1 = r2 = dist;
-            return true;
+			else
+			{
+				wpnMaxDist = wpnMaxDist * 150 / 100;
+			}
+		}
+		else if( skillNum == SK_THROWING )
+		{
+			wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int( 10 ), npc.Stat[ ST_STRENGTH ] ) );
+		}
+		
+		//Log( "wpnMaxDist " + wpnMaxDist );
+		
+		int dist = GetDistantion( npc.HexX, npc.HexY, target.HexX, target.HexY );
+        if( !npc.IsCanWalk() )
+		{
+            if( wpnMaxDist < dist )
+			{
+				//Log( "Npc cant walk "  + dist );
+				return true;
+			}
         }
 
+		int toHit = to_hit( npc, target, weapon, mode, ammo, 0, 0, false );
+		int ai_min = AI_MIN_TO_HIT( npc_AI );
+		
+		//Log( "toHit " + toHit + " ai_min " + ai_min );
+		
         // non-ranged weapons:
-        int skill = _WeaponSkill( weapon, use );
-        if( skill == SK_UNARMED || skill == SK_MELEE_WEAPONS )
+        if( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS )
 		{
-            int base =
-                npc.Skill[ skill ] -
-                MAX( 0, target.Stat[ ST_ARMOR_CLASS ] + ( valid( ammo ) ? ammo.Ammo_AcMod : 0 ) ) +
-                ( target.IsKnockout() ? 40 : 0 ) -
-                ( npc.Damage[ DAMAGE_EYE ] != 0 ? 25 : 0 );
-
-            if( !weapon.Weapon_IsUnarmed )
-			{
-                base += ( weapon.Weapon_Perk == WEAPON_PERK_ACCURATE ? 20 : 0 );
-				int strength = npc.Stat[ ST_STRENGTH ];
-                if( strength < weapon.Weapon_MinStrength )
-				{
-                    base -= 20 * ( weapon.Weapon_MinStrength - strength );
-                }
-				
-				if( npc.Trait[ TRAIT_ONE_HANDER ] != 0 )
-				{
-                    base += ( FLAG( weapon.Flags, ITEM_TWO_HANDS ) ? -40 : 20 );
-				}
-			}
-			
-            int ai_min = AI_MIN_TO_HIT( npc.Stat[ ST_AI_ID ] );
-            if( base < ai_min )
+            if( toHit < ai_min )
 			{
                 r0 = 0;
                 r1 = 0;
@@ -438,398 +463,139 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
             }
 			else
 			{
-                r0 = 1 + multihex;
-                r1 = 1 + multihex;
-                r2 = wpnDist + multihex;
+                r0 = optimalDist;
+                r1 = 1;
+                r2 = wpnMaxDist;
             }
+			
             return true;
         }
-		else  // ranged weapons:
+		else
 		{
-            if( skill == SK_THROWING )
-			{
-                if( npc.Stat[ ST_STRENGTH ] * 3 < wpnDist )
-				{
-                    wpnDist = npc.Stat[ ST_STRENGTH ] * 3;
-				}
-			}
-			
-            r1 = 0;
-            if( skill == SK_THROWING )
+			if( skillNum == SK_THROWING )
 			{
                 uint dmgType = _WeaponDmgType( weapon, use );
 
-                if( dmgType == DAMAGE_PLASMA || dmgType == DAMAGE_EMP || dmgType == DAMAGE_EXPLODE )
+                if( weapon.Blast_Radius > 0 )
 				{
-                    r0 = weapon.Blast_Radius;
+                    r1 = weapon.Blast_Radius;
 				}
             }
-			else if( valid( ammo ) )
+			else if( validAmmo )
 			{
-                switch( ammo.ProtoId )
-                {
-					case PID_EXPLOSIVE_ROCKET:
-					case PID_ROCKET_AP:
-					case PID_ROBO_ROCKET_AMMO:
-						r1 = ammo.Blast_Radius;
-					default:
-						break;
-                }
+                if( ammo.Blast_Radius > 0 )
+				{
+                    r1 = ammo.Blast_Radius;
+				}
             }
 
-            if( ( weapon.Weapon_Perk == WEAPON_PERK_SCOPE_RANGE ) && ( r1 < 8 ) )
+            if( int( r1 ) >= dist )
 			{
-                r1 = 8;
-			}
-			
-            if( int(r1) > wpnDist )
-			{
+				//Log( " r1 >= dist " + r1 + " >= " + dist );
                 r1 = 0;
                 r0 = 0;
                 r2 = 0;
                 return true;
             }
 
-            int base = npc.Skill[ skill ] -
-                       MAX( 0, target.Stat[ ST_ARMOR_CLASS ] + ( valid( ammo ) ? ammo.Ammo_AcMod : 0 ) ) +
-                       ( target.IsKnockout() ? 40 : 0 ) -
-                       ( npc.Damage[ DAMAGE_EYE ] != 0 ? 25 : 0 ) + ( weapon.Weapon_Perk == WEAPON_PERK_ACCURATE ? 20 : 0 );
-
-            int strength = npc.Stat[ ST_STRENGTH ];
-            if( strength < weapon.Weapon_MinStrength )
+            if( toHit < ai_min )
 			{
-                base -= 20 * ( weapon.Weapon_MinStrength - strength );
+				//Log( " toHit < ai_min: " + toHit + " < " + ai_min );
+				r1 = 3;
+				r0 = 0;
+				r2 = optimalDist;
 			}
-			
-			if( npc.Trait[ TRAIT_ONE_HANDER ] != 0 )
+			else if( toHit < 50 )
 			{
-                base += ( FLAG( weapon.Flags, ITEM_TWO_HANDS ) ? -40 : 20 );
-			}
-			
-            int ai_min = AI_MIN_TO_HIT( npc.Stat[ ST_AI_ID ] );
-            int perception = npc.Stat[ ST_PERCEPTION ];
-            int mod = ( weapon.Weapon_Perk == WEAPON_PERK_SCOPE_RANGE ? 5 : ( weapon.Weapon_Perk == WEAPON_PERK_LONG_RANGE ? 4 : 2 ) );
-
-            if( base + 8 * perception < 95 )
-			{
-                if( base + 8 * perception < ai_min )
-				{
-                    r1 = 0;
-                    r0 = 0;
-                    r2 = 0;
-                    return true;
-                }
-				else
-				{
-                    r0 = ( mod - 2 ) * perception;
-				}
-			}
-			else
-			{
-                if( base < 95 )
-				{
-                    r0 = ( base + 4 * mod * perception - 95 ) / 4;
-				}
-				else
-				{
-                    if( npc.Damage[ DAMAGE_EYE ] != 0 )
-					{
-                        r0 = ( base + 12 * mod * perception - 95 ) / 12;
-                    }
-					else
-					{
-                        r0 = ( base + 4 * mod * perception - 95 ) / 4;
-					}
-				}
-            }
-
-            if( base < ai_min )
-			{
-                r2 = ( base + 4 * mod * perception - ai_min ) / 4;
+				//Log( " toHit < 50 " + toHit + " < " + 50 );
+				r0 = optimalDist - 10;
+				r2 = optimalDist;
             }
 			else
 			{
-                if( npc.Damage[ DAMAGE_EYE ] != 0 )
-				{
-                    r2 = ( base + 12 * mod * perception - ai_min ) / 12;
-                }
-				else
-				{
-                    r2 = ( base + 4 * mod * perception - ai_min ) / 4;
-				}
+				r0 = optimalDist;
+				r2 = dist;
+				//Log( "else: r0 " + r0 + " r1 " + r1 + " r2 " + r2 );
 			}
 
-            if( npc.IsCanAim() )
-			{
-                if( weapon.Weapon_Aim_0 )
-				{
-                    uint reduction = ( r0 * 3 * npc.Stat[ ST_INTELLECT ] ) / 100;
-                    reduction = MIN( 15, reduction );
-                    r0 -= reduction;
-                }
-            }
-
-            // left clamp:
-            if( r0 < r1 )
-			{
-                r0 = r1;
-			}
-            if( r2 < r0 )
-			{
-                r2 = r0;                  // this can be deleted under assumption that ai_min is always <= 95, which should be true
-			}
-            // right clamp
-            if( wpnDist < int(r2) )
-			{
-                r2 = _WeaponMaxDist( weapon, use );
-                if( r0 > r2 )
-				{
-                    r0 = r2;
-				}
-            }
-            // Multihex
-            r0 += multihex;
-            r1 += multihex;
-            r2 += multihex;
             return true;
         }
     }
 	else if( reason == REASON_ATTACK_USE_AIM )
-	{
-        if( !CogitateFiring( npc, r0, r1 ) )
-		{
-            r0 = 0;           // Primary attack
-            r1 = ( npc.IsCanAim() && Random( 0, 5 ) == 0 ? Random( HIT_LOCATION_HEAD, HIT_LOCATION_GROIN ) : 0 );
-        }
-
-        uint8      mode = 0;
+	//  In: r0 target id, r1 0, r2 0
+	//  Out: r0 use, r1 aim, r2 disable attack and wait this time (in ms)
+	{ 
+		//Log( "reason_aim" );
+		Critter@ target = GetCritter( r0 );
+		uint8 mode = 0;
         ProtoItem@ weapon = npc.GetSlotProto( SLOT_HAND1, mode );
-        int ap = valid( weapon ) ? _WeaponApCost( weapon, r0 ) : 3;
-        switch( r1 )
-        {
-			case HIT_LOCATION_EYES:
-				ap += __ApCostAimEyes;
-				break;
-			case HIT_LOCATION_GROIN:
-				ap += __ApCostAimGroin;
-				break;
-			case HIT_LOCATION_HEAD:
-				ap += __ApCostAimHead;
-				break;
-			case HIT_LOCATION_LEFT_ARM:
-			case HIT_LOCATION_RIGHT_ARM:
-				ap += __ApCostAimArms;
-				break;
-			case HIT_LOCATION_LEFT_LEG:
-			case HIT_LOCATION_RIGHT_LEG:
-				ap += __ApCostAimLegs;
-				break;
-			default:
-				break;
-        }
-
-        if( ap > npc.Stat[ ST_CURRENT_AP ] )
+		ProtoItem@ ammo = ( weapon.Weapon_MaxAmmoCount > 0 && weapon.Weapon_Caliber != 0 ? GetProtoItem( _CritGetItemHand( npc ).AmmoPid ) : null );
+        int use = _WeaponModeUse( mode );
+		
+		if( npc.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
 		{
-            r1 = 0;
-        }
-		else
-		{
-            ap -= npc.Stat[ ST_CURRENT_AP ];
-            if( ap > 0 )
+			int needAp = attack_ap( npc, weapon, use, ammo );
+			//Log( "needAP " + needAp + " Remaining AP " + npc.Stat[ ST_CURRENT_AP ] );
+			if( npc.Stat[ ST_CURRENT_AP ] < needAp )
 			{
-                r2 = ( ap * __ApRegeneration ) / npc.Stat[ ST_CURRENT_AP ] + 50;
+				needAp -= npc.Stat[ ST_CURRENT_AP ];
+				//Log( "Missing AP " + needAp );
+				if( needAp > 0 )
+				{
+					//Log( "npc.Stat[ ST_CURRENT_AP ] " + npc.Stat[ ST_CURRENT_AP ] );
+					r2 = needAp * npc.Stat[ ST_APREGEN ] / AP_DIVIDER;
+					//Log( " r2 " + r2 ); 
+				}
 			}
 		}
+		
+		if( weapon.Weapon_Anim2_0 == ANIM2_AUTO )
+		{
+			r1 = HIT_LOCATION_NONE;
+			//Log( " npc.Param[ CR_AUTO_ROUNDS_FIRED ] "  + npc.Param[ CR_AUTO_ROUNDS_FIRED ] );
+			if( npc.Param[ CR_AUTO_ROUNDS_FIRED ] >= 10 )
+			{
+				//Log( " npc.Param[ CR_AUTO_ROUNDS_FIRED ] >= 10 " );
+				npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+				r2 = _GetProtoWindupTime( weapon );
+			}
+		}
+		else if( _WeaponRound( weapon, use ) > 1 && ValidateBurst( npc, target, weapon, ammo, use ) )
+		{
+			r1 = HIT_LOCATION_NONE;
+		}
+		else if( _WeaponIsSecondaryAviable( weapon ) && weapon.Weapon_Anim2_1 == ANIM2_BURST && ValidateBurst( npc, target, weapon, ammo, use ) )
+		{
+			r0 = 1;
+			r1 = HIT_LOCATION_NONE;
+		}
+		else
+		{
+			int toHit = to_hit( npc, target, weapon, use, ammo, 0, 0, false );
+			r1 = ChooseAim( npc, target, toHit );
+		}
+		//Log( "aim_return_true, r0 " + r0 + " r1 " + r1 + " r2 " + r2 );
         return true;
     }
+	//Log( "aim_return_false" );
     return false;
 }
 
-bool CogitateFiring( Critter& cr, uint& mode, uint& aim ) // in: targetId, 0; out: mode, aim
+int ChooseAim( Critter& npc, Critter& target, int toHit )
 {
-    Critter@ target = GetCritter( mode );
-    if( !valid( target ) )
+	int chance = AI_CALLED_FREQ( npc.Stat[ ST_AI_ID ] );
+	int roll = Random( 1, 95 );
+	if( roll > chance )
 	{
-		return false;
+		return HIT_LOCATION_NONE;
 	}
 	
-    Item@ weapon = cr.GetItem( 0, SLOT_HAND1 );
-
-    if( !valid( weapon ) )
+	if( toHit < 85 )
 	{
-        mode = 0;
-        if( cr.IsCanAim() )
-		{
-            aim = ChooseAim( cr, target, null, 0, null );
-        }
-		else
-		{
-            aim = 0;
-		}
-        return true;
-    }
-
-    if( weapon.GetType() != ITEM_TYPE_WEAPON )
-	{
-		return false;
+        return HIT_LOCATION_TORSO;
 	}
 	
-    ProtoItem@ protoWeapon = GetProtoItem( weapon.GetProtoId() );
-    ProtoItem@ protoAmmo = null;
-    if( weapon.AmmoPid != 0 )
-	{
-        @protoAmmo = GetProtoItem( weapon.AmmoPid );
-	}
-    if( protoWeapon.Weapon_Skill_0 == SK_UNARMED || protoWeapon.Weapon_Skill_0 == SK_MELEE_WEAPONS )
-	{
-        mode = 0;
-        if( cr.IsCanAim() )
-		{
-            aim = ChooseAim( cr, target, protoWeapon, mode, protoAmmo );
-        }
-		else
-		{
-            aim = 0;
-		}
-        return true;
-    }
-	else	// assuming all modes ranged
-	{
-		bool forceBurst = false;
-        if( protoWeapon.Weapon_Round_0 > 1 )
-		{
-            forceBurst = true;
-            mode = 0;
-        }
-		else
-		{
-            if( protoWeapon.Weapon_DmgType_1 == DAMAGE_UNCALLED )
-			{
-                mode = 0;
-            }
-			else
-			{ 													
-                if( ValidateBurst( cr, target, protoWeapon, mode ) )
-				{
-                    forceBurst = true;
-                    mode = 1;
-                }
-				else
-				{
-                    mode = 0;
-                }
-            }
-        }
-
-        if( forceBurst )
-		{
-            aim = 0;
-            return true;
-        }
-
-        if( !cr.IsCanAim() || !_WeaponAim( protoWeapon, mode ) )
-		{
-            aim = 0;
-            return true;
-        }
-        aim = ChooseAim( cr, target, protoWeapon, mode, protoAmmo );
-        return true;
-    }
-}
-
-int ChooseAim( Critter& cr, Critter& target, ProtoItem@ weapon, uint8 mode, ProtoItem@ ammo )
-{
-    int tohit = RawToHit( cr, target, weapon, mode, ammo );
-
-    if( tohit < 26 )
-	{
-        return 0;
-	}
-	
-    int ap = valid( weapon ) ? _WeaponApCost( weapon, mode ) : 3;
-    uint skill = valid( weapon ) ? _WeaponSkill( weapon, mode ) : 0;
-    int pendiv = valid( weapon ) ? ( skill == SK_MELEE_WEAPONS || skill == SK_UNARMED ? 2 : 1 ) : 2;
-
-    int[] val( 6 ); // none, eyes, groin, head, arms, legs
-
-    int th = tohit;
-    int aps = ap;
-    val[ 0 ] /= aps;
-
-    aps = ap + __ApCostAimEyes;
-    th = tohit - __HitAimEyes / pendiv;
-    val[ 1 ] /= aps;
-
-    th = tohit - __HitAimGroin / pendiv;
-    aps = ap + __ApCostAimGroin;
-    val[ 2 ] /= aps;
-
-    th = tohit - __HitAimHead / pendiv;
-    aps = ap + __ApCostAimHead;
-    val[ 3 ] /= aps;
-
-    th = tohit - __HitAimArms / pendiv;
-    aps = ap + __ApCostAimArms;
-    val[ 4 ] /= aps;
-
-    th = tohit - __HitAimLegs / pendiv;
-    aps = ap + __ApCostAimLegs;
-    val[ 5 ] /= aps;
-
-    // find best shot, with 1/3 chance for taking second-best shot
-    int max = 0, next = 0;
-    for( int i = 1; i < 6; i++ )
-	{
-        if( val[ i ] >= val[ max ] )
-		{
-            max = i;
-		}
-	}
-	
-    for( int i = 1; i < 6; i++ )
-	{
-        if( val[ i ] >= val[ next ] && val[ next ] < val[ max ] )
-		{
-            next = i;
-		}
-	}
-    if( Random( 0, 2 ) == 2 )
-	{
-        max = next;
-	}
-
-    switch( max )
-    {
-		case( 1 ):
-			return HIT_LOCATION_EYES;
-		case( 2 ):
-			return HIT_LOCATION_GROIN;
-		case( 3 ):
-			return HIT_LOCATION_HEAD;
-		case( 4 ):
-		{
-			if( Random( 0, 1 ) == 1 )
-			{
-				return HIT_LOCATION_LEFT_ARM;
-			}
-			else
-			{
-				return HIT_LOCATION_RIGHT_ARM;
-			}
-		}
-		case( 5 ):
-			if( Random( 0, 1 ) == 1 )
-			{
-				return HIT_LOCATION_LEFT_LEG;
-			}
-			else
-			{
-				return HIT_LOCATION_RIGHT_LEG;
-			}
-		case( 0 ):
-		default:
-    }
-	return HIT_LOCATION_UNCALLED;
+	return Random( HIT_LOCATION_HEAD, HIT_LOCATION_GROIN );
 }
 
 class CTraceFirstCritter : ITraceContext
@@ -852,6 +618,7 @@ class CTraceFirstCritter : ITraceContext
 		{
             return true;
         }
+		
 		@Cr = map.GetCritter( hx, hy );
         return valid( Cr ) && Cr.Cond == COND_LIFE && GetDistantion( Gx, Gy, Cr.HexX, Cr.HexY ) >= Mindist;
     }
@@ -864,15 +631,15 @@ Critter@ TraceFirstCritter( uint16 hx, uint16 hy, uint16 tx, uint16 ty, Map& map
     return Tracer.Cr;
 }
 
-bool IsCurrentEnemy( Critter& cr, uint targetId )
+bool IsCurrentEnemy( Critter& npc, uint targetId )
 {
-    if( cr.CheckEnemyInStack( targetId ) )
+    if( npc.CheckEnemyInStack( targetId ) )
 	{
 		return true;
 	}
 	
     array< NpcPlane@ > plans;
-    cr.GetPlanes( plans );
+    npc.GetPlanes( plans );
     for( uint i = 0, j = plans.length(); i < j; i++ )
 	{
         if( plans[ i ].Type == AI_PLANE_ATTACK && plans[ i ].Attack_TargId == targetId )
@@ -880,30 +647,31 @@ bool IsCurrentEnemy( Critter& cr, uint targetId )
 			return true;
 		}
 	}
+	
     return false;
 }
 
-bool ValidateBurst( Critter& cr, Critter& target, ProtoItem@ weapon, uint mode )
+bool ValidateBurst( Critter& npc, Critter& target, ProtoItem@ weapon, ProtoItem@ ammo, uint mode )
 {
-    if( Random( 0, 2 ) == 0 ) // force normal shot, for a little diversity
+	if( to_hit( npc, target, weapon, mode, ammo, 0, 0, false ) < 95 )
 	{
 		return false;
-	}                 
-    
-	Map@ map = cr.GetMap();
-    if( cr.Stat[ ST_CURRENT_AP ] < int( _WeaponApCost( weapon, mode ) ) )
-	{
-        return false;
 	}
 	
-    uint     maxDist = _WeaponMaxDist( weapon, mode );
-
-    uint16   hx = cr.HexX;
-    uint16   hy = cr.HexY;
-    uint16   tx = target.HexX;
-    uint16   ty = target.HexY;
+	if( Random( 0, 1 ) == 0 ) // force normal shot, for a little diversity
+	{
+		return false;
+	}     
+	
+	Map@ map = npc.GetMap();
+    uint maxDist = _WeaponMaxDist( weapon, mode );
+	uint16 hx = npc.HexX;
+    uint16 hy = npc.HexY;
+    uint16 tx = target.HexX;
+    uint16 ty = target.HexY;
     Critter@ blocker = TraceFirstCritter( hx, hy, tx, ty, map, maxDist, hx, hy, 0 );
-    if( valid( blocker ) && !IsCurrentEnemy( cr, blocker.Id ) )
+	
+    if( valid( blocker ) && !IsCurrentEnemy( npc, blocker.Id ) )
 	{
 		return false;
 	}
@@ -912,28 +680,29 @@ bool ValidateBurst( Critter& cr, Critter& target, ProtoItem@ weapon, uint mode )
     uint16 sy = hy;
     uint16 ex = tx;
     uint16 ey = hy;
-    uint8  dir = GetOffsetDir( hx, hy, tx, ty, 89.0f );
+    uint8  dir = GetOffsetDir( hx, hy, tx, ty, 2.0f );
     map.MoveHexByDir( sx, sy, dir, 1 );
     map.MoveHexByDir( ex, ey, dir, 1 );
     @blocker = TraceFirstCritter( sx, sy, ex, ey, map, maxDist, hx, hy, 3 );
-    if( valid( blocker ) && !IsCurrentEnemy( cr, blocker.Id ) )
-	{
-		return false;
-	}
+    if( valid( blocker ) && !IsCurrentEnemy( npc, blocker.Id ) )
+    {
+        return false;
+    }
 
     sx = hx;
     sy = hy;
     ex = tx;
     ey = hy;
-    dir = GetOffsetDir( hx, hy, tx, ty, -89.0f );
+    dir = GetOffsetDir( hx, hy, tx, ty, -2.0f );
     map.MoveHexByDir( sx, sy, dir, 1 );
     map.MoveHexByDir( ex, ey, dir, 1 );
     @blocker = TraceFirstCritter( sx, sy, ex, ey, map, maxDist, hx, hy, 3 );
-    if( valid( blocker ) && !IsCurrentEnemy( cr, blocker.Id ) )
-	{
-		return false;
-	}
-    return true;
+    if( valid( blocker ) && !IsCurrentEnemy( npc, blocker.Id ) )
+    {
+        return false;
+    }
+
+	return true;
 }
 
 void SkillsSort( Critter& npc, int[]& skills, uint first, uint count )
@@ -981,7 +750,7 @@ bool CheckBattleWeapon( Critter& npc, Item& weapon )
 		return false;
 	}
 	
-    if( not npc.IsAnim1( weapon.Proto.Weapon_Anim1 ) )
+    if( !npc.IsAnim1( weapon.Proto.Weapon_Anim1 ) )
 	{
 		return false;
 	}
@@ -1000,6 +769,7 @@ bool CheckBattleWeapon( Critter& npc, Item& weapon )
 	{
 		return false;
 	}
+	
     return true;
 }
 
@@ -1009,10 +779,7 @@ bool IsAmmoForWeapon( Critter& npc, Item& weapon )
 	{
         return true;
     }
-	if( npc.CountItem( weapon.Proto.Weapon_DefaultAmmoPid ) > 0 )
-	{
-        return true;
-    }
+
 	Item@[] ammo;
     for( uint i = 0, j = npc.GetItemsByType( ITEM_TYPE_AMMO, ammo ); i < j; i++ )
     {
@@ -1022,6 +789,7 @@ bool IsAmmoForWeapon( Critter& npc, Item& weapon )
             return true;
 		}
 	}
+	
     return false;
 }
 

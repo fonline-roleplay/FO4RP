@@ -3,11 +3,14 @@
 
 #include "_utils.fos"
 #include "effects_h.fos"
+#include "gateway_h.fos"
 
 int[][] lifts_hexes = {
 //  Lift item           Door hex    KO hex    Critter hexes
-//  ProtoId             X   Y       X   Y     X   Y   X   Y   X   Y   X   Y   X   Y
-    { PID_LIFT_1,       0,  2,      0,  4,    0,  0,  0,  1, -1,  1,  1,  1, -1,  2 }
+//  ProtoId             X   Y       X   Y     X  Y   X  Y   X  Y   X  Y   X  Y   X  Y   X  Y
+    { PID_LIFT_1,       0,  2,      0,  4,    0, 0,  0, 1, -1, 1,  1, 1, -1, 2 },
+	{ PID_LIFT_2,       0,  2,      0,  4,    0, 0,  0, 1, -1, 1,  1, 1, -1, 2 },
+	{ PID_LIFT_3,       0,  2,      0,  4,    0, 0, -1,-1, -1, 1,  0, 1,  1, 1,  1, 0,  1,-1 },
 };
 
 bool lifts_initialized = false;
@@ -74,9 +77,9 @@ void menu( Critter& cr, int group, int floor, int safe )
 	
     uint item_id = GetLift(group, floor);
     Item@ item = GetItem(item_id);
-    if(item is null)
+    if(!valid(item))
 	{
-        cr.Say(SAY_NETMSG, "Item is null");
+        cr.Say(SAY_NETMSG, "Item invalid!");
     }
 	else
 	{
@@ -175,204 +178,221 @@ Item@ GetGroupCurrentItem(uint group)
     return GetLiftItem(group, floor);
 }
 
-bool SetLift(uint16 pid, uint group, uint floor, uint item_id, bool arrived) {
-    if (lifts_ids.length() < group)
+bool SetLift( uint16 pid, uint group, uint floor, uint item_id, bool arrived )
+{
+    if( lifts_ids.length() < group )
 	{
-        lifts_ids.resize(group);
-    }
-    uint[]@ group_ids = lifts_ids[group-1];
-    if (group_ids.length() == 0)
-	{
-        group_ids.resize(GROUP_INDEX_FIRST);
-        group_ids[GROUP_INDEX_PID] = pid;
-        group_ids[GROUP_INDEX_CURRENT] = 0;
-        group_ids[GROUP_INDEX_GOING_TO] = 0;
-        group_ids[GROUP_INDEX_COOLDOWN] = 0;
+        lifts_ids.resize( group );
     }
 	
-    if (arrived)
+    uint[]@ group_ids = lifts_ids[group-1];
+    if( group_ids.length() == 0 )
 	{
-        if(group_ids[GROUP_INDEX_CURRENT] == 0)
+        group_ids.resize(GROUP_INDEX_FIRST);
+        group_ids[ GROUP_INDEX_PID ] = pid;
+        group_ids[ GROUP_INDEX_CURRENT ] = 0;
+        group_ids[ GROUP_INDEX_GOING_TO ] = 0;
+        group_ids[ GROUP_INDEX_COOLDOWN ] = 0;
+    }
+	
+    if( arrived )
+	{
+        if( group_ids[ GROUP_INDEX_CURRENT ] == 0 )
 		{
-            Log("Group "+group+" lift arrived at floor "+floor);
+            Log( "Group "+group+" lift arrived at floor " + floor + "lift ID: " + item_id );
             group_ids[GROUP_INDEX_CURRENT] = floor;
         }
 		else
 		{
-            Log("Two arrived lifts per group "+group+", "+group_ids[GROUP_INDEX_CURRENT]+" and "+floor+", fixing...");
+            Log( "Two arrived lifts per group " + group + ", " + group_ids[GROUP_INDEX_CURRENT] + " and " + floor + "lift ID: " + item_id + ", fixing...");
             arrived = false;
         }
     }
     
     uint group_ids_len = group_ids.length();
-    if (GroupLength(group_ids) < floor)
+    if( GroupLength( group_ids ) < floor )
 	{
-        uint len = GROUP_INDEX_FIRST+floor;
-        group_ids.resize(len);
-        for(uint i=group_ids_len; i<len; ++i)
+        uint len = GROUP_INDEX_FIRST + floor;
+        group_ids.resize( len );
+        for( uint i = group_ids_len; i < len; ++i )
 		{
             group_ids[i] = 0;
         }
     }
-    GROUP_GET_FLOOR(group_ids, floor) = item_id;
+    GROUP_GET_FLOOR( group_ids, floor ) = item_id;
     return arrived;
 }
 
-bool IsSettingsValid(uint group, uint floor)
+bool IsSettingsValid( Item& item, uint group, uint floor)
 {
     if( group == 0 || group > 99 )
 	{
-        Log("Invalid lifts' group: "+group);
+        Log( "Invalid lifts' group: " + group + "Item id: " + item.Id );
         return false;
     }
 	
     if( floor == 0 || floor > 99 )
 	{
-        Log("Invalid lifts' floor: "+floor);
+        Log( "Invalid lifts' floor: "+floor + "Item id: " + item.Id );
         return false;
     }
     return true;
 }
 
-uint InitializeLiftsFor(uint16 pid) {
-    int[]@ hexes = GetLiftHexes(pid);
-    if(hexes is null)
+uint InitializeLiftsFor( uint16 pid )
+{
+    int[]@ hexes = GetLiftHexes( pid );
+    if( !valid(hexes) )
 	{
-        Log("Unsupported lift proto: "+pid);
+        Log( "Unsupported lift proto: " + pid );
         return 0;
     }
 
     Item@[] items;
-    uint _count = GetAllItems (pid, items);
+    uint _count = GetAllItems( pid, items );
     uint count_ok = 0;
 
-    for(uint i=0, l=items.length(); i<l; ++i)
+    for( uint i = 0, l = items.length(); i < l; ++i )
 	{
         Item@ item = items[i];
-        uint group = item.Val1;
-        uint floor = item.Val2;
-        if (!IsSettingsValid(group, floor))
+		if( valid( item ) )
 		{
-            continue;
-        }
-        uint group_type = GetGroupType(group);
-        if (group_type != 0 && group_type != pid)
-		{
-            LiftDebug("Different prototypes of lifts in the same group: "+pid+" != "+group_type, item);
-            continue;
-        }
-		
-        uint prev_lift = GetLift(group, floor);
-        if( prev_lift != 0 )
-		{
-            LiftDebug("Collision of lifts' settings, previous value: "+prev_lift, item);
-            continue;
-        }
-		
-        uint16 item_hexX = 0, item_hexY = 0;
-        Map@ item_map = item.GetMapPosition (item_hexX, item_hexY);
-        if(item_map is null)
-		{
-            LiftDebug("Lift item isn't on map", item);
-            continue;
-        }
+			uint group = item.Val1;
+			uint floor = item.Val2;
+			if( !IsSettingsValid( item, group, floor ) )
+			{
+				continue;
+			}
+			
+			uint group_type = GetGroupType( group );
+			if ( group_type != 0 && group_type != pid )
+			{
+				LiftDebug( "Different prototypes of lifts in the same group: " + pid + " != " + group_type, item );
+				continue;
+			}
+			
+			uint prev_lift = GetLift( group, floor );
+			if( prev_lift != 0 )
+			{
+				LiftDebug( "Collision of lifts' settings, previous value: " + prev_lift, item );
+				continue;
+			}
+			
+			uint16 item_hexX = 0, item_hexY = 0;
+			Map@ item_map = item.GetMapPosition( item_hexX, item_hexY );
+			if( !valid( item_map ) )
+			{
+				LiftDebug( "Lift item isn't on map", item );
+				continue;
+			}
 
-        Item@ door = FindDoor(item_map, item, hexes);
-        if(door is null)
-		{
-            LiftDebug("Lift has no door", item);
-            continue;
-        }
-        door.Val1 = group;
-        door.Val2 = floor;
-        door.SetEvent( ITEM_EVENT_SKILL, "e_DoorSkill" );
+			Item@ door = FindDoor( item_map, item, hexes );
+			if( !valid( door ) )
+			{
+				LiftDebug( "Lift has no door", item );
+				continue;
+			}
+			
+			door.Val1 = group;
+			door.Val2 = floor;
+			door.SetEvent( ITEM_EVENT_SKILL, "e_DoorSkill" );
 
-        bool arrived = SetLift(pid, group, floor, item.Id, item.AnimShowBegin==FRAME_ARRIVED);
-        ChangeLift(item_map, item, hexes, door, arrived, arrived);
-        count_ok += 1;
+			bool arrived = SetLift( pid, group, floor, item.Id, item.AnimShowBegin==FRAME_ARRIVED );
+			ChangeLift( item_map, item, hexes, door, arrived, arrived );
+			count_ok += 1;
+		}
     }
+	
+	items.resize(0);
+	
     return count_ok;
 }
 
 Item@ FindDoor(Map& map, Item& lift, int[]& hexes)
 {
-    int door_shift_x = hexes[HEXES_INDEX_DOOR];
-    int door_shift_y = hexes[HEXES_INDEX_DOOR+1];
-    return map.GetDoor(lift.HexX+door_shift_x, lift.HexY+door_shift_y);
+    int door_shift_x = hexes[ HEXES_INDEX_DOOR ];
+    int door_shift_y = hexes[ HEXES_INDEX_DOOR + 1 ];
+    return map.GetDoor( lift.HexX+door_shift_x, lift.HexY+door_shift_y );
 }
 
-bool ChangeLift(Map& map, Item& lift, int[]& hexes, Item& door, bool arrived, bool opened) {
+bool ChangeLift( Map& map, Item& lift, int[]& hexes, Item& door, bool arrived, bool opened )
+{
     int ko_shiftX = hexes[HEXES_INDEX_KO];
     int ko_shiftY = hexes[HEXES_INDEX_KO+1];
 
-    if(arrived)
+    if( arrived )
 	{
-        ChangeFrame(lift, FRAME_ARRIVED);
+        ChangeFrame( lift, FRAME_ARRIVED );
     }
 	else
 	{
-        ChangeFrame(lift, FRAME_VACANT);
+        ChangeFrame( lift, FRAME_VACANT );
     }
 
-    if(opened)
+    if( opened )
 	{
         door.LockerOpen();
+		PlayDoorSound( map, door.HexX, door.HexY, door.GetProtoId(), door.LockerCondition, 15 );
     }
 	else
 	{
-        Critter@ cr = map.GetCritter(door.HexX, door.HexY);
-        if(cr !is null)
+        Critter@ cr = map.GetCritter( door.HexX, door.HexY );
+        if( valid( cr ) )
 		{
             uint16 nex_hexX = lift.HexX+ko_shiftX;
             uint16 nex_hexY = lift.HexY+ko_shiftY;
 
-            if(!cr.TransitToHex(nex_hexX, nex_hexY, 6))
+            if( !cr.TransitToHex( nex_hexX, nex_hexY, 6 ) )
 			{
                 return false;
             }
-            cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT(true), 100, cr.HexX, cr.HexY );
+            cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 100, cr.HexX, cr.HexY );
         }
-        if(!door.LockerClose())
+		
+        if( !door.LockerClose() )
 		{
-            Log("Can't close prev lift door");
+			Log("Can't close prev lift door");
             return false;
-        }
+		}
     }
-
+	
+	ToggleDoorBlocker( map, door, !opened );
     return true;
 }
 
 void InitializeLifts()
 {
     lifts_initialized = true;
-    lifts_ids.resize(0);
+    lifts_ids.resize( 0 );
     uint count_ok = 0;
-    for(uint i=0, len=lifts_hexes.length(); i<len; i++)
+    for( uint i = 0, len = lifts_hexes.length(); i < len; i++ )
 	{
         int[]@ hexes = lifts_hexes[i];
         uint hexes_length = hexes.length();
-        if(hexes_length == 0)
+        if( hexes_length == 0 )
 		{
             continue;
         }
-        uint16 pid = hexes[0];
-        if(hexes_length < HEXES_INDEX_FIRST+2 || hexes_length%2==0)
+		
+        uint16 pid = hexes[ 0 ];
+        if( hexes_length < HEXES_INDEX_FIRST + 2 || hexes_length % 2 == 0 )
 		{
-            Log("Invalid lift hexes settings: "+i+" pid "+pid);
+            Log( "Invalid lift hexes settings: " + i + " pid " + pid );
             continue;
         }
-        count_ok += InitializeLiftsFor(pid);
+		Log( "Initializing lifts for pid: " + pid );
+        count_ok += InitializeLiftsFor( pid );
     }
-    Log("Lifts initialized: "+count_ok);
+    Log( "Lifts initialized: " + count_ok );
 }
 
 void LiftDebug(string@& message, Item& item)
 {
     uint16 hexX = 0, hexY = 0;
     Map@ map = item.GetMapPosition (hexX, hexY);
-    if(map is null)
+    if(!valid(map))
 	{
-        Log(message+"; item.Id: "+item.Id+", group: "+item.Val1+", floor: "+item.Val2+", map is null");
+        Log(message+"; item.Id: "+item.Id+", group: "+item.Val1+", floor: "+item.Val2+", map invalid!");
     }
 	else
 	{
@@ -395,17 +415,17 @@ bool e_DoorSkill( Item& door, Critter& cr, int skill )
     return true;
 }
 
-bool CheckLiftAvaible(Critter& cr, uint[]& group_ids, uint cooldown)
+bool CheckLiftAvaible( Critter& cr, uint[]& group_ids, uint cooldown )
 {
-    uint going_to = group_ids[GROUP_INDEX_GOING_TO];
-    if(going_to!=0)
+    uint going_to = group_ids[ GROUP_INDEX_GOING_TO ];
+    if( going_to!=0 )
 	{
         cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ELEVATOR_BUSY );
         return false;
     }
 	
-    uint timestamp = group_ids[GROUP_INDEX_COOLDOWN];
-    if(timestamp+cooldown > __FullSecond)
+    uint timestamp = group_ids[ GROUP_INDEX_COOLDOWN ];
+    if( timestamp+cooldown > __FullSecond )
 	{
         cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ELEVATOR_RECHARGE );
         return false;
@@ -415,45 +435,46 @@ bool CheckLiftAvaible(Critter& cr, uint[]& group_ids, uint cooldown)
 
 bool DoorActivate( Item& door, Critter& cr )
 {
-    if(_LockerIsOpen(door))
+    if( _LockerIsOpen( door ) )
 	{
         return false;
     }
 
     uint group = door.Val1;
     uint floor = door.Val2;
-    if (!IsSettingsValid(group, floor))
+    if ( !IsSettingsValid( door, group, floor ) )
 	{
         return false;
     }
+	
     Item@ parent_lift = GetLiftItem(group, floor);
 	
-    if(parent_lift is null)
+    if( !valid( parent_lift ) )
 	{
         LiftDebug("Can't find parent lift of the door", door);
         return false;
     }
 	
-    Item@ current_lift_item = GetGroupCurrentItem(group);
-    if(current_lift_item is null)
+    Item@ current_lift_item = GetGroupCurrentItem( group );
+    if( !valid( current_lift_item) )
 	{
         LiftDebug("No current floor", door);
         return false;
     }
 	
-    uint[]@ group_ids = lifts_ids[group-1];
-    if( !CheckLiftAvaible(cr, group_ids, REAL_SECOND(10)) )
+    uint[]@ group_ids = lifts_ids[ group - 1 ];
+    if( !CheckLiftAvaible( cr, group_ids, REAL_SECOND( 10 ) ) )
 	{
         return false;
     }
 
-    if(!CanAccessFloor(cr, group, floor, ACCESS_DOOR))
+    if( !CanAccessFloor( cr, group, floor, ACCESS_DOOR ) )
 	{
         //player can't use lift door on this floor
         return false;
     }
 
-    return MoveLiftTo(current_lift_item, floor, true);
+    return MoveLiftTo( current_lift_item, floor, true );
 }
 
 bool e_LiftSkill( Item& item, Critter& cr, int skill )
@@ -463,10 +484,11 @@ bool e_LiftSkill( Item& item, Critter& cr, int skill )
         LiftActivate(item, cr, true);
         return true;
     }
+	
     return false;
 }
 
-void LiftActivate(Item& item, Critter& cr, bool safe)
+void LiftActivate( Item& item, Critter& cr, bool safe )
 {
     if( !lifts_initialized )
 	{
@@ -478,68 +500,70 @@ void LiftActivate(Item& item, Critter& cr, bool safe)
         //npc can't activate lift
         return;
     }
+	
     uint16 item_hexX = 0, item_hexY = 0;
-    Map@ item_map = item.GetMapPosition (item_hexX, item_hexY);
-    if (item_map is null)
+    Map@ item_map = item.GetMapPosition ( item_hexX, item_hexY );
+    if( !valid( item_map ) )
 	{
-        LiftDebug("Player "+cr.Id+" is activating lift which is not on the map", item);
+        LiftDebug( "Player "+cr.Id+" is activating lift which is not on the map", item );
         return;
     }
 
     if( safe )
 	{
         Map@ map = cr.GetMap();
-        if (map is null)
+        if( !valid( map ) )
 		{
-            LiftDebug("Player "+cr.Id+" is activating lift while on global", item);
+            LiftDebug( "Player "+cr.Id+" is activating lift while on global", item );
             return;
         }
 
-        if (item_map.Id != map.Id)
+        if( item_map.Id != map.Id )
 		{
-            LiftDebug("Player "+cr.Id+" is activating lift which is on the other map", item);
+            LiftDebug( "Player "+cr.Id+" is activating lift which is on the other map", item );
             return;
         }
     }    
 
     uint group = item.Val1;
     uint floor = item.Val2;
-    if (!IsSettingsValid(group, floor))
+    if( !IsSettingsValid( item, group, floor ) )
 	{
         return;
     }
 	
     uint lift_id = GetLift(group, floor);
-    if (lift_id == 0 || lift_id != item.Id)
+    if( lift_id == 0 || lift_id != item.Id )
 	{
-        LiftDebug("Player is activating lift that's not registered correctly", item);
+        LiftDebug( "Player is activating lift that's not registered correctly", item );
         return;
     }
 	
     uint[]@ group_ids = lifts_ids[group-1];
     uint floors_in_group = GroupLength(group_ids);
-    if( floors_in_group == 0)
+    if( floors_in_group == 0 )
 	{
         //empty group
         return;
     }
-    if( !CheckLiftAvaible(cr, group_ids, REAL_SECOND(5)) )
+    if( !CheckLiftAvaible( cr, group_ids, REAL_SECOND( 5 ) ) )
 	{
         //lift can't be used just yet
         return;
     }
 
     GameVar@ var_item_id = GetLocalVar(LVAR_menu_lift_id, cr.Id);
-    if(var_item_id is null)
+    if( !valid(var_item_id) )
 	{
-        Log("LVAR_menu_lift_id is null for player "+cr.Id);
+        Log("LVAR_menu_lift_id invalid for player "+cr.Id);
         return;
     }
+	
     var_item_id = item.Id;
 	
-    if(safe)
+    if( safe )
 	{
-        if(!CanAccessFloor(cr, group, floor, ACCESS_INITAL))
+        if( !CanAccessFloor( cr, group, floor, ACCESS_INITAL ) )
 		{
             //player can't use lift on this floor
             return;
@@ -548,20 +572,21 @@ void LiftActivate(Item& item, Critter& cr, bool safe)
 
     cr.ShowScreen( SCREEN_DIALOGBOX, floors_in_group-1, safe ? "answer_LiftMenuHandler" : "answer_LiftMenuHandler_unsafe" );
     cr.SayMsg( SAY_DIALOGBOX_TEXT, TEXTMSG_TEXT, FOTEXT_LIFT(group, floor) );
-    for(uint i=0, j=1; j<=floors_in_group; ++j)
+    for( uint i=0, j=1; j <= floors_in_group; ++j )
 	{
-        if(j==floor)
+        if( j==floor )
 		{
             continue;
         }
-        cr.SayMsg( SAY_DIALOGBOX_BUTTON( i ), TEXTMSG_TEXT, FOTEXT_LIFT(group, j));
-        i+=1;
+		
+        cr.SayMsg( SAY_DIALOGBOX_BUTTON( i ), TEXTMSG_TEXT, FOTEXT_LIFT( group, j ) );
+        i += 1;
     }
 }
 
 void answer_LiftMenuHandler( Critter& player, uint answerI, string& answerS )
 {
-    if( LiftMenuHandler(player, answerI, true) )
+    if( LiftMenuHandler(player, answerI, true ) )
 	{
         player.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_ACTIVATE_ELEVATOR );
     }
@@ -575,16 +600,16 @@ void answer_LiftMenuHandler_unsafe( Critter& player, uint answerI, string& answe
 bool LiftMenuHandler( Critter& player, uint answerI, bool safe )
 {
     GameVar@ var_item_id = GetLocalVar(LVAR_menu_lift_id, player.Id);
-    if(var_item_id is null)
+    if( !valid(var_item_id) )
 	{
-        Log("LVAR_menu_lift_id is null for player "+player.Id);
+        Log( "LVAR_menu_lift_id invalid for player " + player.Id );
         return false;
     }
 	
     uint item_id = var_item_id.GetValue();
-    if(item_id == 0)
+    if( item_id == 0 )
 	{
-        Log("Player "+player.Id+" answers lift menu but menu_lift_id game var holds 0 value");
+        Log( "Player "+player.Id+" answers lift menu but menu_lift_id game var holds 0 value" );
         return false;
     }
 	
@@ -592,11 +617,12 @@ bool LiftMenuHandler( Critter& player, uint answerI, bool safe )
     if(safe)
 	{
         Map@ player_map = player.GetMap();
-        if(player_map is null)
+        if( !valid( player_map ) )
 		{
-            Log("Player "+player.Id+" answers lift menu while on global");
+            Log( "Player " + player.Id + " answers lift menu while on global" );
             return false;
         }
+		
         @item = player_map.GetItem(item_id);
     }
 	else
@@ -604,29 +630,29 @@ bool LiftMenuHandler( Critter& player, uint answerI, bool safe )
         @item = GetItem(item_id);
     }
     
-    if(item is null)
+    if( !valid( item ) )
 	{
-        Log("Player "+player.Id+" answers lift menu but there is no lift with Id "+item_id);
+        Log( "Player " + player.Id + " answers lift menu but there is no lift with Id " + item_id );
         return false;
     }
 
-    if(safe)
+    if( safe )
 	{
         if( item.MapId == 0 )
 		{
-            LiftDebug("Lift isn't on the map", item);
+            LiftDebug( "Lift isn't on the map", item );
             return false;
         }
 		
         if( item.MapId != player.GetMapId() )
 		{
-            LiftDebug("Player "+player.Id+" is on the different map than lift", item);
+            LiftDebug( "Player " + player.Id + " is on the different map than lift", item );
             return false;
         }
 		
-        if( GetDistantion(player.HexX, player.HexY, item.HexX, item.HexY) > 1 )
+        if( GetDistantion( player.HexX, player.HexY, item.HexX, item.HexY ) > 1 )
 		{
-            LiftDebug("Player "+player.Id+" is too far away from lift", item);
+            LiftDebug( "Player " + player.Id + " is too far away from lift", item );
             return false;
         }
     }
@@ -640,23 +666,23 @@ bool LiftMenuHandler( Critter& player, uint answerI, bool safe )
         next_floor += 1;
     }
 
-    if(safe)
+    if( safe )
 	{
-        if(!CanAccessFloor(player, group, floor, ACCESS_SELECT, next_floor))
+        if( !CanAccessFloor( player, group, floor, ACCESS_SELECT, next_floor ) )
 		{
             //player can't send lift to this floor
             return false;
         }
     }
 
-    return MoveLiftTo(item, next_floor, true);
+    return MoveLiftTo( item, next_floor, true );
 }
 
 bool MoveLiftTo( Item& item, uint next_floor, bool initial )
 {
     uint group = item.Val1;
     uint floor = item.Val2;
-    if( !IsSettingsValid( group, floor ) || GetLift( group, floor ) != item.Id )
+    if( !IsSettingsValid( item, group, floor ) || GetLift( group, floor ) != item.Id )
 	{
         return false;
     }
@@ -679,7 +705,7 @@ bool MoveLiftTo( Item& item, uint next_floor, bool initial )
     }
 
     int[]@ hexes = GetLiftHexes( group_ids[0] );
-    if(hexes is null)
+    if(!valid(hexes))
 	{
         LiftDebug( "No hex settings for this lift item prototype", item );
         return false;
@@ -792,7 +818,7 @@ bool MoveLiftTo( Item& item, uint next_floor, bool initial )
         group_ids[ GROUP_INDEX_GOING_TO ] = next_floor;
 		PlayGenericSound( prev_map, prev_hexX, prev_hexY, "ELEVATO1.mp3", 20 );
         uint[] arr = {item.Id, go_to_floor};
-        CreateTimeEvent( __FullSecond + REAL_SECOND( 2 ), "e_LiftMoving", arr, false );
+        CreateTimeEvent( __FullSecond + REAL_SECOND( 2 ), "lift@e_LiftMoving", arr, false );
         return true;
     }
 
@@ -821,14 +847,14 @@ bool MoveLiftTo( Item& item, uint next_floor, bool initial )
     if( next_floor == going_to )
 	{
         uint[] arr = { next_lift.Id, 0 };
-        CreateTimeEvent( __FullSecond + REAL_SECOND( 2 ), "e_LiftMoving", arr, false );
+        CreateTimeEvent( __FullSecond + REAL_SECOND( 2 ), "lift@e_LiftMoving", arr, false );
     }
 	else
 	{        
         uint go_to_floor2 = ( going_to < next_floor ) ? ( next_floor - 1 ) : ( next_floor + 1 );
         uint[] arr = { next_lift.Id, go_to_floor2 };
         uint delay = ( prev_map.Id == next_map.Id ) ? 3 : 5;
-        CreateTimeEvent( __FullSecond + REAL_SECOND(delay), "e_LiftMoving", arr, false );
+        CreateTimeEvent( __FullSecond + REAL_SECOND(delay), "lift@e_LiftMoving", arr, false );
     }
     return true;
 }
@@ -846,67 +872,57 @@ uint e_LiftMoving( uint[] @ val )
     }
 	
     Item@ item = GetItem(val[0]);
-    if(item is null)
+    if( !valid( item ) )
 	{
         return 0;
     }
+	
     MoveLiftTo(item, val[1], false);
     return 0;
 }
 
-#define MAX_ITEM_PROTOTYPES           ( 30000 )
-bool CheckProtoId(int pid)
-{
-    return pid > 0 && pid < MAX_ITEM_PROTOTYPES;
-}
-
 // next_floor is only valid with access == ACCESS_SELECT
-bool CanAccessFloor(Critter& player, uint group, uint floor, uint8 access, uint next_floor=0)
+bool CanAccessFloor( Critter& player, uint group, uint floor, uint8 access, uint next_floor = 0 )
 {
-    string@ proto_name = GetTextMsgStr(FOTEXT_LIFT(group, 0));
+    string@ proto_name = GetTextMsgStr( FOTEXT_LIFT( group, 0 ) );
     // if there is no field with keycard name - allow access
-    if( proto_name is null )
+    if( !valid(proto_name) )
 	{
         return true;
     }
-	int proto_id = GetProtoIdByName(proto_name);
-    // if there is field with keycard name but it's invalid - forbid access
-    if( !CheckProtoId(proto_id) )
+	
+	int proto_id = GetProtoIdByName( proto_name );
+	if( !hasItem( player, proto_id ) )
 	{
-        Log("Invalid keycard name: "+proto_name);
-        return false;
-    }
-
-    if( player.CountItem( proto_id ) < 1 )
-    {
-        switch(access)
+		switch( access )
 		{
-            case ACCESS_INITAL:
-            case ACCESS_SELECT:
-                player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_CARD_TO_MOVE );
-                break;
-            case ACCESS_DOOR:
-                player.SayMsg( SAY_NETMSG,  TEXTMSG_TEXT, STR_NEED_CARD_TO_CALL );
-                break;
-        }
-        return false;
-    }
-    else
+			case( ACCESS_INITAL ):
+			case( ACCESS_SELECT ):
+				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_CARD_TO_MOVE );
+				break;
+			case( ACCESS_DOOR ):
+				player.SayMsg( SAY_NETMSG,  TEXTMSG_TEXT, STR_NEED_CARD_TO_CALL );
+				break;
+		}
+		return false;
+	}
+	else
 	{
-        switch(access)
+		switch( access )
 		{
-            case ACCESS_INITAL:
-                player.SayMsg( SAY_EMOTE,  TEXTMSG_TEXT, STR_EMOTE_INSERT_CARD );
-                break;
-            case ACCESS_DOOR:
-                //don't say anything, doing that in another place
-                break;
-            case ACCESS_SELECT:
-                // WIP: check if next floor can be accessed
-                // return false;
-                break;
-        }
-    }
+			case( ACCESS_INITAL ):
+				player.SayMsg( SAY_EMOTE,  TEXTMSG_TEXT, STR_EMOTE_INSERT_CARD );
+				break;
+			case( ACCESS_DOOR ):
+				//don't say anything, doing that in another place
+				break;
+			case( ACCESS_SELECT ):
+				// WIP: check if next floor can be accessed
+				// return false;
+				break;
+		}
+	}
+	
     return true;
 }
 

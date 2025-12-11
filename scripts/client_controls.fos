@@ -1,0 +1,772 @@
+class Controlled 
+{
+	uint id;
+	string name;
+	
+	Controlled( uint id ) 
+	{
+		this.id = id;
+		checkName();
+	}
+	
+	void checkName() 
+	{
+		CritterCl@ cr = GetCritter( id );
+		if( !valid( cr ) )
+		{
+			name = "#" + id;
+			return;
+		}		
+		
+		if( cr.IsPlayer() )
+		{
+			name = cr.Name;
+		}				
+		else
+		{
+			name = GetMsgStr( TEXTMSG_DLG, STR_NPC_NAME( cr.Stat[ ST_DIALOG_ID ], cr.Pid ) );
+		}		
+	}
+}
+
+class ControlGroup 
+{	
+	uint id;
+	string name;
+	Controlled@[] list;
+	
+	ControlGroup( uint id ) 
+	{
+		this.id = id + 1;
+		this.name = ReplaceText( GetMsgStr( TEXTMSG_TEXT, STR_CONTRL_GROUP_NAME ), "ID", this.id );
+	}
+	
+	ControlGroup( string name ) 
+	{
+		this.id = 0;//GetStrHash( name );
+		this.name = name;
+	}
+	
+	ControlGroup@ copy( ControlGroup@ other ) 
+	{
+		if( valid( other ) )
+		{
+			int[] IDs = other.getIDs();
+			for( uint i = 0, l = IDs.length(); i < l; i++ )
+			{
+				this.addNew( IDs[i] );
+			}
+		}
+		
+		return this;
+	}
+	
+	ControlGroup@ add( uint id ) 
+	{ 
+		return this.add( Controlled( id ) ); 
+	}
+	
+	ControlGroup@ addNew( uint id ) 
+	{ 
+		if( !contains( id ) )
+		{
+			add( Controlled( id ) );
+		}
+	
+		return this;
+	}
+	
+	ControlGroup@ add( Controlled@ elem ) 
+	{
+		RunServerScriptUnsafe( "mobcontrol@unsafe_setControl", elem.id, this.id, 0, null, null );
+		list.insertLast( @elem );
+		return this;
+	}
+	
+	ControlGroup@ remove( uint id ) 
+	{
+		return remove( id, false );
+	}
+	
+	ControlGroup@ remove( uint id, bool silent ) 
+	{		
+		int l = list.length();
+		bool replacing = false;
+		for( int i = 0; i < l; i++ )
+		{
+			if( list[i].id == id )
+			{
+				if( !silent )
+				{
+					RunServerScriptUnsafe( "mobcontrol@unsafe_FreeMobById", id, this.id, 0, null, null );
+				}
+				replacing = true;
+			}
+			
+			if( replacing && i + 1 < l )
+			{
+				@list[i] = list[i+1];
+			}
+		}
+		
+		if( replacing )
+		{
+			list.resize( l - 1 );
+		}
+
+		return this;
+	}
+
+	ControlGroup@ check( uint id )
+	{
+		for( int i = 0, l = list.length(); i < l; i++ )
+		{
+			if( list[i].id == id )
+			{
+				return remove( id );
+			}
+		}
+		
+		return add( id );
+	}
+
+	bool contains( uint id ) 
+	{
+		for( int i = 0, l = list.length(); i < l; i++ )
+		{
+			if( list[i].id == id )
+			{
+				return true;
+			}
+		}
+		
+		return false;
+	}
+
+	void clear()
+	{
+		clear( false );
+	}
+	
+	void clear( bool silent ) 
+	{
+		if( !silent )
+		{
+			for( int i = 0, l = list.length(); i < l; i++ )
+			{
+				RunServerScriptUnsafe( "mobcontrol@unsafe_FreeMobById", list[i].id, this.id, 0, null, null );
+			}
+		}
+		
+		list.resize(0);
+	}
+	
+	string[] getNames() 
+	{
+		string[] result;
+		for( int n = 0, l = list.length(); n < l; n++ )
+			result.insertLast( list[n].name );
+		
+		return result;
+	}
+
+	string getName( uint n ) 
+	{
+		if( n >= list.length() )
+		{
+			return "[n(" + n + ") > len(" + list.length + ")]";
+		}
+		
+		return list[n].name;
+	}
+	
+	int[] getIDs() 
+	{
+		int[] result;
+		
+		for( int i = 0, l = list.length(); i < l; i++ )
+		{
+			result.insertLast( list[i].id );
+		}
+		
+		return result;
+	}
+
+	int getID( uint n )
+	{
+		if( n >= list.length() )
+		{
+			return n;
+		}
+		
+		return list[n].id;
+	}
+}
+
+int[] shiftGroup;
+ControlPanel@ controlpanel;
+class ControlPanel 
+{
+	ControlGroup@ current;
+	ControlGroup@ selection;
+	ControlGroup@[] groups;
+	
+	ControlPanel( uint size ) 
+	{
+		@selection = ControlGroup( "Selection" );
+		
+		@current = selection;	
+
+		for( uint i = 0; i < size; i++ )
+		{
+			groups.insertLast( ControlGroup( i ) );
+		}
+	}
+	
+	bool KeyPress( uint8 key ) 
+	{
+		//TODO: Вынести уже этого чузена, ну ВЕЗДЕ он юзается один и тот же, зачем столько дублирующего кода повсюду!?
+		CritterCl@ chosen = GetChosen();
+		if( !valid( chosen ) )
+		{ 
+			return false;
+		}
+
+		if( __ConsoleActive || ( GetCurrentCursor() != CURSOR_RTS && !KeyPressed[ DIK_LMENU ] ) )
+		{
+			return false;
+		}
+
+		return HotkeyGroup( key ) || HotkeyCommand( key );
+	}
+	
+	bool HotkeyGroup( uint8 key )
+	{
+		uint[] number_keys = { DIK_0, DIK_1, DIK_2, DIK_3, DIK_4, DIK_5, DIK_6, DIK_7, DIK_8, DIK_9 };
+		int key_n = number_keys.find( key );
+		
+		if( key_n == -1 )
+		{
+			return false;
+		}
+
+		if( key_n == 0 )
+		{
+			int[] IDs = current.getIDs();
+			for( uint i = 0, l = IDs.length(); i < l; i++ )
+			{
+				removeFromAllGroups( IDs[i] );
+			}
+			
+			current.clear();
+			selection.clear();
+		}
+		else
+		{
+			selectGroup( key_n - 1 );
+		}
+		
+		return true;
+	}
+	
+	void removeFromAllGroups( uint id ) 
+	{
+		removeFromAllGroups( id, false );
+	}
+	
+	void removeFromAllGroups( uint id, bool silent ) 
+	{
+		selection.remove( id, silent );
+
+		for( uint i = 0, l = groups.length(); i < l; i++ )
+			groups[i].remove( id, silent );		
+	}
+	
+	bool HotkeyCommand( uint8 key ) 
+	{
+		return false; //Пока нет чисто-RTSных команд, все ГМ-команды доступны и без режима RTS.
+	}
+	
+	void selectGroup( uint n )
+	{
+		if( n > groups.length() )
+		{
+			return;
+		}
+		
+		if( !KeyPressed[ DIK_LSHIFT ] )
+		{
+			if( KeyPressed[ DIK_LCONTROL ] )
+			{ //ctrl-n == установить группу равную выборке
+				groups[n].clear();
+				groups[n].copy( selection );
+			}
+			else
+			{ //n == установить выборку равную группе
+				selection.clear();
+				selection.copy( groups[n] );
+			}
+			
+			//В подсветке имя будет = группе, а значит кнопка "0" очистит эту группу.
+			@current = groups[n];
+		}
+		else
+		{
+			if( KeyPressed[ DIK_LCONTROL ] )
+			{ //ctrl+shift-n == добавить выборку в группу N
+				groups[n].copy( selection );
+			}
+			else
+			{ //shift-n == добавить группу N в выборку
+				selection.copy( groups[n] );
+				
+				@current = selection;			
+			}
+		}
+		
+	}
+	
+	int[] contains( uint id ) 
+	{
+		int[] result;
+
+		if( selection.contains( id ) )
+		{
+			result.insertLast( -1 );
+		}
+				
+		for( uint i = 0, l = groups.length(); i < l; i++ )
+		{
+			if( groups[i].contains( id ) )
+			{
+				result.insertLast( i );
+			}
+		}
+		
+		return result;
+	}
+	
+	bool controlled( uint id ) 
+	{
+		return current.contains( id );
+	}
+	
+	void draw()
+	{
+		if( !valid( current ) || ( __sinf & SINF_MOB_LIST == 0 ) )
+		{
+			return;
+		}
+		
+		DrawText_info( "   " + current.name + ":", 10, 30, 500, 10 );
+
+		string[] names = current.getNames();
+		bool ID_INFO = ( __sinf & SINF_LOGINS != 0 ) && ( __sinf & SINF_ID_HEADS != 0 );
+		for( uint n = 0, l = names.length(); n < l; n++ )
+		{
+			DrawText_info( "> " + ( ID_INFO ? current.getID(n) + " " : "" ) + names[n], 10, 40 + 10 * n, 500, 10 );
+		}
+	}
+}
+
+void initControlPanel()
+{
+	if( valid( controlpanel ) )
+	{
+		for( uint i = 0; i < 9; i++ )
+		{
+			controlpanel.groups[i].clear( true );
+		}
+		
+		controlpanel.selection.clear( true );
+		@controlpanel.current = controlpanel.selection;
+	}
+	else
+	{
+		@controlpanel = ControlPanel(9);
+	}
+}
+
+
+int[] checkSelectionBarNPC() 
+{
+	return checkSelectionBar( FIND_LIFE_AND_KO | FIND_ONLY_NPC );
+}
+
+int[] checkSelectionBarALL() 
+{
+	return checkSelectionBar( FIND_LIFE_AND_KO );
+}
+
+bool isLMB_on()
+{
+	return LMB_on;
+}
+
+int[] checkSelectionBar( int findType ) 
+{
+	int[] targets;
+
+	CritterCl@ chosen = GetChosen();
+	if( !valid( chosen ) ) 
+	{
+		return targets;
+	}
+	
+	if( !FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) || !__mobhotkeys )
+	{
+		return targets;
+	}
+	
+	CritterCl@[] allTargets;
+	GetCritters( 0, findType, allTargets );
+
+	int x1 = MIN( LMB_x1, LMB_x2 ); int y1 = MIN( LMB_y1, LMB_y2 ); 
+	int x2 = MAX( LMB_x1, LMB_x2 );	int y2 = MAX( LMB_y1, LMB_y2 );
+
+	//Нужно для ускорения поиска существ по их координатам:
+	dictionary CordIndexMap;
+	for( uint i = 0, l = allTargets.length(); i < l; i ++ )
+	{
+		CritterCl@ target = allTargets[i];
+		if( !valid( target ) )
+		{
+			continue;
+		}
+		
+		CordIndexMap.set( target.HexX + " " + target.HexY, target.Id );
+	}
+
+	int line = 0, x = 0, y = 0;
+	uint16 hxX = 0, hxY = 0;	
+	
+	//Находим в какой гекс попала стартовая координата (левый верхний угол прямоугольника)
+	GetMonitorHex( x1, y1, hxX, hxY, true );
+
+	int dx = int( 32 / __SpritesZoom );
+	while( y < y2 ) //Пока не достигнут нижний край прямоугольника (учитывая неполностью выбранные гексы):
+	{
+		//Встаем в центр текущего гекса
+		GetHexPos( hxX, hxY, x, y );
+
+		int _x = x;
+		do
+		{
+			if( x + dx / 3 >= x1 )
+			{
+				//Находим криттера, стоящего на гексе ВНУТРИ рамки:
+				uint ID;
+				if( CordIndexMap.get( hxX + " " + hxY, ID ) )
+				{
+					CritterCl@ target2 = GetCritter( ID );
+					if( valid( target2 ) && ( targets.find( target2.Id ) == -1  ) )
+					{
+						if( target2.IsLife() || ( y2 - y1 < dx && x2 - x1 < dx ) )
+						{
+							targets.insertLast( target2.Id );
+						}
+					}
+				}
+			}
+		
+			//Сдвигаемся на гекс вправо
+			MoveHexByDir( hxX, hxY, DIR_E, 1 );	
+
+			//Встаем в его центр
+			GetHexPos( hxX, hxY, x, y );
+		}
+		while( x - dx / 2 < x2 ); //Пока не достигнут правый край прямоугольника (учитывая неполностью выбранные гексы):
+
+
+		//Находим самый левый гекс этой линии
+		x = _x;
+		GetMonitorHex( x, y, hxX, hxY, true );
+		//Смещаемся на линию ниже, двигаясь зигзагом (левей-правей, по очереди):
+		uint8 dir = ( line % 2 == 0 ? DIR_SW : DIR_SE );
+		
+		MoveHexByDir( hxX, hxY, dir, 1 );	
+
+		line++;
+		
+		if( line >= 999 )
+		{
+			Message( x1 +" " + y1 + " ; " + x2 + " " + y2 + " ; " + x + " " + y + " ; " + hxX + " " + hxY );
+			break;
+		}
+	}
+	
+	return targets;
+}
+
+void AssaultAttackTargets()
+{
+	RunServerScriptUnsafe( "mobcontrol@unsafe_clearPlans", 0, 0, 0, null, control() );	
+
+	int[] targets = checkSelectionBarALL();
+
+	CritterCl@ target;
+	CritterCl@ chosen = GetChosen();
+	for( uint i = 0, l = targets.length(); i < l; i++ )
+	{
+		@target = GetCritter( targets[i] );
+		if( isControlled( target ) )
+		{
+			continue;
+		}
+
+		RunServerScriptUnsafe( "mobcontrol@unsafe_addEnemy", targets[i], 0, 0, null, control() );
+	}
+}
+
+int[] GetControlledParameterValues( uint parameter_id )
+{
+	int[] result;
+	
+	int[] selection = control();
+	for( uint i = 0, l = selection.length(); i < l; i++ )
+	{
+		CritterCl@ target = GetCritter( selection[i] );
+		if( !valid( target ) )
+		{
+			continue;
+		}
+		
+		int parameter_value;
+
+		if( parameter_id < 200 )
+		{
+			parameter_value = target.Stat[parameter_id];
+		}
+		else
+		{
+			parameter_value = target.Param[parameter_id];
+		}
+		
+		if( parameter_value != 0 && result.find( parameter_value ) == -1 )
+		{
+			result.insertLast( parameter_value );
+		}
+	}
+	
+	return result;
+}
+
+void OutlineAttackTargets()
+{
+	int[] targets = checkSelectionBarALL();
+	
+	int[] teams = GetControlledParameterValues( ST_TEAM_ID );
+	int[] factions = GetControlledParameterValues( ST_FACTION );
+	
+	CritterCl@ target;
+	CritterCl@ chosen = GetChosen();
+	uint8 r, g, b;
+	for( uint i = 0, l = targets.length(); i < l; i++ )
+	{
+		@target = GetCritter( targets[i] );
+		if( isControlled( target ) )
+		{
+			r = 0x00; g = 0xFF;	b = 0x00;
+		}
+		else if( factions.find( target.ParamBase[ ST_FACTION ] ) != -1 || teams.find( target.ParamBase[ ST_TEAM_ID ] ) != -1 )
+		{
+			r = 0x00; g = 0x00;	b = 0xFF;
+		}
+		else
+		{
+			r = 0xFF; g = 0x00;	b = 0x00;
+		}
+
+		OutlineCritter( target, r, g, b );
+	}
+}
+
+int[] nonTEAM_IDs = { 0, 1 };
+bool sameTEAM( Critter& cr, Critter& target ) 
+{
+    if( !valid( cr ) )
+    {
+        return false;
+    }
+    
+	if( !valid( target ) )
+	{
+        return false;
+    }
+	
+	int myTeamID = cr.Stat[ ST_TEAM_ID ];
+    return( nonTEAM_IDs.find( myTeamID ) != 0 ) && ( myTeamID == target.Stat[ ST_TEAM_ID ] );
+}
+
+void addNewSelection()
+{
+	int[] targets = checkSelectionBarNPC();
+	
+	if( targets.length() == 0 )
+	{
+		return;
+	}
+	
+	bool needRefresh = false;
+		
+	//Проверяем что есть НПЦ которых нужно добавить в список:
+	for( int i = 0, l = targets.length(); i < l; i++ )
+	{
+		CritterCl@ target = GetCritter( targets[i] );
+		if( !valid( target ) )
+		{
+			continue;
+		}
+		
+		if( !controlpanel.controlled( targets[i] ) )
+		{
+			needRefresh = true;
+			break;
+		}
+	}
+
+	//Проверяем что есть НПЦ которых нужно исключить из списка:
+	int[] controlled = controlpanel.current.getIDs();
+	for( int i = 0, l = controlled.length(); i < l; i++ )
+	{
+		if( targets.find( controlled[i] ) == -1 )
+		{
+			needRefresh = true;
+			break;
+		}
+	}
+	
+	if( !needRefresh && !KeyPressed[ DIK_LSHIFT ] )
+	{
+		return;
+	}
+	
+	//Если не нажат шифт - обнуляем текущее выделение (группу):
+	if( !KeyPressed[ DIK_LSHIFT ] )
+	{
+		controlpanel.selection.clear();
+	}
+	
+	for( int i = 0, l = targets.length(); i < l; i++ )
+	{
+		CritterCl@ target = GetCritter( targets[i] );
+		if( !valid( target ) )
+		{
+			continue;
+		}
+		
+		if( KeyPressed[ DIK_LSHIFT ] )
+		{
+			if( shiftGroup.find( targets[i] ) != -1 )
+			{
+				continue;
+			}
+			shiftGroup.insertLast( targets[i] );
+		}
+
+		//Берем/убираем контроль над криттером:
+		SetControlCritters( targets[i] );
+	}
+	
+	updateAllNicks();
+}
+
+void clearShiftGroup()
+{
+	shiftGroup.resize(0);
+}
+
+int[] getControlledGroups( int id )
+{
+	return controlpanel.contains( id );
+}
+
+bool isControlled( CritterCl& cr ) 
+{
+	return( cr.Param[ MERC_MASTER_ID ] == int( GetChosen().Id ) );
+}
+
+bool isControlled( int id )
+{ 
+	return controlpanel.contains( id ).length() != 0;
+}
+
+bool isControlled( int id, int groupN )
+{
+	return controlpanel.controlled( id );
+}
+
+bool isSelected( int id )
+{
+	return controlpanel.current.contains( id );
+}
+
+void _LostCritterControl( int id, int, int, string@, int[]@ )
+{
+    controlpanel.removeFromAllGroups( id, true );
+}
+
+void SetControlCritters( int id )
+{
+    CritterCl@ chosen = GetChosen();
+	if( chosen.Stat[ ST_ACCESS_LEVEL ] < ACCESS_MODER )
+	{
+		return;
+	}
+	
+	controlpanel.selection.check(id);
+	@controlpanel.current = controlpanel.selection;//TODO: rework?
+
+    CritterCl@ target = GetCritter( id );
+	if( valid( target) )
+	{
+		replaceNick(target);
+	}
+}
+
+int[] control()
+{
+    return controlpanel.current.getIDs();
+}
+
+int[] getControlledGroups( CritterCl& cr )
+{
+	int[] result;
+	int groups = cr.ParamBase[ CR_CONTROLLED_GROUP ];
+	for( uint i = 0; i < 10; i++ )
+	{
+		int flag = ( 1 << i );
+		if( ( groups & flag ) == flag )
+		{
+			result.insertLast( i - 1 );
+		}
+	}
+	
+	return result;
+}
+
+void checkCritterControl( CritterCl@ cr )
+{
+	CritterCl@ ch = GetChosen();
+
+	if( !valid( cr ) || !valid( ch ) )
+	{
+		return;
+	}
+	
+	if( cr.Param[MERC_MASTER_ID] == int( ch.Id ) )
+	{
+		int[] IDs = getControlledGroups( cr );
+		for( uint i = 0, l = IDs.length(); i < l; i++ )
+		{
+			if( IDs[i] == -1 )
+			{
+				controlpanel.selection.addNew( cr.Id );
+			}
+			else
+			{
+				controlpanel.groups[IDs[i]].addNew( cr.Id );				
+			}
+		}
+	}
+}

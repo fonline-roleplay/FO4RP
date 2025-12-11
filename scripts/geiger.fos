@@ -3,96 +3,457 @@
 
 #include "_utils.fos"
 #include "geiger_h.fos"
+#include "radiation_h.fos"
 
+class MenuGeiger: CenteredMenuHandler
+{
+    uint geiger_id;
+    uint map_id;
+	uint menu_format = STR_GEIGER_MENU_MAIN;
+	int cr_rad_strength = 0;
+	int loc_rad_strength = 0;
+	
+
+    MenuGeiger( Item& geiger, Map& map ) 
+	{
+		geiger.GEIGER_MAX_CHARGE = geiger.Proto.StartValue_2;
+		geiger_id = geiger.Id;
+		map_id = map.Id;
+	}
+	
+	void ButtonSound( Map& map, uint16& hex_x, uint16& hex_y, uint volume=5 )
+	{
+		PlayGenericSound( map, hex_x, hex_y, "BUTIN1.mp3", 5 );
+	}
+	
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+        if( !valid( map ) )
+		{
+            return false;
+        }
+		
+        Item@ geiger = GetItem( geiger_id );
+		if( !valid( geiger ) )
+		{
+            return false;
+        }
+		
+		if( cr.Stat[ ST_INTELLECT ] < GEIGER_MIN_INTELLIGENCE )
+		{
+			menu_format = STR_GEIGER_MENU_MAIN_STUPID;
+		}
+		
+        if( geiger.GEIGER_STATE == GEIGER_OFF && ( cr.Stat[ ST_INTELLECT ] >= GEIGER_MIN_INTELLIGENCE ? menu.ButtonMsg( STR_ON ) : menu.ButtonMsg( STR_GEIGER_ON_OFF_STUPID ) ) )
+		{
+			ButtonSound( map, cr.HexX, cr.HexY );
+			EnableGeiger( cr, geiger );
+            return true; 
+        }	
+        else if( geiger.GEIGER_STATE == GEIGER_ON && ( cr.Stat[ ST_INTELLECT ] >= GEIGER_MIN_INTELLIGENCE ? menu.ButtonMsg( STR_OFF ) : menu.ButtonMsg( STR_GEIGER_ON_OFF_STUPID ) ) )
+		{
+			ButtonSound( map, cr.HexX, cr.HexY );
+			DisableGeiger( cr, geiger );
+            return true; 
+        }	
+		
+		/*if( geiger_lid_state == 0 && menu.ButtonMsg( STR_GEIGER_OPEN_LID ) )
+		{
+			geiger_lid_state = 1;
+		}*/
+		
+		if( cr.Stat[ ST_INTELLECT ] >= GEIGER_MIN_INTELLIGENCE ? menu.ButtonMsg( STR_GEIGER_CHARGE ) : menu.ButtonMsg( STR_GEIGER_CHARGE_STUPID ) )
+		{
+			ButtonSound( map, cr.HexX, cr.HexY );
+			UseSkillOnGeiger( cr, geiger, SK_SCIENCE );
+			MenuGeiger_charge@ charge = MenuGeiger_charge( geiger, map );
+			return menu.OpenChild( "Level ", charge );
+		}
+		
+		if( geiger.GEIGER_STATE == GEIGER_ON && ( cr.Stat[ ST_INTELLECT ] >= GEIGER_MIN_INTELLIGENCE ? menu.ButtonMsg( STR_GEIGER_SCAN_LOC ) : menu.ButtonMsg( STR_GEIGER_SCAN_LOC_STUPID ) ) )
+		{
+			ButtonSound( map, cr.HexX, cr.HexY );
+			loc_rad_strength = GetHexRadStrength( map, cr.HexX, cr.HexY );
+			StartSoundGeiger( map, cr.HexX, cr.HexY, loc_rad_strength );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_LOOP_CHECK, "$rem" + loc_rad_strength );
+		}
+		
+        if( geiger.GEIGER_STATE == GEIGER_ON && ( cr.Stat[ ST_INTELLECT ] >= GEIGER_MIN_INTELLIGENCE ? menu.ButtonMsg( STR_GEIGER_SCAN_ME ) : menu.ButtonMsg( STR_GEIGER_SCAN_ME_STUPID ) ) )
+		{
+			ButtonSound( map, cr.HexX, cr.HexY );
+			CheckRadLevel( cr, geiger );
+			cr_rad_strength = cr.Stat[ ST_RADIATION_LEVEL ];
+            return true; 
+        }
+		
+		return true;
+	}
+
+	int getDescriptionFile()
+	{
+		return TEXTMSG_TEXT;
+	}
+	
+	int getDescriptionLine()
+	{
+		// watch the heirs classes
+		return menu_format;
+	}
+	
+	string@ Description( Critter& cr )
+	{
+		string info;
+
+		if( menu_format == STR_GEIGER_MENU_MAIN )
+		{
+			Item@ geiger = GetItem( geiger_id );
+			info += "$geigerState" + STR_INSERT_TEXT_LINE( geiger.GEIGER_STATE == GEIGER_ON ? STR_ON : STR_OFF ); 
+			
+			if( geiger.GEIGER_STATE == GEIGER_ON )
+			{
+				info += "$geigerCurCharge" + geiger.GEIGER_CUR_CHARGE + " /" + "$geigerMaxCharge" + geiger.GEIGER_MAX_CHARGE;
+				
+				if( cr_rad_strength == 0 )
+				{
+					info += "$crRadLvl" + "-";
+				}
+				else
+				{
+					info += "$crRadLvl" + cr_rad_strength;
+				}
+				
+				if( loc_rad_strength == 0 ) 
+				{
+					info += "$locRadLvl" + "-";
+				}
+				else
+				{
+					info += "$locRadLvl" + loc_rad_strength;
+				}
+			}
+			else
+			{
+				info += "$geigerCurCharge" + "-" + " /" + "$geigerMaxCharge" + "-";
+				info += "$crRadLvl" + "-";
+				info += "$locRadLvl" + "-";
+			}
+		}
+		
+		return info;
+	}
+	
+}
+
+class MenuGeiger_charge: MenuGeiger
+{
+	
+    MenuGeiger_charge( Item& geiger, Map& map ) 
+	{
+		geiger_id = geiger.Id;
+		map_id = map.Id;
+		menu_format = STR_GEIGER_CHOICE_CHARGE_TYPE;
+    }
+	
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+	
+        Map@ map = GetMap( map_id );
+        if( !valid( map ) )
+		{
+            return false;
+        }
+		
+        Item@ geiger = GetItem( geiger_id );
+		if( !valid( geiger ) )
+		{
+            return false;
+        }
+		
+		if( cr.Stat[ ST_INTELLECT ] < GEIGER_MIN_INTELLIGENCE )
+		{
+			menu_format = STR_GEIGER_CHOICE_CHARGE_TYPE_STUPID;
+		}		
+
+		if( cr.CountItem( PID_CUENCELL_LOW ) > 0 && ( cr.Stat[ ST_INTELLECT ] >= GEIGER_MIN_INTELLIGENCE ? menu.ButtonMsg( STR_GEIGER_HOMEMADE_ENERGY_CELL ) : menu.ButtonMsg( STR_GEIGER_HOMEMADE_ENERGY_CELL_STUPID ) ) )
+		{
+			Item@ charge_cell = cr.GetItem( PID_CUENCELL_LOW, -1 );
+			
+			if( valid( charge_cell ) )
+			{
+				UseItemOnGeiger ( cr, geiger, charge_cell );
+			}
+			
+			return false;
+		}
+		
+		if( cr.CountItem( PID_SMALL_ENERGY_CELL ) > 0 && ( cr.Stat[ ST_INTELLECT ] >= GEIGER_MIN_INTELLIGENCE ? menu.ButtonMsg( STR_GEIGER_ENERGY_CELL ) : menu.ButtonMsg( STR_GEIGER_ENERGY_CELL_STUPID ) ) )
+		{
+			Item@ charge_cell = cr.GetItem( PID_SMALL_ENERGY_CELL, -1 );
+			
+			if( valid( charge_cell ) )
+			{
+				UseItemOnGeiger ( cr, geiger, charge_cell );
+			}
+			
+			return false;
+		}
+		
+		if( cr.CountItem( PID_MICRO_FUSION_CELL ) > 0 && ( cr.Stat[ ST_INTELLECT ] >= GEIGER_MIN_INTELLIGENCE ? menu.ButtonMsg( STR_GEIGER_MICRO_FUSION_CELL ) : menu.ButtonMsg( STR_GEIGER_MICRO_FUSION_CELL_STUPID ) ) )
+		{
+			if( cr.Skill[ SK_SCIENCE ] >= GEIGER_MIN_SCIENCE || cr.Skill[ SK_REPAIR ] >= GEIGER_MIN_REPAIR )
+			{
+				Item@ charge_cell = cr.GetItem( PID_MICRO_FUSION_CELL, -1 );
+				
+				if( valid( charge_cell ) )
+				{
+					UseItemOnGeiger ( cr, geiger, charge_cell );
+				}
+				
+				return false;
+			}
+			else
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GEIGER_LOW_SKILL_CRITTER_TRY_USE );
+				return true;
+			}
+
+		}
+		
+		if( menu.ButtonMsg( STR_PREVIOUS ) )
+		{
+			return false;
+		}
+		
+		return true;
+	}
+
+	int getDescriptionFile()
+	{
+		return TEXTMSG_TEXT;
+	}
+
+	int getDescriptionLine()
+	{
+		return menu_format;
+	}
+	
+	string@ Description( Critter& cr )
+	{
+		string info;
+		if( menu_format == STR_GEIGER_CHOICE_CHARGE_TYPE )
+		{
+			Item@ geiger = GetItem( geiger_id );
+			info += "$geigerState" + STR_INSERT_TEXT_LINE( geiger.GEIGER_STATE == GEIGER_ON ? STR_ON : STR_OFF ); 
+			
+			if( geiger.GEIGER_STATE == GEIGER_ON )
+			{
+				info += "$geigerCurCharge" + geiger.GEIGER_CUR_CHARGE + " /" + "$geigerMaxCharge" + geiger.GEIGER_MAX_CHARGE;
+			}
+			else
+			{
+				info += "$geigerCurCharge" + "-" + " /" + "$geigerMaxCharge" + "-";
+			}
+		}
+
+		return info;
+	}
+
+}
+
+
+// call start menu geiger
 bool UseGeiger( Critter& cr, Item& geiger ) // Export
 {
-    if( geiger.Val1 == 1 )
-    {
-        geiger.Val1 = 0;
-        if( geiger.Val3 != 0 )
-            EraseTimeEvent( geiger.Val3 );
-        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_OFF );
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return false;
     }
-    else
-    {
-        if( geiger.Val2 == 0 )
-        {
-            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_NO_CHARGES );
-            return true;
-        }
+	
+	iMenuHandler@ handler = MenuGeiger( geiger, map );
+	iDialogBox@ menu = OpenMenu( cr, "", handler );
+	return true;
+}
 
-        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_FIRST_CHECK, "$rem" + cr.Stat[ ST_RADIATION_LEVEL ] );
+bool EnableGeiger( Critter& cr, Item& geiger )
+{
+	if( geiger.GEIGER_STATE == GEIGER_ON )
+	{
+		return true;
+	}
 
-        geiger.Val2--;
-        if( geiger.Val2 == 0 )
-        {
-            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_NO_CHARGES );
-        }
-        else
-        {
-            // Turn on and loop
-            geiger.Val1 = 1;
-            geiger.Val3 = CreateTimeEvent( __FullSecond + GEIGER_DURATION, "e_Geiger", geiger.Id, true );
-            cr.PlaySound( "geiger_active.ogg", true );
-        }
-    }
+	if( geiger.GEIGER_CUR_CHARGE <= 0 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_NO_CHARGES );
+		return true;
+	}
+
+	geiger.GEIGER_CUR_CHARGE--;
+	if( geiger.GEIGER_CUR_CHARGE <= 0 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_NO_CHARGES );
+	}
+	else
+	{
+		// Turn on and loop
+		geiger.GEIGER_STATE = GEIGER_ON;
+		geiger.GEIGER_EVENT = CreateTimeEvent( __FullSecond + GEIGER_DURATION, "geiger@e_Geiger", geiger.Id, true );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_ON );
+	}
 
     geiger.Update();
     return true;
 }
 
+bool DisableGeiger( Critter& cr, Item& geiger )
+{
+    if( geiger.GEIGER_STATE == GEIGER_ON )
+    {
+        geiger.GEIGER_STATE = GEIGER_OFF;
+        if( geiger.GEIGER_EVENT != 0 )
+        {
+            EraseTimeEvent( geiger.GEIGER_EVENT );
+		}
+
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_OFF );
+    }
+	
+	geiger.Update();
+	return true;
+}
+
+bool CheckRadLevel( Critter& cr, Item& geiger )
+{
+	if( cr.Stat[ ST_INTELLECT ] < 4 )
+	{
+		// cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GEIGER_STUPID_CRITTER_TRY_USE );
+		int stupidChance = Random( 1, 6 );
+		if( stupidChance == 1 )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_FIRST_CHECK, "$rem" + cr.Stat[ ST_RADIATION_LEVEL ] );
+		}
+		else 
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GEIGER_STUPID_CRITTER_TRY_USE );
+		}
+	}
+	else
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_FIRST_CHECK, "$rem" + cr.Stat[ ST_RADIATION_LEVEL ] );
+	}
+	return true;
+}
+
+
 bool UseItemOnGeiger( Critter& cr, Item& geiger, Item& item ) // Export
 {
     uint16 itemPid = item.GetProtoId();
-    if( ( itemPid == PID_SMALL_ENERGY_CELL || itemPid == PID_MICRO_FUSION_CELL ) && geiger.Val2 < geiger.Proto.StartValue_2 )
+	if( itemPid == PID_SMALL_ENERGY_CELL || itemPid == PID_MICRO_FUSION_CELL || itemPid == PID_CUENCELL_LOW )
     {
-        uint needCharge = geiger.Proto.StartValue_2 - geiger.Val2;
-        uint charge = ( itemPid == PID_SMALL_ENERGY_CELL ? GEIGER_ENERGY_CHARGE : GEIGER_FUSION_CHARGE );
-        uint needItems = needCharge / charge;
-        if( ( needCharge % charge ) != 0 )
-            needItems++;
-        if( needItems > item.GetCount() )
-            needItems = item.GetCount();
-        geiger.Val2 += needItems * charge;
-        if( geiger.Val2 > geiger.Proto.StartValue_2 )
-            geiger.Val2 = geiger.Proto.StartValue_2;
-        geiger.Update();
-        _SubItem( item, needItems );
-        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_ADD_CHARGE );
+		ChargeGeiger ( cr, geiger, item );
     }
     else
     {
         cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_NOTHING );
     }
+    
     return true;
+}
+
+bool ChargeGeiger ( Critter& cr, Item& geiger, Item& item )
+{
+	uint16 itemPid = item.GetProtoId();
+	
+	if( geiger.GEIGER_CUR_CHARGE < geiger.Proto.StartValue_2 && item.GetCount() > 0 )
+	{
+		Map@ map = cr.GetMap();
+		if( valid( map ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "WRJ1XXX1.mp3", 6 );
+		}
+		
+		uint charge = GetGeigerCharge( itemPid );
+		uint needCharge = geiger.Proto.StartValue_2 - geiger.GEIGER_CUR_CHARGE;
+		geiger.GEIGER_CUR_CHARGE += charge;
+		_SubItem( item, 1 );
+		
+		if( geiger.GEIGER_CUR_CHARGE > geiger.Proto.StartValue_2 )
+		{
+			if( cr.Skill[ SK_SCIENCE ] >= GEIGER_MIN_SCIENCE  && cr.Skill[ SK_REPAIR ] >= GEIGER_MIN_REPAIR && itemPid == PID_MICRO_FUSION_CELL )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT,  STR_GEIGER_SMART_CRITTER_MODIFIED );
+				// cr.Say( SAY_NETMSG, "+" + charge + " - " + geiger.GEIGER_CUR_CHARGE + "/" + geiger.GEIGER_MAX_CHARGE );
+			}
+			else
+			{
+				geiger.GEIGER_CUR_CHARGE = geiger.Proto.StartValue_2;
+			}
+		}
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_ADD_CHARGE );
+	}
+	else
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_NOTHING );
+	}
+	
+	geiger.Update();
+	return true;
+}
+
+uint GetGeigerCharge ( uint16 itemPid )
+{
+	switch ( itemPid )
+	{
+		case( PID_MICRO_FUSION_CELL ):
+			return GEIGER_FUSION_CHARGE;
+		case( PID_SMALL_ENERGY_CELL):
+			return GEIGER_ENERGY_CHARGE;
+		case( PID_CUENCELL_LOW ):
+			return uint( GEIGER_ENERGY_CHARGE / 3 );
+		default:
+			break;
+	}
+	
+	return 0;
 }
 
 bool UseSkillOnGeiger( Critter& cr, Item& geiger, int skill ) // Export
 {
     if( skill < 0 )
+	{
         return false;                                         // Pick, move
+	}
 
     if( skill == SK_SCIENCE )
     {
-        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_CUR_CHARGE, "$cur" + geiger.Val2 + "$max" + geiger.Proto.StartValue_2 );
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_CUR_CHARGE, "$cur" + geiger.GEIGER_CUR_CHARGE + "$max" + geiger.GEIGER_MAX_CHARGE );
     }
     else
     {
         cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_NOTHING );
     }
+	
     return true;
 }
 
 uint e_Geiger( uint[] @ values )
 {
     Item@ geiger = GetItem( values[ 0 ] );
-    if( not valid( geiger ) )
+    if( !valid( geiger ) )
+    {
         return 0;
-
-    if( geiger.Val1 == 0 )
+	}
+	
+    if( geiger.GEIGER_STATE == GEIGER_OFF )
+	{
         return 0;                    // Off
-    if( geiger.Val2 > 0 )
-        geiger.Val2--;
+	}
+	
+    if( geiger.GEIGER_CUR_CHARGE > 0 )
+	{
+        geiger.GEIGER_CUR_CHARGE--;
+	}
 
     // Show rems
     if( geiger.Accessory == ACCESSORY_CRITTER )
@@ -100,14 +461,20 @@ uint e_Geiger( uint[] @ values )
         Critter@ cr = GetCritter( geiger.CritId );
         if( valid( cr ) )
         {
-            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_LOOP_CHECK, "$rem" + cr.Stat[ ST_RADIATION_LEVEL ] );
-            if( geiger.Val2 == 0 )
+            if( geiger.GEIGER_CUR_CHARGE == 0 )
             {
                 cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_NO_CHARGES );
                 cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_OFF );
-                cr.PlaySound( "geiger_active.ogg", true );
             }
-        }
+			
+			Map@ map = cr.GetMap();
+			if( valid( map ) )
+			{
+				int rad_strength = GetHexRadStrength( map, cr.HexX, cr.HexY, PID_RADIATION_MARKER );
+				StartSoundGeiger( map, cr.HexX, cr.HexY, rad_strength );
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_GEIGER_LOOP_CHECK, "$rem" + rad_strength );
+			}
+		}
     }
     else if( geiger.Accessory == ACCESSORY_HEX )
     {
@@ -115,31 +482,67 @@ uint e_Geiger( uint[] @ values )
         Map@   map = geiger.GetMapPosition( hx, hy );
         if( valid( map ) )
         {
-            Critter@[] critters;
-            map.GetCrittersHex( hx, hy, GEIGER_HEX_RANGE - 1, FIND_ALL, critters );
-            // Calculate aprox value of radiation
-            uint aproxValue = 0;
-            for( uint i = 0, j = critters.length(); i < j; i++ )
-            {
-                Critter@ cr = critters[ i ];
-                uint     value = cr.Stat[ ST_RADIATION_LEVEL ] * ( GEIGER_HEX_RANGE - GetDistantion( cr.HexX, cr.HexY, hx, hy ) ) / GEIGER_HEX_RANGE;
-                if( value > aproxValue )
-                    aproxValue = value;
-            }
-            // Show to all
-            map.SetTextMsg( hx, hy, COLOR_GRAY, TEXTMSG_GAME, STR_GEIGER_LOOP_CHECK, "$rem" + aproxValue );
-			map.PlaySound( "geiger_active.ogg", geiger.HexX, geiger.HexY, 3 );
+			int rad_strength = GetHexRadStrength( map, hx, hy, PID_RADIATION_MARKER );
+			StartSoundGeiger( map, hx, hy, rad_strength );
+			map.SetTextMsg( hx, hy, COLOR_GRAY, TEXTMSG_GAME, STR_GEIGER_LOOP_CHECK, "$rem" + rad_strength );
+            // map.GetCrittersHex( hx, hy, GEIGER_HEX_RANGE - 1, FIND_ALL, critters );
         }
     }
+	
 
-    if( geiger.Val2 == 0 ) // Turn off
+    if( geiger.GEIGER_CUR_CHARGE == 0 ) // Turn off
     {
-        geiger.Val1 = 0;
-        geiger.Val3 = 0;
+        geiger.GEIGER_STATE = GEIGER_OFF;
+        geiger.GEIGER_EVENT = 0;
     }
 
     geiger.Update();
-    return geiger.Val2 == 0 ? 0 : GEIGER_DURATION;
+    return geiger.GEIGER_CUR_CHARGE == 0 ? 0 : GEIGER_DURATION;
+}
+
+int GetHexRadStrength( Map& map, uint16& hex_x, uint16& hex_y, int proto_id = PID_RADIATION_MARKER )
+{
+	Item@[] rad_markers;
+	int rad_strength = 0;
+	uint len = map.GetItems( proto_id, @rad_markers );
+	
+	for( uint index = 0; index < len; index++ )
+	{
+		Item@ rad_marker = rad_markers[index];
+		int dist = GetDistantion( hex_x, hex_y, rad_marker.HexX, rad_marker.HexY );
+		if( dist <= rad_marker.RADIATION_DISTANCE )
+		{
+			rad_strength += rad_marker.RADIATION_STRENGTH;
+		}
+	}
+	
+	return rad_strength;
+}
+
+void StartSoundGeiger( Map& map, uint16& hex_x, uint16& hex_y, int rad_strength = 3 )
+{
+	if( rad_strength > 0 )
+	{
+		uint radius = 3;
+		if( rad_strength > 100 )
+		{
+			radius = 20;
+		}
+		else if( rad_strength > 50 )
+		{
+			radius = 15;
+		}
+		else if( rad_strength > 25 )
+		{
+			radius = 10;
+		}
+		else if( rad_strength >= 10 )
+		{
+			radius = 5;
+		}
+		
+		PlayGenericSound( map, hex_x, hex_y, "geiger_active.ogg", radius );
+	}
 }
 
 #endif //GEIGER

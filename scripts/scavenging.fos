@@ -9,6 +9,7 @@
 #include "entire_h.fos"
 #include "combat_h.fos"
 #include "repair_h.fos"
+#include "speed_h.fos"
 
 // LTP (long time process)
 bool ltp_scavenging_inited = false;
@@ -51,7 +52,7 @@ bool PrepareScavenging( Critter& cr, Item@ tool, Item@ target )
 
 	if( _ItemIsBroken( tool ) )
 	{
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Your tool is broken" );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOOL_BROKEN );
 		return true;
 	}
 
@@ -72,6 +73,12 @@ bool PrepareScavenging( Critter& cr, Item@ tool, Item@ target )
 		SetDeterioration( tool, det + 1 );
 	}
 
+	if( tool.Deterioration >= MAX_DETERIORATION )
+	{
+		BreakTool( cr, tool );
+		return false;
+	}
+
 	start_scavenging( cr, tool, target );
 	return true;
 }
@@ -85,12 +92,15 @@ bool start_scavenging( Critter& cr, Item& tool, Item& target )
 	
 	if( valid( tool ) && valid( target ) )
 	{	
-		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint object_dpa = cr.Skill[ SK_SCAVENGING ] + ( cr.Stat[ ST_STRENGTH ] * 10 ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = uint( ceil( float( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		
 		uint[] values = { cr.Id, tool.Id };
-		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ScavengingSound", values, true);
-		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
-		StartProcess( cr, LTP_SCAVENGING, 0, tool.Id, target.Id, action_pause );
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ScavengingSound", values, true );
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true );	
+		StartProcess( cr, LTP_SCAVENGING, 0, tool.Id, target.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		return true;
 	}
 	return false;
@@ -99,34 +109,30 @@ bool start_scavenging( Critter& cr, Item& tool, Item& target )
 uint process_scavenging( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_SCAVENGING )
-	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
     Item@ tool = GetItem( param1 );
   	Item@ target = GetItem( param2 );
   	if( valid( tool ) && valid( target ) )
     {
       	param0++;
-		uint object_dpa = cr.Skill[SK_SCAVENGING] + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = uint( ceil( float( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
 
-		if( param0 > sequence_length )
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
 			Profit( cr, tool, target );
 			int skillNum = SK_SCAVENGING;
 			Accident( cr, skillNum );
-			SayLog( cr, crInfo( cr ) + " has salvaged a resource node." );
+			SayLog( cr, crInfo( cr ) + " has salvaged a scavenging resource node." );
 		}
 		else
 		{
 			uint toolPid = tool.GetProtoId();
 			switch( toolPid )
 			{
-				case( PID_SUPER_TOOL_KIT ):
 				case( PID_MULTI_TOOL ):
-					_CritAnimateUse(cr);
+					_CritAnimateUse( cr );
 					break;
 				default:
-					_CritAnimateSwing(cr);
+					_CritAnimateSwing( cr );
 					break;
 			}
 			
@@ -137,10 +143,10 @@ uint process_scavenging( Critter@ cr, int& param0, int& param1, int& param2 )
 			if( cr.IsInjured() )
 			{
 				uint damage = INJURED_HP_DAMAGE - cr.Stat[ ST_ENDURANCE ];
-				InjureCritter( cr, damage, DAMAGE_UNCALLED, cr.Dir, cr.Id, HIT_LOCATION_NONE, false );
+				hurt( cr, damage );
 			}
 			
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
     }
 	return 0;
@@ -165,9 +171,9 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 		case( PID_IRON_PROD ):
 		case( PID_SPADE ):
 		case( PID_SHOVEL ):
+		case( PID_PRIMITIVE_SHOVEL ):
 			amount--;
 			break;
-		case( PID_SUPER_TOOL_KIT ):	
 		case( PID_MULTI_TOOL ):
 			amount++;
 			break;
@@ -187,17 +193,15 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 		int skillNum = SK_SCAVENGING;
 		raiseSkill( cr, skillNum );
 		
-		int[] loot = {};
+		uint[] loot = {};
 		if( Random( 0, 1 ) == 1 )
 		{
-			Item@ looted = cr.AddItem( PID_JUNK, 1 );
-			loot.insertLast( looted.Proto.ProtoId );
+			loot.insertLast( PID_JUNK );
 		}
 
 		for( int i = 0; i < amount; i++ )
 		{
-			ProtoItem@ junk = GetProtoItem( JunkLootList[ Random( 0, JunkLootList.length() - 1 ) ] );
-			cr.AddItem( junk.ProtoId, 1 );
+			ProtoItem@ junk = GetProtoItem( JunkLootList[target.JUNK_TIER][ Random( 0, JunkLootList[target.JUNK_TIER].length() - 1 ) ] );
 			loot.insertLast( junk.ProtoId );
 		}
 		
@@ -214,75 +218,181 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 			inform[ inform.length() - 2 ] = '.';
 			inform[ inform.length() - 1 ] = ' ';
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_COLLECTED, "$result " + inform );
+			SpawnBeneath( cr, loot );
 			cr.StatBase[ST_EXPERIENCE] += 25;
+			taking_sweat(cr);
 		}
 		
+		ChangeCritterSpeed( cr );
 		DeleteItem( target );	
 	}
+	
 	return true;
 }
 
 //===============JUNK_SPAWNER_MECHANIC===============//
-//Forced Spawn
-void _ForceJunkInit(Critter& player, int param0, int param1, int param2)
+
+void SpawnJunkZone( Map& map, uint16 hx, uint16 hy, uint timeout, uint range, uint capacity, uint tier )
 {
-	JunkInit();
+	if( !valid( map ) )
+	{
+		return;
+	}
+
+	Item@ junkMarker = map.AddItem( hx, hy, PID_JUNK_MARKER, 1 );
+	if( !valid( junkMarker ) )
+	{
+		return;
+	}
+
+	junkMarker.MAP_ID = map.Id;
+	junkMarker.ZONE_TIMEOUT = timeout;
+	junkMarker.ZONE_RANGE = ( range < 1 ? 1 : range );
+	junkMarker.RESOURCE_CAPACITY = ( capacity < 1 ? 1 : capacity );
+	junkMarker.JUNK_TIER = tier;
+
+	int[] values = { junkMarker.Id };
+	junkMarker.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_processJunkZone", values, true );
 }
 
-void JunkInit()
+//~run scavenging _RefreshJunkSpawners 0 0 0
+void _RefreshJunkSpawners( Critter& player, int param0, int param1, int param2 )
 {
-    Map@[] maps;
-    for( int i = 0, iend = GetAllMaps( 0, maps ); i < iend; i++)
-	{   
-		CheckMapEvent( maps[i] );
+	if(!isGM(player)) return;
+
+	Item@[] spawners;
+	GetAllItems(PID_JUNK_MARKER, spawners);
+
+	for(uint i = 0, len = spawners.length(); i < len; i++)
+	{
+		Item@ currSpawner = spawners[i];
+		if( !valid( currSpawner ) )
+		{
+			continue;
+		}
+
+		Map@ currMap = GetMap( currSpawner.MAP_ID );
+		if( !valid( currMap ) )
+		{
+			continue;
+		}
+
+		uint duration = 0;
+		uint[] values;
+		if( !GetTimeEvent( currSpawner.EVENT, duration, values ) )
+		{ 
+			Log("WARNING: Junk Spawner with broken TE, at map" + currMap.GetProtoId() + ", at hex " + currSpawner.HexX + " " + currSpawner.HexY + "\n");
+			continue;
+		}
+		duration = REAL_MINUTE( currSpawner.ZONE_TIMEOUT );
+		SetTimeEvent( currSpawner.EVENT, duration, values );
+
+		DespawnJunk(currMap, currSpawner);
+		ProcessRespawnJunk(currMap, currSpawner);
 	}
 }
 
-bool CheckMapEvent( Map& map )
+void DespawnJunk(Map@ map, Item@ junkSpawner)
 {
-    int n = JUNK_ENTIRE;
-	if( map.CountEntire( n ) != 0 ) 
+	Item@[] junkFound;
+
+	map.GetItems( PID_JUNK_SALVAGE, junkFound );
+
+	for( uint i = 0, len = junkFound.length(); i < len; i++ )
 	{
-		int[] values = {map.Id};
-        map.SetData( MAP_JUNK_SPAWN_TE, CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_SpawnJunk", values, true ) );
-        return true;
-    } 
-    return false;
+		Item@ junk = junkFound[i];
+		if( valid( junk ) && junk.JUNK_NODE_ID == int( junkSpawner.Id ) )
+		{
+			junk.JUNK_NODE_ID = 0;
+			DeleteItem(junk);
+		}
+	}
+	
+	junkFound.resize(0);
 }
 
-uint e_SpawnJunk( int[] @ values )
+void ProcessRespawnJunk(Map@ map, Item@ junkSpawner)
 {
-	Map @ map = GetMap( values[ 0 ] );
+	int junkCount = 0;
+	Item@[] junkFound;
+
+	map.GetItems( PID_JUNK_SALVAGE, junkFound );
+
+	for( uint i = 0, len = junkFound.length(); i < len; i++ )
+	{
+		Item@ junk = junkFound[i];
+		if( valid( junk ) && junk.JUNK_NODE_ID == int( junkSpawner.Id ) )
+		{
+			junkCount++;
+		}
+	}
+	
+	int missing = junkSpawner.RESOURCE_CAPACITY - junkCount;
+
+	if( missing > 0 )
+	{
+		uint attempt = 0;
+		for( int i = 0; i < missing; i++ )
+		{
+			if( attempt >= MAX_RESOURCE_SPAWN_ATTEMPTS )
+			{
+				break;
+			}
+			
+			int radius = junkSpawner.ZONE_RANGE / 2;
+			uint16 hx = junkSpawner.HexX + Random( -radius, radius );
+			uint16 hy = junkSpawner.HexY + Random( -radius, radius );
+			if( map.IsHexPassed( hx, hy ) )
+			{
+				JunkSpawn( map, hx, hy, junkSpawner.Id, junkSpawner.JUNK_TIER );
+			}
+			else
+			{
+				missing++;
+				attempt++;
+			}
+		}
+	}
+	
+	junkFound.resize(0);
+}
+
+uint e_processJunkZone( int[] @ values )
+{
+	Item@ zoneMarker = GetItem( values[0] );
+	if( !valid( zoneMarker ) )
+	{
+		return 0;
+	}
+
+	Map@ map = GetMap( zoneMarker.MAP_ID );
 	if( !valid( map ) )
 	{
 		return 0;
 	}
-	
-	SpawnJunk( map );
 
-	EraseTimeEvent( map.GetData( MAP_JUNK_SPAWN_TE ) );
-	map.SetData( MAP_JUNK_SPAWN_TE, CreateTimeEvent( AFTER( DELAY_FOR_HARVESTABLE_LOOT_RESPAWN ), "e_SpawnJunk", values, true ) );
-	return 0;
+	ProcessRespawnJunk(map, zoneMarker);
+	
+	return REAL_MINUTE( zoneMarker.ZONE_TIMEOUT );
 }
 
-bool SpawnJunk( Map& map )
+void JunkSpawn(Map& map, uint16 hx, uint16 hy, uint nodeId = 0, uint tier = 0)
 {
-	int entireId = JUNK_ENTIRE;
-	int entires = map.CountEntire( entireId );
-
-	uint16 hx=0, hy=0;
-	for( int j = 0; j < entires; j++ )
+	if(!valid(map))
 	{
-		map.GetEntireCoords( entireId, j, hx, hy );
-		if( map.IsHexPassed( hx, hy ) && Random( 0, 2 ) == 2 )
-		{	
-			Item@ JunkSalvage = map.AddItem( hx, hy, PID_JUNK_SALVAGE, 1 );
-			ProtoItem@ proto = GetProtoItem(  JunkPileArtList [ Random( 0, JunkPileArtList.length() - 1 ) ] );
-			JunkSalvage.PicMap = proto.PicMap;
-			JunkSalvage.Update();
-		}
+		return;
 	}
-	return true;
+
+	Item@ junk = map.AddItem( hx, hy, PID_JUNK_SALVAGE, 1 );
+	if(!valid(junk))
+	{
+		return;
+	}
+	ProtoItem@ proto = GetProtoItem( JunkPileArtList[tier][ Random( 0, JunkPileArtList[tier].length() - 1 ) ] );
+	junk.PicMap = proto.PicMap;
+	junk.JUNK_NODE_ID = nodeId;
+	junk.JUNK_TIER = tier;
+	junk.Update();
 }
 
 #endif //SCAVENGING

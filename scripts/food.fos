@@ -3,198 +3,189 @@
 
 #include "_utils.fos"
 #include "food_h.fos"
-#include "_ltp.fos"
 #include "gathering_h.fos"
 #include "drugs_h.fos"
 #include "radiation_h.fos"
 #include "paralysis_h.fos"
 #include "poison_h.fos"
 
-void ProccessFood( Critter& cr, Critter& target, Item& item )
+bool ProccessFood( Critter& cr, Critter& consumer, Item& consumed )
 {
-	if( cr.Id != target.Id && !target.IsDead() && !target.IsKnockout() && target.StatBase[ ST_CURRENT_HP ] > 0 && !isOwningNPC( cr, target ) && !sameFaction( cr, target ) )
+	if( canResist( cr, consumer ) )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_RESIST );
-		SayLog( cr, crInfo( cr ) + " unsuccessfully tried to use " + itemDesc( item ) + " on " + crInfo( target ) + "." );
-		return;
+		SayLog( cr, crInfo( cr ) + " unsuccessfully tried to use " + itemDesc( consumed ) + " on " + crInfo( consumer ) + "." );
+		return false;
 	}
 		
-    CheckFoodFlags( target, item );
-}
-
-void ProccessDrink( Critter& cr, Critter& target, Item& item )
-{
-	if( cr.Id != target.Id && !target.IsDead() && !target.IsKnockout() && target.StatBase[ ST_CURRENT_HP ] > 0 && !isOwningNPC( cr, target ) && !sameFaction( cr, target ) )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_RESIST );
-		SayLog( cr, crInfo( cr ) + " unsuccessfully tried to use " + itemDesc( item ) + " on " + crInfo( target ) + "." );
-		return;
-	}
+    CheckFoodFlags( consumer, consumed );
+	CheckToxins( consumer, consumed );
+	ApplyFoodEffects( consumer, consumed );
 	
-	if( item.REMAINING_USES <= 0)
-	{
-		SpillOut( @item );
-		return;
-	}
-
-	CheckSpiritLevel( target, item );
-    CheckFoodFlags( target, item );
-	CheckToxins( target, item );
-	ApplyFoodEffects( target, item );
-	
-	drinking_process( target, item );
-}
-
-void drinking_process( Critter& cr, Item@ item )
-{		
-	Emote( cr, item );
-	
-	if( !SpillOut( item ) )
-	{
-		return;
-	}	
-	start_consuming( cr, item );
-}
-
-void CheckFoodFlags( Critter& target, Item& item )
-{
-	if( FLAG( FOOD_KNOCKOUT, item.Proto.Food_Flags ) )
-	{
-	   target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 100, target.HexX, target.HexY );
-	}
-	
-	if( FLAG( FOOD_POISONED, item.Proto.Food_Flags ) )
-	{
-		AffectPoison( target, Random( 10, 25 ) );
-	}
-	
-	if( FLAG( FOOD_RADIOACTIVE, item.Proto.Food_Flags ) )
-	{
-		AffectRadiation( target, Random( 10, 25 ) );
-	}
-
-	target.StatBase[ ST_HUNGER ] += item.Proto.Food_Restore * SATURATION_SIMPLIFIER;
-	target.StatBase[ ST_THIRST ] += item.Proto.Food_Thrist * SATURATION_SIMPLIFIER;
-}
-
-void CheckToxins( Critter& target, Item& item )
-{
-	if( item.TOXIN_LEVEL >= 100 )
-	{
-		target.ParamBase[CR_VAL9] = 1;
-		AffectParalysis( target, item.TOXIN_LEVEL );
-	}
-}
-
-void ApplyFoodEffects( Critter& target, Item& item )
-{
-	CheckSpiritLevel( target, item );
-	uint8 hungerModifier = item.Proto.Food_Restore;
-    uint8 ThirstModifier = item.Proto.Food_Thrist;
-	target.StatBase[ ST_HUNGER ] += hungerModifier; //* SATURATION_SIMPLIFIER;
-	target.StatBase[ ST_THIRST ] += ThirstModifier; //* SATURATION_SIMPLIFIER;
-	target.ParamBase[ ST_POISONING_LEVEL ] += item.POLUTION_LEVEL;
-	if( target.ParamBase[ ST_RADIATION_LEVEL ] > 0 )
-	{
-		target.ParamBase[ ST_RADIATION_LEVEL ] -= int( item.SPIRIT_LEVEL * 0.25f );
-	}
-	if( target.ParamBase[ ST_DRUNK ] != 100 )
-	{
-		target.ParamBase[ ST_DRUNK ] += int( item.SPIRIT_LEVEL * 0.25f );
-		if( target.StatBase[ ST_DRUNK ] > 0 && target.GetTimeEvents( CTE_DRUNK, null, null, null ) < 1 )
-		{
-			target.AddTimeEvent( "gameplay@cte_Drunk", REAL_SECOND( target.Param[ CR_DRUNK_SPEED ] ), CTE_DRUNK, 0 );
-		}
-	}
-	else
-	{
-		AffectPoison( target, int( item.SPIRIT_LEVEL * 0.25f ) );
-	}
-}
-
-void Emote( Critter& target, Item& consumed )
-{
-	target.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT,STR_EMOTE_DRINKS );
-	target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CONSUMED_DRINK, "$proto@msg item " + ( consumed.Proto.ProtoId * 100 ) + "@" );
-	
-	if( target.ParamBase[ ST_RADIATION_LEVEL ] > 0 && consumed.SPIRIT_LEVEL != 0 )
-	{
-		target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOST_RAD, "$rad" + consumed.SPIRIT_LEVEL );
-	}
-	
-	if( consumed.POLUTION_LEVEL != 0 )
-	{
-		target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DRUNK_POISON, "$poison" + consumed.POLUTION_LEVEL );
-	}
-}
-
-void CheckSpiritLevel( Critter& target, Item& consumed )
-{
-	if( consumed.SPIRIT_LEVEL != 0 )
-	{
-		return;
-	}
-	
-	const uint8 item_Subtype = consumed.Proto.Item_Subtype;
-	switch( item_Subtype )
-	{
-		case( ITEM_SUBTYPE_DRUG_ALCOHOL_LIGHT ):
-			consumed.SPIRIT_LEVEL = 5;
-			break;
-		case( ITEM_SUBTYPE_DRUG_ALCOHOL_MEDIUM ):
-			consumed.SPIRIT_LEVEL = 20;
-			break;
-		case( ITEM_SUBTYPE_DRUG_ALCOHOL_HEAVY ):
-			consumed.SPIRIT_LEVEL = 40;
-			break;
-		case( ITEM_SUBTYPE_DRUG_ALCOHOL_SPIRIT ):
-			consumed.SPIRIT_LEVEL = 98;
-			break;	
-		default:
-			consumed.SPIRIT_LEVEL = 0;
-			break;
-	}
-}
-
-bool ltp_consuming_inited = false;
-void ltp_consuming_init()
-{
-	LTPREG( LTP_CONSUMING, process_consuming )
-	ltp_consuming_inited = true;
-}
-
-bool start_consuming( Critter& cr, Item& consumed )
-{
-	if(!ltp_consuming_inited)
-	{
-		ltp_consuming_init();
-	}
-	//cr.ParamBase[ CR_IS_USING ] = 1;
-	//cr.SetAnims( COND_LIFE, 0, ANIM2_DRINKING ); - extra anims required
-	
-	StartProcess( cr, LTP_CONSUMING, 0, 0, consumed.Id, 0 );
-
 	return true;
 }
 
-uint process_consuming( Critter@ cr, int& param0, int& param1, int& param2 )
+void ProccessDrink( Critter& cr, Critter& consumer, Item& consumed )
 {
-	LTPROCESS( cr, param0, LTP_CONSUMING )
-	
-  	Item@ consumed = GetItem( param2 );
-
-	param0++;
-		
-	if( param0 > 4 )
+	if( cr.Id != consumer.Id && !consumer.IsDead() && !consumer.IsKnockout() && consumer.StatBase[ ST_CURRENT_HP ] > 0 && !isOwningNPC( cr, consumer ) && !sameFaction( cr, consumer ) )
 	{
-		/*cr.ParamBase[ CR_IS_USING ] = 0;
-		if(cr.Anim2Life == ANIM2_DRINKING) {		 - extra anims required
-			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
-		}*/
-		return 0;
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_RESIST );
+		SayLog( cr, crInfo( cr ) + " unsuccessfully tried to use " + itemDesc( consumed ) + " on " + crInfo( consumer ) + "." );
+		return;
 	}
+	
+	if( consumed.REMAINING_USES <= 0 )
+	{
+		SpillOut( @consumed );
+		return;
+	}
+	
+    CheckFoodFlags( consumer, consumed );
+	CheckToxins( consumer, consumed );
+	ApplyFoodEffects( consumer, consumed );
+	
+	drinking_process( consumer, consumed );
+}
 
-	return 1000;
+void drinking_process( Critter& cr, Item@ consumed )
+{
+	Emote( cr, consumed );
+	
+	if( !SpillOut( consumed ) )
+	{
+		return;
+	}	
+}
+
+void CheckFoodFlags( Critter& consumer, Item& consumed )
+{
+	uint type = consumed.GetType();
+	uint[] allowed_types = { ITEM_TYPE_FOOD, ITEM_TYPE_DRINK };
+	if( !_Contains( allowed_types, type ) ) return;
+	
+	if( FLAG( FOOD_KNOCKOUT, consumed.Proto.Food_Flags ) )
+	{
+	   consumer.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 100, consumer.HexX, consumer.HexY );
+	}
+	
+	if( FLAG( FOOD_POISONED, consumed.Proto.Food_Flags ) )
+	{
+		AffectPoison( consumer, POISON_RANGE );
+	}
+	
+	if( FLAG( FOOD_RADIOACTIVE, consumed.Proto.Food_Flags ) )
+	{
+		AffectRadiation( consumer, RADIATION_RANGE );
+	}
+	
+	uint16 pid = consumed.GetProtoId();
+	
+	switch( pid )
+	{
+		case( PID_CANNED_FISH ):
+		case( PID_IRP ):
+		case( PID_CANNED_MEAT ):
+			consumer.AddItem( PID_METAL_CAN, 1 );
+			break;
+		case( PID_POTATO_FRIES ):
+		case( PID_POTATO_PANCAKES ):
+		case( PID_POTATO_CHIPS ):	
+		case( PID_POTATO_MASHED_CUTLET ):
+		case( PID_PANCAKES ):
+		case( PID_MAGGOT_SOUP ):
+		case( PID_RAT_STEW ):
+		case( PID_SALAD ):
+		case( PID_HERBAL_SOUP ):
+		case( PID_COOKED_MOLERAT_STOMATCH ):
+		case( PID_RAGOUT ):
+			consumer.AddItem( PID_DIRTY_BOWL, 1 );
+			break;
+		default:
+			break;
+	}
+}
+
+void CheckToxins( Critter& consumer, Item& consumed )
+{
+	if( consumed.TOXIN_LEVEL >= 100 )
+	{
+		consumer.ParamBase[CR_VAL9] = 1;
+		AffectParalysis( consumer, consumed.TOXIN_LEVEL );
+	}
+}
+
+void ApplyFoodEffects( Critter& consumer, Item& consumed )
+{
+	if( valid( consumed ) )
+	{
+		CheckSpiritLevel( consumed );
+		consumer.StatBase[ ST_HUNGER ] -= consumed.Proto.Food_Restore * SATURATION_SIMPLIFIER;
+		consumer.StatBase[ ST_THIRST ] -= consumed.Proto.Food_Thrist * SATURATION_SIMPLIFIER;
+		consumer.ParamBase[ ST_POISONING_LEVEL ] += consumed.POLUTION_LEVEL;
+		
+		if( consumer.Param[ ST_RADIATION_LEVEL ] > 0 )
+		{
+			AffectRadiation( consumer, -int( consumed.SPIRIT_LEVEL * 0.20f ) );
+		}
+		
+		if( consumer.Param[ ST_DRUNK ] != 100 )
+		{
+			consumer.ParamBase[ ST_DRUNK ] += int( consumed.SPIRIT_LEVEL * 0.20f );
+			if( consumer.Stat[ ST_DRUNK ] > 0 && consumer.GetTimeEvents( CTE_DRUNK, null, null, null ) < 1 )
+			{
+				consumer.AddTimeEvent( "gameplay@cte_Drunk", REAL_SECOND( consumer.Param[ CR_DRUNK_SPEED ] ), CTE_DRUNK, 0 );
+			}
+		}
+		else
+		{
+			AffectPoison( consumer, int( consumed.SPIRIT_LEVEL ) );
+		}
+	}
+}
+
+void Emote( Critter& consumer, Item& consumed )
+{
+	if( valid( consumed ) )
+	{
+		consumer.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT,STR_EMOTE_DRINKS );
+		consumer.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CONSUMED_DRINK, "$proto@msg item " + ( consumed.Proto.ProtoId * 100 ) + "@" );
+		
+		if( consumed.POLUTION_LEVEL != 0 )
+		{
+			consumer.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DRUNK_POISON, "$poison" + consumed.POLUTION_LEVEL );
+		}
+	}
+}
+
+void CheckSpiritLevel( Item& consumed )
+{
+	if( valid( consumed ) )
+	{
+		if( consumed.SPIRIT_LEVEL != 0 )
+		{
+			return;
+		}
+		
+		const uint8 item_Subtype = consumed.Proto.Item_Subtype;
+		switch( item_Subtype )
+		{
+			case( ITEM_SUBTYPE_DRUG_ALCOHOL_LIGHT ):
+				consumed.SPIRIT_LEVEL = 5;
+				break;
+			case( ITEM_SUBTYPE_DRUG_ALCOHOL_MEDIUM ):
+				consumed.SPIRIT_LEVEL = 20;
+				break;
+			case( ITEM_SUBTYPE_DRUG_ALCOHOL_HEAVY ):
+				consumed.SPIRIT_LEVEL = 40;
+				break;
+			case( ITEM_SUBTYPE_DRUG_ALCOHOL_SPIRIT ):
+				consumed.SPIRIT_LEVEL = 98;
+				break;	
+			default:
+				consumed.SPIRIT_LEVEL = 0;
+				break;
+		}
+	}
 }
 
 #endif //FOOD

@@ -26,12 +26,24 @@ bool start_devour( Critter& cr, Critter@ target )
 	if( valid( target ) )
 	{	
 		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint object_dpa = ( cr.Skill[ SK_HUNTING ] ) + ( cr.Stat[ ST_AGILITY ] * 10 ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = uint( ceil( float( target.Stat[ ST_MAX_LIFE ] * 15 / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		
 		uint[] values = { cr.Id };
 		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_SkinningSound", values, false );
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);
-		cr.Animate( 0, ANIM2_DODGE_FRONT, null, true, true );
-		StartProcess( cr, LTP_DEVOUR, 0, 0, target.Id, action_pause );
+		
+		if( IsHuman( cr ) || IsRobot( cr ) || IsMutant( cr ) )
+		{
+			cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+		}
+		else
+		{
+			cr.Animate( 0, ANIM2_DODGE_FRONT, null, true, true );
+		}
+		
+		StartProcess( cr, LTP_DEVOUR, 0, 0, target.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 	}
 	return true;
 }
@@ -39,19 +51,22 @@ bool start_devour( Critter& cr, Critter@ target )
 uint process_devour( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_DEVOUR )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
   	Critter@ target = GetCritter( param2 );
   	if( valid( target ) )
 	{
       	param0++;
-		uint object_dpa = ( cr.Skill[ SK_HUNTING ] ) + ( cr.Stat[ ST_AGILITY ] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = uint( ceil( float( target.Stat[ ST_MAX_LIFE ] * 15 / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
-		cr.Animate( 0, ANIM2_DODGE_FRONT, null, true, true );
-		if( param0 > sequence_length )
+
+		if( !IsHuman( cr ) && !IsRobot( cr ) && !IsMutant( cr ) )
+		{
+			cr.Animate( 0, ANIM2_DODGE_FRONT, null, true, true );
+		}
+		
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
 			Item@ tool = null;
-			Profit( cr, tool, target );
+			Profit( cr, tool, target, true );
+			SayLog( cr, crInfo( cr ) + " has devoured a critter." );
 		}
 		else
 		{
@@ -66,9 +81,16 @@ uint process_devour( Critter@ cr, int& param0, int& param1, int& param2 )
 				map.MoveHexByDir( hx, hy, Random( 0, 5 ), 1 );
 				CheckBlood( map, hx, hy );
 			}
-			return action_pause;
+			
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
     }
+	
+	if( IsHuman( cr ) || IsRobot( cr ) || IsMutant( cr ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	}
+	
 	return 0;
 }
 
@@ -110,7 +132,7 @@ bool PrepareSkinning( Critter& cr, Item@ tool, Critter@ target )
 		return false; 
 	} 
 	
-	if( target.ParamBase[ CR_DEATH_STAGE ] >= int( skinnable.loot.length() - 1 ) )
+	if( target.ParamBase[ CR_SKINNING_STAGE ] >= int( skinnable.loot.length() - 1 ) )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NOTHING_TO_SKIN );
 		return false; 	
@@ -130,7 +152,7 @@ bool PrepareSkinning( Critter& cr, Item@ tool, Critter@ target )
 
 	if( _ItemIsBroken( tool ) )
 	{
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Your tool is broken" );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOOL_BROKEN );
 		return true;
 	}
 
@@ -150,6 +172,12 @@ bool PrepareSkinning( Critter& cr, Item@ tool, Critter@ target )
 		uint det = GetDeteriorationProcent( tool );
 		SetDeterioration( tool, det + 1 );
 	}
+	
+	if( tool.Deterioration >= MAX_DETERIORATION )
+	{
+		BreakTool( cr, tool );
+		return false;
+	}
 
 	start_skinning( cr, tool, target );
 	return true;
@@ -165,12 +193,15 @@ bool start_skinning( Critter& cr, Item& tool, Critter@ target )
 	if( valid( tool ) && valid( target ) )
 	{	
 		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint object_dpa = cr.Skill[ SK_HUNTING ] + ( cr.Stat[ ST_AGILITY ] * 10 ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = uint( ceil( float( target.Stat[ ST_MAX_LIFE ] * 15 / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		
 		uint[] values = { cr.Id };
 		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_SkinningSound", values, false );
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);
 		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
-		StartProcess( cr, LTP_SKINNING, 0, tool.Id, target.Id, action_pause );
+		StartProcess( cr, LTP_SKINNING, 0, tool.Id, target.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 	}
 	return true;
 }
@@ -178,26 +209,24 @@ bool start_skinning( Critter& cr, Item& tool, Critter@ target )
 uint process_skinning( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_SKINNING )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
     Item@ tool = GetItem( param1 );
   	Critter@ target = GetCritter( param2 );
   	if( valid( tool ) && valid( target ) )
 	{
       	param0++;
-		
-		uint object_dpa = cr.Skill[ SK_HUNTING ] + ( cr.Stat[ ST_AGILITY ] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = uint( ceil( float( target.Stat[ ST_MAX_LIFE ] * 15 / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
 
-		if( param0 > sequence_length )
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
-			Profit( cr, tool, target );
+			Profit( cr, tool, target, false );
 			int skillNum = SK_HUNTING;
 			Accident( cr, skillNum );
-			if( !hasItem( cr, PID_RUBBER_GLOVES, SLOT_HAND2 ) )
+			
+			if( !hasItem( cr, PID_RUBBER_GLOVES, SLOT_HAND2 ) && !hasItem( cr, PID_itgloves, SLOT_HAND2 ))
 			{
 				cr.ParamBase[ CR_DIRTINESS ] += Random( 0, 3 );
 			}
+			
 			SayLog( cr, crInfo( cr ) + " has skinned a critter." );
 		}
 		else
@@ -217,26 +246,28 @@ uint process_skinning( Critter@ cr, int& param0, int& param1, int& param2 )
 			if( cr.IsInjured() )
 			{
 				uint damage = INJURED_HP_DAMAGE - cr.Stat[ ST_ENDURANCE ];
-				InjureCritter( cr, damage, DAMAGE_UNCALLED, cr.Dir, cr.Id, HIT_LOCATION_NONE, false );
+				hurt( cr, damage );
 			}
 			
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
     }
+	
 	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 	return 0;
 }
 
 //Loot
-bool Profit(  Critter& cr, Item@ tool, Critter& target )
+bool Profit(  Critter& cr, Item@ tool, Critter& target, bool devour )
 {
-	if( cr.Stat[ ST_BODY_TYPE ] != BT_DOG )
+	if( !devour && ( IsHuman( cr ) || IsRobot( cr ) || IsMutant( cr ) ) )
 	{
 		if( !valid( tool ) )
 		{
 			return false;
 		}
 	}
+	
 	if( !valid( target ) )
 	{
 		return false;
@@ -247,18 +278,22 @@ bool Profit(  Critter& cr, Item@ tool, Critter& target )
 	{
 		return false;
 	}
+	
 	bool allowRaiseSkill = true;
-	int deathStage = target.Param[ CR_DEATH_STAGE ];
+	int skinStage = target.Param[ CR_SKINNING_STAGE ];
 	uint16 lootPid = 0;
 	
-	if( deathStage > int( skinnable.loot.length() ) )
+	if( !devour )
 	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NOTHING_USEFULL );
-		allowRaiseSkill = false;
-	}
-	else
-	{
-		lootPid = skinnable.loot[ deathStage + 1 ];
+		if( skinStage > int( skinnable.loot.length() ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NOTHING_USEFULL );
+			allowRaiseSkill = false;
+		}
+		else
+		{
+			lootPid = skinnable.loot[ skinStage + 1 ];
+		}
 	}
 	
 	int amount = 1;
@@ -266,7 +301,7 @@ bool Profit(  Critter& cr, Item@ tool, Critter& target )
 	int16 stat_bonus = ( cr.Stat[ ST_STRENGTH ] * SKINNING_STR_MOD ) + ( cr.Stat[ ST_AGILITY ] * SKINNING_AGI_MOD );
 	//tool bonus
 	uint16 toolBonus = 0;
-	if( cr.Stat[ ST_BODY_TYPE ] != BT_DOG )
+	if( IsHuman( cr ) )
 	{
 		uint16 toolPid = tool.GetProtoId();
 		uint16 index = SkinningTools.find( toolPid );
@@ -290,18 +325,21 @@ bool Profit(  Critter& cr, Item@ tool, Critter& target )
 		amount = 0;
 	}
 	
-	if( amount < 1 )
+	if( !devour )
 	{
-		if( deathStage < int( skinnable.loot.length() ) )
+		if( amount < 1 )
 		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DAMAGED_SKIN );
-			lootPid = skinnable.loot[ 0 ];
-			amount = 1;
-		}
-		else
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NOTHING_USEFULL );
-			allowRaiseSkill = false;
+			if( skinStage < int( skinnable.loot.length() ) )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DAMAGED_SKIN );
+				lootPid = skinnable.loot[ 0 ];
+				amount = 1;
+			}
+			else
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NOTHING_USEFULL );
+				allowRaiseSkill = false;
+			}
 		}
 	}
 	
@@ -309,14 +347,11 @@ bool Profit(  Critter& cr, Item@ tool, Critter& target )
 	{
 		int skillNum = SK_HUNTING;
 		raiseSkill( cr, skillNum );
-		if( cr.Stat[ ST_BODY_TYPE ] != BT_DOG )
+		if( !devour && ( IsHuman( cr ) || IsRobot( cr ) || IsMutant( cr ) ) )
 		{
 			switch( lootPid )
 			{
-				case( PID_CRAFT_L_RAGS ):
-					amount = Random( 1, 5 );
-					break;
-				case( PID_CRAFT_L_HIDE ):
+				case( PID_CLOTH ):
 					amount = Random( 1, 3 );
 					break;
 				case( PID_PLANT_SPIKE ):
@@ -326,32 +361,43 @@ bool Profit(  Critter& cr, Item@ tool, Critter& target )
 					amount = Random( 1, 4 );
 					break;
 				default:
+					amount = 1;
 					break;
 			}
-			cr.AddItem( lootPid, amount );
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_GATHERED, "$proto@msg item " +  ( lootPid * 100 ) + "@$amount" + amount );
+			
+			SpawnBeneath( cr, lootPid, amount );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_GATHERED, "$proto@msg item " + ( lootPid * 100 ) + "@$amount" + amount );
 			cr.StatBase[ ST_EXPERIENCE ] += 25;
 		}
 		else
 		{
-			uint huntMod = cr.Stat[ SK_HUNTING ] * 10 / 30;
-			cr.StatBase[ ST_HUNGER ] += 100 + huntMod;
-			cr.StatBase[ ST_THIRST ] += 100 + huntMod;
+			uint huntMod = cr.Skill[ SK_HUNTING ] * 10 / 30;
+			cr.StatBase[ ST_HUNGER ] -= 100 + huntMod;
+			cr.StatBase[ ST_THIRST ] -= 100 + huntMod;
 		}
 	}
-	if( target.Param[ CR_DEATH_STAGE ] >= int( skinnable.loot.length() - 2 ) )
+	
+	if( target.Param[ CR_SKINNING_STAGE ] >= int( skinnable.loot.length() - 2 ) )
 	{
 		if( target.Stat[ ST_BODY_TYPE ] != BT_PLANT )
 		{
 			Map@ map = target.GetMap();
-			AddBlood( map, target.HexX, target.HexY, 2 );
+			Item@ bone = map.AddItem( target.HexX, target.HexY, _GetOneRandom( bones ), 1 );
+			if( valid( bone ) )
+			{
+				bone.BLOOD_AMOUNT = 10;
+				uint[] values = { bone.Id };
+				bone.BLOOD_TE = CreateTimeEvent( __FullSecond + REAL_MINUTE( BLOOD_DRY_TO ), "critter_status@e_dryup", values, true );
+			}
 		}
+		
 		DeleteNpc( target );
 	}
 	else
 	{
-		target.ParamBase[ CR_DEATH_STAGE ] ++;
+		target.ParamBase[ CR_SKINNING_STAGE ] ++;
 	}
+	
 	return true;
 }
 
@@ -431,7 +477,7 @@ class SkinnableCrCollection
 SkinnableCrCollection@ skinnableCrits = SkinnableCrCollection()
 //				Type, subtype, difficulty
     .skinnable( BT_RAT, CRTYPE_RAT, 5 )
-        .loot( PID_CRAFT_L_RAGS )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_MOUSE_SKIN )
         .loot( PID_RAT_MEAT )
     .skinnable( BT_MANTI, CRTYPE_MANTI, 10 )
@@ -442,97 +488,96 @@ SkinnableCrCollection@ skinnableCrits = SkinnableCrCollection()
     .skinnable( BT_GIANT_ANT, CRTYPE_GIANT_ANT_BROWN, 6 )
         .loot( PID_SHIT_SMALL )
         .loot( PID_MANTIS_SHELL )
-        .loot( PID_RAD_MEAT )
+        .loot( PID_THORAX )
     .skinnable( BT_GIANT_ANT, CRTYPE_GIANT_ANT_BROWN_L, 7 )
         .loot( PID_SHIT_SMALL )
         .loot( PID_MANTIS_SHELL )
-        .loot( PID_RAD_MEAT )
+        .loot( PID_THORAX )
     .skinnable( BT_GIANT_ANT, CRTYPE_GIANT_ANT_GREEN, 8 )
         .loot( PID_SHIT_SMALL )
         .loot( PID_MANTIS_SHELL )
-        .loot( PID_RAD_MEAT )
+        .loot( PID_THORAX )
     .skinnable( BT_GIANT_ANT, CRTYPE_GIANT_ANT_RED, 9 )
         .loot( PID_SHIT_SMALL )
         .loot( PID_MANTIS_SHELL )
-        .loot( PID_RAD_MEAT )
+        .loot( PID_THORAX )
     .skinnable( BT_GIANT_ANT, CRTYPE_GIANT_ANT_LION, 10 )
         .loot( PID_SHIT_SMALL )
 		.loot( PID_MANTIS_SHELL )
-        .loot( PID_RAD_MEAT )
         .loot( PID_THORAX )
     .skinnable( BT_RAT, CRTYPE_RAT_PIGRAT, 15 )
-		.loot( PID_CRAFT_L_RAGS )
-        .loot( PID_CRAFT_L_HIDE )
+		.loot( PID_SHIT_SMALL )
+        .loot( PID_LEATHER )
         .loot( PID_RAD_MEAT )
         .loot( PID_RAD_MEAT )
     .skinnable( BT_RAT, CRTYPE_RAT_MOLERAT, 20 )
-		.loot( PID_CRAFT_L_RAGS )
-        .loot( PID_CRAFT_L_HIDE )
+		.loot( PID_SHIT_SMALL )
+        .loot( PID_LEATHER )
         .loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_MOLERAT_STOMATCH )
     .skinnable( BT_RAT, CRTYPE_RAT_MOLERAT_MUTANT, 25 )
-		.loot( PID_CRAFT_L_RAGS )
-        .loot( PID_CRAFT_L_HIDE )
+		.loot( PID_SHIT_SMALL )
+        .loot( PID_LEATHER )
         .loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_MOLERAT_STOMATCH )
     .skinnable( BT_GECKO, CRTYPE_GECKO_SILV, 17 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_GECKO_PELT )
 		.loot( PID_GECKO_MEAT )
         .loot( PID_KLK )
     .skinnable( BT_GECKO, CRTYPE_GECKO_GOLD_SMALL, 15 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_GOLDEN_GECKO_PELT )
         .loot( PID_GECKO_MEAT )
     .skinnable( BT_GECKO, CRTYPE_GECKO_GOLD, 20 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_GOLDEN_GECKO_PELT )
 		.loot( PID_GECKO_MEAT )
 		.loot( PID_GECKO_MEAT )
     .skinnable( BT_GECKO, CRTYPE_GECKO_CAVE, 25 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_PELT3 )
 		.loot( PID_GECKO_MEAT )
 		.loot( PID_GECKO_MEAT )
 	.skinnable( BT_DOG, CRTYPE_COYOTE, 25 )
-		.loot( PID_CRAFT_L_HIDE )
+		.loot( PID_SHIT_SMALL )
         .loot( PID_WOLF_FUR )
 		.loot( PID_WOLF_FUR )
        	.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_KLK )
 	.skinnable( BT_DOG, CRTYPE_WOLF, 25 )
-		.loot( PID_CRAFT_L_HIDE )
+		.loot( PID_SHIT_SMALL )
         .loot( PID_WOLF_FUR )
 		.loot( PID_WOLF_FUR )
        	.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_KLK )			
     .skinnable( BT_DOG, CRTYPE_DOG, 15 )
-		.loot( PID_CRAFT_L_HIDE )
+		.loot( PID_SHIT_SMALL )
         .loot( PID_WOLF_FUR )
 		.loot( PID_WOLF_FUR )
        	.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_KLK )
     .skinnable( BT_DOG, CRTYPE_DOG_BLC, 16 )
-		.loot( PID_CRAFT_L_HIDE )
+		.loot( PID_SHIT_SMALL )
         .loot( PID_WOLF_FUR )
 		.loot( PID_WOLF_FUR )
        	.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_KLK )
     .skinnable( BT_DOG, CRTYPE_DOG_BRN, 17 )
-		.loot( PID_CRAFT_L_HIDE )
+		.loot( PID_SHIT_SMALL )
         .loot( PID_WOLF_FUR )
 		.loot( PID_WOLF_FUR )
        	.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_KLK )
     .skinnable( BT_DOG, CRTYPE_DOG_SMALL, 10 )
-	    .loot( PID_CRAFT_L_HIDE )
+	    .loot( PID_SHIT_SMALL )
         .loot( PID_WOLF_FUR )
 		.loot( PID_KLK )
 		.loot( PID_RAD_MEAT )
@@ -560,7 +605,7 @@ SkinnableCrCollection@ skinnableCrits = SkinnableCrCollection()
         .loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
     .skinnable( BT_YAO, CRTYPE_YAO, 50 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_DEATHCLAW_HIDE )
 		.loot( PID_KLK )
 		.loot( PID_MEAT )
@@ -574,8 +619,13 @@ SkinnableCrCollection@ skinnableCrits = SkinnableCrCollection()
 		.loot( PID_RADSCORPION_PINCERS )
         .loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
-    .skinnable( BT_BRAHMIN, CRTYPE_BRAHMIN, 30 )
-        .loot( PID_CRAFT_L_HIDE )
+    .skinnable( BT_BRAHMIN, CRTYPE_BRAHMIN_SMALL, 15 )
+        .loot( PID_SHIT_SMALL )
+        .loot( PID_BRAHMIN_SKIN )
+        .loot( PID_MEAT )
+		.loot( PID_MEAT )
+	.skinnable( BT_BRAHMIN, CRTYPE_BRAHMIN, 30 )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_BRAHMIN_SKIN )
         .loot( PID_MEAT )
 		.loot( PID_MEAT )
@@ -590,77 +640,83 @@ SkinnableCrCollection@ skinnableCrits = SkinnableCrCollection()
         .loot( PID_SHIT_SMALL )
 		.loot( PID_SHIT_SMALL )
     .skinnable( BT_ALIEN, CRTYPE_ALIEN_REG, 45 )
-        .loot( PID_CRAFT_L_RAGS )
-		.loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
+		.loot( PID_LEATHER )
         .loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_MUTATED_GLAND )
     .skinnable( BT_ALIEN, CRTYPE_ALIEN_QUEEN, 50 )
-        .loot( PID_CRAFT_L_RAGS )
-		.loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
+		.loot( PID_LEATHER )
         .loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
 		.loot( PID_MUTATED_GLAND )
         .loot( PID_MUTATED_GLAND )
     .skinnable( BT_DEATHCLAW, CRTYPE_DEADCLAW_SMALL, 30 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_DEATHCLAW_HIDE )
 		.loot( PID_RAD_MEAT )
         .loot( PID_H_CLAW )
     .skinnable( BT_DEATHCLAW, CRTYPE_DEADCLAW, 40 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_DEATHCLAW_HIDE )
 		.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_H_CLAW )
     .skinnable( BT_DEATHCLAW, CRTYPE_DEADCLAW_GREY, 50 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_DEATHCLAW_HIDE )
 		.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_H_CLAW )
     .skinnable( BT_CROCS, CRTYPE_CROCS_BEETLE, 40 )
-        .loot( PID_CRAFT_L_RAGS )
-		.loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
+		.loot( PID_LEATHER )
 		.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_MUTATED_GLAND )
     .skinnable( BT_CROCS, CRTYPE_CROCS_SHADOW, 50 )
-        .loot( PID_CRAFT_L_RAGS )
-		.loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
+		.loot( PID_LEATHER )
         .loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
 		.loot( PID_MUTATED_GLAND )
         .loot( PID_MUTATED_GLAND )
     .skinnable( BT_GECKO, CRTYPE_GECKO_FIRE, 30 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_FIRE_GECKO_PELT )
         .loot( PID_GECKO_MEAT )
 		.loot( PID_KLK )
 		.loot( PID_FIREGECKO_GLAND )		
     .skinnable( BT_DEATHCLAW, CRTYPE_DEADCLAW_BEAST, 45 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_DEATHCLAW_HIDE )
 		.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
 		.loot( PID_H_CLAW )
     .skinnable( BT_CENTAUR, CRTYPE_CENTAUR, 50 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_BRAHMIN_SKIN )
 		.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
         .loot( PID_MUTATED_GLAND )
 		.loot( PID_MUTATED_GLAND )
     .skinnable( BT_FLOATER, CRTYPE_FLOATER, 50 )
-		.loot( PID_CRAFT_L_RAGS )
-		.loot( PID_CRAFT_L_HIDE )
+		.loot( PID_SHIT_SMALL )
+		.loot( PID_LEATHER )
+		.loot( PID_RAD_MEAT )
+        .loot( PID_MUTATED_GLAND )
+        .loot( PID_MUTATED_GLAND )
+    .skinnable( BT_FLOATER, CRTYPE_FLOATER_GRAY, 50 )
+		.loot( PID_SHIT_SMALL )
+		.loot( PID_LEATHER )
 		.loot( PID_RAD_MEAT )
         .loot( PID_MUTATED_GLAND )
         .loot( PID_MUTATED_GLAND )
     .skinnable( BT_SWAMP_LURKER, CRTYPE_SWAMP_LURKER, 50 )
-        .loot( PID_MANTIS_SHELL )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_MIRELUK_SHELL )
         .loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
@@ -674,7 +730,7 @@ SkinnableCrCollection@ skinnableCrits = SkinnableCrCollection()
         .loot( PID_MANTIS_SHELL )
         .loot( PID_ROACH )
     .skinnable( BT_LAVASH, CRTYPE_LAVASH, 40 )
-        .loot( PID_CRAFT_L_HIDE )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_BRAHMIN_SKIN )
         .loot( PID_MEAT )
 		.loot( PID_MEAT )
@@ -685,9 +741,25 @@ SkinnableCrCollection@ skinnableCrits = SkinnableCrCollection()
         .loot( PID_MANTIS_SHELL )
         .loot( PID_RAD_MEAT )
 	.skinnable( BT_MILLEPEDE, CRTYPE_MILLEPEDE, 20 )
-        .loot( PID_MANTIS_SHELL )
+        .loot( PID_SHIT_SMALL )
         .loot( PID_MIRELUK_SHELL )
         .loot( PID_RAD_MEAT )
+		.loot( PID_RAD_MEAT )
+	.skinnable( BT_RADSCORPION, CRTYPE_REDSCP, 10 )
+        .loot( PID_SHIT_SMALL )
+        .loot( PID_SCORPION_SMALL_TAIL )
+		.loot( PID_RADSCORPION_PINCERS )
+        .loot( PID_RAD_MEAT )
+	.skinnable( BT_GECKO, CRTYPE_TOXGECK, 20 )
+		.loot( PID_SHIT_SMALL )
+		.loot( PID_RAD_MEAT )
+		.loot( PID_RAD_MEAT )
+		.loot( PID_TOXIC_GECKO_PELT )  
+	.skinnable( BT_DEATHCLAW, CRTYPE_MONSTR, 30 )
+		.loot( PID_SHIT_SMALL )
+		.loot( PID_DEATHCLAW_HIDE )
+		.loot( PID_RAD_MEAT )
+		.loot( PID_RAD_MEAT )
 		.loot( PID_RAD_MEAT )
 	;
 

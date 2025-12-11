@@ -1,0 +1,232 @@
+#ifndef MOB_SPAWNERS
+#define MOB_SPAWNERS
+
+#include "_utils.fos"
+#include "mob_spawners_h.fos"
+
+Critter@ MobSpawn( Map& map, uint16 hx, uint16 hy, uint minMobPID, uint maxMobPID, uint teamID, uint spawnerId, uint isAggro, uint isWild )
+{	
+	map.SetText( hx, hy, COLOR_LGRAY, ":rustling:" );
+	
+	Critter@ npc = map.AddNpc( Random(minMobPID, maxMobPID), hx, hy, Random( 0, 5 ), null, null, isWild > 0 ? "ai_mob@_MobInit" : "ai_guards@_AiGuardsInit" );
+	if( !valid( npc ) )
+	{
+		return null;
+	}
+	
+	npc.SetHomePos( npc.HexX, npc.HexY, npc.Dir );
+	npc.StatBase[ ST_TEAM_ID ] = teamID;
+	npc.ParamBase[ CR_SPAWNER_ID ] = spawnerId;
+	npc.ParamBase[ CR_IS_AGGRESSIVE ] = isAggro;
+	
+	for( uint i = __SkillBegin; i < __SkillEnd; i++ )
+	{
+		if( npc.SkillBase[ i ] > __SkillMaxValue )
+		{
+			npc.SkillBase[ i ] = __SkillMaxValue;
+		}
+	}
+
+	return npc;
+}
+
+uint e_delayed_mob_spawn( uint[]@ values )
+{
+	Map@ map = GetMap( values[ 0 ] );
+	if( values[9] == 0 )
+	{
+		values[9]++;
+		map.SetText( values[1], values[2], COLOR_LGRAY, ":rustling:" );
+		return REAL_SECOND( Random( 3, 6 ) );
+	}
+	
+	MobSpawn( map, values[1], values[2], values[3], values[4], values[5], values[6], values[7], values[8] );
+
+	return 0;
+}
+
+void CreateMobSpawner( Map& map, uint16 hx, uint16 hy, uint teamID, uint mobCount, uint minMobPID, uint maxMobPID, uint minTimeout, uint maxTimeout, uint range, uint flags)
+{
+	if( !valid( map ) )
+	{
+		return;
+	}
+
+	Item@ mobSpawner = map.AddItem( hx, hy, PID_MOB_SPAWNER, 1 );
+	if( !valid( mobSpawner ) )
+	{
+		return;
+	}
+
+	mobSpawner.SPAWNER_FLAGS = flags;
+	mobSpawner.TEAM_ID = ( teamID == 0 ? 100 : teamID );
+	mobSpawner.MOB_COUNT = ( mobCount < 1 ? 1 : mobCount );
+	mobSpawner.MIN_MOB_PID = ( minMobPID > 999 ? 999 : minMobPID );
+	mobSpawner.MAX_MOB_PID = ( maxMobPID > 999 ? 999 : maxMobPID );
+	mobSpawner.MIN_TIMEOUT = ( minTimeout < 1 ? 1 : minTimeout );
+	mobSpawner.MAX_TIMEOUT = ( maxTimeout < 1 ? 1 : maxTimeout );
+	mobSpawner.RANGE = ( range < 1 ? 1 : range );
+	
+	Critter@ firstMob = MobSpawn( map, 
+								hx,
+								hy,
+								mobSpawner.MIN_MOB_PID,
+								mobSpawner.MAX_MOB_PID,
+								mobSpawner.TEAM_ID,
+								mobSpawner.Id,
+								FLAG(mobSpawner.SPAWNER_FLAGS, SPAWNER_IS_AGGRO) ? 1 : 0,
+								FLAG(mobSpawner.SPAWNER_FLAGS, SPAWNER_IS_WILD) ? 1 : 0);
+	if(valid(firstMob))
+	{
+		mobSpawner.CRTYPE = firstMob.CrType;
+	}
+
+	int[] values = { mobSpawner.Id };
+	mobSpawner.SPAWNER_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_processMobSpawner", values, true );
+}
+
+//~run mob_spawners _RefreshMobSpawners 0 0 0
+void _RefreshMobSpawners( Critter& player, int param0, int param1, int param2 )
+{
+	if(!isGM(player)) return;
+
+	Item@[] spawners;
+	GetAllItems(PID_MOB_SPAWNER, spawners);
+
+	for(uint i = 0, len = spawners.length(); i < len; i++)
+	{
+		Item@ currSpawner = spawners[i];
+		if( !valid( currSpawner ) )
+		{
+			continue;
+		}
+
+		Map@ currMap = GetMap(currSpawner.MapId);
+		if( !valid( currMap ) )
+		{
+			continue;
+		}
+
+		uint duration = 0;
+		uint[] values;
+		if( !GetTimeEvent( currSpawner.SPAWNER_EVENT, duration, values ) )
+		{ 
+			Log("WARNING: Mob Spawner with broken TE, at map" + currMap.GetProtoId() + ", at hex " + currSpawner.HexX + " " + currSpawner.HexY + "\n");
+			continue;
+		}
+		duration = REAL_MINUTE( Random(currSpawner.MIN_TIMEOUT, currSpawner.MAX_TIMEOUT) );
+		SetTimeEvent( currSpawner.SPAWNER_EVENT, duration, values );
+
+		DespawnMobs(currMap, currSpawner);
+		ProcessRespawnMobs(currMap, currSpawner);
+	}
+}
+
+void DespawnMobs(Map@ map, Item@ mobSpawner)
+{
+	Critter@[] mobsFound;
+	
+	uint minMobPID = mobSpawner.MIN_MOB_PID;
+	uint maxMobPID = mobSpawner.MAX_MOB_PID;
+	uint pidsLen = 1 + maxMobPID - minMobPID;
+	
+	for( uint i = 0; i < pidsLen; i++ )
+	{
+		map.GetCritters( minMobPID + i, FIND_LIFE_AND_KO | FIND_ONLY_NPC, mobsFound );
+	}
+
+	for( uint i = 0, len = mobsFound.length(); i < len; i++ )
+	{
+		Critter@ currMob = mobsFound[i];
+		if( valid( currMob ) && currMob.Param[CR_SPAWNER_ID] == int( mobSpawner.Id ) )
+		{	
+			currMob.ParamBase[CR_SPAWNER_ID] = 0; // Not so much time passes between Despawn & Respawn, so we need to unmark mob as valid for respawn somehow - APAMk2
+			DeleteNpc(currMob);
+		}
+	}
+
+	mobsFound.resize(0);
+}
+
+void ProcessRespawnMobs(Map@ map, Item@ mobSpawner)
+{
+	int mobsCount = 0;
+	Critter@[] mobsFound;
+	Critter@ currMob = null;
+	uint minMobPID = mobSpawner.MIN_MOB_PID;
+	uint maxMobPID = mobSpawner.MAX_MOB_PID;
+	uint pidsLen = 1 + maxMobPID - minMobPID;
+	
+	for( uint i = 0; i < pidsLen; i++ )
+	{
+		map.GetCritters( minMobPID + i, FIND_LIFE_AND_KO | FIND_ONLY_NPC, mobsFound );
+	}
+
+	for( uint i = 0, len = mobsFound.length(); i < len; i++ )
+	{
+		@currMob = mobsFound[i];
+		if( valid( currMob ) && currMob.Param[CR_SPAWNER_ID] == int( mobSpawner.Id ) )
+		{	
+			mobsCount++;
+		}
+	}
+	
+	int missing = mobSpawner.MOB_COUNT - mobsCount;
+
+	if( missing > 0 )
+	{
+		uint attempt = 0;
+		for( int i = 0; i < missing; i++ )
+		{
+			if( attempt > MAX_MOB_SPAWN_ATTEMPTS )
+			{
+				break;
+			}
+			
+			int range = mobSpawner.RANGE / 2;
+			uint16 hx = mobSpawner.HexX + Random( -range, range );
+			uint16 hy = mobSpawner.HexY + Random( -range, range );
+			if( map.IsHexPassed( hx, hy ) && map.GetPathLength( hx, hy, mobSpawner.HexX, mobSpawner.HexY, 1 ) != 0 )
+			{
+				uint[] values = { map.Id, 
+								hx,
+								hy,
+								minMobPID,
+								maxMobPID,
+								mobSpawner.TEAM_ID,
+								mobSpawner.Id,
+								FLAG(mobSpawner.SPAWNER_FLAGS, SPAWNER_IS_AGGRO) ? 1 : 0,
+								FLAG(mobSpawner.SPAWNER_FLAGS, SPAWNER_IS_WILD) ? 1 : 0,
+								0 };
+				CreateTimeEvent( AFTER( REAL_SECOND(1) ), "e_delayed_mob_spawn", values, true );
+			}
+			else
+			{
+				attempt++;
+			}
+		}
+	}
+	
+	mobsFound.resize(0);
+}
+
+uint e_processMobSpawner( int[] @ values )
+{
+	Item@ mobSpawner = GetItem( values[0] );
+	if( !valid( mobSpawner ) )
+	{
+		return 0;
+	}
+
+	Map@ map = GetMap(mobSpawner.MapId);
+	if( !valid( map ) )
+	{
+		return 0;
+	}
+
+	ProcessRespawnMobs(map, mobSpawner);
+	
+	return REAL_MINUTE( Random(mobSpawner.MIN_TIMEOUT, mobSpawner.MAX_TIMEOUT) );
+}
+
+#endif // MOB_SPAWNERS

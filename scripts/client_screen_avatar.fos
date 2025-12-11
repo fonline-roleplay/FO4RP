@@ -1,0 +1,260 @@
+// FOS Client
+
+#include "_macros.fos"
+#include "_client_defines.fos"
+#include "client_gui_h.fos"
+#include "sprite.fos"
+
+import Sprite@ GetAvatar( uint hash, bool isPlayer ) from "client_avatars";
+import Sprite@ GetAvatar( CritterCl& critter ) from "client_avatars";
+
+const uint AvatarCount = 3;
+const uint AvatarFileCollectionType = 1;
+
+enum FileCollectionReason
+{
+	Fail = -1,
+	Success = 1
+}
+
+class LoadingAnimation : Sprite
+{
+	
+    void Draw( int x, int y ) override
+    {
+        Draw( x, y, false, false, 0 );
+    }
+	
+	void Draw( int x, int y, bool scratch, bool center, uint color ) override
+    {
+        if( Id != 0 )
+		{
+            DrawSprite( Id, DrawFrame, x, y, Width, Height, scratch, center, color );
+		}
+		
+		DrawText( "" + __CurrentFileSendPercent + "%", x, y, Width, Height, COLOR_RED, FONT_FALLOUT, FT_BORDERED | FT_CENTERXY);
+    }
+}
+
+class AvaScreen : IGUIScreenCallbackShow
+{	
+	AvaScreen()
+	{
+		CritterId = 0;
+		Activate.resize( AvatarCount );
+		Upload.resize( AvatarCount );
+		Ava.resize( AvatarCount );
+	}
+
+	CritterCl@ get_Critter()
+	{
+		return GetCritter( CritterId );
+	}
+
+	void OnShow( int critterid, int, int )
+	{
+		CritterId = critterid;		
+		auto critter = Critter;
+		if( valid( critter ) )
+		{
+			DropButtons();
+			
+			for( uint i = 0; i < AvatarCount; i++ )
+				Ava[i].SetPic( critter.Avatar[AVATAR_BEGIN + i] );
+			
+			Activate[critter.Stat[ST_AVATAR_INDEX]].ElementOption.JammingState = true;
+		}
+	}
+	
+	void DropButtons()
+	{
+		for( uint i = 0; i < AvatarCount; i++ )
+		{
+			Activate[i].ElementOption.JammingState = false;
+		}
+	}
+		
+	bool IsChosen()
+	{
+		CritterCl@ critter = Critter;
+		return valid( critter ) ? critter.IsChosen() : false;
+	}
+	
+	void SetAva( uint index, uint filehash, uint critterId )
+	{
+		if( critterId == CritterId )
+			Ava[index].SetPic( filehash );
+		RunServerScriptUnsafe( "avatars@unsafe_SetAvatar", critterId, index, filehash );
+	}
+	
+	uint CritterId;
+	array<AvaActivate@> Activate;
+	array<AvaUpload@> Upload;
+	array<AvaPic@> Ava;
+}
+
+mixin class MutualAva
+{
+	uint Index;
+	AvaScreen@ Screen;
+	IGUIElementOpt@ ElementOption;
+	IGUIElementOpt@ ProtoElementOption;
+	
+	void construct( uint index, AvaScreen@ screen )
+	{
+		Index = index;
+		@Screen = screen;
+		@ElementOption = null;
+	}
+	
+	void InstanceInit( IGUIInstanceContext@ context, IGUIElementOpt@ element )
+	{
+		@ElementOption = element;
+	}
+	
+}
+
+mixin class MutualAvaButton
+{	
+	void OnMouseClick( int click ) override
+	{
+		if( click == MOUSE_CLICK_LEFT )
+		{
+			Button();
+		}
+	}
+}
+
+class AvaPic : MutualAva
+{
+	AvaPic( uint index, AvaScreen@ screen )
+	{
+		construct( index, screen );
+	}
+	
+	void SetPic( uint hash )
+	{	
+		SetPic( GetAvatar( hash, true ) );
+	}
+	
+	void SetPic( Sprite@ sprite )
+	{	
+		if( !valid(sprite) )
+			return;
+		else
+		{
+			ElementOption.SetSprite( sprite );
+			ElementOption.SetSize( ProtoElementOption.GetSurfaceWidth(), ProtoElementOption.GetSurfaceHeight() );
+		}
+	}
+}
+
+class AvaActivate : IGUIElementCallbackMouseClick, MutualAva, MutualAvaButton
+{	
+	AvaActivate( uint index, AvaScreen@ screen )
+	{
+		construct( index, screen );
+	}
+	
+	void Button( )
+	{
+		Screen.DropButtons();
+		ElementOption.JammingState = true;
+		RunServerScriptUnsafe( "avatars@unsafe_ActivationAvatar", Screen.CritterId, Index, 0, null, null );
+	}
+}
+
+class AvaUpload : IGUIElementCallbackMouseClick, MutualAva, MutualAvaButton
+{
+	AvaUpload( uint index, AvaScreen@ screen )
+	{
+		construct( index, screen );
+	}
+	
+	void Button( )
+	{
+		AvatarUpload( WindowsExplorer_OpenFile( "Avatar Files (*.png, *.jpg, *.bmp)\0*.png;*.bmp;*.jpg" ) );
+	}
+	
+	void AvatarUpload( string& file )
+	{
+		if( ValidationImage( file, 0 ) )
+		{
+			LoadingAnimation spr;
+			spr.Load("Loading.png", PT_ART_INTRFACE );
+			Screen.Ava[Index].SetPic( spr );
+			AddFileToServerCollection( file, AvatarFileCollectionType, Screen.CritterId, Index, func: FileCollectionUploadFuncdef( @this.FileCollectionUpload ) );
+		}
+		else
+		{
+			Message( "|0xFFFF00 Unable to upload avatar! Image invalidation!" );
+		}
+	}
+	
+	void FileCollectionUpload( int8 result, uint filehash, int type, int critterId, int index, int )
+	{
+	
+		if( result < 0 )
+		{
+			Message( "|0xFFFF00 Unable to upload avatar! <" + result + ">" );
+			Screen.Ava[index].SetPic( Screen.Critter.Avatar[AVATAR_BEGIN + index] );
+		}
+		else
+		{
+			Message( "|0xFFFF00 Avatar upload success! <" + result + ">" );
+			Screen.SetAva( index, filehash, critterId );
+		}
+	}
+}
+
+class AvaExit : IGUIElementCallbackMouseClick
+{
+	void OnMouseClick( int click ) override
+	{
+		if( click == MOUSE_CLICK_LEFT )
+		{
+			GUI_HideScreen( CLIENT_SCREEN_AVATAR, 0, 0, 0 );
+		}
+	}
+}
+
+void GUIInit( )
+{
+	AvaScreen screen();
+	
+	GUI_CreateScreenIni( CLIENT_SCREEN_AVATAR, "Ava" )
+		.CallbackShow( screen )
+		.AutoCursor( true, CURSOR_DEFAULT );
+	
+	string pref = "";
+	for( uint i = 0; i < AvatarCount; i++ )
+	{
+		AvaActivate activate( i, screen );
+		AvaUpload upload( i, screen );
+		AvaPic pic( i, screen );
+		
+		pref = "Ava" + ( i + 1 );
+		
+		@pic.ProtoElementOption = GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, pref + "Pic", 0, 0 )
+			.CallbackInstanceInit( IGUIElementInstanceInitFunc( pic.InstanceInit ) );
+		
+		@activate.ProtoElementOption = GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, pref + "Activate", 0, 0 )
+			.CallbackMouseClick( activate )
+			.DownPicIni( pref + "ActivateDn" )
+			.SetJamming( true )
+			.CallbackInstanceInit( IGUIElementInstanceInitFunc( activate.InstanceInit ) );
+		
+		@upload.ProtoElementOption = GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, pref + "Upload", 0, 0 )
+			.CallbackMouseClick( upload )
+			.DownPicIni( pref + "UploadDn" )
+			.CallbackInstanceInit( IGUIElementInstanceInitFunc( upload.InstanceInit ) );
+			
+		@screen.Activate[i] = activate;
+		@screen.Upload[i] = upload;
+		@screen.Ava[i] = pic;
+	}
+	
+	GUI_AddScreenElementIni( CLIENT_SCREEN_AVATAR, "AvaExitBut", 0, 0 )
+		.CallbackMouseClick( AvaExit() )
+		.DownPicIni( "AvaExitButDn" );
+}

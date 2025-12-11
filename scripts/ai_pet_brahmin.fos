@@ -1,0 +1,726 @@
+#ifndef AI_PET_BRAHMIN
+#define AI_PET_BRAHMIN
+
+#include "_utils.fos"
+#include "npc_planes_h.fos"
+#include "heal_h.fos"
+#include "speed_h.fos"
+#include "drugs_h.fos"
+#include "food_h.fos"
+
+import int NextLevelNeedExp( Critter& cr ) from "parameters";
+
+#define FOOD_SEARCH_RANGE ( 16 )
+
+void GM_PetBrahmin( Critter& npc ) // Export
+{
+    npc.SetScript( "_PetBrahminInit" );
+	npc.SayMsg( SAY_EMOTE, TEXTMSG_COMBAT, STR_BRAHMIN_MOO );
+	if( npc.GetTimeEvents( CTE_THIRST, null, null, null ) < 1 )
+	{
+		npc.AddTimeEvent( "gameplay@cte_Thirst", REAL_SECOND( npc.Param[ CR_THIRST_SPEED ] ), CTE_THIRST, 0 );
+	}
+	
+	if( npc.GetTimeEvents( CTE_HUNGER, null, null, null ) < 1 )
+	{
+		npc.AddTimeEvent( "gameplay@cte_Hunger", REAL_SECOND( npc.Param[ CR_HUNGER_SPEED ] ), CTE_HUNGER, 0 );
+	}
+}
+
+void _PetDogInit( Critter& npc, bool firstTime )
+{
+    npc.SetEvent( CRITTER_EVENT_IDLE,				"_Idle" );
+	npc.SetEvent( CRITTER_EVENT_HIDE_CRITTER,		"_CritterOutOfSight" );
+    npc.SetEvent( CRITTER_EVENT_PLANE_BEGIN,		"_PlaneBegin" );
+	npc.SetEvent( CRITTER_EVENT_PLANE_END,			"_PlaneEnd" );
+    npc.SetEvent( CRITTER_EVENT_DEAD,				"_MyDeath" );
+    npc.SetEvent( CRITTER_EVENT_ATTACKED,			"_Attacked" );
+	npc.SetEvent( CRITTER_EVENT_USE_SKILL_ON_ME,	"_ReactToSkill" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_USE_ITEM, 		"_UseOnPet" );   
+}
+
+void _UseOnPet( Critter& npc, Critter& fromCrit, Item& item, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
+{
+	if( !valid( fromCrit ) )
+	{
+		return;
+	}
+
+	if( fromCrit.IsDead() )
+	{
+		return;
+	}
+
+	if( !valid( item ) )
+	{
+		return;
+	}
+
+	if( !valid( onCritter ) )
+	{
+		return;
+	}
+
+	if( onCritter.Id != npc.Id )
+	{
+		return;
+	}
+
+	if( valid( onItem ) )
+	{
+		return;
+	}
+
+	if( valid( onScenery ) )
+	{
+		return;
+	}
+
+	uint16 pid = item.GetProtoId();
+	if( heal_items.find( pid ) != -1 )
+	{
+		UseHealingItem( fromCrit, npc, item );
+	}
+	else if( bandage_items.find( pid ) != -1 )
+	{
+		UseBandageItem( fromCrit, npc, item );
+	}
+
+	switch( pid )
+	{
+		case( PID_BACKPACK ):
+			EquipPetItem( npc, fromCrit, item, SLOT_BACK );
+			break;
+	}
+}
+
+void EquipPetItem( Critter& npc, Critter& fromCrit, Item& item, uint8 slot )
+{
+	Item@ equipped = npc.GetItem( 0, slot );
+	if( valid( equipped ) )
+	{
+		MoveItem( equipped, equipped.GetCount(), fromCrit );
+	}
+
+	MoveItem( item, item.GetCount(), npc );
+	npc.MoveItem( item.Id, item.GetCount(), slot );
+}
+
+void _CritterOutOfSight( Critter& npc, Critter& target )
+{
+	if( npc.IsDead() )
+	{
+		return;
+	}
+	
+	if( npc.CheckEnemyInStack( target.Id ) )
+	{
+		npc.DropPlanes();
+		if( npc.IsSee( target ) )
+		{
+			if( target.IsDead() )
+			{ 
+				npc.EraseEnemyFromStack( target.Id );
+				return;
+			}
+			
+			if( !npc.CheckEnemyInStack( target.Id ) )
+			{
+				npc.AddEnemyInStack( target.Id );
+			}
+			
+			AddAttackPlane( npc, 0, target );
+			
+		}
+	}
+}
+
+void _Idle( Critter& npc )
+{
+	if( npc.IsPlayer() )
+	{
+		npc.SetEvent( CRITTER_EVENT_IDLE, null );
+		return;
+	}
+
+	if( npc.IsDead() || npc.IsKnockout() )
+	{
+		return;
+	}
+
+	if( npc.IsBusy() || !npc.IsNoPlanes() )
+	{
+		return;
+	}
+	
+	if( npc.Stat[ ST_FOLLOW_CRIT ] != 0 )
+	{
+		Critter@ follow = GetCritter( npc.Stat[ ST_FOLLOW_CRIT ] );
+		if( valid( follow ) )
+		{
+			Map@ nMap = npc.GetMap();
+			Map@ fMap = follow.GetMap();
+	
+			if( nMap.Id == fMap.Id )
+			{
+				if( npc.IsSee( follow ) )
+				{
+					npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+					npc.ModeBase[ MODE_NO_HOME ] = 1;
+					npc.AddTimeEvent( "mobcontrol@follow", REAL_SECOND( 1 ), CTE_NPC_FOLLOW );
+				}
+			}
+		}
+	}
+	
+	if( npc.Param[ PET_HUNGER ] >= 12 )
+	{
+		NpcRefresh( npc, 1 );
+	}
+	
+	uint[] index;
+	if( npc.Mode[ MODE_NO_HOME ] == 1 && npc.GetTimeEvents( CTE_NPC_FOLLOW, index, null, null ) == 0 )
+	{
+		if( npc.Param[ PET_HUNGER ] >= 6 )
+		{
+			if( npc.Param[ PET_FOOD_CHARGE ] < 2 )
+			{
+				Item@[] foodstuff;
+				npc.GetItemsByType( ITEM_TYPE_FOOD, foodstuff );
+				
+				Item@ food;
+				for( uint i = 0, len = foodstuff.length(); i < len ; i ++ )
+				{
+					@ food = foodstuff[i];
+					if( valid( food ) )
+					{
+						if( food.Proto.Item_Subtype >= ITEM_SUBTYPE_DRUG_FOOD_MEAT && food.Proto.Item_Subtype <= ITEM_SUBTYPE_DRUG_FOOD_MEAT_SPOILED )
+						{
+							npc.Wait( 2000 );
+							npc.Action( ACTION_DODGE, 1, food );
+							npc.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_CONSUMED, "$proto@msg item " + ( food.GetProtoId() * 100 ) + "@" );
+							ProccessFood( npc, npc, food );
+							useDrug( npc, food, npc );
+							npc.ParamBase[ PET_FOOD_CHARGE ] ++;
+							//Log( "Pet Ate food " + npc.Param[ PET_FOOD_CHARGE ] );
+							npc.AddTimeEvent( "ai_pet_brahmin@cte_shit", REAL_MINUTE( Random( 5, 15 ) ), CTE_SHIT, 0 );
+							break;
+						}
+					}
+				}
+			}
+			
+			if( npc.Param[ PET_FOOD_CHARGE ] > 0 && npc.Param[ PET_HUNGER ] >= 12 )
+			{
+				npc.ParamBase[ PET_FOOD_CHARGE ] --;
+				npc.ParamBase[ PET_HUNGER ] -= 12;
+				if( npc.Param[ PET_HUNGER ] <= 0 )
+				{
+					npc.Param[ PET_HUNGER ] == 0;
+				}
+				
+				if( npc.Param[ PET_LOYALTY ] < 100 )
+				{
+					npc.ParamBase[ PET_LOYALTY ] ++;
+				}
+			}
+			else if( npc.Param[ PET_FOOD_CHARGE ] < 2 )
+			{
+				if( !FindFood( npc ) )
+				{
+					npc.MoveRandom();
+				}
+			}
+		}
+		else if( Random( 1, 2 ) == 2 )
+		{
+			npc.MoveRandom();
+		}
+	}
+}
+
+int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem )
+{
+	if( npc.IsDead() )
+	{
+		return PLANE_DISCARD;
+	}
+	
+    if( plane.Type == AI_PLANE_ATTACK )
+	{
+        Critter@ target = GetCritter( plane.Attack_TargId );
+        if( !valid( target ) )
+		{
+			return PLANE_RUN_GLOBAL;
+		}
+
+        if( ( target.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] ) && target.Stat[ ST_TEAM_ID ] != 0 )
+		{
+			return PLANE_DISCARD; 
+		}
+	}
+	else if( reason == REASON_FROM_SCRIPT )
+	{
+		return PLANE_KEEP;
+	}
+	
+    return PLANE_RUN_GLOBAL;
+}
+
+int _PlaneEnd( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem ) 
+{
+	if( npc.IsDead() )
+	{
+		return PLANE_DISCARD;
+	}
+	
+	if( reason == REASON_GAG_CRITTER && someCr.IsNpc() )
+	{
+        if( someCr.ParamBase[ ST_TEAM_ID ] != npc.ParamBase[ ST_TEAM_ID ] )
+		{
+            return PLANE_RUN_GLOBAL;
+		}
+		
+        if( TryLetPassage( someCr, npc ) ) 
+		{
+            npc.Wait( AI_DELAY );
+            return PLANE_KEEP;
+        }
+    }
+	
+	return PLANE_RUN_GLOBAL;
+}
+
+void _MyDeath( Critter& npc, Critter@ killer ) 
+{
+	npc.DropPlanes();
+    npc.ClearEnemyStack();
+	npc.AddTimeEvent ( "rotting@cte_rotten", 0, CTE_ROTTEN, 0 );
+}
+
+bool _Attacked( Critter& npc, Critter& target )
+{
+	if( !valid( npc ) )
+	{
+		return false;
+	}
+	
+	if( npc.IsDead() )
+	{
+		return false;
+	}
+	
+	if( !valid( target ) )
+	{
+		return false;
+	}
+	
+	if( target.IsDead() )
+	{
+		return false;
+	}
+	
+	npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+	npc.ModeBase[ MODE_NO_HOME ] = 1;
+	
+	if( int( target.Id ) == npc.Param[ PET_OWNER_ID ] || int( target.Id ) == npc.Param[ PET_PROTECT_ID ] ) 
+	{
+        npc.EraseEnemyFromStack( target.Id );
+        EraseAttackPlane( npc, target );
+	}
+	else
+	{
+		AttackOrFind( npc, target, true );
+	}
+	
+    return true;
+}
+
+bool _ReactToSkill( Critter& npc, Critter& whoUse, int skill )
+{
+	if( isGM( whoUse ) )
+	{
+		return false;
+	}
+	
+	
+	return true;
+}
+
+// Support functions
+bool FindFood( Critter& npc )
+{
+	Map@ map = npc.GetMap();
+	if( !valid( map ) )
+	{
+		return false;
+	}
+	
+	uint16 tx = npc.HexX, ty = npc.HexY;
+	Item@[] foodstuff;
+	for( uint i = 1; i < FOOD_SEARCH_RANGE; i++ )
+	{
+		for( uint j = 0; j < 6; j++ )
+		{
+			map.MoveHexByDir( tx, ty, j, i );
+			map.GetItems( tx, ty, foodstuff );
+		}
+	}
+	
+	Item@ food;
+	Item@ meat;
+	Item@ bath;
+	Item@[] contents;
+	for( uint i = 0, len = foodstuff.length(); i < len ; i ++ )
+	{
+		@ food = foodstuff[i];
+		if( valid( food ) )
+		{
+			if( food.Proto.Item_Subtype >= ITEM_SUBTYPE_DRUG_FOOD_MEAT && food.Proto.Item_Subtype <= ITEM_SUBTYPE_DRUG_FOOD_MEAT_SPOILED )
+			{
+				@ meat = food;
+				break;
+			}
+		}
+	}
+
+	if( valid( meat ) )
+	{
+		AddPickPlane( npc, 0, meat.HexX, meat.HexY, meat.GetProtoId(), 0, true );
+		return true;
+	}
+
+	// if no meat found, search for bath
+	for( uint k = 0, len = foodstuff.length(); k < len ; k ++ )
+	{
+		@ bath = foodstuff[k];
+		if( valid( bath ) )
+		{
+			uint16 pid = bath.GetProtoId();
+			if( pid == PID_DOG_BOWL )
+			{
+				bath.GetItems( 0, contents );
+				for( uint l = 0, length = contents.length(); l < length; l ++ )
+				{
+					@ food = contents[l];
+					if( valid( food ) )
+					{
+						if( food.Proto.Item_Subtype >= ITEM_SUBTYPE_DRUG_FOOD_MEAT && food.Proto.Item_Subtype <= ITEM_SUBTYPE_DRUG_FOOD_MEAT_SPOILED )
+						{
+							@ meat = food;
+							break;
+						}
+					}
+				}
+			}
+		}
+	}
+	
+	if( valid( meat ) )
+	{
+		if( GetDistantion( npc.HexX, npc.HexY, bowl.HexX, bowl.HexY ) > 1 )
+		{
+			AddWalkPlane( npc, AI_PLANE_ATTACK_PRIORITY - 1, bowl.HexX, bowl.HexY, 1, true, 1 );
+		}
+		else
+		{
+			MoveItem( meat, 1, npc );
+			return true;
+		}
+	}
+	
+	return false;
+}
+
+void NpcRefresh( Critter& npc, int no_home )
+{
+	npc.ClearEnemyStack();
+	npc.DropPlanes();
+	npc.EraseTimeEvents( CTE_NPC_FOLLOW );
+	npc.ModeBase[ MODE_NO_HOME ] = no_home;
+	npc.ParamBase[ PET_PROTECT_ID ] = 0;
+	npc.ParamBase[ PET_GUARD_ID ] = 0;
+}
+
+uint cte_shit( Critter& npc, int identifier, uint& rate )
+{
+	if( npc.IsDead() )
+	{
+		return 0; 
+	}
+	
+	Map@ map = npc.GetMap();
+	if( !valid( map ) )
+	{
+		return 0;	
+	}
+	
+	npc.Wait( 2000 );
+	uint16 hx = npc.HexX, hy = npc.HexY;
+	map.MoveHexByDir( hx, hy, _RevDir( npc.Dir ), 1 );
+	map.AddItem( hx, hy, PID_SHIT_SMALL, 1 );
+	return 0; 
+}
+
+void PetLevelUp( Critter& npc )
+{
+	switch( npc.Param[ PET_GROW_LEVEL ] )
+	{
+		case( 1 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 2 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			ChangeStat( npc, ST_NORMAL_RESIST, 1 );
+			ChangeStat( npc );
+			npc.StatBase[ ST_EXPERIENCE ] = NextLevelNeedExp( npc );
+			break;
+		}
+		case( 2 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 2 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			ChangeStat( npc, ST_NORMAL_RESIST, 1 );
+			ChangeStat( npc );
+			npc.StatBase[ ST_EXPERIENCE ] = NextLevelNeedExp( npc );
+			break;
+		}
+		case( 3 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 2 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			ChangeStat( npc, ST_NORMAL_RESIST, 1 );
+			ChangeStat( npc );
+			npc.StatBase[ ST_EXPERIENCE ] = NextLevelNeedExp( npc );
+			break;
+		}
+		case( 4 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 2 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			ChangeStat( npc, ST_NORMAL_RESIST, 1 );
+			ChangeStat( npc );
+			npc.StatBase[ ST_EXPERIENCE ] = NextLevelNeedExp( npc );
+			break;
+		}
+		case( 5 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 2 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			ChangeStat( npc, ST_NORMAL_RESIST, 1 );
+			ChangeStat( npc );
+			break;
+		}
+		case( 6 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 5 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_EXPLODE_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			npc.StatBase[ ST_EXPERIENCE ] = NextLevelNeedExp( npc );
+			break;
+		}
+		case( 7 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 5 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_EXPLODE_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			break;
+		}
+		case( 8 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 5 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_EXPLODE_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			npc.StatBase[ ST_EXPERIENCE ] = NextLevelNeedExp( npc );
+			break;
+		}
+		case( 9 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 5 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_EXPLODE_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			break;
+		}
+		case( 10 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 5 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_EXPLODE_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			npc.StatBase[ ST_EXPERIENCE ] = NextLevelNeedExp( npc );
+			npc.StatBase[ ST_BASE_CRTYPE ] = CRTYPE_DOG;
+			npc.ChangeCrType( CRTYPE_DOG );
+			ChangeCritterSpeed( npc );
+			break;
+		}
+		case( 11 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 8 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_EXPLODE_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			break;
+		}
+		case( 12 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 8 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_EXPLODE_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			npc.StatBase[ ST_EXPERIENCE ] = NextLevelNeedExp( npc );
+			break;
+		}
+		case( 13 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 8 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_EXPLODE_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			break;
+		}
+		case( 14 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 8 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_EXPLODE_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			npc.StatBase[ ST_EXPERIENCE ] = NextLevelNeedExp( npc );
+			break;
+		}
+		case( 15 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 8 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_EXPLODE_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			break;
+		}
+		case( 16 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 10 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_PLASMA_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			break;
+		}
+		case( 17 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 10 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_PLASMA_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			npc.StatBase[ ST_EXPERIENCE ] = NextLevelNeedExp( npc );
+			break;
+		}
+		case( 18 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 15 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_PLASMA_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			break;
+		}
+		case( 19 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 17 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_PLASMA_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			break;
+		}
+		case( 20 ):
+		{
+			ChangeStat( npc, ST_MAX_LIFE, 19 );
+			ChangeStat( npc, ST_MELEE_DAMAGE, 1 );
+			for( uint i = ST_NORMAL_RESIST; i < ST_PLASMA_RESIST; i++ )
+			{
+				ChangeStat( npc, i, 1 );
+			}
+			
+			ChangeStat( npc );
+			npc.StatBase[ ST_EXPERIENCE ] = NextLevelNeedExp( npc );
+			break;
+		}
+		default:
+			break;
+	}
+	
+	uint[] values = { npc.Id, SK_UNARMED };
+	CreateTimeEvent( AFTER( REAL_SECOND( 10 ) ), "e_DistributeSkllPoints", values, true );
+}
+
+uint e_DistributeSkllPoints( uint[]@ values )
+{
+	Critter@ npc = GetCritter( values[0] );
+	uint skillIndex = values[1];
+	
+	if( !valid( npc ) )
+	{
+		return 0;
+	}
+	
+	DistributeSkllPoints( npc, skillIndex );
+	
+	return 0;
+}
+
+#endif //AI_PET_DOG

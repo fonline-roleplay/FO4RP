@@ -8,8 +8,113 @@
 #include "critter_skills_h.fos"
 #include "handcuffs_h.fos"
 #include "explode_h.fos"
+#include "craft_recipes.fosh"
+#include "decraft.fosh"
 
-dictionary decraftItems; //Global variable for decraft ingredients
+dictionary RepairHardList;
+
+void InitRepairList()
+{
+	ItemPartArray@ Repair;
+
+	@Repair = ItemPartArray();	
+	Repair.Add( PID_FLINT, 1 );
+	RepairHardList.set( "" + PID_KNIFE, Repair );
+
+	@Repair = ItemPartArray();
+	Repair.Add( PID_JUNK, 1 );
+	RepairHardList.set( "" + PID_BRASS_KNUCKLES, Repair );
+}
+
+ItemPartArray@ GetRepairParts(uint16 pid)
+{
+	ItemPartArray@ Repair;
+	if( RepairHardList.get(""+pid, @Repair) )
+	{
+		return Repair;
+	}
+
+	ProtoItem@ ItemProto = GetProtoItem(pid);
+
+	if(valid(ItemProto) && ( ItemProto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_KNIFE || 
+							ItemProto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_LONG_KNIFE ||
+							ItemProto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_SPEAR ||
+							ItemProto.Item_Subtype == ITEM_SUBTYPE_WEAPON_GRENADE_KIFE ) )
+	{
+		if( RepairHardList.get(""+PID_KNIFE, @Repair) )
+		{
+			return Repair;
+		}
+	}
+	
+	if(valid(ItemProto) && ( ItemProto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_HAMMER || 
+							ItemProto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_GLOVE ||
+							ItemProto.Item_Subtype == ITEM_SUBTYPE_WEAPON_MELEE_CLUB ) )
+	{
+		if( RepairHardList.get(""+PID_BRASS_KNUCKLES, @Repair) )
+		{
+			return Repair;
+		}
+	}
+	
+	
+	return GetItemParts(pid);
+}
+
+void ShowRepairInfo( Critter& cr, Item& item )
+{
+	if( !valid( item ) || !valid (cr ) )
+	{
+		return;
+	}
+
+	ItemPartArray@ Repair = GetRepairParts( item.GetProtoId() );
+	if( !valid( Repair ) )
+	{
+		return;
+	}
+
+	ShowRepairInfo( cr, Repair, item );
+}
+
+void ShowRepairInfo( Critter& cr, ItemPartArray@ Repair, Item& item )
+{
+	if(!valid(cr) || !valid(Repair)) return;
+
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, ( FLAG(Repair.Tools, TOOL_MULTITOOL) ? STR_REPAIR_NEED_TOOLS_AND_MULTITOOL : STR_REPAIR_NEED_TOOLS ) );
+	for( int i = 0; i < 32; i ++ )
+	{
+		if( i == 2 ) // TOOL_MULTITOOL
+		{
+			continue;
+		}
+		if( ISBIT( Repair.Tools, i ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_HOLD_TOOL_PID, "$proto@msg item " + ( ProtoToolPids[i] * 100 ) + "@" );
+		}
+	}
+
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_PARTS );
+
+	uint resCount = 0;
+	for( uint i = 0, len = Repair.length(); i < len; i++ )
+	{
+		resCount += Repair[i].Count;
+	}
+
+	if( !FLAG( item.BrokenFlags, BI_BROKEN ) )
+		resCount = uint(resCount / 100.0f * GetDeteriorationProcent( item ));
+	resCount = MAX(resCount, 1);
+
+	for( uint i = 0, len = Repair.length(); i < len; i++ )
+	{
+		if(resCount <= 0) break;
+		uint currCount = resCount > Repair[i].Count ? Repair[i].Count : resCount;
+		
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_PARTS_PID, "$proto@msg item " + ( Repair[i].Pid * 100 ) + "@$amount" + currCount );
+		resCount -= currCount;
+	}
+}
 
 bool TryRepairItem( Critter& cr, Item& item )
 {
@@ -25,7 +130,7 @@ bool TryRepairItem( Critter& cr, Item& item )
         return true;
     }
 
-    if( FLAG( item.BrokenFlags, BI_ETERNAL ) || FLAG( item.BrokenFlags, BI_NOTRESC ) )
+    if( FLAG( item.BrokenFlags, BI_ETERNAL ) || FLAG( item.BrokenFlags, BI_NOTRESC ) || GetDeteriorationProcent( item ) >= 100 )
     {
         cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_NO_RESC );
         return true;
@@ -55,946 +160,63 @@ bool TryRepairItem( Critter& cr, Item& item )
     uint16 Pid = item.GetProtoId();
 	int type = item.GetType();
 	uint8 Item_Subtype = item.Proto.Item_Subtype;
-	bool isNonReparable = ( Pid == PID_SOLAR_SCORCHER ) || ( Pid == PID_SUN ) || ( Pid == PID_SUN2 ) || ( Pid == PID_SUN3 );
+	bool isNonReparable = item.BrokenCount > MAX_BROKENS;
 	bool hasAmmo = ( item.Proto.Weapon_MaxAmmoCount != 0 );
-	
-	if( isNonReparable )
+	ItemPartArray@ RepairParts = GetRepairParts(Pid);
+
+	if( !valid(RepairParts) || isNonReparable )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ITEM_CANT_FIX );
 		return true;
 	}
-	
-	uint16[] tools;
-	uint16[] parts;
-	//BY PID
-    switch( Pid )
-    {
-		case( PID_TECH_ARMOR ):
-			repair -=10;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 4 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 2 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );
-			parts.insertLast( PID_ARMOR_PLATE ); parts.insertLast( 1 );
-			parts.insertLast( PID_RUST_METAL_SHEET ); parts.insertLast( 1 );
-			break;
-		case( PID_arlthr1 ):
-		case( PID_arlthr2 ):
-			repair -= 20;
-			tools.insertLast( PID_MULTI_TOOL );
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_ARMOR_PLATE ); parts.insertLast( 1 );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 2 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );
-			break;
-		case( PID_VEST_MK1 ):
-		case( PID_VEST_MK2 ):
-		case( PID_militia_armor_MK2 ):
-			repair -= 20;
-			tools.insertLast( PID_MULTI_TOOL );
-			tools.insertLast( PID_WELDING );
-			parts.insertLast( PID_ARMOR_PLATE ); parts.insertLast( 2 );
-			parts.insertLast( PID_RUST_METAL_SHEET ); parts.insertLast( 1 );
-			break;
-		case( PID_PERSONAL_JACKET ):
-			repair -= 20;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 3 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );
-			break;
-		case( PID_ArmorGaz ):
-			repair -= 20;
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			tools.insertLast( PID_SHIV );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 2 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 2 );
-			break;
-		case( PID_armetal ):
-		case( PID_general ):
-			repair -= 40;
-			tools.insertLast( PID_SUPER_TOOL_KIT );
-			tools.insertLast( PID_WELDING );		
-			parts.insertLast( PID_CHEMICALS ); parts.insertLast( 3 );
-			parts.insertLast( PID_METAL_SHEET ); parts.insertLast( 3 );
-			parts.insertLast( PID_ARMOR_PLATE ); parts.insertLast( 3 );
-			break;
-		case( PID_TRIBE_ARMOR2 ):
-			repair -= 5;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_PELT3 ); parts.insertLast( 2);
-			parts.insertLast( PID_KLK ); parts.insertLast( 6);
-			parts.insertLast( PID_MANTIS_SHELL ); parts.insertLast( 3 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );
-			parts.insertLast( PID_DEATHCLAW_HIDE ); parts.insertLast( 1 );
-			break;  
-		case( PID_TRIBE_ARMOR3 ):
-			repair -= 5;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_MANTIS_SHELL ); parts.insertLast( 6);
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 3 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 6 );
-			break;  
-		case( PID_LEATHER_COAT ):
-			repair -= 5;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 5 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 6 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 4 );
-			break;
-		case( PID_FIRE_ARMOR ):
-			repair -= 25;
-			parts.insertLast( PID_FIRE_GECKO_PELT ); parts.insertLast( 1 );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 4 );
-			parts.insertLast( PID_MEDNEEDLE ); parts.insertLast( 2 );
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			break;
-		case( PID_MUTARMOR_METAL ):	
-		case( PID_MUTARMOR_METAL_MK2 ):
-			repair -= 35;
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			tools.insertLast( PID_WELDING );
-			tools.insertLast( PID_SUPER_TOOL_KIT );
-			parts.insertLast( PID_METAL_SHEET ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 4 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-			break;
-		case( PID_PURPLE_ROBE ):
-		case( PID_BLACK_ROBE ):
-		case( PID_BROWN_ROBE ):
-		case( PID_DARK_GREEN_ROBE ):
-		case( PID_RED_RITUAL_ROBE ):
-		case( PID_BLACK_RITUAL_ROBE ):
-		case( PID_DARK_BLACK_ROBE ):
-		case( PID_DARK_RED_ROBE ):
-		case( PID_RED_ROBE ):
-		case( PID_DARK_BROWN_ROBE ):
-		case( PID_DARK_BLUE_ROBE ):
-		case( PID_ATOM_CHILD_ROBE ):
-		case( PID_PARADE_UNIFORM ):
-		case( PID_LAB_COAT ):
-			repair -= 5;
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 2 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 2 );
-			break;
-		case( PID_MUTARMOR_LEATHER ):
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 4 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 2 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );
-			break;
-		case( PID_SANDROBE ):
-		case( PID_JUMPSUIT ):
-		case( PID_FAKE_JUMPSUIT ):
-			repair -= 10;
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 2 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );
-			break;
-		case( PID_LEATHER_JACKET ):
-		case( PID_BIKER_JACKET ):
-		case( PID_POLICE_JACKET ):
-		case( PID_TRIBE_ARMOR1 ):
-		case( PID_GEKKO_ARMOR ):
-		case( PID_LEATHER_SHIRT ):
-			repair -= 5;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 1 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 2 );
-			break;
-		case( PID_LEATHER_ARMOR ):
-		case( PID_CURED_LEATHER_ARMOR ):
-		case( PID_IMPROVED_JACKET ):
-		case( PID_CARAVAN_MASTER_JACKET ):
-			repair -= 5;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 3 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );
-			break;
-		case( PID_LEATHER_ARMOR_MK_II ):
-		case( PID_militia_armor_MK1 ):
-		case( PID_SAVAGE_LEATHER ):
-			repair -= 5;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 3 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 4 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 3 );
-			break;
-		case( PID_LEATHER_ARMOR_MK_III ):
-		case( PID_LEATHER_ARMOR_GREY ):
-		case( PID_LEATHER_ARMOR_DARK ):
-		case( PID_LEATHER_ARMOR_SWAMP ):
-		case( ITEM_TREASURE_HOLE ):
-		case( PID_arbsbl1 ):
-		case( PID_FZZZ1 ):
-		case( PID_FZZZ2 ):
-			repair -=5;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 4 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 4);
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 3 );
-			parts.insertLast( PID_ARMOR_PLATE ); parts.insertLast( 1 );
-			break;
-		case( PID_CURED_LEATHER_ARMOR_MK_II ):
-			repair -=5;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 3 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 2);
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );		
-			parts.insertLast( PID_ARMOR_PLATE ); parts.insertLast( 1 );
-			break;
-		case( PID_LEATHER_ARMOR_CAMMO ):
-		case( PID_LEATHER_ARMOR_RED ):
-			repair -= 5;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 3 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 4 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 3 );
-			break;
-		case( PID_LEATHER_ARMOR_BLACK ):
-		case( PID_ROAD_ARMOR ):
-			repair -=10;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 4 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 4);
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 3 );
-			parts.insertLast( PID_ARMOR_PLATE ); parts.insertLast( 1 );
-			break;	
-		case( PID_RIOT_ARMOR ):
-		case( PID_armltfuk ):
-		case( PID_CARED ):
-		case( PID_tesla21 ):
-			repair -=30;
-			tools.insertLast( PID_WELDING );
-			tools.insertLast( PID_SUPER_TOOL_KIT );
-			tools.insertLast( PID_SLEDGEHAMMER );
-			parts.insertLast( PID_ARMOR_PLATE ); parts.insertLast( 3 );
-			parts.insertLast( PID_METAL_SHEET ); parts.insertLast( 2 );
-			break;
-		case( PID_METAL_ARMOR ):
-		case( PID_arbsbl2 ):
-		case( PID_LEGION_ARMOR ):
-			repair -=5;
-			tools.insertLast( PID_SLEDGEHAMMER );
-			tools.insertLast( PID_WELDING );
-			parts.insertLast( PID_RUST_METAL_SHEET ); parts.insertLast( 1 );
-			parts.insertLast( PID_SPIKE_MEH ); parts.insertLast( 2 );
-			break;
-		case( PID_METAL_ARMOR_MK_II ):
-		case( PID_ZERKALO_METAL_ARMOR_MK_II ):
-			repair -= 10;
-			tools.insertLast( PID_SUPER_TOOL_KIT );
-			tools.insertLast( PID_WELDING );
-			tools.insertLast( PID_SLEDGEHAMMER );
-			parts.insertLast( PID_METAL_SHEET ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 3 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 4 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 4 );
-			break;
-		case( PID_METAL_ARMOR_MK_III ):
-			repair -= 50;
-			tools.insertLast( PID_SUPER_TOOL_KIT );
-			tools.insertLast( PID_WELDING );
-			parts.insertLast( PID_COPPER_LEAF) ; parts.insertLast( 1 );
-			parts.insertLast( PID_METAL_SHEET ); parts.insertLast( 2 );
-			parts.insertLast( PID_ARMOR_PLATE ); parts.insertLast( 2 );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 4 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 4 );
-			break;
-		case( PID_MANTIS_ARMOR ):
-			repair -= 5;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_MEDNEEDLE );
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_MANTIS_SHELL ); parts.insertLast( 3 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 4 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 2 );
-			break;
-		case( PID_MIRELURK_ARMOR ):
-			repair -=30;
-			tools.insertLast( PID_MULTI_TOOL );
-			tools.insertLast( PID_SLEDGEHAMMER );
-			tools.insertLast( PID_SHIV );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 4 );
-			parts.insertLast( PID_MANTIS_SHELL ); parts.insertLast( 4 );
-			parts.insertLast( PID_ROPE ); parts.insertLast( 1 );
-			break;
-		case( PID_HOUND_ARMOR ):
-		case( PID_POLICE_ARMOR ):
-			repair -= 40;
-			tools.insertLast( PID_SUPER_TOOL_KIT );
-			tools.insertLast( PID_WELDING );
-			parts.insertLast( PID_METAL_SHEET ); parts.insertLast( 3 );
-			parts.insertLast( PID_ARMOR_PLATE ); parts.insertLast( 3 );
-			parts.insertLast( PID_CHEMICALS ); parts.insertLast( 2 );
-			break;
-		case( PID_CASER ):
-		case( PID_CADES ):
-		case( PID_COMBAT_ARMOR ):
-		case( PID_COMBAT_ARMOR_RNEGATE_MK1 ):
-		case( PID_COMBAT_ARMOR_DESERT_MK1 ):
-		case( PID_CMBT_DESERT ):
-		case( PID_CA_BASALT ):
-		case( PID_militia_armor_MK3 ):
-		case( PID_CHEM_ARMOR ):
-		case( PID_CHEM_ARMOR_MK2 ):
-			repair -= 80;
-			tools.insertLast( PID_WELDING );
-			tools.insertLast( PID_SUPER_TOOL_KIT );
-			parts.insertLast( PID_CHEMICALS ); parts.insertLast( 4 );
-			parts.insertLast( PID_METAL_SHEET ); parts.insertLast( 2 );
-			parts.insertLast( PID_ARMOR_PLATE ); parts.insertLast( 2 );
-			break;
-		case( PID_OLD_JACKET ):
-			repair -= 10;
-			tools.insertLast( PID_SHIV );
-			tools.insertLast( PID_SCISSORS );
-			tools.insertLast( PID_MEDNEEDLE );		
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 1 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 1 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 1 );
-			break;
 
-	// Lowtech junk
-		case PID_SPRINGER_RIFLE:
-		case PID_REVOLVER_LOW:
-		case PID_PISTOL_LOW:
-		case PID_BIGGUN_LOW:
-		case PID_SMOKE_GUN_LOW:
-		case PID_SHOTPISTOL_LOW:
-		case PID_QUADRO_SHOTGUN:
-		case PID_LOW_SNIPER2:
-		case PID_SAVAGE:
-		case PID_IMPROVED_SAVAGE:
-		case PID_REV_RIFLE_LOW:
-		case PID_ONEHAND_ROCKET_LAUNCHER:
-		case PID_14mm_BIGGUN2_LOW:
-		case PID_RAIDER_CANNON:
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 2 );		
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );
-			parts.insertLast( PID_DETAL_MEH ); parts.insertLast( 1 );
-			break;
-		case( PID_HANDCUFFS ):
-		case( PID_SHACKLES ):
-			tools.insertLast( PID_WELDING );
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );
-			parts.insertLast( PID_CHAIN ); parts.insertLast( 1 );
-			break;
-	}
-	//BY_ITEM_SUBTYPE
-	if ( tools.length() == 0 && parts.length() == 0 )
+	uint firstTool = FindFirstTool(RepairParts.Tools);
+	bool isMultitool = FLAG(RepairParts.Tools, TOOL_MULTITOOL) ? HasTool(cr, 2) : true;
+	bool isNeedRepair = GetDeteriorationProcent( item ) > 0;
+
+	if ( !HasTool(cr, firstTool) || !isMultitool || !isNeedRepair )
 	{
-		switch( Item_Subtype )
-		{
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_PISTOL ):
-				repair -= 5;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_PISTOL_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_PISTOL_REVOLVER ):
-				repair -= 15;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_REVOLVER_PART ); parts.insertLast( 1 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_REVOLVER_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_SMG ):
-				repair -= 25;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 2 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 2 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 1 );
-				parts.insertLast( PID_SG_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_RIFLE ):
-				repair -= 35;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 1 );
-				parts.insertLast( PID_MUSKET_BARREL ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_ASSAULT_RIFLE ):
-				repair -= 40;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 1 );
-				parts.insertLast( PID_AUTOMAT_PARTS ); parts.insertLast( 1 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_SNIPER_RIFLE ):
-				repair -= 35;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 1 );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 2 );
-				parts.insertLast( PID_MUSKET_BARREL ); parts.insertLast( 1 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_SHOTGUN ):
-				repair -= 25;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_SHOTGUN_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_AUTOSHOTGUN ):
-				repair -= 30;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_SHOTGUN_PARTS2 ); parts.insertLast( 1 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_LMG ):
-				repair -= 35;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 3 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 4 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_MACHINEGUN ):
-				repair -= 45;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 3 );
-				parts.insertLast( PID_DVIGAT_MEH ); parts.insertLast( 2 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 4 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_NADELAUNCHER ):
-				repair -= 45;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 2 );
-				parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER ):
-				repair -= 55;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 1 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 2 );
-				parts.insertLast( PID_TUBE ); parts.insertLast( 3 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_MINIGUN ):
-				repair -= 55;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 3 );
-				parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 4 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_HEAVY_RIFLE ):
-				repair -= 65;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 2 );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 1 );
-				parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_PISTOL ):
-				repair -= 10;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 2 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_RIFLE ):
-				repair -= 15;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 2 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 1 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_SMG ):
-				repair -= 20;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 1 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_SNIPER_RIFLE ):
-				repair -= 30;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 2 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 1 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_HEAVY_RIFLE ):
-				repair -= 45;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 2 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 2 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_MINIGUN ):
-				repair -= 65;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 1 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 6 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 4 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_MACHINEGUN ):
-				repair -= 55;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 2 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 2 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_PISTOL ):
-				repair -= 15;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 1 );
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_RIFLE ):
-				repair -= 25;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 2 );
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_SMG ):
-				repair -= 35;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 2 );
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_SNIPER_RIFLE ):
-				repair -= 45;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 2 );
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_HEAVY_RIFLE ):
-				repair -= 55;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 5 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 2 );
-				parts.insertLast( PID_blstrBM ); parts.insertLast( 1 );
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_MINIGUN ):
-				repair -= 75;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 5 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 6 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 2 );
-				parts.insertLast( PID_blstrBM ); parts.insertLast( 1 );
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_PISTOL ):
-				repair -= 25;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_RIFLE ):
-				repair -= 45;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_SMG ):
-				repair -= 35;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 2 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_SNIPER_RIFLE ):
-				repair -= 45;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_SHOTGUN ):
-				repair -= 35;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 3 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_MINIGUN ):
-				repair -= 75;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 2 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 6 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 4 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_SONIC_PISTOL ):
-				repair -= 25;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_CRAFT_E_LAMP ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 3 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 3 );
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_SONIC_RIFLE ):
-				repair -= 35;
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				tools.insertLast( PID_SCREWDRIVER );
-				tools.insertLast( PID_SOLDERER );
-				parts.insertLast( PID_CRAFT_E_LAMP ); parts.insertLast( 4 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 5 );
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 3 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_GRENADE_KIFE ):
-			case( ITEM_SUBTYPE_WEAPON_MELEE_KNIFE ):
-			{
-				if( hasAmmo )
-				{
-					repair -= 20;
-					tools.insertLast( PID_MULTI_TOOL );
-					tools.insertLast( PID_SCREWDRIVER );
-					tools.insertLast( PID_SOLDERER );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 3 );
-					break;
-				}
-				else
-				{
-					tools.insertLast( PID_FLINT );
-					parts.insertLast( PID_FLINT ); parts.insertLast( 1 );
-					break;
-				}
-			}
-			case( ITEM_SUBTYPE_WEAPON_MELEE_LONG_KNIFE ):
-			{
-				if( hasAmmo )
-				{
-					repair -= 15;
-					tools.insertLast( PID_MULTI_TOOL );
-					tools.insertLast( PID_SCREWDRIVER );
-					tools.insertLast( PID_SOLDERER );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 3 );
-					break;
-				}
-				else
-				{
-					tools.insertLast( PID_FLINT );
-					parts.insertLast( PID_FLINT ); parts.insertLast( 1 );
-					break;
-				}
-			}
-			case( ITEM_SUBTYPE_WEAPON_MELEE_SHORT_SPEAR ):
-			case( ITEM_SUBTYPE_WEAPON_MELEE_SPEAR ):
-			{
-				if( hasAmmo )
-				{
-					repair -= 35;
-					tools.insertLast( PID_MULTI_TOOL );
-					tools.insertLast( PID_SCREWDRIVER );
-					tools.insertLast( PID_SOLDERER );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 1 );
-					parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 3 );
-					break;
-				}
-				else
-				{
-					tools.insertLast( PID_FLINT );
-					parts.insertLast( PID_FLINT ); parts.insertLast( 1 );
-					break;
-				}
-			}
-			case( ITEM_SUBTYPE_WEAPON_MELEE_HAMMER ):
-			{
-				if( hasAmmo )
-				{
-					repair -= 45;
-					tools.insertLast( PID_MULTI_TOOL );
-					tools.insertLast( PID_SCREWDRIVER );
-					tools.insertLast( PID_SOLDERER );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 3 );
-					break;
-				}
-				else
-				{
-					tools.insertLast( PID_MULTI_TOOL );
-					parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-					break;
-				}
-			}
-			case( ITEM_SUBTYPE_WEAPON_MELEE_GLOVE ):
-			{		
-				if( hasAmmo )
-				{
-					repair -= 25;
-					tools.insertLast( PID_MULTI_TOOL );
-					tools.insertLast( PID_SCREWDRIVER );
-					tools.insertLast( PID_SOLDERER );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-					parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-					break;
-				}
-				else
-				{
-					tools.insertLast( PID_MULTI_TOOL );
-					parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-					break;
-				}
-			}
-			case( ITEM_SUBTYPE_WEAPON_MELEE_CLUB ):
-			{
-				if( hasAmmo )
-				{
-					repair -= 25;
-					tools.insertLast( PID_MULTI_TOOL );
-					tools.insertLast( PID_SCREWDRIVER );
-					tools.insertLast( PID_SOLDERER );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 3 );
-					break;
-				}
-				else
-				{
-					tools.insertLast( PID_MULTI_TOOL );
-					parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-					break;
-				}
-			}
-			default:
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ITEM_CANT_FIX ); 
-				return true;
-		}
-    }
-
-	if( tools.length() > 0 || parts.length() > 0 )
-	{
-		bool NoTools = false;
-		bool NoParts = false;
-
-		for( uint8 j = 0; j < tools.length(); j++ )
-		{
-			if( cr.CountItem( tools[j] ) == 0 )
-			{ 
-				NoTools = true; 
-			}
-		}
-		
-		for( uint8 jj = 0; jj < parts.length(); jj += 2 )
-		{
-			if( cr.CountItem( parts[jj] ) < parts[jj + 1] )
-			{ 
-				NoParts = true;
-			}
-		}
-		
-		if( NoTools || NoParts )
-		{
-			if( tools.length() > 0 )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_TOOL );
-				for( uint8 i = 0; i < tools.length(); i++ )
-				{
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_TOOL_PID, "$proto@msg item " + ( tools[i] * 100 ) + "@" );
-				}	
-			}
-			
-			if( parts.length() > 0 )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_PARTS );
-				for( uint8 ii = 0; ii < parts.length(); ii += 2 )
-				{
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_PARTS_PID, "$proto@msg item " + ( parts[ii] * 100 ) + "@$amount" + parts[ii+1] );
-				}	
-			}
-			return true;
-		}
-		else
-		{
-			for( uint8 iii = 0; iii < parts.length(); iii += 2 )
-			{
-				cr.DeleteItem( parts[iii], parts[iii + 1] );
-			}
-			
-			Item@ hands = cr.GetItem( 0, SLOT_HAND1 );
-			if( valid( hands ) )
-			{
-				cr.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
-			}
-			cr.MoveItem( item.Id, item.GetCount(), SLOT_HAND1 );
-
-			start_repair( cr, item, repair );
-		}
+		ShowRepairInfo(cr, RepairParts, item);
+		return true;
 	}
+
+	uint resCount = 0;
+	for( uint i = 0, len = RepairParts.length(); i < len; i++ )
+	{
+		ItemPart@ currPart = RepairParts[i];
+		if(!valid(currPart)) continue;
+		resCount += currPart.Count;
+	}
+
+	if( !FLAG( item.BrokenFlags, BI_BROKEN ) )
+		resCount = uint(resCount / 100.0f * GetDeteriorationProcent( item ));
+	resCount = MAX(resCount, 1);
+
+	for( uint i = 0, len = RepairParts.length(); i < len; i++ )
+	{
+		if(resCount <= 0) break;
+
+		ItemPart@ currPart = RepairParts[i];
+		if(!valid(currPart)) continue;
+
+		uint currCount = resCount > currPart.Count ? currPart.Count : resCount;
+
+		if( cr.CountItem( currPart.Pid ) < currCount )
+		{
+			break;
+		}
+
+		resCount -= currCount;
+	}
+
+	if(resCount > 0)
+	{
+		ShowRepairInfo(cr, RepairParts, item);
+		return true;
+	}
+
+	start_repair( cr, item );
+
     return true;
 }
 
@@ -1005,7 +227,7 @@ void ltp_repair_init()
 	ltp_repair_inited = true;
 }
 
-bool start_repair( Critter& cr, Item& item, int repair )
+bool start_repair( Critter& cr, Item& item )
 {
 	if( !ltp_repair_inited )
 	{
@@ -1013,39 +235,34 @@ bool start_repair( Critter& cr, Item& item, int repair )
 	}
 	
 	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
-	uint[] values = { cr.Id };
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	int repair_rate = ( cr.Skill[ SK_REPAIR ] ) + ( cr.Stat[ST_AGILITY] * 10 ) + ( cr.Stat[ST_INTELLECT] * 10 ) + OBJECT_DPA_BASE; 
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( ( item.Deterioration ) / ( CLAMP( repair_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
 	
+	uint[] values = { cr.Id };
 	CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
 	CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
 	
 	_CritAnimateUse( cr );
 	
-	StartProcess( cr, LTP_REPAIR, 0, repair, item.Id, action_pause );
+	StartProcess( cr, LTP_REPAIR, 0, item.Id, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 	return true;
 }
 
 uint process_repair( Critter@ cr, int& param0, int& param1, int& param2 )
 {
 	LTPROCESS( cr, param0, LTP_REPAIR )
-	
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
   	
-	int repair = param1;
-	Item@ item = GetItem( param2 );
+	Item@ item = GetItem( param1 );
 	
 	if( valid( item ) )
     {
 		param0++;
-		
-		int repair_rate = ( cr.Skill[ SK_REPAIR ] ) + ( cr.Stat[ST_AGILITY] * 10 ) + ( cr.Stat[ST_INTELLECT] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = int( ceil( float( ( item.Deterioration ) / ( CLAMP( repair_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
-		
-		if( param0 > sequence_length )
+
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
 			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_FINISH_REPAIR );
-			RepairResult( cr, item, repair );
+			RepairResult( cr, item );
 			
 			if( item.GetType() == ITEM_TYPE_WEAPON && item.Proto.Weapon_MaxAmmoCount > 0 )
 			{
@@ -1065,136 +282,271 @@ uint process_repair( Critter@ cr, int& param0, int& param1, int& param2 )
 		
 		_CritAnimateUse( cr );
 		
-		return action_pause;
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 	}
 	return 0;
 }
 
-void RepairResult( Critter& cr, Item& item, int repair )
+void HandcuffsRepairResult(Critter& cr, Item& item)
+{
+	item.BONDAGE_STATE = BONDAGE_STATE_OFF;
+	uint16 pid = item.GetProtoId();
+	switch( pid )
+	{
+		case( PID_HANDCUFFS ):
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HANDCUFFS_REPAIRED );
+			item.PicInv = GetStrHash( null );
+			break;
+		case( PID_SHACKLES ):
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SHACKLES_REPAIRED );
+			item.PicInv = GetStrHash( null );
+			break;
+		default:
+			break;
+	}
+
+	item.Update();
+}
+
+void BrokenRepairResult(Critter& cr, Item& item)
+{
+	if(!valid(cr) || !valid(item))
+		return;
+
+	uint16 Pid = item.GetProtoId();
+	ItemPartArray@ RepairParts = GetRepairParts(Pid);
+
+	if( !valid(RepairParts) )
+		return;
+
+	if( FLAG( item.BrokenFlags, BI_HIGHBROKEN ) )
+	{
+		
+	}
+	else if( FLAG( item.BrokenFlags, BI_NORMBROKEN ) )
+	{
+		
+	}
+	else if( FLAG( item.BrokenFlags, BI_LOWBROKEN ) )
+	{
+		
+	}
+	
+	int maxSkill = RepairParts.Tier * RepairParts.Tier * REPAIR_SK_MUL + REPAIR_SK_MOD;    
+	int successRoll = Random( 1, maxSkill );
+
+	if(cr.Param[SK_REPAIR] < successRoll)
+	{
+		bool IsDeletedAnything = false;
+		uint16 resPid = 0;
+		uint resCount = 0;
+		while(!IsDeletedAnything)
+		{
+			uint partIndex = Random(0, RepairParts.length());
+			ItemPart@ PartToDelete = RepairParts[partIndex];
+			if(!valid(PartToDelete) || cr.CountItem(PartToDelete.Pid) < PartToDelete.Count)
+				continue;
+
+			cr.DeleteItem(PartToDelete.Pid, PartToDelete.Count);
+			resPid = PartToDelete.Pid;
+			resCount = PartToDelete.Count;
+			IsDeletedAnything = true;
+		}
+		
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_REPAIR_FAIL );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_LOST, "$proto@msg item " + ( resPid * 100 ) + "@" + "$count" + resCount);
+	}
+	else
+	{
+		item.Deterioration = 0;
+		UNSETFLAG( item.BrokenFlags, BI_BROKEN );
+
+		item.BrokenCount++;
+		if( item.BrokenCount >= MAX_BROKENS )
+			SETFLAG( item.BrokenFlags, BI_NOTRESC );
+
+		for(uint i = 0, len = RepairParts.length(); i < len; i++)
+		{
+			ItemPart@ PartToDelete = RepairParts[i];
+			if(!valid(PartToDelete) || cr.CountItem(PartToDelete.Pid) < PartToDelete.Count)
+				continue;
+
+			cr.DeleteItem(PartToDelete.Pid, PartToDelete.Count);
+		}
+
+		cr.StatBase[ ST_EXPERIENCE ] += 40;
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_REPAIR_SUCC );
+	}
+
+	item.Update();
+}
+
+void ServiceRepairResult(Critter& cr, Item& item)
+{
+	if(!valid(cr) || !valid(item))
+		return;
+
+	uint16 Pid = item.GetProtoId();
+	ItemPartArray@ RepairParts = GetRepairParts(Pid);
+
+	if( !valid(RepairParts) )
+		return;
+
+	if( FLAG( item.BrokenFlags, BI_SERVICE ) )
+	{
+
+	}
+	
+	int maxSkill = RepairParts.Tier * RepairParts.Tier * REPAIR_SK_MUL + REPAIR_SK_MOD;    
+	int successRoll = Random( 1, maxSkill );
+
+	if(cr.Param[SK_REPAIR] < successRoll)
+	{
+		bool IsDeletedAnything = false;
+		uint16 resPid = 0;
+		uint resCount = 0;
+		while(!IsDeletedAnything)
+		{
+			uint partIndex = Random(0, RepairParts.length());
+			ItemPart@ PartToDelete = RepairParts[partIndex];
+			if(!valid(PartToDelete) || cr.CountItem(PartToDelete.Pid) < PartToDelete.Count)
+				continue;
+
+			cr.DeleteItem(PartToDelete.Pid, PartToDelete.Count);
+			resPid = PartToDelete.Pid;
+			resCount = PartToDelete.Count;
+			IsDeletedAnything = true;
+		}
+		
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_REPAIR_FAIL );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_LOST, "$proto@msg item " + ( resPid * 100 ) + "@" + "$count" + resCount);
+	}
+	else
+	{
+		SETFLAG( item.BrokenFlags, BI_SERVICE );
+		UNSETFLAG( item.BrokenFlags, BI_BROKEN );
+
+		item.BrokenCount++;
+		if( item.BrokenCount >= MAX_BROKENS )
+			SETFLAG( item.BrokenFlags, BI_NOTRESC );
+		
+		uint resCount = 0;
+		for(uint i = 0, len = RepairParts.length(); i < len; i++)
+		{
+			ItemPart@ PartToDelete = RepairParts[i];
+			if(!valid(PartToDelete))
+				continue;
+			resCount += PartToDelete.Count;
+		}
+
+		resCount = uint(resCount / 100.0f * GetDeteriorationProcent( item ));
+		resCount = MAX(resCount, 1);
+
+		for(uint i = 0, len = RepairParts.length(); i < len; i++)
+		{
+			if(resCount <= 0) break;
+			ItemPart@ PartToDelete = RepairParts[i];
+			uint currCount = resCount > PartToDelete.Count ? PartToDelete.Count : resCount;
+			if(!valid(PartToDelete) || cr.CountItem(PartToDelete.Pid) < currCount)
+				continue;
+
+			cr.DeleteItem(PartToDelete.Pid, currCount);
+
+			resCount -= currCount;
+		}
+
+		item.Deterioration = 0;
+		cr.StatBase[ ST_EXPERIENCE ] += 20;
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_REPAIR_SUCC );
+	}
+
+	item.Update();
+}
+
+void RepairResult( Critter& cr, Item& item )
 {
 	if( item.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE && item.BONDAGE_STATE == BONDAGE_STATE_BROKEN )
 	{
-		item.BONDAGE_STATE = BONDAGE_STATE_OFF;
-		uint16 pid = item.GetProtoId();
-		switch( pid )
-		{
-			case( PID_HANDCUFFS ):
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HANDCUFFS_REPAIRED );
-				item.PicInv = GetStrHash( null );
-				break;
-			case( PID_SHACKLES ):
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SHACKLES_REPAIRED );
-				item.PicInv = GetStrHash( null );
-				break;
-			default:
-				break;
-		}
+		HandcuffsRepairResult(cr, item);
+		return;
 	}
 	else if( FLAG( item.BrokenFlags, BI_BROKEN ) )
 	{
-        if( FLAG( item.BrokenFlags, BI_HIGHBROKEN ) )
-		{
-            repair -= 100;
-        }
-		else if( FLAG( item.BrokenFlags, BI_NORMBROKEN ) )
-		{
-            repair -= 75;
-		}
-		else if( FLAG( item.BrokenFlags, BI_LOWBROKEN ) )
-		{
-            repair -= 25;
-		}
-		
-        repair -= item.BrokenCount * 50 / MAX_BROKENS;
-        repair = CLAMP( repair, 5, 95 );
-
-        if( repair >= Random( 1, 100 ) )
-		{
-            item.Deterioration = 0;
-            UNSETFLAG( item.BrokenFlags, BI_BROKEN );
-            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_REPAIR_SUCC );
-            cr.StatBase[ ST_EXPERIENCE ] += 40;
-		}
-		else
-		{
-            item.BrokenCount++;
-            if( item.BrokenCount >= MAX_BROKENS )
-			{
-                SETFLAG( item.BrokenFlags, BI_NOTRESC );
-			}
-            cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_REPAIR_FAIL );
-        }
+        BrokenRepairResult(cr, item);
+		return;
     }
 	else
-	{    // Service
-		if( FLAG( item.BrokenFlags, BI_SERVICE ) )
-		{
-            repair -= 25;
-		}
-		
-		if( item.Proto.Weapon_MaxAmmoCount == 0 && ( ( item.Proto.Item_Subtype >= ITEM_SUBTYPE_WEAPON_MELEE_BEGIN && item.Proto.Item_Subtype <= ITEM_SUBTYPE_WEAPON_MELEE_END ) 
-			|| ( item.Proto.Item_Subtype >= ITEM_SUBTYPE_WEAPON_GRENADE_BEGIN && item.Proto.Item_Subtype <= ITEM_SUBTYPE_WEAPON_GRENADE_END ) ) )
-		{
-				item.BrokenCount ++;
-				item.Deterioration = 0;
-				cr.StatBase[ ST_EXPERIENCE ] += 20;
-				if( item.BrokenCount >= MAX_BROKENS )
-				{
-					SETFLAG( item.BrokenFlags, BI_NOTRESC );
-				}
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_SERVICE_SUCC );
-		}
-		else
-		{
-			repair -= item.BrokenCount * 50 / MAX_BROKENS;
-			repair = CLAMP( repair, 5, 95 );
-
-			if( repair >= Random( 1, 100 ) )
-			{
-				SETFLAG( item.BrokenFlags, BI_SERVICE );
-			   
-				int cnt = repair * MAX_DETERIORATION / 100;
-				if( cnt > int( item.Deterioration ) )
-				{
-					item.Deterioration = 0;
-				}
-				else
-				{
-					item.Deterioration -= cnt;
-				}
-				
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_SERVICE_SUCC );
-				cr.StatBase[ ST_EXPERIENCE ] += 20;
-			}
-			else
-			{
-				DeteriorateItem( cr, item, MAX_DETERIORATION / 5 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_SERVICE_FAIL );
-			}
-		}
+	{
+		ServiceRepairResult(cr, item);
+		return;
     }
-    item.Update();
+}
+
+void SetMaxDeteriorPics( Item& item )
+{
+	for( uint w = 0, wLen = picWear.length(); w < wLen; w += 2 )
+	{
+		if( "" + item.Proto.ProtoId == picWear[w] )
+		{
+			string base = picWear[ w + 1 ];
+							
+			if( base.length() > 0 )
+			{
+				item.PicMap = GetStrHash( "art\\items\\broken_armor\\ground_"+base+"_broken.png" );
+				item.PicInv = GetStrHash( "art\\inven\\broken_armor\\"+base+"_broken.png" );
+			}
+
+			break;
+		}
+	}
 }
 
 void DeteriorateItem( Critter& cr, Item& item, int deteriorationCount )
 {
-    if( deteriorationCount <= 0 || not item.IsDeteriorable() || FLAG( item.BrokenFlags, BI_ETERNAL ) || FLAG( item.BrokenFlags, BI_BROKEN ) )
+    if( deteriorationCount <= 0 || !item.IsDeteriorable() || FLAG( item.BrokenFlags, BI_ETERNAL ) || FLAG( item.BrokenFlags, BI_BROKEN ) )
 	{
 		return;
 	}
+	
+	if( item.GetType() == ITEM_TYPE_ARMOR )
+	{
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_FRAGILE ) )
+		{
+			deteriorationCount = int ( deteriorationCount * ARMOR_PERK_FRAGILE_MALUS / 100 );
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_DURABLE ) )
+		{
+			if( deteriorationCount <= ARMOR_PERK_DURABLE_TRESHOLD )
+			{
+				deteriorationCount = 0;
+			}
+		}
+	}
 
     item.Deterioration += deteriorationCount;
+
     if( item.Deterioration >= MAX_DETERIORATION )
 	{
         item.Deterioration = MAX_DETERIORATION;
-        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_WEAPON_BROKEN );
-    }
+		SetMaxDeteriorPics( item );
+		
+		if( item.Proto.Type == ITEM_TYPE_WEAPON )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DETERIORATION_WEAPON_BROKEN );
+		}
+		else if( item.Proto.Type == ITEM_TYPE_ARMOR )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_ARMOR_IS_BROKEN );
+		}
+	}
+	
 	item.Update();
 }
 
 void SetDeterioration( Item& item, int deteriorationProcent )
 {
-    if( not item.IsDeteriorable() ) 
+    if( !item.IsDeteriorable() ) 
 	{
 		return;
 	}
@@ -1202,10 +554,10 @@ void SetDeterioration( Item& item, int deteriorationProcent )
     UNSETFLAG( item.BrokenFlags, BI_BROKEN );
     deteriorationProcent = CLAMP( deteriorationProcent, 0, 100 );
     item.Deterioration = MAX_DETERIORATION * deteriorationProcent / 100;
-    item.BrokenCount = MAX_BROKENS * deteriorationProcent / 100;
     
 	if( deteriorationProcent == 100 )
 	{
+		SetMaxDeteriorPics( item );
         SETFLAG( item.BrokenFlags, BI_BROKEN );
 	}
 	
@@ -1214,7 +566,7 @@ void SetDeterioration( Item& item, int deteriorationProcent )
 
 int GetDeteriorationProcent( Item& item )
 {
-    if( not item.IsDeteriorable() )
+    if( !item.IsDeteriorable() )
 	{
 		return 0;
 	}
@@ -1246,32 +598,40 @@ class MenuAskAction: CenteredMenuHandler
         Item@ item = GetItem( item_id );
 		int type = item.GetType();
 		uint8 subtype = item.Proto.Item_Subtype;
+		uint16 pid = item.GetProtoId();
 		
         if( !valid( map ) || !valid( item ) )
 		{
             return false;
         }
 		
-		if( subtype == ITEM_SUBTYPE_BONDAGE && item.BONDAGE_STATE == BONDAGE_STATE_BROKEN && menu.Button( "Repair" ) )
+		if( subtype == ITEM_SUBTYPE_BONDAGE && item.BONDAGE_STATE == BONDAGE_STATE_BROKEN && menu.ButtonMsg( STR_REPAIR_MENU_REPAIR ) )
 		{
 			TryRepairItem( cr, item );
 			return false;
 		}
-		else if( item.IsDeteriorable() && menu.Button( "Repair" ) )
+		else if( item.IsDeteriorable() && menu.ButtonMsg( STR_REPAIR_MENU_REPAIR ) )
 		{
 			TryRepairItem( cr, item );
 			return false;
 		}
-		
-		if( ( item.GetProtoId() == PID_REMOTE_DETONATOR || item.GetProtoId() == PID_TNT_PACK_ACTIVE ) && menu.Button( "Set frequency" ) )
+
+		if( item.IsDeteriorable() && menu.ButtonMsg( STR_REPAIR_MENU_REPAIR_INFO ) )
 		{
-			cr.RunClientScript( "client_screen_numberpad@ShowScreen", item.Id, 0, 0, "Input radio frequency", null );
+			ShowRepairInfo( cr, item );
 			return false;
 		}
 		
-		if( menu.Button( "Dismantle" ) )
+		if( ( pid == PID_REMOTE_DETONATOR || pid == PID_GM_REMOTE_DETONATOR || pid == PID_TNT_PACK_ACTIVE || pid == PID_SLAVE_COLLAR_SWITCH || ( pid == PID_SLAVE_COLLAR && item.BONDAGE_STATE == BONDAGE_STATE_OFF ) ) && menu.ButtonMsg( STR_REPAIR_MENU_SET_FREQUENCY ) )
 		{
-			if( item.GetProtoId() == PID_ACTIVE_DYNAMITE || item.GetProtoId() == PID_TNT_PACK_ACTIVE )
+			int[] data = {0};
+			cr.RunClientScript( "client_screen_numberpad@ShowScreen", item.Id, 0, 0, "Input radio frequency", data );
+			return false;
+		}
+		
+		if( menu.ButtonMsg( STR_REPAIR_MENU_DISMANTLE ) )
+		{
+			if( pid == PID_ACTIVE_DYNAMITE || pid == PID_TNT_PACK_ACTIVE )
 			{
 				Explode( item );
 				return false;
@@ -1279,10 +639,16 @@ class MenuAskAction: CenteredMenuHandler
 			TryDisassembleItem( cr, item );
 			return false;
 		}
+
+		if( menu.ButtonMsg( STR_REPAIR_MENU_DISMANTLE_INFO ) )
+		{
+			ShowDecraftInfo( cr, item );
+			return false;
+		}
 			
 		if(	type == ITEM_TYPE_ARMOR )
 		{
-			if( ( subtype >= ITEM_SUBTYPE_ARMOR_AC20 && subtype <= ITEM_SUBTYPE_ARMOR_AC50 ) && menu.Button( "Install Radio" ) )
+			if( ( subtype >= ITEM_SUBTYPE_ARMOR_AC20 && subtype <= ITEM_SUBTYPE_ARMOR_AC50 ) && menu.ButtonMsg( STR_REPAIR_MENU_INSTALL_RADIO ) )
 			{
 				InstallRadio( cr, item );
 				return false;
@@ -1290,7 +656,7 @@ class MenuAskAction: CenteredMenuHandler
 			
 			if( hasItem( cr, PID_COLORS ) )
 			{
-				if( menu.Button( "Paint Armour" ) )
+				if( menu.ButtonMsg( STR_REPAIR_MENU_PAINT_ARMOUR ) )
 				{
 					Item@ paint = getItem( cr, PID_COLORS );
 					TryPaintArmor( cr, paint, item );
@@ -1302,7 +668,10 @@ class MenuAskAction: CenteredMenuHandler
 		Item@ belt = _CritGetItemMisc( cr );
 		if( valid( belt ) && belt.GetProtoId() == PID_AMMO_BELT )
 		{	
-			if( type == ITEM_TYPE_WEAPON && !item.IsStackable() && menu.Button( "Stow Weapons" ) )
+			if( type == ITEM_TYPE_WEAPON
+			  && ( subtype == ITEM_SUBTYPE_WEAPON_MELEE_SPEAR )
+			  || ( subtype >= ITEM_SUBTYPE_WEAPON_GRENADE_BEGIN && subtype <= ITEM_SUBTYPE_WEAPON_GRENADE_END )
+			  && !item.IsStackable() && menu.ButtonMsg( STR_REPAIR_MENU_STOW_WEAPONS ) )
 			{
 				uint itemsVolume = 0;
 				Item@[] stuff;
@@ -1314,7 +683,6 @@ class MenuAskAction: CenteredMenuHandler
 				
 				uint freeVolume = belt.Proto.Container_Volume - itemsVolume;
 				float count = freeVolume / item.Proto.Volume;
-				uint16 pid = item.GetProtoId();
 				
 				Item@[] inventoryItms;
 				cr.GetItems( SLOT_INV, inventoryItms );
@@ -1333,7 +701,7 @@ class MenuAskAction: CenteredMenuHandler
 				
 				if( count <= 0 )
 				{
-					cr.Say( SAY_NETMSG, "|0xFFFF00 There is not enough space in the ammo belt to store any weapons" );
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_BELT_NOT_ENOUGH_SPACE );
 				}
 				else if( uint( count ) >= itemCount )
 				{
@@ -1345,7 +713,7 @@ class MenuAskAction: CenteredMenuHandler
 							MoveItem( moved, 1, belt, 0 );
 						}
 					}
-					cr.Say( SAY_NETMSG, "You have stowed |0xFFFF00 " + itemCount + " |0x3CF800 thrown weapons in your ammo belt" );
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_BELT_STOWED_WEAPONS, "$count" + itemCount );
 				}
 				else
 				{
@@ -1357,1154 +725,102 @@ class MenuAskAction: CenteredMenuHandler
 							MoveItem( moved, 1, belt, 0 );
 						}
 					}
-					cr.Say( SAY_NETMSG, "You have stowed |0xFFFF00 " + count + " |0x3CF800 thrown weapons in your ammo belt" );
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_BELT_STOWED_WEAPONS, "$count" + count );
 				}
 				return false;
 			}
 		}
 		return true;
     }
+		
+	int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_REPAIR_MENU_MAIN;
+	}
 	
-    string@ Description( Critter& cr )
+	string@ Description( Critter& cr )
 	{
 		Item@ item = GetItem( item_id );
-		string info = "Item Action Menu";
-		info += "\nItem: |0xFFFF00 " + GetMsgStr( 1, TEXTMSG_ITEM, item.GetProtoId() * 100 );
+		
+		uint broken = 0;
+		uint deterioration = 0;
+		uint serviceRepair = 0;
+		uint serviceExtRepair = 0;
+		string deteriorationRepair = "";
 		if( item.IsDeteriorable() )
 		{
-			info += "\n|0x3CF800 ";
 			if( FLAG( item.BrokenFlags, BI_NOTRESC ) )
 			{
-				info += GetMsgStr( 1, TEXTMSG_GAME, STR_DETERIORATION_NO_RESC );
+				deterioration = STR_DETERIORATION_NO_RESC;				
 			}
 			else if( FLAG( item.BrokenFlags, BI_LOWBROKEN ) )
 			{
-				info += GetMsgStr( 1, TEXTMSG_GAME, STR_DETERIORATION_BROKEN_LOW );
+				deterioration = STR_DETERIORATION_BROKEN_LOW ;				
 			}
 			else if( FLAG( item.BrokenFlags, BI_NORMBROKEN ) )
 			{
-				info += GetMsgStr( 1, TEXTMSG_GAME, STR_DETERIORATION_BROKEN_NORM );
+				deterioration = STR_DETERIORATION_BROKEN_NORM;				
 			}
 			else if( FLAG( item.BrokenFlags, BI_HIGHBROKEN ) )
 			{
-				info += GetMsgStr( 1, TEXTMSG_GAME, STR_DETERIORATION_BROKEN_HIGH );
+				deterioration = STR_DETERIORATION_BROKEN_HIGH;			
 			}
 			else
 			{
-				info += "Deterioration: |0xFFFF00 " + item.Deterioration * 100 / MAX_DETERIORATION + "|0x3CF800  %";
+				deteriorationRepair = STR_INSERT_TEXT_LINE( STR_REPAIR_MENU_COMMON_DET ) 
+									+ "$commonDeterioration" + (item.Deterioration * 100 / MAX_DETERIORATION) ;
 			}
 			
 			if( FLAG( item.BrokenFlags, BI_SERVICE ) )
 			{
-				info += "\n" + GetMsgStr( 1, TEXTMSG_GAME, STR_DETERIORATION_SERVICE );
+				serviceRepair = STR_DETERIORATION_SERVICE;
 			}
 
 			if( FLAG( item.BrokenFlags, BI_SERVICE_EXT ) )
 			{
-				info += "\n" + GetMsgStr( 1, TEXTMSG_GAME, STR_DETERIORATION_SERVICE_EXT );
+				serviceExtRepair = STR_DETERIORATION_SERVICE_EXT;
 			}
-			
-			info += "\nBroken: |0xFFFF00 " + item.BrokenCount + "|0x3CF800  times.";
+
+			broken = item.BrokenCount;
 		}
-		return info;
-    }
-	
-    string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Hide menu", null );
+		
+		if( deterioration != 0 ) deteriorationRepair = STR_INSERT_GAME_LINE( deterioration );
+
+		string service = "$service";
+		if( serviceRepair != 0 )
+			service += STR_INSERT_TEXT_LINE( STR_REPAIR_MENU_SERVICE_STATE )
+					+  "$serviceState" + STR_INSERT_GAME_LINE( serviceRepair );
+					
+		string serviceExt = "$serviceExt";
+		if( serviceRepair != 0 )
+			serviceExt += STR_INSERT_TEXT_LINE( STR_REPAIR_MENU_SERVICE_STATE_EXT )
+					   +  "$serviceExtState" + STR_INSERT_GAME_LINE( serviceExtRepair );
+
+		string result = "$itemRepair" + STR_INSERT_ITEM_LINE( item.GetProtoId() * 100 )
+		 	   + "$deteriorationRepair" + deteriorationRepair
+			   + service
+			   + serviceExt
+			   + "$brokenRepair" + broken;
+
+		return result;
     }
 }
 
 void StartMenuAskAction( Critter& cr, Item& item )
 {
     Map@ map = cr.GetMap();
-    if( map is null )
+    if( !valid(map) )
 	{
         return;
     }
 
     iMenuHandler@ handler = MenuAskAction( item, map );
     iDialogBox@ menu = OpenMenu( cr, "Action menu", handler );
-}
-
-//DECRAFT//
-bool TryDisassembleItem( Critter& cr, Item& item )
-{
-	if( !valid( item ) )
-	{
-		return false;
-	}
-	
-	if( IsTired( cr ) )
-	{
-		return false;
-	}
-	
-	if( HandsTied( cr ) )
-	{
-		return false;
-	}
-	
-	if( cr.IsInjured() )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_TO_DECRAFT );
-		return false;
-	}
-	
-	bool isItemPartable = true;
-	uint16 Pid = item.GetProtoId();
-	uint8 Item_Subtype = item.Proto.Item_Subtype;
-	bool hasAmmo = ( item.Proto.Weapon_MaxAmmoCount != 0 );
-	
-	int repair = 0;
-	int science = 0;
-
-	uint16[] tools;
-	uint16[] parts;
-	
-    switch( Pid )
-    {
-		case( PID_REMOTE_DETONATOR ):
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_CRAFT_E_LAMP ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );  
-			break;
-		case( PID_SINGLE_SANDBAG ):
-			parts.insertLast( PID_SANDBAG_EMPTY ); parts.insertLast( 1 ); 
-			break;
-		case PID_OLD_JACKET:
-			tools.insertLast( PID_KNIFE );
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 2 );
-			parts.insertLast( PID_MEDTHREAD ); parts.insertLast( 1 ); 
-			break;
-		case PID_CHAIN:
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 2 ); 
-			break;
-		case PID_IMPOVISED_TRAP:
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_FRAG_GRENADE ); parts.insertLast( 1 ); 
-			break;
-		case PID_IMPOVISED_TRAP_PLASMA:
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_PLASMA_GRENADE ); parts.insertLast( 1 ); 
-			break;
-		case PID_IMPOVISED_TRAP_PULSE:
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_PULSE_GRENADE ); parts.insertLast( 1 ); 
-			break;
-		case PID_MINE:
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-			parts.insertLast( PID_TNT ); parts.insertLast( 2 ); 
-			break;	
-		case PID_TRAP_DEACTIVATED:
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 2 ); 
-			parts.insertLast( PID_METAL_JUNK1 ); parts.insertLast( 2 );
-			parts.insertLast( PID_SPIKE_MEH ); parts.insertLast( 6 ); 
-			break;	
-		case PID_REVKNIFE1:
-		case PID_REVKNIFE2:
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );  
-			break;
-		case PID_CAMO_01:
-		case PID_CAMO_02:
-		case PID_CAMO_03:
-		case PID_CAMO_04:
-		case PID_CAMO_05:
-		case PID_CAMO_06:
-		case PID_CAMO_07:
-		case PID_CAMO_08:
-		case PID_CAMO_09:
-		case PID_CAMO_10:
-		case PID_CAMO_11:
-		case PID_CAMO_12:
-		case PID_CAMO_13:
-		case PID_CAMO_14:
-		case PID_CAMO_15:
-		case PID_CAMO_16:
-			tools.insertLast( PID_SHOVEL );
-			parts.insertLast( PID_SAND ); parts.insertLast( 1 );  
-			break;
-		case PID_CAMO_17:
-		case PID_CAMO_18:
-		case PID_CAMO_19:
-			tools.insertLast( PID_SHOVEL );
-			parts.insertLast( PID_SAND ); parts.insertLast( 2 );  
-			break;
-		case PID_KEY_BUNCH:
-		case PID_FNKEYBT:
-		case PID_HOLODISK:
-		case PID_HANDWRITINGS:
-		case PID_PASSPORT:
-		case PID_PAPERS_JAMMED:
-		case PID_CRAFT_RECIPES:
-			tools.insertLast( PID_KNIFE ); 
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 2 );  
-			break;
-		case PID_KNIFE:
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 2 ); 
-			break;
-		case PID_LOCKER_LOW:
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 ); 
-			break;
-		case PID_LOCKER_MED:
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 5 ); 
-			break;
-		case PID_LOCKER_HARD:
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 10 ); 
-			break;
-		case PID_SPEARTHROWER1:
-		case PID_SPEARTHROWER2:
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 3 );  
-			break;
-		case PID_FLARE:
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_SHORT_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 1 );
-			break;
-		case PID_OHLAD_MEH: 
-		case PID_DETAL_MEH: 
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );  
-			break;
-		case PID_ELECTO_MEH: 
-		case PID_EMKOCT_MEH: 
-		case PID_DVIGAT_MEH: 
-		case PID_SOED_MEH: 
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );  
-			break;
-		case PID_CRAFT_M_STEL:
-		case PID_PERED_MEH:	
-			tools.insertLast( PID_MULTI_TOOL ); 
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );  
-			break;
-		case PID_CRAFT_L_HIDE: tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 4 );  
-			break;
-		case PID_CRAFT_L_RAGS: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_LINT ); parts.insertLast( 3 );  
-			break;
-		case PID_PART_OF_ROPE:
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 1 );  
-			break;
-		case PID_ROPE: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_PART_OF_ROPE ); parts.insertLast( 4 );  
-			break;
-		case PID_MOUSE_SKIN: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 1 );  
-			break;
-		case PID_GECKO_PELT: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 2 );  
-			break;
-		case PID_PELT3: 	
-		case PID_GOLDEN_GECKO_PELT: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 4 );  
-			break;
-		case PID_FIRE_GECKO_PELT: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 6 );  
-			break;
-		case PID_BRAHMIN_SKIN: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 6 ); 
-			break;
-		case PID_CKNIFE_P: 
-			tools.insertLast( PID_CRAFT_L_RAGS );
-			parts.insertLast( PID_COMBAT_KNIFE ); parts.insertLast( 1 );  
-			break;		
-		case PID_MKNIFE_P: 
-			tools.insertLast( PID_CRAFT_L_RAGS );
-			parts.insertLast( PID_THROWING_KNIFE ); parts.insertLast( 1 );  
-			break;
-		case PID_SPEAR_P: 
-			tools.insertLast( PID_CRAFT_L_RAGS );
-			parts.insertLast( PID_SPEAR ); parts.insertLast( 1 );  
-			break;
-		case PID_KNIFE_P: 
-			tools.insertLast( PID_CRAFT_L_RAGS );
-			parts.insertLast( PID_KNIFE ); parts.insertLast( 1 );  
-			break;
-		case PID_SPEAR:	
-			parts.insertLast( PID_KNIFE ); parts.insertLast( 1 ); 
-			parts.insertLast( PID_SHARPENED_POLE ); parts.insertLast( 1 ); 
-			break;
-		case PID_SHARP_SPEAR: 
-			parts.insertLast( PID_KNIFE ); parts.insertLast( 1 ); 
-			parts.insertLast( PID_SHARPENED_POLE ); parts.insertLast( 1 ); 
-			break;		
-		case PID_SANDROBE: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 5 );  
-			break;
-		case PID_LEATHER_JACKET: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 3 ); 
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 2 ); 
-			break;
-		case PID_LEATHER_ARMOR:
-		case PID_LEATHER_ARMOR_MK_II: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 2 ); 
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 4 ); 
-			break;	
-		case PID_CURED_LEATHER_ARMOR: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_CRAFT_L_RAGS ); parts.insertLast( 2 ); 
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 4 ); 
-			break;
-		case PID_CURED_LEATHER_ARMOR_MK_II: 
-			tools.insertLast( PID_KNIFE ); 
-			tools.insertLast( PID_THROWING_KNIFE ); 
-			tools.insertLast( PID_SWITCHBLADE ); 
-			tools.insertLast( PID_COMBAT_KNIFE ); 
-			tools.insertLast( PID_REVKNIFE2 );
-			parts.insertLast( PID_RUST_METAL_SHEET ); parts.insertLast( 1 ); 
-			parts.insertLast( PID_CRAFT_L_HIDE ); parts.insertLast( 4 ); 
-			break;
-		case PID_METAL_ARMOR:
-		case PID_METAL_ARMOR_MK_II: 
-			tools.insertLast( PID_MULTI_TOOL ); 
-			tools.insertLast( PID_SLEDGEHAMMER );
-			parts.insertLast( PID_RUST_METAL_SHEET ); parts.insertLast( 2 ); 
-			break;
-		case PID_MANTIS_ARMOR: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_MANTIS_SHELL ); parts.insertLast( 2 ); 
-			break;
-		case PID_MIRELURK_ARMOR: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_MANTIS_SHELL ); parts.insertLast( 4 ); 
-			break;
-		case PID_REVOLVER_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_SHORT_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_REVOLVER_PART ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_PISTOL_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_SHORT_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_BIGGUN_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_SMOKE_GUN_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_SHORT_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_METAL_CAN ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_SHOTPISTOL_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_SHORT_TUBE ); parts.insertLast( 2 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_SHOTGUN: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_TUBE ); parts.insertLast( 2 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_SAWED_OFF_SHOTGUN: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_SHORT_TUBE ); parts.insertLast( 2 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_10MM_PISTOL: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_SHORT_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_GECKO_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_TUBE ); parts.insertLast( 2 );
-			parts.insertLast( PID_METAL_CAN ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_REV_RIFLE_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_REVOLVER_PART ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;	
-		case PID_FLAMER: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_SOED_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_EMKOCT_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_LIGHTER ); parts.insertLast( 1 );		
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_AUTOGUN_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_DETAL_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );	
-			break;
-		case PID_SAWGUN_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_PERED_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_DETAL_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_MOTOR ); parts.insertLast( 1 );
-			parts.insertLast( PID_CHAIN ); parts.insertLast( 1 );	
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 2 );	
-			break;
-		case PID_GATLING_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_TUBE ); parts.insertLast( 6 );	
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_SNIPER_GUN_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_ZIP_GUN: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;	
-		case PID_NEEDLER_PISTOL: 
-			tools.insertLast( PID_SUPER_TOOL_KIT );
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );	
-			break;	
-		case PID_DRUM_GUN_LOW: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_SHORT_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_DETAL_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_9MM_MAUSER: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_SHORT_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_MAUSER_SMG: 
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_SHORT_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_DETAL_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );	
-			break;
-		case PID_ROD_STRING: 
-			parts.insertLast( PID_ROD ); parts.insertLast( 1 );
-			parts.insertLast( PID_STRING ); parts.insertLast( 1 );
-			break;
-		case PID_ROD_STRING_HOOK: 
-			parts.insertLast( PID_ROD_STRING ); parts.insertLast( 1 );
-			parts.insertLast( PID_HOOK ); parts.insertLast( 1 );
-			break;
-		case( PID_DESERT_EAGLE_EXT_MAG ):
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_DESERT_EAGLE ); parts.insertLast( 1 );
-			parts.insertLast( PID_ELECTO_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK); parts.insertLast( 2 );
-			break;
-		case( PID_10MM_PISTOL_MAGAZIN ):
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_10MM_PISTOL ); parts.insertLast( 1 );
-			parts.insertLast( PID_ELECTO_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 2 );
-			break;
-		case( PID_44_MAGNUM_SPEEDLOADER ):
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_44_MAGNUM_REVOLVER ); parts.insertLast( 1 );
-			parts.insertLast( PID_REVOLVER_PART ); parts.insertLast( 1 );
-			parts.insertLast( PID_SHORT_TUBE ); parts.insertLast( 1 );
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 2 );
-			break;
-		case( PID_DOMINION_DUPLEX ):
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_DOMINION_ROBUR ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 4 );
-			parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-			parts.insertLast( PID_BOLT ); parts.insertLast( 4 );
-			break;
-		case( PID_SCOPED_HUNTING_RIFLE ):
-			tools.insertLast( PID_MULTI_TOOL );
-			tools.insertLast( PID_SCREWDRIVER );
-			parts.insertLast( PID_HUNTING_RIFLE ); parts.insertLast( 1 );
-			parts.insertLast( PID_optics1 ); parts.insertLast( 1 );
-			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-			break;
-		case( PID_ASSAULT_RIFLE_OPT ):
-			tools.insertLast( PID_MULTI_TOOL );
-			tools.insertLast( PID_SCREWDRIVER );
-			parts.insertLast( PID_ASSAULT_RIFLE ); parts.insertLast( 1 );
-			parts.insertLast( PID_optics3 ); parts.insertLast( 1 );
-			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-			break;
-		case( PID_M4_OPT ):
-			tools.insertLast( PID_MULTI_TOOL );
-			tools.insertLast( PID_SCREWDRIVER );
-			parts.insertLast( PID_M4 ); parts.insertLast( 1 );
-			parts.insertLast( PID_optics3 ); parts.insertLast( 1 );
-			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-			break;
-		case( PID_ASSAULT_RIFLE_EXT_MAG ):
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_ASSAULT_RIFLE ); parts.insertLast( 1 );
-			parts.insertLast( PID_ELECTO_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 2 );
-			parts.insertLast( PID_DETAL_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-			break;
-		case( PID_ASSAULT_RIFLE_EXT_MAG_OPT ):
-			tools.insertLast( PID_MULTI_TOOL );
-			tools.insertLast( PID_SCREWDRIVER );
-			parts.insertLast( PID_ASSAULT_RIFLE_EXT_MAG ); parts.insertLast( 1 );
-			parts.insertLast( PID_optics3 ); parts.insertLast( 1 );
-			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-			break;
-		case( PID_ASSAULT_RIFLE_EXT_XXL_MAG ):
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_ASSAULT_RIFLE ); parts.insertLast( 1 );
-			parts.insertLast( PID_ELECTO_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 1 );
-			parts.insertLast( PID_IRON_DETALS ); parts.insertLast( 2 );
-			parts.insertLast( PID_DETAL_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_BRACING ); parts.insertLast( 1 );
-			break;
-		case( PID_ASSAULT_RIFLE_EXT_XXL_MAG_OPT ):
-			tools.insertLast( PID_MULTI_TOOL );
-			tools.insertLast( PID_SCREWDRIVER );
-			parts.insertLast( PID_ASSAULT_RIFLE_EXT_XXL_MAG ); parts.insertLast( 1 );
-			parts.insertLast( PID_optics3 ); parts.insertLast( 1 );
-			parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-			break;
-		case( PID_LASER_RIFLE_EXT_CAP ):
-			tools.insertLast( PID_SUPER_TOOL_KIT );
-			parts.insertLast( PID_LASER_RIFLE ); parts.insertLast( 1 );
-			parts.insertLast( PID_IRON_DETALS ); parts.insertLast( 2 );
-			parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 );
-			parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-			parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 1 );
-			parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 1 );
-			parts.insertLast( PID_MPARTS ); parts.insertLast( 2 );
-			break;
-	//lowtech junk
-		case( PID_SPRINGER_RIFLE ):
-		case( PID_QUADRO_SHOTGUN ):
-		case( PID_LOW_SNIPER2 ):
-		case( PID_SAVAGE ):
-		case( PID_IMPROVED_SAVAGE ):
-		case( PID_ONEHAND_ROCKET_LAUNCHER ):
-		case( PID_14mm_BIGGUN2_LOW ):
-		case( PID_RAIDER_CANNON ):
-			tools.insertLast( PID_MULTI_TOOL );
-			parts.insertLast( PID_JUNK ); parts.insertLast( 2 );
-			break;
-	}
-	
-	if ( tools.length() == 0 && parts.length() == 0 )
-	{
-		switch( Item_Subtype )
-		{
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_PISTOL ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_PISTOL_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_PISTOL_REVOLVER ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_REVOLVER_PART ); parts.insertLast( 1 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_REVOLVER_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_SMG ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 2 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 2 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 1 );
-				parts.insertLast( PID_SG_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 1 );
-				parts.insertLast( PID_MUSKET_BARREL ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_ASSAULT_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 1 );
-				parts.insertLast( PID_AUTOMAT_PARTS ); parts.insertLast( 1 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_SNIPER_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 1 );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 2 );
-				parts.insertLast( PID_MUSKET_BARREL ); parts.insertLast( 1 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_SHOTGUN ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 1 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 1 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_SHOTGUN_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_AUTOSHOTGUN ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_SHOTGUN_PARTS2 ); parts.insertLast( 1 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_LMG ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 3 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 4 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_MACHINEGUN ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 3 );
-				parts.insertLast( PID_DVIGAT_MEH ); parts.insertLast( 2 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 4 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_NADELAUNCHER ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 2 );
-				parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 1 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 2 );
-				parts.insertLast( PID_TUBE ); parts.insertLast( 3 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_MINIGUN ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 3 );
-				parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-				parts.insertLast( PID_MSPIRAL ); parts.insertLast( 2 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 4 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_NORMAL_HEAVY_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-				parts.insertLast( PID_JUNK ); parts.insertLast( 2 );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 1 );
-				parts.insertLast( PID_TUBE ); parts.insertLast( 1 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_PISTOL ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 2 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 2 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 1 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_SMG ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 1 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_SNIPER_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 2 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 1 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_HEAVY_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 2 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 2 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_MINIGUN ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 1 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 6 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 4 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_LASER_MACHINEGUN ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_LINZA ); parts.insertLast( 2 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 2 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_PISTOL ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 1 );
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 2 );
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_SMG ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 2 );
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_SNIPER_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 2 );
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_HEAVY_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 5 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 2 );
-				parts.insertLast( PID_blstrBM ); parts.insertLast( 1 );
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PLASMA_MINIGUN ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 5 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 6 );
-				parts.insertLast( PID_medrest ); parts.insertLast( 2 );
-				parts.insertLast( PID_blstrBM ); parts.insertLast( 1 );
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				parts.insertLast( PID_WEAPON_PARTS ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_PISTOL ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_SMG ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 2 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 1 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_SNIPER_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 2 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 4 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_SHOTGUN ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 3 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 1 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 1 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_PULSE_MINIGUN ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_CRAFT_M_STEL ); parts.insertLast( 2 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 4 );
-				parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 6 );
-				parts.insertLast( PID_OHLAD_MEH ); parts.insertLast( 4 );
-				parts.insertLast( PID_CAPACITOR ); parts.insertLast( 2 ); 
-				parts.insertLast( PID_CRAFT_E_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_SONIC_PISTOL ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CRAFT_E_LAMP ); parts.insertLast( 2 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 3 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 3 );
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 2 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_SONIC_RIFLE ):
-				tools.insertLast( PID_SUPER_TOOL_KIT );
-				parts.insertLast( PID_CRAFT_E_LAMP ); parts.insertLast( 4 );
-				parts.insertLast( PID_MPARTS ); parts.insertLast( 6 );
-				parts.insertLast( PID_BRACING ); parts.insertLast( 5 );
-				parts.insertLast( PID_EXCAVATOR_CHIP ); parts.insertLast( 3 );
-				break;
-			case( ITEM_SUBTYPE_WEAPON_MELEE_KNIFE ):
-			{
-				if( hasAmmo )
-				{
-					tools.insertLast( PID_MULTI_TOOL );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 3 );
-					break;
-				}
-				else
-				{
-					isItemPartable = false;
-					break;
-				}
-			}
-			case( ITEM_SUBTYPE_WEAPON_MELEE_LONG_KNIFE ):
-			{
-				if( hasAmmo )
-				{
-					tools.insertLast( PID_MULTI_TOOL );
-					tools.insertLast( PID_SCREWDRIVER );
-					tools.insertLast( PID_SOLDERER );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 3 );
-					break;
-				}
-				else
-				{
-					isItemPartable = false; 
-					break;
-				}
-			}
-			case( ITEM_SUBTYPE_WEAPON_MELEE_SPEAR ):
-			{
-				if( hasAmmo )
-				{
-					tools.insertLast( PID_MULTI_TOOL );
-					tools.insertLast( PID_SCREWDRIVER );
-					tools.insertLast( PID_SOLDERER );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 3 );
-					break;
-				}
-				else
-				{
-					isItemPartable = false; 
-					break;
-				}
-			}
-			case( ITEM_SUBTYPE_WEAPON_MELEE_HAMMER ):
-			{
-				if( hasAmmo )
-				{
-					tools.insertLast( PID_MULTI_TOOL );
-					tools.insertLast( PID_SCREWDRIVER );
-					tools.insertLast( PID_SOLDERER );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 3 );
-					break;
-				}
-				else
-				{
-					isItemPartable = false;
-					break;
-				}
-			}
-			case( ITEM_SUBTYPE_WEAPON_MELEE_GLOVE ):
-			{
-				if( hasAmmo )
-				{
-					repair -= 35;
-					tools.insertLast( PID_MULTI_TOOL );
-					tools.insertLast( PID_SCREWDRIVER );
-					tools.insertLast( PID_SOLDERER );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 4 );
-					break;
-				}
-				else
-				{	
-					isItemPartable = false;
-					break;
-				}
-			}
-			case( ITEM_SUBTYPE_WEAPON_MELEE_CLUB ):
-			{
-				if( hasAmmo )
-				{
-					repair -= 35;
-					tools.insertLast( PID_MULTI_TOOL );
-					tools.insertLast( PID_SCREWDRIVER );
-					tools.insertLast( PID_SOLDERER );
-					parts.insertLast( PID_CRAFT_M_BARS ); parts.insertLast( 3 );
-					parts.insertLast( PID_COPPER_WIRE ); parts.insertLast( 2 );
-					parts.insertLast( PID_MPARTS ); parts.insertLast( 5 );
-					break;
-				}
-				else
-				{
-					isItemPartable = false;
-					break;
-				}
-			}
-			default: 
-				isItemPartable = false;
-				break;
-		}
-	}
-	
-	if( !isItemPartable )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_IDEA );
-		return false;
-	}
-	
-	if( repair > cr.Skill[ SK_REPAIR ]	|| science > cr.Skill[ SK_SCIENCE ] )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LACK_SKILL );
-		return true;
-	}
-	
-	if ( ( tools.length() > 0 ) && ( !valid( _CritGetItemHand( cr ) ) || tools.find( _CritGetItemHand( cr ).GetProtoId() ) == -1 ) )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_HOLD_TOOL );
-	    for( uint j = 0; j < tools.length(); j++ )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_HOLD_TOOL_PID, "$proto@msg item " + ( tools[j] * 100 ) + "@" );
-		}
-
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GAINED_PARTS );
-		for( uint jj = 0; jj < parts.length(); jj+=2 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GAINED_PARTS_PID, "$proto@msg item " + ( parts[jj] * 100 ) + "@" );
-		}
-		return true;
-	}
-	
-	if( item.GetType() == ITEM_TYPE_WEAPON && item.Proto.Weapon_MaxAmmoCount > 0 )
-	{
-		uint ammoCount = item.AmmoCount;
-		
-		if( ammoCount > 0 )
-		{
-			Item@ ammo = cr.AddItem( item.AmmoPid, ammoCount );
-			item.AmmoCount = 0;
-			item.Update();
-			
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_AMMO_EJECTED, "$proto@msg item " + ( ammo.Proto.ProtoId * 100 + 2 ) + "@$count" + ammoCount );
-		}
-	}
-	decraftItems.set( ""+cr.Id, parts );
-	uint amount = parts.length();
-	start_decraft( cr, item, amount );
-    return true;
-}
-
-bool ltp_decraft_inited = false;
-void ltp_decraft_init()
-{
-	LTPREG( LTP_DECRAFT, process_decraft )
-	ltp_decraft_inited = true;
-}
-
-bool start_decraft( Critter& cr, Item& item, uint amount )
-{
-	if( !ltp_decraft_inited )
-	{
-		ltp_decraft_init();
-	}
-	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
-	uint[] values = { cr.Id };
-	
-	CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
-	CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);	
-
-	_CritAnimateUse( cr );
-
-	StartProcess( cr, LTP_DECRAFT, 0, amount, item.Id, action_pause );
-	return true;
-}
-
-uint process_decraft( Critter@ cr, int& param0, int& param1, int& param2 )
-{
-	LTPROCESS( cr, param0, LTP_DECRAFT )
-	
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
-  	
-	uint amount = param1;
-	Item@ item = GetItem( param2 );
-	
-	if( valid( item ) )
-    {
-		param0++;
-		
-		int decraft_rate = ( cr.Skill[SK_REPAIR] ) + ( cr.Stat[ST_AGILITY] * 10 ) + ( cr.Stat[ST_INTELLECT] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = int( ceil( float( ( amount * 200 ) / ( CLAMP( decraft_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
-		
-		if( param0 > sequence_length )
-		{
-			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_FINISH_DECRAFT );
-			DecraftResult( cr, item );
-			return 0;
-		}
-		
-		uint[] values = { cr.Id };
-		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
-		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
-
-		_CritAnimateUse( cr );
-		
-		return action_pause;
-	}
-	return 0;
-}
-
-bool DecraftResult( Critter& cr, Item& item ) 
-{
-	uint16[]@ parts;
-	decraftItems.get( ""+cr.Id, @parts );
-	
-	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GAINED_DECRAFT, "$proto@msg item " + ( item.Proto.ProtoId * 100 ) + "@" );
-    for( uint8 i = 0; i < parts.length(); i += 2 )
-	{
-		Item@ gainedItem = cr.AddItem( parts[ i ], parts[ i + 1 ] );
-		if( gainedItem.GetType() == ITEM_TYPE_WEAPON && gainedItem.Proto.Weapon_MaxAmmoCount > 0 )
-		{
-			gainedItem.AmmoCount = 0;
-			int deterioration = GetDeteriorationProcent( item );
-			SetDeterioration( gainedItem, deterioration );
-			gainedItem.Update();
-		}
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GAINED_DECRAFT_PID, "$proto@msg item " + ( gainedItem.Proto.ProtoId * 100 ) + "@$count" + parts[ i + 1 ] );
-	}
-
-	decraftItems.delete ( "" + cr.Id );
-	
-	if ( item.GetCount() > 1 )
-	{
-		item.SetCount(item.GetCount() - 1);
-		StartMenuAskAction( cr, item );
-	}
-	else
-	{
-		DeleteItem( item );
-	}
-	return true;
 }
 
 //Armor radio installation	
@@ -2542,7 +858,7 @@ bool InstallRadio( Critter& cr, Item& armor )
 	if( !checkTools( cr ) )
 	{ 
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FAILED_INSTALL_RADIO );
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_TOOLS_AND_HOLD_TOOL );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REPAIR_NEED_TOOLS );
 		for( uint i = 0; i < RadioInstallTools.length; i++ )
 		{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_HOLD_TOOL_PID, "$proto@msg item " + ( RadioInstallTools[i] * 100 ) + "@" );
@@ -2615,7 +931,10 @@ bool start_install_radio( Critter& cr, Item& armor )
 		ltp_install_init();
 	}	
 	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	int install_rate = ( cr.Skill[SK_REPAIR] ) + ( cr.Stat[ST_AGILITY] * 10 ) + ( cr.Stat[ST_INTELLECT] * 10 ) + OBJECT_DPA_BASE; 
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( ( OBJECT_HP_BASE * 10 ) / ( CLAMP( install_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+	
 	uint[] values = { cr.Id };
 	
 	CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
@@ -2623,25 +942,20 @@ bool start_install_radio( Critter& cr, Item& armor )
 
 	_CritAnimateUse( cr );
 	
-	StartProcess( cr, LTP_INSTALL_RADIO, 0, 0, armor.Id, action_pause );
+	StartProcess( cr, LTP_INSTALL_RADIO, 0, 0, armor.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 	return true;
 }
 
 uint process_install_radio( Critter@ cr, int& param0, int& param1, int& param2 )
 {
 	LTPROCESS( cr, param0, LTP_INSTALL_RADIO )
-	
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
   	Item@ armor = GetItem( param2 );
 	if( valid( armor ) )
     {
 		param0++;
 		
-		int install_rate = ( cr.Skill[SK_REPAIR] ) + ( cr.Stat[ST_AGILITY] * 10 ) + ( cr.Stat[ST_INTELLECT] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = int( ceil( float( ( OBJECT_HP_BASE * 10 ) / ( CLAMP( install_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
-		
-		if( param0 > sequence_length )
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
 			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_FINISH_INSTALL_RADIO );
 			InstallRadioResult( cr, armor );
@@ -2655,7 +969,7 @@ uint process_install_radio( Critter@ cr, int& param0, int& param1, int& param2 )
 
 		_CritAnimateUse( cr );
 		
-		return action_pause;
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 	}
 	return 0;
 }
@@ -2794,28 +1108,30 @@ class MenuPaintArmor: CenteredMenuHandler
 		for( uint i = 0; i < len; i ++ )
 		{
 			ProtoItem@ armorBtn = GetProtoItem( armorType[i] );
-			uint16 armorPid = armorBtn.ProtoId;
-			string name = GetMsgStr( 1, TEXTMSG_ITEM, armorPid * 100 + 2 );
-			if( menu.Button( name ) )
+			if( valid( armorBtn ) && menu.ButtonMsg( TEXTMSG_ITEM, armorBtn.ProtoId * 100 + 2 ) )
 			{
-				cr.StatBase[ ST_VAR7 ] = armorPid;
+				cr.StatBase[ ST_VAR7 ] = armorBtn.ProtoId;
 				start_paint_armor( cr, armor, paint );
 				return false;
 			}
 		}
 		return true;
     }
+
+	int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_REPAIR_MENU_CHOOSE_COLOUR;
+	}
 	
     string@ Description( Critter& cr )
 	{
-		string info = "Choose repaint colour";
-		return info;
-    }
-	
-    string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Hide menu", null );
-    }
+		return null;
+    }  
 }
 
 void StartMenuPaintArmor( Critter& cr, Item& armor, Item& paint, uint8 PaintableArmorType )
@@ -2845,15 +1161,17 @@ bool start_paint_armor( Critter& cr, Item& armor, Item& paint )
 	}
 	
 	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
-	uint[] values = { cr.Id };
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	uint install_rate = ( cr.Skill[ SK_REPAIR ] ) + ( cr.Stat[ ST_AGILITY ] * 10 ) + ( cr.Stat[ ST_INTELLECT ] * 10 ) + OBJECT_DPA_BASE; 
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ( OBJECT_HP_BASE * ( armor.Proto.Item_Subtype - 69 ) ) / ( CLAMP( install_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) );
 	
+	uint[] values = { cr.Id };
 	CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
 	CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);	
 
 	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
 	
-	StartProcess( cr, LTP_ARMOR_PAINT, 0, armor.Id, paint.Id, action_pause );
+	StartProcess( cr, LTP_ARMOR_PAINT, 0, armor.Id, paint.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 	return true;
 }
 
@@ -2861,8 +1179,6 @@ uint process_paint_armor( Critter@ cr, int& param0, int& param1, int& param2 )
 {
 	LTPROCESS( cr, param0, LTP_ARMOR_PAINT )
 	
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
   	Item@ armor = GetItem( param1 );
 	Item@ paint = GetItem( param2 );
 	
@@ -2870,10 +1186,7 @@ uint process_paint_armor( Critter@ cr, int& param0, int& param1, int& param2 )
     {
 		param0++;
 		
-		uint install_rate = ( cr.Skill[SK_REPAIR] ) + ( cr.Stat[ST_AGILITY] * 10 ) + ( cr.Stat[ST_INTELLECT] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = int( ceil( float( ( OBJECT_HP_BASE * ( armor.Proto.Item_Subtype - 69 ) ) / ( CLAMP( install_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
-		
-		if( param0 > sequence_length )
+		if( param0 > cr.Param[ ST_LTP_SEQUENCE ] )
 		{
 			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_FINISH_REPAINT );
 			PaintArmor( cr, armor, paint );
@@ -2882,11 +1195,10 @@ uint process_paint_armor( Critter@ cr, int& param0, int& param1, int& param2 )
 		}
 		
 		uint[] values = { cr.Id };
-		
 		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_RepairSound", values, true);
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
 
-		return action_pause;
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 	}
 	return 0;
 }

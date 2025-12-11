@@ -3,12 +3,35 @@
 
 #include "_utils.fos"
 #include "gateway_h.fos"
+#include "lockers_h.fos"
 #include "gm_h.fos"
 #include "effects_h.fos"
 
-import void _TraderInit( Critter& trader, bool firstTime ) from "trader";
+import void _TraderInit( Critter& trader, bool firstTime ) from "ai_trader";
+import void GM_MobInit( Critter& npc ) from "ai_mob";
+import void GM_GuardsInit( Critter& npc ) from "ai_guards";
+import void GM_PetDog( Critter& npc ) from "ai_pet_dog";
+		
+void unsafe_GM_EffectOnHex( Critter& player, int time, int radius, int param2, string@ color, int[]@ cords )
+{
+	if( !isGM( player ) || !valid( cords ) || cords.length() != 2 || cords[0] == 0 || cords[1] == 0 ) return;
 
-import void GM_MobInit( Critter& npc ) from "mob";
+	int color_index = blinding_color_names_eng.find(color);
+	if( color_index == -1 )
+	{
+		if( color.length() == 1 )
+		{
+			StrToInt( color, color_index );
+		}
+		else
+		{
+			player.Say( SAY_NETMSG, "Ошибка! Используйте следующие названия цветов: black, white, red" );
+			return;
+		}
+	}
+	
+	BlindingEffect( player.GetMap(), cords[0], cords[1], time, radius, color_index );
+}
 
 void unsafe_GM_AddItemOnMap( Critter& player, int pid, int x, int y, string@ param3, int[]@ args )
 {
@@ -16,6 +39,7 @@ void unsafe_GM_AddItemOnMap( Critter& player, int pid, int x, int y, string@ par
 	{
 		return;
 	}
+	
 	GM_AddItemOnMap( player, args[0], args[1], args[2], args[3] );
 }
 
@@ -25,21 +49,24 @@ void GM_AddItemOnMap( Critter& player, int pid, int x, int y, int count )
 	{
 		return;
 	}
+	
 	Map@ map = player.GetMap();
 	if( !valid( map ) )
 	{
 		return;
 	}
+	
 	map.AddItem( x, y, pid, count );
 }
 
 //Dynamic Lightsource adding
-void unsafe_GM_AddLightOnMap( Critter& player, int pid, int x, int y, string@ param3, int[]@ args )
+void unsafe_GM_AddLightOnMap( Critter& player, int param0, int x, int y, string@ param3, int[]@ args )
 {
 	if( !valid( args ) || args.length() != 5 )
 	{
 		return;
 	}
+	
 	GM_AddLightOnMap( player, PID_LIGHT_SOURCE, x, y, args[0], args[1], args[2], args[3], args[4] );
 }
 
@@ -66,6 +93,34 @@ void GM_AddLightOnMap( Critter& player, uint16 pid, int x, int y, int8 LightInte
 	player.Say( SAY_NETMSG, "|0xFFFF00 Light source added on coords: " + x + ":" + y + " Group: " + LightGroup );
 }
 
+//Desc on hex adding
+void unsafe_GM_HexDesc( Critter& player, int mode, int x, int y, string@ str, int[]@ args )
+{
+	if( !valid( str ) )
+	{
+		return;
+	}
+	
+	if( !isGM( player ) )
+	{
+		return;
+	}
+	
+	Map@ map = player.GetMap();
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	Item@ marker = map.AddItem( x, y, PID_DESC_MARKER, 1 );
+	if( valid( marker ) )
+	{
+		marker.SetLexems( str );
+		marker.Val0 = mode;
+		marker.Update();
+	}
+}
+
 void unsafe_ctd( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
 {
 	if( isGM( player ) )
@@ -82,16 +137,15 @@ void _ctd( Critter& player, int param0, int param1, int param2, string@ param3, 
 void ctd( Critter& player, int param0, int param1, int param2 )
 {
     Critter@ target = GetCritter( param0 );
-    if( not valid( target ) )
+    if( !valid( target ) )
 	{
         return;
 	}
     Critter@ daddy = ( ( param2 != 0 ) ? target : player );
     Critter@ child = ( ( param2 == 0 ) ? target : player );
 
-
     Map@ map = daddy.GetMap();
-    if( not valid( map ) )
+    if( !valid( map ) )
         return;
 
 	if( child.ParamBase[ QST_GAMEMODE ] == GAME_START && !isGM( daddy ) )
@@ -100,13 +154,12 @@ void ctd( Critter& player, int param0, int param1, int param2 )
 		return;
 	}
 	
-		
     uint8 temp_dir = Random( 0, 5 );
     for( uint i = 0; i < 6; i++ )
     {
         uint16 hexX = daddy.HexX, hexY = daddy.HexY;
         map.MoveHexByDir( hexX, hexY, ( temp_dir + i ) % 6, 1 + param1 );
-        if( not map.IsHexPassed( hexX, hexY ) )
+        if( !map.IsHexPassed( hexX, hexY ) )
 		{
             continue;
 		}
@@ -139,6 +192,7 @@ void GM_god( Critter& player, int param0, int param1, int param2, string@ param3
 	{
         player.SkillBase[ i ] = 300;
 	}
+	
 	FullHeal( player );
 }
 
@@ -269,7 +323,8 @@ void setcodedoor( Critter& cr, int p0, int p1, int p3 )
 	{
         return;
     }
-	item.Val0 = 4;
+	
+	item.Val0 = LOCK_CODE;
     item.Val1 = p1 + 1;
     item.Val4 = p3 != 0 ? p3 : Random( int( pow( 10, item.Val1 ) ), int( pow( 10, ( item.Val1 + 1 ) ) - 1 ) );
     cr.Say( SAY_NETMSG, "code " + item.Val4 );
@@ -317,8 +372,51 @@ void unsafe_GM_mobinit( Critter& player, int param0, int param1, int param2, str
 void GM_mobinit( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
 {
     Critter@ cr = GetCritter( param0 );
-    cr.StatBase[ ST_TEAM_ID ] = 33;
-    GM_MobInit( cr );
+	if( valid( cr ) )
+	{
+		cr.StatBase[ ST_TEAM_ID ] = param1;
+		GM_MobInit( cr );
+	}
+}
+
+void unsafe_GM_PetDoginit( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	if( isGM( player ) )
+	{
+		Critter@ cr = GetCritter( param0 );
+		if( valid( cr ) )
+		{
+			cr.ParamBase[ PET_OWNER_ID ] = param1;
+			GM_PetDoginit( player, param0, param1, param2, param3, param4 );
+		}
+	}
+}
+
+void GM_PetDoginit( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+    Critter@ cr = GetCritter( param0 );
+	if( valid( cr ) )
+	{
+		GM_PetDog( cr );
+	}
+}
+
+void unsafe_GM_guard_init( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	if( isGM( player ) )
+	{ 
+		GM_guard_init( player, param0, param1, param2, param3, param4 );
+	}
+}
+
+void GM_guard_init( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+    Critter@ cr = GetCritter( param0 );
+	if( valid( cr ) )
+	{
+		cr.StatBase[ ST_TEAM_ID ] = param1;
+		GM_GuardsInit( cr );
+	}
 }
 
 void unsafe_GM_GetParam( Critter& player, int crId, int param1, int param2, string@ param3, int[] @ param4 )
@@ -449,6 +547,8 @@ void GM_getkey( Critter& cr, int param0, int param1, int param2 )
 		switch( item.GetProtoId() )
 		{
 			case( PID_LIFT_1 ):
+			case( PID_LIFT_2 ):
+			case( PID_LIFT_3 ):
 			{
 				string@ proto_name = GetTextMsgStr( FOTEXT_LIFT( item.Val1, 0 ) );
 				if( !valid( proto_name ) )
@@ -509,7 +609,7 @@ void unsafe_GM_openDoor( Critter& player, int param0, int param1, int param2, st
 void GM_openDoor( Critter& player, int param0, int param1, int param2 )
 {
     Item@ item = GetItem( uint( param0 ) );
-    if( item is null )
+    if( !valid(item) )
 	{
         return;
 	}
@@ -529,7 +629,7 @@ void unsafe_GM_closeDoor( Critter& player, int param0, int param1, int param2, s
 void GM_closeDoor( Critter& player, int param0, int param1, int param2 )
 {
     Item@ item = GetItem( uint( param0 ) );
-    if( item is null )
+    if( !valid(item) )
 	{
         return;
 	}
@@ -549,7 +649,7 @@ void unsafe_GM_noopenDoor( Critter& player, int param0, int param1, int param2, 
 void GM_noopenDoor( Critter& player, int param0, int param1, int param2 )
 {
     Item@ door = GetItem( uint( param0 ) );
-    if( door is null )
+    if( !valid(door) )
 	{
         return;
 	}
@@ -577,7 +677,7 @@ void unsafe_GM_clearDoor( Critter& player, int param0, int param1, int param2, s
 void GM_clearDoor( Critter& player, int param0, int param1, int param2 )
 {
     Item@ door = GetItem( uint( param0 ) );
-    if( door is null )
+    if( !valid(door) )
 	{
         return;
 	}
@@ -588,6 +688,7 @@ void GM_clearDoor( Critter& player, int param0, int param1, int param2 )
     door.LockerComplexity = 0;
     door.Val0 = 0;
     door.Val1 = 0;
+	door.Val4 = 0;
 }
 
 
@@ -620,12 +721,11 @@ void GM_respawnCritter( Critter& player, int param0, int param1, int param2, str
 	if( param1 == 0 )
 	{
 		critter.ToLife();
-		critter.ParamBase[ CR_VAL0 ];
 	}
 	else 
 	{
 		GM_respawnCritterdef @respawn = @RespawnCritter_all;
-		if( @param3 !is null )
+		if( valid(param3) )
 		{
 			if( param3 == "dead" )
 			{
@@ -636,7 +736,7 @@ void GM_respawnCritter( Critter& player, int param0, int param1, int param2, str
 		Map@ map = player.GetMap();
 		for( uint i = 0, iEnd = map.GetCrittersHex ( param1, param2, param0, FIND_ALL | FIND_ONLY_NPC, critters ); i < iEnd; i++ )
 		{
-			if( @critters[i] !is null)
+			if( valid(critters[i]) )
 			{
 				respawn( critters[i] );
 			}
@@ -685,7 +785,7 @@ void GM_deleteCritter( Critter& player, int param0, int param1, int param2, stri
 	else 
 	{
 		GM_deleteCritterdef @delete = @DeleteCritter_all;
-		if( @param3 !is null )
+		if( valid(param3) )
 		{
 			if( param3 == "dead" )
 			{
@@ -696,7 +796,7 @@ void GM_deleteCritter( Critter& player, int param0, int param1, int param2, stri
 		Map@ map = player.GetMap();
 		for( uint i = 0, iEnd = map.GetCrittersHex ( param1, param2, param0, FIND_ALL | FIND_ONLY_NPC, critters ); i < iEnd; i++ )
 		{
-			if( @critters[i] !is null)
+			if( valid(critters[i]) )
 			{
 				delete( critters[i] );
 			}
@@ -750,36 +850,31 @@ void GM_delItem( Critter& player, int param0, int param1, int param2, string@ pa
 	}
 }
 
-void unsafe_GM_delItemId( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+void unsafe_GM_delItemId( Critter& player, int itemID, int x, int y, string@ p3, int[]@ p4 )
 {
 	if( isGM( player ) )
 	{
-		GM_delItemId( player, param0, param1, param2, param3, param4 );
+		GM_delItemId( player, itemID, x, y, p3, p4 );
 	}
 }
 
-void GM_delItemId( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+void GM_delItemId( Critter& player, int itemID, int x, int y, string@ p3, int[]@ p4 )
 {
-	if( param1 == 0 )
+	if( itemID == 0 )
 	{
-		player.Say( SAY_NETMSG, "|0xFFFF00 input item Id" );
+		player.Say( SAY_NETMSG, "|0xFFFF00 Input item Id" );
 		return;
 	}
-	else
+	
+	Item@ item = GetItem( itemID );
+	if( !valid( item ) )
 	{
-		Map@ map = player.GetMap();
-		Item@ item = map.GetItem( param0 );
-		if( valid( item ) )
-		{
-			DeleteItem( item );
-			player.Say( SAY_NETMSG, "|0xFFFF00 item has been deleted" );
-		}
-		else
-		{
-			player.Say( SAY_NETMSG, "|0xFFFF00 you must be on a same map as item" );
-			return;
-		}
+		player.Say( SAY_NETMSG, "|0xFFFF00 You must be on a same map as item" );
+		return;
 	}
+
+	DeleteItem( item );
+	player.Say( SAY_NETMSG, "|0xFFFF00 Item has been deleted" );
 }
 
 void unsafe_GM_brokeItem( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
@@ -993,6 +1088,10 @@ void GM_TraderInit( Critter& player, int param0, int param1, int param2, string@
 	{
         return;
     }
+	if( param1 > 0)
+	{
+		cr.StatBase[ST_DIALOG_ID] = param1;
+	}
 	_TraderInit( cr, true );
 }
 
@@ -1003,6 +1102,10 @@ void GM_TraderInit( Critter& player, int param0, int param1, int param2)
 	{
         return;
     }
+	if( param1 > 0)
+	{
+		cr.StatBase[ST_DIALOG_ID] = param1;
+	}
 	_TraderInit( cr, true );
 }
 
@@ -1017,7 +1120,7 @@ void unsafe_setautodoor( Critter& player, int param0, int param1, int param2, st
 void setautodoor( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
 {
     Item@ door = GetItem( param0 );
-    if( door is null )
+    if( !valid(door) )
 	{
         return;
 	}
@@ -1109,7 +1212,7 @@ void _GM_DeleteAllCTE( Critter& gm, int param0, int param1, int param2 )
 			//Log( "crCount " + crCount );
 			for( uint i = 0; i < crCount; i++ )
 			{
-				if( critters[ i ] is null )
+				if( !valid(critters[ i ]) )
 				{
 					continue;
 				}
@@ -1159,6 +1262,65 @@ void unsafe_ClearHex( Critter& player, int x, int y, int param2, string@ param3,
 		DeleteItem( items[i] );
 	}
 	player.Say( SAY_NETMSG, "Items deleted: " + count );
+}
+
+void unsafe_GM_mutateCritter( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	if( isGM( player ) )
+	{
+		GM_mutateCritter( player, param0, param1, param2, param3, param4 );
+	}
+}
+
+void GM_mutateCritter( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	if( param0 <= 0 )
+	{
+		return;
+	}
+	
+	Critter@ target = GetCritter(param0);
+	if( !valid( target ) )
+	{
+		return;
+	}
+	
+	if( valid( _CritGetItemArmor( target ) ) || valid( _CritGetItemMisc( target ) ) || valid( _CritGetItemHead( target ) ) || valid( _CritGetItemBack( target ) ) )
+	{
+		return;
+	}
+	
+	KnockoutOnce( target, false, target.Stat[ ST_CURRENT_AP ] + 1000 ); 
+    target.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_LIE_DOWN );
+
+	target.StatBase[ ST_BODY_TYPE ] = BT_SUPER_MUTANT;
+	int crType = CRTYPE_SUPERMUTE_NORMAL;
+	if( target.Skill[ SK_SNEAK ] >= 200 )
+	{
+		crType = CRTYPE_NIGHTKIN_NORMAL;
+		target.SkillBase[ SK_SNEAK ] = CLAMP( target.Skill[ SK_SNEAK ] + 50, 0, 300 );
+	}
+	
+	target.StatBase[ ST_BASE_CRTYPE ] = crType;
+	target.ChangeCrType( crType );
+
+	target.StatBase[ ST_NORMAL_ABSORB ] += 2;
+	target.StatBase[ ST_NORMAL_RESIST ] += 20;
+	target.StatBase[ ST_FIRE_ABSORB ] += 1;
+	target.StatBase[ ST_FIRE_RESIST ] += 10;
+	target.StatBase[ ST_ELECTRO_ABSORB ] += 1;
+	target.StatBase[ ST_ELECTRO_RESIST ] += 10;
+	target.StatBase[ ST_EXPLODE_ABSORB ] += 1;
+	target.StatBase[ ST_EXPLODE_RESIST ] += 10;
+	target.StatBase[ ST_PLASMA_ABSORB ] += 1;
+	target.StatBase[ ST_PLASMA_RESIST ] += 5;
+
+	target.StatBase[ ST_STRENGTH ] = CLAMP( target.Stat[ ST_STRENGTH ] + 2, 0, 15 );
+	target.StatBase[ ST_ENDURANCE ] = CLAMP( target.Stat[ ST_ENDURANCE ] + 2, 0, 15 );
+	target.StatBase[ ST_CHARISMA ] = CLAMP( target.Stat[ ST_CHARISMA ], 0, 3 );
+
+	target.StatBase[ ST_MAX_LIFE ] += 100;
+	target.StatBase[ ST_MELEE_DAMAGE ] += 15;
 }
 
 #endif // GM_COMMANDS

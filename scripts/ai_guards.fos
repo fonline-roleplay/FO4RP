@@ -4,27 +4,39 @@
 #include "_utils.fos"
 #include "npc_planes_h.fos"
 #include "heal_h.fos"
+#include "reload_h.fos"
+#include "Fractions.fosh"
+#include "lockers_h.fos"
+#include "windup_h.fos"
+
+import void relaxNPC( int[]@ IDs ) from "mobcontrol";
+import void LookDataRefresh( Critter& cr ) from "main";
 
 void GM_GuardsInit( Critter& npc ) // Export
 {
     npc.SetScript( "_AiGuardsInit" );
 	npc.Say( SAY_EMOTE, "salutes" );
+	npc.ParamBase[CR_VAL2] = 2;
 }
 
 void _AiGuardsInit( Critter& npc, bool firstTime )
 {
-	npc.SetEvent( CRITTER_EVENT_SHOW_CRITTER,	"_CritterLookAt" );
-	npc.SetEvent( CRITTER_EVENT_HIDE_CRITTER,	"_CritterOutOfSight" );
-    npc.SetEvent( CRITTER_EVENT_IDLE,			"_Idle" );
-	npc.SetEvent( CRITTER_EVENT_MESSAGE,     	"_OnMessage" );
-    npc.SetEvent( CRITTER_EVENT_PLANE_BEGIN,	"_PlaneBegin" );
-	npc.SetEvent( CRITTER_EVENT_PLANE_END,		"_PlaneEnd" );
-    npc.SetEvent( CRITTER_EVENT_DEAD,			"_MyDeath" );
-    npc.SetEvent( CRITTER_EVENT_ATTACKED,		"_Attacked" );
-	npc.SetEvent( CRITTER_EVENT_SMTH_DEAD,		"_FindKiller" );
-	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACK,	"_AssistAttack" );
-	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACKED,	"_AssistAttacked" );
-	npc.SetEvent( CRITTER_EVENT_KNOCKOUT,		"_MangeEntanglement" );
+	npc.SetEvent( CRITTER_EVENT_SHOW_CRITTER,		"_CritterLookAt" );
+	npc.SetEvent( CRITTER_EVENT_HIDE_CRITTER,		"_CritterOutOfSight" );
+    npc.SetEvent( CRITTER_EVENT_IDLE,				"_Idle" );
+	npc.SetEvent( CRITTER_EVENT_MESSAGE,     		"_OnMessage" );
+    npc.SetEvent( CRITTER_EVENT_PLANE_BEGIN,		"_PlaneBegin" );
+	npc.SetEvent( CRITTER_EVENT_PLANE_END,			"_PlaneEnd" );
+    npc.SetEvent( CRITTER_EVENT_DEAD,				"_MyDeath" );
+    npc.SetEvent( CRITTER_EVENT_ATTACKED,			"_Attacked" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_DEAD,			"_FindKiller" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACK,		"_AssistAttack" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_ATTACKED,		"_AssistAttacked" );
+	npc.SetEvent( CRITTER_EVENT_KNOCKOUT,			"_MangeEntanglement" );
+	npc.SetEvent( CRITTER_EVENT_USE_SKILL_ON_ME,	"_ReactToSkill" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_KNOCKOUT,  	"_TargetDown" );
+//	npc.SetEvent( CRITTER_EVENT_SMTH_DROP_ITEM,		"_ReactToDrop" );
+//	npc.SetEvent( CRITTER_EVENT_SMTH_MOVE_ITEM,		"_ExplosiveSnow" );
 }
 
 void _CritterLookAt( Critter& npc, Critter& target )
@@ -41,17 +53,19 @@ void _CritterLookAt( Critter& npc, Critter& target )
 			npc.EraseEnemyFromStack( target.Id );
 			return;
 		}
+		
 		npc.ErasePlane( AI_PLANE_WALK, true );
 		AddAttackPlane( npc, 0, target );
 		return;
 	}
-	if( Random( 0, 100 ) == 100 )
+	
+	/*if( Random( 0, 100 ) == 100 )
 	{
 		uint16 hx = npc.HexX, hy = npc.HexY;
 		uint16 tx = target.HexX, ty = target.HexY;
 		uint dir = GetDirection( hx, hy, tx, ty );
 		npc.SetDir( dir );
-	}
+	}*/
 }
 
 void _CritterOutOfSight( Critter& npc, Critter& target )
@@ -60,20 +74,19 @@ void _CritterOutOfSight( Critter& npc, Critter& target )
 	{
 		return;
 	}
+	
 	if( npc.CheckEnemyInStack( target.Id ) )
 	{
-		npc.DropPlanes();
-		if( npc.IsSee( target ) )
+		if( npc.Param[ CR_IS_SNIPER ] > 0 && npc.Param[ CR_IS_WINDUPED ] == 0 )
 		{
-			if( target.IsDead() )
-			{ 
-				npc.EraseEnemyFromStack( target.Id );
-				return;
-			}
-			npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
-			npc.AddEnemyInStack( target.Id );
-			AddAttackPlane( npc, 0, target );
+			EraseTimeEvent( npc.Param[ CR_IS_SNIPER ] );
+			npc.ParamBase[ CR_IS_SNIPER ] = 0;
 			
+			ChangeWindup( npc, true );
+			uint[] values = { npc.Id, 60 };
+			npc.ParamBase[ CR_IS_SNIPER ] = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "ai_guards@e_npc_windup", values, true );
+			LookDataRefresh( npc );
+			npc.Wait( AI_REACTION_TIME );
 		}
 		else
 		{
@@ -102,6 +115,24 @@ void _Idle( Critter& npc )
 	{
 		return;
 	}
+	
+	Item@ weapon = _CritGetItemHand( npc );
+	if( valid( weapon ) )
+	{
+		if( weapon.Proto.Weapon_MaxAmmoCount - weapon.AmmoCount > 0 && Random( 1, 10 ) == 10 )
+		{
+			FindAmmo( npc, weapon, 0 );
+		}
+	}
+	
+	if( !npc.IsKnockout() && hasItems( npc, heal_items, -1 ) )
+	{	
+		int damage = ( npc.Stat[ ST_MAX_LIFE ] + npc.Stat[ ST_MAX_LIFE_EXT ] ) - npc.Stat[ ST_CURRENT_HP ];	
+		if( damage >= 30 && Random( 1, 2 ) == 2  )
+		{
+			UseHealingItem( npc );
+		}
+	}	
 }
 
 void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
@@ -110,14 +141,17 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 	{
 		return;
 	}
+	
     if( npc.IsDead() )
 	{
 		return;
 	}
+	
     if( npc.Stat[ ST_TEAM_ID ] == 0 )
 	{
 		return;
 	}
+	
     if( npc.Stat[ ST_TEAM_ID ] != fromCrit.Stat[ ST_TEAM_ID ] )
 	{
 		return;
@@ -125,34 +159,84 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
  
 	if( fromCrit.IsPlayer() )
 	{
-		npc.AddEnemyInStack( fromCrit.Id );
-		AddAttackPlane( npc, 10, fromCrit ); 
+		return;
 	}
 
-    if( message == MSG_GROUP_ATTACK )
+	if( message == MSG_GROUP_ATTACK )
 	{
         Critter@ target = ::GetCritter( value );
-        
 		if( !valid( target ) )
 		{
 			return; 
 		}
 		
 		Map@ mapNpc = npc.GetMap();
+		if( !valid( mapNpc ) )
+		{
+			return;
+		}
+		
 		Map@ mapTarget = target.GetMap();
+		if( !valid( mapTarget ) )
+		{
+			return;
+		}
 		
 		if( mapNpc.Id != mapTarget.Id )
 		{
 			return;
 		}
 		
-		npc.AddEnemyInStack( target.Id );
-		AddAttackPlane( npc, 0, target );
+		if( !npc.IsSee( target ) )
+		{
+			if( npc.Param[ CR_IS_WINDUPED ] == 0 )
+			{
+				Item@ weapon = _CritGetItemHand( npc );
+				if( valid( weapon ) )
+				{
+					if( FLAG( weapon.Proto.Weapon_Perk, WEAPON_PERK_SCOPE_RANGE ) )
+					{
+						npc.Wait( AI_REACTION_TIME );
+						npc.SetDir( fromCrit.Dir );
+						
+						ChangeWindup( npc, true );
+						uint[] values = { npc.Id, 60 };
+						npc.ParamBase[ CR_IS_SNIPER ] = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "ai_guards@e_npc_windup", values, true );
+						LookDataRefresh( npc );
+						
+						npc.Wait( AI_REACTION_TIME );
+						if( npc.IsSee( target ) ) 
+						{
+							npc.AddEnemyInStack( target.Id );
+							AddAttackPlane( npc, 0, target );
+						}
+					}
+				}
+			}
+		}
+		else
+		{
+			npc.AddEnemyInStack( target.Id );
+			AddAttackPlane( npc, 0, target );
+		}
 	}
 }
 
 int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem )
 {
+	if( npc.IsDead() )
+	{
+		return PLANE_DISCARD;
+	}
+	
+	if( plane.Type == AI_PLANE_WALK )
+	{
+		if( !npc.IsCanWalk() )
+		{
+			return PLANE_DISCARD;
+		}
+	}
+	
     if( plane.Type == AI_PLANE_ATTACK )
 	{
         Critter@ target = GetCritter( plane.Attack_TargId );
@@ -165,98 +249,336 @@ int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Ite
 		{
 			return PLANE_DISCARD; 
 		}
+		
+		if( !npc.IsBusy() )
+		{
+			npc.Wait( AI_REACTION_TIME );
+		}
 	}
 	else if ( reason == REASON_FROM_SCRIPT )
 	{
 		return PLANE_KEEP;
 	}
+	
     return PLANE_RUN_GLOBAL;
 }
 
 int _PlaneEnd( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem ) 
 {
+	if( npc.IsDead() )
+	{
+		return PLANE_DISCARD;
+	}
+	
 	if( reason == REASON_GAG_CRITTER && someCr.IsNpc() )
 	{
-        if( someCr.ParamBase[ST_TEAM_ID] != npc.ParamBase[ST_TEAM_ID] )
+        if( someCr.ParamBase[ ST_TEAM_ID ] != npc.ParamBase[ ST_TEAM_ID ] )
 		{
             return PLANE_RUN_GLOBAL;
 		}
 		
-        if( TryLetPassage( someCr, npc ) ) 
+        if( TryLetPassage( someCr, npc ) )
 		{
-            npc.Wait( AI_DELAY );
+            npc.Wait( AI_REACTION_TIME );
             return PLANE_KEEP;
         }
     }
+	
+	if( reason == REASON_GAG_ITEM || reason == REASON_DEADLOCK )
+	{
+        if( valid( someItem ) )
+		{
+            if( someItem.GetType() == ITEM_TYPE_DOOR && !FLAG( someItem.LockerCondition, LOCKER_ISOPEN ) && !FLAG(someItem.LockerCondition, LOCKER_ELECTRO) &&
+                npc.Stat[ ST_BODY_TYPE ] <= BT_GHOUL )
+			{
+				if(FLAG( someItem.LockerCondition, LOCKER_LOCKED ) && IsKeyAviable( npc, someItem.LockerId ))
+				{
+					NpcPlane@ child = CreatePlane();
+					child.Type = AI_PLANE_PICK;
+					child.Priority = 0;
+					child.Pick_HexX = someItem.HexX;
+					child.Pick_HexY = someItem.HexY;
+					child.Pick_Pid = someItem.GetProtoId();
+					child.Pick_UseItemId = GetKeyId( npc, someItem.LockerId );
+					child.Pick_ToOpen = true;
+					child.Run = plane.Run;
+					plane.SetChild( child );
+					return PLANE_RUN_GLOBAL;                 // Cancel deleting
+				}
+                else if(!FLAG( someItem.LockerCondition, LOCKER_LOCKED ))
+				{
+					NpcPlane@ child = CreatePlane();
+					child.Type = AI_PLANE_PICK;
+					child.Priority = 0;
+					child.Pick_HexX = someItem.HexX;
+					child.Pick_HexY = someItem.HexY;
+					child.Pick_Pid = someItem.GetProtoId();
+					child.Pick_ToOpen = true;
+					child.Run = plane.Run;
+					plane.SetChild( child );
+					return PLANE_RUN_GLOBAL;                 // Cancel deleting
+				}
+			}
+            /* WIP need to find a way to animate critter without dropping plane stack */
+            else if( someItem.Proto.Material == MATERIAL_WOOD && someItem.Proto.Item_Subtype == ITEM_SUBTYPE_FURNITURE )
+			{
+                NpcPlane@ child = CreatePlane();
+                child.Type = AI_PLANE_PICK;
+                child.Priority = 0;
+                child.Identifier = 228;
+                child.Pick_HexX = someItem.HexX;
+                child.Pick_HexY = someItem.HexY;
+                child.Pick_Pid = someItem.GetProtoId();
+                child.Run = plane.Run;
+                plane.SetChild( child );
+
+                npc.Animate( 0, ANIM2_PUNCH_RIGHT, null, true, true );
+
+                if( isContainer( someItem ) )
+                {
+                    DropContainerItems( npc.GetMap(), someItem);
+                }
+				
+                DeleteItem( someItem );
+                
+                return PLANE_RUN_GLOBAL;
+            }	
+			else if( someItem.GetType() != ITEM_TYPE_DOOR )
+			{
+                NpcPlane@ child = CreatePlane();
+                child.Type = AI_PLANE_PICK;
+                child.Priority = 0;
+                child.Pick_HexX = someItem.HexX;
+                child.Pick_HexY = someItem.HexY;
+                child.Pick_Pid = someItem.GetProtoId();
+                child.Run = plane.Run;
+                plane.SetChild( child );
+                return PLANE_RUN_GLOBAL;                 // Cancel deleting
+            }			
+        }
+		
+		return PLANE_DISCARD;
+	}
+	
 	return PLANE_RUN_GLOBAL;
 }
 
 void _MyDeath( Critter& npc, Critter@ killer ) 
 {
+	npc.DropPlanes();
     npc.ClearEnemyStack();
 	npc.AddTimeEvent ( "rotting@cte_rotten", 0, CTE_ROTTEN, 0 );
 }
 
-bool _Attacked( Critter& npc, Critter& target )
+bool _Attacked( Critter& npc, Critter& attacker )
 {
-	if( int( target.Id ) == npc.Stat[ST_FOLLOW_CRIT] ) 
+	if( !valid( npc ) )
 	{
-        npc.EraseEnemyFromStack( target.Id );
-        EraseAttackPlane( npc, target );
-		return true;
+		return false;
 	}
-	else if( !npc.IsKnockout() && hasItems( npc, heal_items, -1 ) )
+	
+	if( npc.IsDead() )
+	{
+		return false;
+	}
+	
+	if( !valid( attacker ) )
+	{
+		return false;
+	}
+	
+	if( attacker.IsDead() )
+	{
+		return false;
+	}
+	
+	if( sameFaction( npc, attacker ) )
+	{
+		return false;
+	}
+	
+	Map@ map = npc.GetMap();
+	if( !valid( map ) )
+	{
+		return false;
+	}
+	
+	if( int( attacker.Id ) == npc.Stat[ ST_FOLLOW_CRIT ] ) 
+	{
+		return false;
+	}
+	
+	if( !npc.IsKnockout() && hasItems( npc, heal_items, -1 ) )
 	{	
-		Item@ healingItem = null;
-		int damage = npc.Stat[ ST_MAX_LIFE ] - npc.Stat[ ST_CURRENT_HP ];
-		if( damage > 110 && npc.Param[ ST_GLOBAL_OVERDOSE ] <= 40 && hasItem( npc, PID_TRAUMATIN, -1 ) )
-		{
-			@healingItem = npc.GetItem( PID_TRAUMATIN, -1 );
-		}
-		else if( damage >= 80 && npc.Param[ ST_GLOBAL_OVERDOSE ] <= 60 && hasItem( npc, PID_SUPER_STIMPAK, -1 ) )
-		{
-			@healingItem = npc.GetItem( PID_SUPER_STIMPAK, -1 );
-		}
-		else if( damage >= 50 && npc.Param[ ST_GLOBAL_OVERDOSE ] <= 80 && hasItem( npc, PID_STIMPAK, -1 ) )
-		{
-			@healingItem = npc.GetItem( PID_STIMPAK, -1 );
-		}
-		else if( damage >= 30 && npc.Param[ ST_GLOBAL_OVERDOSE ] <= 90 && hasItem( npc, PID_HEALING_POWDER, -1 ) )
-		{
-			@healingItem = npc.GetItem( PID_HEALING_POWDER, -1 );
-		}
-		
-		if( valid( healingItem ) )
-		{
-			uint[] values = { npc.Id, healingItem.Id };
-			CreateTimeEvent( AFTER( REAL_SECOND( AI_HEAL_REACTION_TIME ) ), "e_useHealingItem", values, false );
-		}
+		UseHealingItem( npc );
 	}
-	else
+
+	uint16 hx = npc.HexX, hy = npc.HexY;
+	uint16 tx = attacker.HexX, ty = attacker.HexY;
+	uint8 dir = GetDirection( hx, hy, tx, ty );
+	uint16 zh = hx, zy = hy;
+	if( npc.Param[ CR_IS_RELAXING ] != 5 )
 	{
-		if( npc.IsSee( target ) ) 
+		map.MoveHexByDir( zh, zy, dir, 1 );
+		Critter@ inFront = map.GetCritter( zh, zy );
+		if( !map.IsHexPassed( zh, zy ) && !valid( inFront ) )
 		{
-			npc.DropPlanes();
-			npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
-			npc.AddEnemyInStack( target.Id );
-			AddAttackPlane( npc, 0, target );
-			return true;
-			
-		} 
-		else if( npc.IsNoPlanes() ) 
+			int[] IDs = { npc.Id };
+			relaxNPC( IDs );
+		}
+	}	
+
+	NpcPlane@ plane = npc.GetCurPlane();
+	if( valid( plane ) )
+	{
+		if( plane.Type == AI_PLANE_ATTACK )
 		{
-			uint16 hx = npc.HexX, hy = npc.HexY;
-			uint16 tx = target.HexX, ty = target.HexY;
-			int dir = GetDirection( hx, hy, tx, ty );
-			AddWalkPlane( npc, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, dir, true, 1 );
+			uint enemy_id = plane.Attack_TargId;
+			Critter@ enemy = GetCritter( enemy_id );
+			if( valid( enemy ) )
+			{
+				if( attacker.Id != enemy.Id && npc.IsSee( enemy ) )
+				{ 		
+					uint attacker_dist = GetDistantion( npc.HexX, npc.HexY, attacker.HexX, attacker.HexY );
+					uint enemy_dist = GetDistantion( npc.HexX, npc.HexY, enemy.HexX, enemy.HexY );
+					if( attacker_dist < enemy_dist )
+					{
+						npc.DropPlanes();
+						npc.AddEnemyInStack( attacker.Id );
+						npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
+						AddAttackPlane( npc, 0, attacker );
+					}
+				}
+			}
 		}
 	}
+	else if( npc.IsNoPlanes() ) 
+	{
+		npc.Wait( AI_REACTION_TIME );
+		npc.AddEnemyInStack( attacker.Id );
+		AddAttackPlane( npc, 0, attacker );
+
+		if( !npc.IsSee( attacker ) )
+		{
+			npc.SetDir( dir );
+			
+			Item@ weapon = _CritGetItemHand( npc );
+			if( valid( weapon ) && FLAG( weapon.Proto.Weapon_Perk, WEAPON_PERK_SCOPE_RANGE ) )
+			{
+				if( npc.Param[ CR_IS_WINDUPED ] == 0 )
+				{
+					if( npc.Param[ CR_IS_SNIPER ] != 0 )
+					{
+						EraseTimeEvent( npc.Param[ CR_IS_SNIPER ] );
+					}
+					
+					ChangeWindup( npc, true );
+					uint[] values = { npc.Id, 60 };
+					npc.ParamBase[ CR_IS_SNIPER ] = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "ai_guards@e_npc_windup", values, true );
+					LookDataRefresh( npc );
+				}
+			}
+			else
+			{
+				AddWalkPlane( npc, AI_PLANE_ATTACK_PRIORITY - 1, tx, ty, dir, true, 1 );
+			}
+			
+		}
+	}
+
     return true;
+}
+
+uint e_npc_windup( uint[]@ values )
+{
+	Critter@ npc = GetCritter( values[0] );
+	uint ticksLeft = values[1];
+	
+	if( !valid( npc ) )
+	{
+		return 0;
+	}
+	
+	if( npc.IsDead() || npc.IsKnockout() ) 
+	{
+		npc.ParamBase[ CR_IS_SNIPER ] = 0;
+		return 0;
+	}
+	
+	if( ticksLeft > 0 )
+	{
+		ticksLeft --;
+		values[1] = ticksLeft;
+		
+		return REAL_MS( 1000 );
+	}
+
+	if( npc.Param[ CR_IS_WINDUPED ] > 0 )
+	{
+		ChangeWindup( npc, false );
+		LookDataRefresh( npc );
+	}
+
+	npc.ParamBase[ CR_IS_SNIPER ] = 0;
+	return 0;
+}
+
+void UseHealingItem( Critter& npc )
+{
+	if( npc.ParamBase[LAST_MEDS_USE_EVENT] != 0 )
+	{
+		return;
+	}
+	
+	if( npc.Timeout[ TO_SK_FIRST_AID ] > 0 )
+	{
+		return;
+	}
+	
+	npc.TimeoutBase[ TO_SK_FIRST_AID ] = FIRST_AID_TIMEOUT( npc );
+	
+	int damage = ( npc.Stat[ ST_MAX_LIFE ] + npc.Stat[ ST_MAX_LIFE_EXT ] ) - npc.Stat[ ST_CURRENT_HP ];	
+	
+	Item@ healingItem = null;	
+	if( damage > 110 && hasItem( npc, PID_TRAUMATIN, -1 ) )
+	{
+		@healingItem = npc.GetItem( PID_TRAUMATIN, -1 );
+	}
+	else if( damage >= 80 && hasItem( npc, PID_SUPER_STIMPAK, -1 ) )
+	{
+		@healingItem = npc.GetItem( PID_SUPER_STIMPAK, -1 );
+	}
+	else if( damage >= 50 && hasItem( npc, PID_STIMPAK, -1 ) )
+	{
+		@healingItem = npc.GetItem( PID_STIMPAK, -1 );
+	}
+	else if( damage >= 30 && hasItem( npc, PID_HEALING_POWDER, -1 ) )
+	{
+		@healingItem = npc.GetItem( PID_HEALING_POWDER, -1 );
+	}
+	
+	if( valid( healingItem ) && Random( 1, 2 ) == 2 )
+	{
+		uint[] values = { npc.Id, healingItem.Id };
+		npc.ParamBase[LAST_MEDS_USE_EVENT] = CreateTimeEvent( AFTER( REAL_SECOND( AI_HEAL_REACTION_TIME ) ), "ai_guards@e_useHealingItem", values, false );
+	}
 }
 
 uint e_useHealingItem( uint[]@ values )
 {
 	Critter@ npc = GetCritter( values[0] );
+	if( !valid( npc ) )
+	{
+		return 0;
+	}
+	
+	npc.ParamBase[LAST_MEDS_USE_EVENT] = 0;
+	
+	if( npc.IsDead() )
+	{
+		return 0;
+	}
+	
 	Item@ healingItem = GetItem( values[1] );
 	if( valid( healingItem ) && !npc.IsDead() && ! npc.IsKnockout() )
 	{
@@ -264,12 +586,18 @@ uint e_useHealingItem( uint[]@ values )
 		UseHealingItem( npc, npc, healingItem );
 		npc.StatBase[ ST_CURRENT_AP ] -= 3000;
 	}
+	
 	return 0;
 }
 
 void _FindKiller( Critter& npc, Critter& fromCrit, Critter@ killer )
 {
 	if( !valid( killer ) )
+	{
+		return;
+	}
+	
+	if( killer.IsDead() )
 	{
 		return;
 	}
@@ -306,6 +634,7 @@ void _FindKiller( Critter& npc, Critter& fromCrit, Critter@ killer )
 			npc.EraseEnemyFromStack( killer.Id );
 			return;
 		}
+		
 		npc.SendMessage( MSG_GROUP_ATTACK, killer.Id, MESSAGE_TO_WHO_SEES_ME );
 		npc.AddEnemyInStack( killer.Id );
 		AddAttackPlane( npc, 0, killer );
@@ -315,6 +644,11 @@ void _FindKiller( Critter& npc, Critter& fromCrit, Critter@ killer )
 void _AssistAttack( Critter& npc, Critter& fromCr, Critter& target )
 {
 	if( npc.IsDead() )
+	{
+		return;
+	}
+	
+	if( target.IsDead() )
 	{
 		return;
 	}
@@ -342,19 +676,21 @@ void _AssistAttacked( Critter& npc, Critter& fromCr, Critter& attacker )
 		return;
 	}
 	
-	if( fromCr.Stat[ ST_TEAM_ID ] == 0 )
+	if( attacker.IsDead() )
 	{
 		return;
 	}
 	
-	if( fromCr.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] )
+	if( sameFaction( npc, attacker ) )
 	{
-		if( attacker.Stat[ ST_TEAM_ID ] != npc.Stat[ ST_TEAM_ID ] && !attacker.IsDead() )
-		{
-			npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
-			npc.AddEnemyInStack( attacker.Id );
-			AddAttackPlane( npc, 0, attacker );
-		}
+		return;
+	}
+	
+	if( sameFaction( npc, fromCr ) )
+	{
+		npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
+		npc.AddEnemyInStack( attacker.Id );
+		AddAttackPlane( npc, 0, attacker );
 	}
 }
 
@@ -380,5 +716,137 @@ void _MangeEntanglement( Critter& npc, uint anim2begin, uint anim2idle, uint ani
 		}
 	}
 }
+
+bool _ReactToSkill( Critter& npc, Critter& whoUse, int skill )
+{
+	if( isGM( whoUse ) )
+	{
+		return false;
+	}
+	
+	if( sameFaction( npc, whoUse ) )
+	{
+		return false;
+	}
+	
+	if( npc.IsLife() && ( skill == SKILL_PUSH_CRITTER || skill == SK_STEAL ) )
+	{
+		npc.SendMessage( MSG_GROUP_ATTACK, whoUse.Id, MESSAGE_TO_WHO_SEES_ME );
+		npc.AddEnemyInStack( whoUse.Id );
+		AddAttackPlane( npc, 0, whoUse );
+		return true;
+	}
+	
+	return false;
+}
+
+// ENEMY DOWN
+void _TargetDown( Critter& self, Critter& enemy, uint anim2begin, uint anim2idle, uint anim2end, uint lostAp, uint knockDist )
+{
+	if( !valid( self ) )
+	{
+		return;
+	}
+	
+	if( self.IsDead() )
+	{
+		return;
+	}
+	
+	if( !valid( enemy ) )
+	{
+		return;
+	}
+	
+	if( enemy.IsDead() )
+	{
+		return;
+	}
+	
+	if( enemy.Stat[ ST_CURRENT_HP ] <= 0 )
+	{
+		self.EraseEnemyFromStack( enemy.Id );
+		EraseAttackPlane( self, enemy );
+	}
+}
+
+/*
+void _ReactToDrop( Critter& npc, Critter& fromCr, Item& item )
+{
+	if( isGM( fromCr ) )
+	{
+		return;
+	}
+	
+	if( sameFaction( npc, fromCr ) )
+	{
+		return;
+	}
+	
+	IRelations@ relation = GetFractionRelation( GetFraction( npc ), fromCr );
+	if( valid(relation) && relation.Value == Relation_Ally )
+	{
+		return;
+	}
+	
+	if( ( item.GetType() == ITEM_TYPE_TRAP && item.GetProtoId() != PID_TRAP_DEACTIVATED ) 
+		|| ( item.Proto.Item_Subtype >= ITEM_SUBTYPE_WEAPON_GRENADE_FRAG && item.Proto.Item_Subtype <= ITEM_SUBTYPE_WEAPON_GRENADE_END )
+		|| ( item.GetProtoId() == PID_MICRO_FUSION_CELL )
+		)
+	{
+		npc.SendMessage( MSG_GROUP_ATTACK, fromCr.Id, MESSAGE_TO_WHO_SEES_ME );
+		npc.AddEnemyInStack( fromCr.Id );
+		AddAttackPlane( npc, 0, fromCr );
+	}
+}
+
+/*
+void _ExplosiveSnow( Critter& npc, Critter& fromCr, Item& item, uint8 fromSlot )
+{
+		
+	if( !valid( npc ) )
+	{
+		return;
+	}
+	
+	if( !valid( fromCr ) )
+	{
+		return;
+	}
+	
+	if( isGM( fromCr ) )
+	{
+		return;
+	}
+	
+	if( sameFaction( npc, fromCr ) )
+	{
+		return;
+	}
+	
+	if( !valid( item ) )
+	{
+		return;
+	}
+
+	IRelations@ relation = GetFractionRelation( GetFraction( npc ), fromCr );
+	if( valid(relation) && relation.Value == Relation_Ally )
+	{
+		return;
+	}
+	
+	if( ( item.GetType() == ITEM_TYPE_TRAP && item.GetProtoId() != PID_TRAP_DEACTIVATED ) 
+		|| ( item.Proto.Item_Subtype >= ITEM_SUBTYPE_WEAPON_GRENADE_FRAG && item.Proto.Item_Subtype <= ITEM_SUBTYPE_WEAPON_GRENADE_END )
+		|| ( item.GetProtoId() == PID_MICRO_FUSION_CELL )
+		&& fromSlot != SLOT_HAND1 )
+	{
+		if( item.CritSlot == SLOT_HAND1 )
+		{
+			npc.SendMessage( MSG_GROUP_ATTACK, fromCr.Id, MESSAGE_TO_WHO_SEES_ME );
+			npc.AddEnemyInStack( fromCr.Id );
+			AddAttackPlane( npc, 0, fromCr );
+		}
+	}
+}*/
 
 #endif //AI_GUARDS

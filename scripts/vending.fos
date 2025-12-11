@@ -2,6 +2,8 @@
 #define VENDING
 
 #include "_utils.fos"
+#include "_ltp.fos"
+#include "gathering_h.fos"
 #include "vending_h.fos"
 #include "speed_h.fos"
 
@@ -40,22 +42,24 @@ class MenuVendingMachine: CenteredMenuHandler
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
         Map@ map = GetMap(map_id);
-        Item@ vendMach = GetItem(vendMach_id);
-	
-		bool locked_in_place = !FLAG( vendMach.Flags, ITEM_CAN_PICKUP );
-		
-        if( map is null || vendMach is null )
+        if( !valid( map ) )
 		{
             return false;
         }
 
-		for( uint i = 0, len = cash_pids.length(); i < len; i++ )
+        Item@ vendMach = GetItem(vendMach_id);
+        if( !valid( vendMach ) )
 		{
-			uint16 pid = cash_pids[i];
-			uint balance_change = int( cash_values[i] );
+            return false;
+        }
+		
+		for( uint i = 0, len = vendMach.MONEY_TYPE == MONEY_CASH ? cash_pids.length() : MONEY_CAPS; i < len; i++ )
+		{
+			uint16 pid = vendMach.MONEY_TYPE == MONEY_CASH ? cash_pids[i] : PID_REAL_BOTTLE_CAPS;
+			uint balance_change = vendMach.MONEY_TYPE == MONEY_CASH ? int( cash_values[i] ) : MONEY_CAPS;
 			Item@ cash = cr.GetItem( pid, -1 );			
 
-			if( menu.Button( "Deposit "+balance_change+" $" ) )
+			if( menu.ButtonMsg( STR_DEVICE_INSERT_MONEY, "$balance_change" + balance_change ) )
 			{
 				if( valid( cash ) )
 				{
@@ -78,7 +82,7 @@ class MenuVendingMachine: CenteredMenuHandler
 			}
 		}
 		
-		if( FLAG( vendMach.VENDING_MODE, IS_SELLING ) && menu.Button( "[ Buy 1 pc. ]" ) )
+		if( FLAG( vendMach.VENDING_MODE, IS_SELLING ) && menu.ButtonMsg( STR_VENDING_MENU_BTN_BUY ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			if( vendMach.BALANCE >= vendMach.SELLING_PRICE )
@@ -116,7 +120,7 @@ class MenuVendingMachine: CenteredMenuHandler
 			
 		}
 		
-		if( FLAG( vendMach.VENDING_MODE, IS_BUYING ) && menu.Button( "[ Sell 1 pc. ]" ) )
+		if( FLAG( vendMach.VENDING_MODE, IS_BUYING ) && menu.ButtonMsg( STR_VENDING_MENU_BTN_SELL ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			
@@ -132,19 +136,20 @@ class MenuVendingMachine: CenteredMenuHandler
 
 			PlayGenericSound( map, cr.HexX, cr.HexY, _GetOneRandom( VendingSoundNames ), 15 );
 			
-			cr.Say( SAY_EMOTE_ON_HEAD, "Sells" );//TODO 4Anuri: cr.SayMsg
+			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_SELLS );
 			return true;
 		}
 		
-		if( menu.Button( "Take change" ) )
+		if( menu.ButtonMsg( STR_DEVICE_TAKE_CHANGE ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			Item@ change = vendMach.GetItem( PID_BOTTLE_CAPS, 0 );
+			uint16 pid = vendMach.MONEY_TYPE == MONEY_CASH ? PID_BOTTLE_CAPS : PID_REAL_BOTTLE_CAPS;
+			Item@ change = vendMach.GetItem( pid, 0 );
 			if( valid( change ) && vendMach.BALANCE > 0 )
 			{
 				int changeCount = MIN( int( change.GetCount() ), vendMach.BALANCE );
 				_SubItem( change, uint( changeCount ) );
-				cr.AddItem( PID_BOTTLE_CAPS, changeCount );
+				cr.AddItem( pid, changeCount );
 				vendMach.BALANCE -= changeCount;
 				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_COLLECTS_CHANGE );
 				return false;
@@ -156,13 +161,23 @@ class MenuVendingMachine: CenteredMenuHandler
 			}
 		}
 		
+		if(vendMach.MONEY_TYPE != MONEY_CAPS )
+		{
+			Item@ handItem = _CritGetItemHand(cr);
+			if((valid(handItem) && handItem.GetProtoId() == PID_MULTI_TOOL) && menu.ButtonMsg(STR_CHANGE_MONEY_TYPE))
+			{
+				start_money_type(cr, vendMach);
+				return false;
+			}
+		}
+
 		if( !FLAG( vendMach.LockerCondition, LOCKER_LOCKED ) )
 		{
 			Item@[] productItm;
 			vendMach.GetItems( uint( -1 ), productItm );
 			if( productItm.length() > 0 )
 			{
-				if( menu.Button( "Select item" ) )
+				if( menu.ButtonMsg( STR_VENDING_MENU_SELECT_ITEM ) )
 				{
 					MenuSelectProduct@ select_product = MenuSelectProduct( vendMach, map );
 					select_product.level = level + 1;
@@ -170,36 +185,38 @@ class MenuVendingMachine: CenteredMenuHandler
 				}
 			}
 			else
-				if( menu.Button( "[ NO ITEMS INSIDE ]" ) )
+				if( menu.ButtonMsg( STR_VENDING_MENU_NO_ITEMS ) )
 					return true;
 			
-			if( menu.Button( "Set selling price" ) )
+			if( FLAG( vendMach.VENDING_MODE, IS_SELLING ) && menu.ButtonMsg( STR_VENDING_MENU_SELLING_PRICE ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-				cr.RunClientScript( "client_screen_numberpad@ShowScreen", vendMach.Id, 0, 0, "Input selling price", null );
+				int[] data = {0};
+				cr.RunClientScript( "client_screen_numberpad@ShowScreen", vendMach.Id, 0, 0, "Set selling price", data );
 				return false;
 			}
 			
-			if( menu.Button( "Set buying price" ) )
+			if( FLAG( vendMach.VENDING_MODE, IS_BUYING ) &&menu.ButtonMsg( STR_VENDING_MENU_BUYING_PRICE ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-				cr.RunClientScript( "client_screen_numberpad@ShowScreen", vendMach.Id, 1, 0, "Input buying price", null );
+				int[] data = {0};
+				cr.RunClientScript( "client_screen_numberpad@ShowScreen", vendMach.Id, 1, 0, "Set buying price", data );
 				return false;
 			}
 			
-			string[] mode_names = { "Sell", "Buy", "Exchange" };
+			int[] mode_names = { STR_VENDING_MENU_MODE_SELL, STR_VENDING_MENU_MODE_BUY, STR_VENDING_MENU_MODE_EXCHANGE };
 			int mode_max = mode_names.length() - 1;
 			int mode  = CLAMP( vendMach.VENDING_MODE - 1, 0, mode_max );
 			
-			if( menu.Button( "Mode: " + mode_names[mode] ) )
+			if( menu.ButtonMsg( STR_VENDING_MENU_SET_MODE, "$mode" + STR_INSERT_TEXT_LINE( mode_names[mode] ) ) )
 			{
 				vendMach.VENDING_MODE = ( mode + 1 ) % ( mode_max + 1 ) + 1;				
 				return true;
 			}
 
-			if( locked_in_place )
+			if( locked_in_place( vendMach ) )
 			{
-				if( menu.Button( "Detach" ) )
+				if( menu.ButtonMsg( STR_FURNITURE_MENU_DETACH ) )
 				{
 					LockInPlace( cr, vendMach );
 					return true;
@@ -207,13 +224,13 @@ class MenuVendingMachine: CenteredMenuHandler
 			}
 			else
 			{
-				if( menu.Button( "Anchor" ) )
+				if( menu.ButtonMsg( STR_FURNITURE_MENU_ANCHOR ) )
 				{
 					LockInPlace( cr, vendMach );
 					return true;
 				}
 
-				if( menu.Button( "Pick up" ) )
+				if( menu.ButtonMsg(STR_FURNITURE_MENU_PICKUP ) )
 				{
 					PickItem( cr, vendMach );
 					ChangeCritterSpeed( cr );
@@ -222,7 +239,7 @@ class MenuVendingMachine: CenteredMenuHandler
 			}
 		}
 
-		if( menu.Button( "Open safe" ) )
+		if( menu.ButtonMsg( STR_FURNITURE_MENU_OPEN_SAFE ) )
 		{
 			if( FLAG( vendMach.LockerCondition, LOCKER_LOCKED ) )
 			{
@@ -240,7 +257,7 @@ class MenuVendingMachine: CenteredMenuHandler
 			}
         }
 
-		if( menu.Button( "Close menu" ) )
+		if( menu.ButtonMsg( STR_CLOSE_MENU_BUTTON ) )
 		{
 			return false;
 		}
@@ -248,66 +265,67 @@ class MenuVendingMachine: CenteredMenuHandler
 		return true;
     }
 	
+   int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_VENDING_MENU_MAIN;
+	}
+	
     string@ Description( Critter& cr )
 	{
 		Item@ vendMach = GetItem( vendMach_id );
-		string vending_machine_description = "Vending machine ¹ " + COLOR_YELLOW + "" + vendMach.Id + NEXT_LINE + COLOR_GREEN;
+		string lex = "$descriptionID" + STR_INSERT_TEXT_LINE( STR_VENDING_MENU_DESCR_ID )
+				   + "$ID" + vendMach.Id;
 		
-		string merchandise_description = "Merchandise: ";
-		
+		lex += "$merchandise";
 		uint itemPID = vendMach.PRODUCT;
 		if( itemPID != 0 )
 		{
-			merchandise_description += COLOR_YELLOW + GetMsgStr( 1, TEXTMSG_ITEM, itemPID * 100 ) + COLOR_GREEN + ", ";
+			lex += STR_INSERT_TEXT_LINE( STR_VENDING_MENU_GOODS_INFO )
+				+ "$goods" + STR_INSERT_ITEM_LINE( itemPID * 100 );
 			
+			lex += "$lexCount";
 			uint count = CountItemsByPID( vendMach, itemPID );
 			if( count == 0 )
-			{
-				merchandise_description += COLOR_RED + "SOLD OUT";
-			}
+				lex += STR_INSERT_TEXT_LINE( STR_VENDING_MENU_SOLD_OUT );
 			else
-			{
-				merchandise_description += COLOR_YELLOW + count + " pc.";
-			}
+				lex += STR_INSERT_TEXT_LINE( STR_VENDING_MENU_LEX_COUNT )
+					+ "$count" + count;
 			
-			merchandise_description += NEXT_LINE + COLOR_GREEN;
-			
+			lex += "$selling";
 			if( FLAG( vendMach.VENDING_MODE, IS_SELLING ) )
 			{
-				merchandise_description += "Price: " + COLOR_YELLOW + vendMach.SELLING_PRICE + COLOR_GREEN + "$. ";
+				lex += STR_INSERT_TEXT_LINE( STR_VENDING_MENU_PRICE_DESC ) 
+					+ "$sellingPrice" + vendMach.SELLING_PRICE;
 			}
 			
+			lex += "$buying";
 			if( FLAG( vendMach.VENDING_MODE, IS_BUYING ) )
 			{
-				merchandise_description += "Purchace: " + COLOR_YELLOW + vendMach.BUYING_PRICE + COLOR_GREEN + "$. ";
+				lex += STR_INSERT_TEXT_LINE( STR_VENDING_MENU_PURCHACE_DESC ) 
+					+ "$byingPrice" + vendMach.BUYING_PRICE;
 			}
 		}
 		else
 		{
-			merchandise_description += COLOR_RED + "EMPTY";
+			lex += STR_INSERT_TEXT_LINE( STR_VENDING_MENU_EMPTY );
 		}
 		
-		merchandise_description += NEXT_LINE + COLOR_GREEN;
-		
-		string available_actions_description;
-		string[] action_name = { "money", "goods", "money or goods" };
+		int[] action_name = { STR_VENDING_MENU_STR_MONEY, STR_VENDING_MENU_STR_GOODS, STR_VENDING_MENU_STR_MONEY_OR_GOODS };
 		uint mode = CLAMP( uint( vendMach.VENDING_MODE - 1 ), 0, action_name.length() - 1 );
-		available_actions_description = "Put your " + COLOR_WHITE + action_name[mode] + COLOR_GREEN + " into.";
-		available_actions_description += NEXT_LINE + COLOR_GREEN;
+		lex += "$wares" + STR_INSERT_TEXT_LINE( action_name[mode] );
 		
-		string cash_description = "Balance: " + COLOR_YELLOW + vendMach.BALANCE + COLOR_GREEN + " $";
+		lex += "$balance" + vendMach.BALANCE;
 
+		lex += "$change";
 		if( CountItemsByPID( vendMach, PID_BOTTLE_CAPS ) == 0 )
-		{
-			cash_description += " " + COLOR_RED + "NO CHANGE"; 			
-		}		
+			lex += STR_INSERT_TEXT_LINE( STR_VENDING_MENU_NO_CHANGE );
 		
-        return vending_machine_description + merchandise_description + available_actions_description + cash_description;
-    }
-	
-    string@ ButtonCancel()
-	{
-        return ButtonDecorator( "", null );
+        return lex;
     }
 
 	bool ShouldRedraw( Critter& cr )
@@ -320,7 +338,7 @@ class MenuVendingMachine: CenteredMenuHandler
 void StartMenuVendingMachine( Critter& cr, Item& vendMach )
 {
     Map@ map = cr.GetMap();
-    if( map is null )
+    if( !valid(map) )
 	{
         return;
     }
@@ -351,17 +369,22 @@ class MenuSelectProduct: CenteredMenuHandler
         Map@ map = GetMap( map_id );
         Item@ vendMach = GetItem( vendMach_id );
 		
-        if( map is null || vendMach is null )
+        if( !valid( map ) )
 		{
             return false;
         }
-			
+		
+		if( !valid( vendMach ) )
+		{
+            return false;
+        }
+		
 		Item@[] productItm;
 		vendMach.GetItems( uint( -1 ), productItm );
 		
 		if( productItm.length() > 0 )
 		{
-			if ( menu.Button( "Previous" ) )
+			if ( menu.ButtonMsg( STR_PREVIOUS ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				selectorPos--;
@@ -379,7 +402,7 @@ class MenuSelectProduct: CenteredMenuHandler
 				return true;
 			}
 			
-			if ( menu.Button( "Next" ) )
+			if ( menu.ButtonMsg( STR_NEXT ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				selectorPos++;
@@ -397,7 +420,7 @@ class MenuSelectProduct: CenteredMenuHandler
 				return true;
 			}
 			
-			if ( menu.Button( "Confirm" ) )
+			if ( menu.ButtonMsg( STR_CONFIRM ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_SELECTS_ITEM );
@@ -407,18 +430,28 @@ class MenuSelectProduct: CenteredMenuHandler
 		return true;
     }
 
+   int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_VENDING_MENU_SELECT_MERCH_MAIN;
+	}
+
     string@ Description( Critter& cr )
 	{	
 		Item@ vendMach = GetItem( vendMach_id );
-		string info = "Vending Machine ¹ ";
-		info += "|0xFFFF00 " + vendMach.Id + "\n";
+		string lex = "$descriptionID" + STR_INSERT_TEXT_LINE( STR_VENDING_MENU_DESCR_ID )
+			   + "$ID" + vendMach.Id;
 		
 		Item@[] productItm;
 		vendMach.GetItems( uint( -1 ), productItm );
 		if( productItm.length() > 0 && vendMach.PRODUCT != 0 )
 		{
 			uint len = productItm.length();
-			string amount = 0;
+			uint amount = 0;
 			for( uint i = 0; i < len; i++ )
 			{			
 				Item@ product = productItm[i];
@@ -426,7 +459,7 @@ class MenuSelectProduct: CenteredMenuHandler
 				{
 					if( product.IsStackable() )
 					{
-						amount = "|0xFFFF00 " + productItm[i].GetCount();
+						amount = productItm[i].GetCount();
 					}
 					else
 					{
@@ -440,38 +473,88 @@ class MenuSelectProduct: CenteredMenuHandler
 								count ++;
 							}
 						}
-						amount = "|0xFFFF00 " + count;
+						amount = count;
 					}
 					break;
 				}
 			}
-			info += "|0x3CF800 Selected merchandise: \n[ ";
-			info += "|0xFFFF00 " + GetMsgStr( 1, TEXTMSG_ITEM, vendMach.PRODUCT * 100 );
-			info += "|0x3CF800  ]\nAvailable: ";
-			info += "|0xFFFF00 " + amount;
-			info += "|0x3CF800  pc.";
+			
+			lex += "$merch" + STR_INSERT_ITEM_LINE( vendMach.PRODUCT * 100 )
+				+  "$amount" + amount;
 		}
-	info += "|0x3CF800  \nChoose desired merchendise and press |0xFFFF00 Confirm|0x3CF800  to complete setup.";
+		else
+			lex += "$merch" + STR_INSERT_TEXT_LINE( STR_VENDING_MENU_EMPTY )
+				+  "$amount" + STR_INSERT_TEXT_LINE( STR_VENDING_MENU_SOLD_OUT );
 	
-		return info;
+		return lex;
 	}	
-		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Close menu", null );
-    }
 }
 
 void StartMenuSelectProduct( Critter& cr, Item& vendMach )
 {
     Map@ map = cr.GetMap();
-    if( map is null )
+    if( !valid(map) )
 	{
         return;
     }
 
     iMenuHandler@ handler = MenuSelectProduct( vendMach, map );
     iDialogBox@ menu = OpenMenu( cr, "Vending machine", handler );
+}
+
+bool ltp_inited=false;
+
+void ltp_init()
+{
+    LTPREG( LTP_MONEY_TYPE, process_money_type )
+
+    ltp_inited=true;
+}
+
+bool start_money_type(Critter& cr, Item& vending)
+{
+	if(!ltp_inited)
+	{
+		ltp_init();
+	}
+
+	if(!valid(cr) || !valid(vending))
+	{
+		return false;
+	}
+
+	uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+	uint cracking_rate = cr.Skill[ SK_LOCKPICK ] + ( cr.Stat[ ST_STRENGTH ] * 10 ) + OBJECT_DPA_BASE; 
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = uint( ceil( float( ( OBJECT_HP_BASE ) / ( CLAMP( cracking_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+
+	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+	StartProcess(cr, LTP_MONEY_TYPE, 0, vending.Id, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ]);
+	return true;
+}
+
+uint process_money_type( Critter@ cr, int& param0, int& vendId, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_MONEY_TYPE )
+
+	Item@ vending = GetItem( vendId );
+
+    if(valid(vending))
+	{
+		param0++;
+
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
+		{
+			vending.MONEY_TYPE = MONEY_CAPS;
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+			return 0;
+		}
+
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+	}
+
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	return 0;
 }
 
 #endif // VENDING

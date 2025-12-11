@@ -1,13 +1,222 @@
-void CopyMob( Critter& master, Critter& slave )
+shared class AddItem
+{
+	uint pid;
+	uint count;
+	
+	AddItem( uint pid, uint count = 1 ) 
+	{
+		this.pid = pid;
+		this.count = count;
+	}
+	
+	void add( Critter& cr )
+	{
+		cr.AddItem( pid, count );
+	}
+	
+	string toString()
+	{ //Format: pid(count)
+		return pid + "(" + count + ")";
+	}
+}
+
+shared class noAddItem : AddItem
+{
+	noAddItem() {}
+	void add( Critter& cr ) override { }
+	string toString() override { return "[noAddItem]"; }
+}
+
+shared class CTE
+{
+	uint rate;
+	uint group_id;
+	uint event_id;
+	uint time_left;
+	
+	CTE( uint group_id, uint event_id, uint rate, uint time_left ) 
+	{
+		this.rate = rate;
+		this.group_id = group_id;
+		this.event_id = event_id;
+		this.time_left = time_left;
+	}	
+		
+	string toString()
+	{//Format: CTE[group:event]rate(time)
+		return "CTE[" + group_id + ":" + event_id + "]" + rate + "(" + DeltaTime_HMS( time_left ) + ")";
+	}
+}
+
+shared class ParamData
+{
+	int base;
+	int value;
+	ParamData( Critter& cr, uint index )
+	{
+		base = getBase( cr, index );
+		value = getValue( cr, index );
+	}	
+	
+	string toString() 
+	{//Format: value(base)
+		return value + "(" + base + ")";
+	}
+}
+
+shared int setBase( Critter@ cr, uint param, int value ) {
+	if( !valid( cr ) ) return value;
+
+		 if( IN_RANGE( param, STAT_BEGIN, STAT_END ) )				cr.StatBase[param] 	     = value;			
+	else if( IN_RANGE( param, SKILL_BEGIN, SKILL_END ) )			cr.SkillBase[param]      = value;          
+	else if( IN_RANGE( param, TIMEOUT_BEGIN, TIMEOUT_END ) )		cr.TimeoutBase[param]    = __FullSecond + REAL_SECOND(value);        
+	else if( IN_RANGE( param, KILL_BEGIN, KILL_END ) )				cr.KillBase[param]       = value;           
+	else if( IN_RANGE( param, PERK_BEGIN, PERK_END ) )				cr.PerkBase[param]       = value;           
+	else if( IN_RANGE( param, AVATAR_BEGIN, AVATAR_END ) )			cr.ParamBase[param]      = value;          
+	else if( IN_RANGE( param, ADDICTION_BEGIN, ADDICTION_END ) )	cr.AddictionBase[param]  = value;	    
+	else if( IN_RANGE( param, KARMA_BEGIN, KARMA_END ) )			cr.KarmaBase[param] 	 = value;          
+	else if( IN_RANGE( param, DAMAGE_BEGIN, DAMAGE_END ) )			cr.DamageBase[param] 	 = value;         
+	else if( IN_RANGE( param, MODE_BEGIN, MODE_END ) )				cr.ModeBase[param] 		 = value;           
+	else if( IN_RANGE( param, TRAIT_BEGIN, TRAIT_END ) )			cr.TraitBase[param] 	 = value;          
+	else if( IN_RANGE( param, REPUTATION_BEGIN, REPUTATION_END ) )	cr.ReputationBase[param] = value;     
+	else 															cr.ParamBase[param] 	 = value;
+	
+	return getValue( cr, param ); 
+}
+
+shared void param_change_inform( Critter& cr, uint param, float delta )
+{
+	//if( cr.Param[ QST_GAMEMODE ] != GAME_TEST ) return;
+	
+	switch(param)
+	{
+		case(ST_DYSPNEA):
+		case(ST_THIRST):
+		case(ST_HUNGER):
+			delta /= STARVATION_PERCENT;
+			break;
+		case(ST_APREGEN_EXT): 
+			delta /= 100.0f;
+			break;
+		default:break;
+	}
+	
+	if( delta > 0 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DRUG_STAT_GAIN, "$value" + delta + "$name" + STR_INSERT_PARAM_NAME(param) );
+	}
+	else if( delta < 0 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DRUG_STAT_LOSE, "$value" + (-delta) + "$name" + STR_INSERT_PARAM_NAME(param) );
+	}
+}
+
+shared int addBase( Critter& cr, uint param, int delta ) 
+{
+	param_change_inform( cr, param, delta );
+	int value = getBase( cr, param ) + delta;
+	return setBase( cr, param, value );
+}
+
+bool gotMoney( Critter& cr, int amount, int barter_mode )
+{
+	return valid( CountMoney( cr, amount, barter_mode ) );
+}
+
+bool giveMoney( Critter& crFrom, Critter@ crTo, int amount )
+{
+	if( !valid( crTo ) )
+	{
+		return false;
+	}
+	
+	return giveItems( crFrom, crTo, CountMoney( crFrom, amount, crTo.ModeBase[ MODE_BARTER_ONLY_CASH ] ) );
+}
+
+int[][]@ CountMoney( Critter& cr, int moneyCount, int barter_mode)
+{
+	int[] currencyPids = { 
+		PID_DOLLAR_100, PID_PREWAR_DOLLAR_100, 
+		PID_DOLLAR_20, 	PID_PREWAR_DOLLAR_20,
+		PID_GOLDEN_COIN, //10$
+		PID_DOLLAR_5, 	PID_PREWAR_DOLLAR_5,
+		PID_PREWAR_DOLLAR_1, PID_BOTTLE_CAPS
+	};
+	
+	if( barter_mode < 2 ) 
+	{
+		currencyPids.insertAt(0, PID_REAL_BOTTLE_CAPS );
+	}
+	
+	int[][] result; //structure: { { pid, amount } }	
+	
+	int moneyLeft = moneyCount;
+	for( int i = 0, l = currencyPids.length(); i < l; i++ )
+	{
+		if( moneyLeft <= 0 ) break;
+		
+		int currencyPid = currencyPids[i];
+		
+		int currencyAvailable = cr.CountItem( currencyPid );
+		if( currencyAvailable == 0 ) continue;		
+		
+		int currencyCost = GetProtoItem( currencyPid ).Cost;
+	
+		if( moneyLeft < currencyCost ) continue;
+		int currencyRequired = int( moneyLeft / currencyCost );
+
+		int currencyTaken = MIN( currencyRequired, currencyAvailable );
+		
+		int[] data = { currencyPid, currencyTaken };
+		result.insertLast( data );		
+		
+		moneyLeft -= currencyTaken * currencyCost;
+	}
+	
+	if( moneyLeft > 0 ) 
+	{ 
+		int moneyGot = moneyCount - moneyLeft;
+		testInfo( cr, "Not enough money - got only " + moneyGot + "$ of " + moneyCount + "$ needed." ); 
+		return null; 
+	}
+	
+	return result;
+}
+
+bool giveItems( Critter& crFrom, Critter& crTo, int[][]@ data )
+{
+	if( !valid( data ) ) return true;
+	
+	for( int i = 0, l = data.length(); i < l; i++ )
+	{
+		int itemPid 	= data[i][0];
+		int itemTaking 	= data[i][1];
+		
+		int itemAvailable = crFrom.CountItem( itemPid );
+		if( itemAvailable < itemTaking ) 
+		{ 
+			Log( "[ERROR] Have less (" + itemAvailable + ") than needed (" + itemTaking + ") of " + itemName( itemPid ) + " in the inventory of " + crInfo( crFrom ) ); 
+			return false; 
+		}
+		
+		Item@ item = crFrom.GetItem( itemPid, -1 );
+		MoveItem( item, itemTaking, crTo );
+	}
+	
+	return true;
+}
+
+Critter@ CopyMob( Critter& master, Critter& slave )
 {
 	Map@ map = master.GetMap();
-	if( !valid(map) ) return;
+	if( !valid(map) ) return null;
 	
 	Critter@ mob = map.AddNpc( slave.GetProtoId(), master.HexX, master.HexY, Random( 0, 5 ), null, null, null );
 	clearInv( mob );  //ignore bag id
 	master.RunClientScript( "client_gui@_SetControlCritters", mob.Id, 0, 0, null, null );
 	FullClone( mob, slave );
 	DublicateLoot( mob, slave );
+	return mob;
 }
 
 void clearInv( Critter& cr )
@@ -300,6 +509,8 @@ shared bool ReplaceWith( Item@ &item, uint pid, uint count = 1 )
 		}
 		case( ACCESSORY_NONE ):
 			return Warning( "Object " + itemDesc( item ) + " is outside game world, can't change for " + itemName( pid ) + "." );
+		default:
+			return Warning( "Object " + itemDesc( item ) + " something went terribly wrong " + itemName( pid ) + "." );
 	}
 	
 	if( !valid( result ) )
@@ -311,6 +522,7 @@ shared bool ReplaceWith( Item@ &item, uint pid, uint count = 1 )
 	{
 		result.Val0 = result.Proto.Partial_Item;
 	}	
+	
 	_SubItem( item, count );
 	
 	@item = @result;
@@ -440,76 +652,27 @@ bool LockInPlace( Critter& cr, Item& targetItem )
 	return true;
 }
 
-//Pick up items, max weight and volume check
-bool PickItem( Critter& cr, Item& targetItem )
+shared void PlayGenericSound( Critter& cr, string& sound, int distance ) 
 {	
-	Item@ item = targetItem;
-	if( !FLAG( item.Flags, ITEM_CAN_PICKUP ) )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_PICK_UP );
-		return false;
-	}	
-	
-	int freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] - ItemsWeight( cr );
-	
-	_testInfo( cr, CR_TEST_MODE_SPEED, SAY_NETMSG, "lifring: " + ItemsWeight( targetItem ) + " gramms." );
-	
-	if( !isGM( cr ) && !item.IsStackable() && int(ItemsWeight( targetItem )) > freeWeight )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_HEAVY );
-		return false;
-	}
-	
-	int amount1 = item.GetCount();
-	if( !isGM( cr ) && freeWeight < int( item.Proto.Weight * item.GetCount() ) )
-	{
-		amount1 = 0;
-		if( item.IsStackable() && freeWeight >= int(item.Proto.Weight) )
-		{
-			amount1 = freeWeight / item.Proto.Weight;
-		}	
-	}
-	
-	int freeVolume = CRITTER_MAX_VOLUME - cr.ItemsVolume();
-	int amount2 = item.GetCount();
-	if( !isGM( cr ) && freeVolume < int( item.Proto.Volume * item.GetCount() ) )
-	{
-		amount2 = 0;
-		if( item.IsStackable() && freeVolume >= int( item.Proto.Volume ) )
-		{
-			amount2 = freeVolume / item.Proto.Volume;
-		}
-	}
-	
-	if( amount1 * amount2 != 0 )
-	{
-		MoveItem( item, MIN( amount1, amount2 ), cr );			
-	}
-	else
-	{
-		if( amount1 == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_FREE_WEIGHT );
-		}
-		else 
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_FREE_VOLUME );
-		}
-	}
-	
-	return true;
+	PlayGenericSound( cr.GetMap(), cr.HexX, cr.HexY, sound, distance ); 
 }
 
-void PlayGenericSound( Map& map, uint16 hx, uint16 hy, string& sound, int distance )
+shared void PlayGenericSound( Map& map, uint16 hx, uint16 hy, string& sound, int distance )
 {
 	if( !valid( map ) )
 	{
 		return;
 	}
+	
+	if( sound.length() < 3 )
+	{
+		return;
+	}
+	
 	Critter@[] players;
 	map.GetCrittersHex( hx, hy, distance, FIND_ALL | FIND_ONLY_PLAYERS, players );
 	int[] val = { distance };
-	for( uint i = 0; i < players.length(); i++ )
+	for( uint i = 0, len = players.length(); i < len; i++ )
 	{
 		Critter@ player = players[i];
 		if( valid( player ) )
@@ -517,6 +680,8 @@ void PlayGenericSound( Map& map, uint16 hx, uint16 hy, string& sound, int distan
 			player.RunClientScript( "fofmod@__PlaySound", map.Id, hx, hy, sound, val );
 		}
 	}
+	
+	players.resize(0);
 }
 
 void PlayDoorSound( Map& map, uint16 hx, uint16 hy, int pid, int lockerCondition, int distance )
@@ -528,7 +693,7 @@ void PlayDoorSound( Map& map, uint16 hx, uint16 hy, int pid, int lockerCondition
 	Critter@[] players;
 	map.GetCrittersHex( hx, hy, distance, FIND_ALL | FIND_ONLY_PLAYERS, players );
 	int[] val = { pid, lockerCondition, distance };
-	for( uint i = 0; i < players.length(); i++ )
+	for( uint i = 0, len = players.length(); i < len; i++ )
 	{
 		Critter@ player = players[i];
 		if( valid( player ) )
@@ -536,41 +701,8 @@ void PlayDoorSound( Map& map, uint16 hx, uint16 hy, int pid, int lockerCondition
 			player.RunClientScript( "fofmod@__PlayDoorSound", map.Id, hx, hy, "LAUGHTE1.mp3", val );
 		}
 	}
-}
-
-void DropContainerItems( Map& map, Item& container )
-{
-	if( !valid( map ) )
-	{
-		return;
-	}
 	
-	if( container.Proto.Type != ITEM_TYPE_CONTAINER )
-	{
-		return;
-	}
-	
-	Item@[] dumpedItems;
-	container.GetItems( uint( -1 ), dumpedItems );
-	if( dumpedItems.length() > 0 ) 
-	{
-		for( uint i = 0; i < dumpedItems.length(); i++ )
-		{
-			uint16 sHx = container.HexX , sHy = container.HexY;
-			uint16 hx = 0, hy = 0;
-			hx = sHx; hy = sHy;
-			uint count = dumpedItems[i].GetCount();
-			map.MoveHexByDir( hx, hy, Random( 0, 5 ), 1 );
-			if( map.IsHexPassed( hx, hy ) )
-			{
-				MoveItem( dumpedItems[i], count, map, hx, hy );
-			}
-			else
-			{	
-				MoveItem( dumpedItems[i], count, map, sHx, sHy );
-			}
-		}
-	}
+	players.resize(0);
 }
 
 bool CantResist( Critter@ targetCr )
@@ -590,21 +722,21 @@ bool CantResist( Critter@ targetCr )
 
 	@item = targetCr.GetItem( 0, SLOT_HAND1 );
 	pid = valid( item ) ? item.GetProtoId() : 0;
-	if( ( pid == PID_ROPE || pid == PID_HANDCUFFS ) && item.Val2 == 1 )
+	if( ( pid == PID_ROPE || pid == PID_HANDCUFFS ) && item.Val1 == 1 )
 	{
 		return true;
 	}
 	
 	@item = targetCr.GetItem( 0, SLOT_HEAD );
 	pid = valid( item ) ? item.GetProtoId() : 0;
-	if( pid == PID_SLAVE_COLLAR && item.Val2 == 1 )
+	if( pid == PID_SLAVE_COLLAR && item.Val1 == 1 )
 	{
 		return true;
 	}
 	
 	@item = targetCr.GetItem( 0, SLOT_MISC );
 	pid = valid( item ) ? item.GetProtoId() : 0;
-	if( pid == PID_SHACKLES && item.Val2 == 1 )
+	if( pid == PID_SHACKLES && item.Val1 == 1 )
 	{
 		return true;
 	}
@@ -616,22 +748,142 @@ void RefreshClientsMap( Map& map )
 {
 	Critter@[] players;
 	map.GetCritters( 0, FIND_ALL | FIND_ONLY_PLAYERS, players );
-	uint len = players.length();
-	if( len > 0 )
+	for( uint i = 0, len = players.length(); i < len; i ++ )
 	{
-		for( uint i = 0; i < len; i ++ )
-		{
-			players[i].RunClientScript( "client_main@__ChosenRefreshMap", 0, 0, 0, null, null );
-		}
+		players[i].RunClientScript( "client_main@__ChosenRefreshMap", 0, 0, 0, null, null );
 	}
+	
+	players.resize(0);
 }
 
-bool disarmCheck( Item& trap, Critter& cr )
+bool DisarmCheck( Item& trap, Critter& cr )
 {
-	return Random( 0, 100 ) + trap.Val0 / 3 < Random( 0, 100 ) + cr.Stat[ ST_LUCK ] / 3;
+	if( isGM( cr ) )
+	{
+		return true;
+	}
+	
+	uint diff = Random( 0, 100 ) + trap.Val0 / 3;
+	uint roll = Random( 0, 100 ) + cr.Skill[ SK_TRAPS ] / 3 + ( cr.Stat[ ST_LUCK ] > 4 ? cr.Stat[ ST_LUCK ] * 3 : 0 ) + ( trap.Val2 == int( cr.Id ) ? 65 : 0 );
+	return diff < roll;
 }
 	
 bool LuckCheck( Critter& cr )
 {
-	return ( cr.Stat[ ST_LUCK ] * 2 ) > Random( 0, 100 );
+	uint stat = cr.Stat[ ST_LUCK ] * 3;
+	uint roll = Random( 0, 100 );
+	return stat > roll;
+}
+
+bool locked_in_place( Item& item )
+{
+	if( !FLAG( item.Flags, ITEM_CAN_PICKUP ) )
+	{
+		return true;
+	}
+	
+	return false;
+}
+
+void DistributeSkllPoints( Critter& cr, uint skillIndex )
+{
+	if( skillIndex >= SKILL_BEGIN && skillIndex <= SKILL_END )
+	{
+		while( cr.Stat[ ST_UNSPENT_SKILL_POINTS ] > 0 )
+		{
+			int skillVal = cr.SkillBase[ skillIndex ];
+
+			if( skillVal >= MAX_SKILL_VAL )
+			{
+				break;
+			}
+
+			int needPoints = 1;
+			if( skillVal > __SkillModAdd6 )
+			{
+				needPoints = 6;
+			}
+			else if( skillVal > __SkillModAdd5 )
+			{
+				needPoints = 5;
+			}
+			else if( skillVal > __SkillModAdd4 )
+			{
+				needPoints = 4;
+			}
+			else if( skillVal > __SkillModAdd3 )
+			{
+				needPoints = 3;
+			}
+			else if( skillVal > __SkillModAdd2 )
+			{
+				needPoints = 2;
+			}
+
+			if( cr.StatBase[ ST_UNSPENT_SKILL_POINTS ] < needPoints )
+			{
+				break;
+			}
+
+			skillVal++;
+			if( _CritIsTagSkill( cr, skillIndex ) && skillVal < MAX_SKILL_VAL )
+			{
+				skillVal++;
+			}
+			//Log( "cr.Stat[ ST_UNSPENT_SKILL_POINTS ] " + cr.Stat[ ST_UNSPENT_SKILL_POINTS ] + " skillVal  " + skillVal );
+			cr.SkillBase[ skillIndex ] = skillVal;
+			cr.StatBase[ ST_UNSPENT_SKILL_POINTS ] -= needPoints;
+			//Log( "cr.Stat[ ST_UNSPENT_SKILL_POINTS ] " + cr.Stat[ ST_UNSPENT_SKILL_POINTS ] );
+		}
+	}
+	else
+	{
+		Log( "Skill values out of bounds! cr.Id: " + cr.Id + " skillIndex " + skillIndex );
+	}
+}
+
+void ChangeStat( Critter& cr, int stat = -1, int val = 0 )
+{
+	if( stat == -1 && val == 0 )
+	{
+		uint statPoints = 0;
+		for( uint i = ST_STRENGTH; i < ST_LUCK; i++ )
+		{
+			statPoints += cr.StatBase[ i ];
+		}
+		
+		if( statPoints >= 50 )
+		{
+			return;
+		}
+		
+		uint roll = Random( ST_STRENGTH, ST_LUCK );
+		if( cr.Stat[ roll ] < 10 )
+		{
+			cr.StatBase[ roll ] ++;
+			Log( "Stat changed: " + roll );
+		}
+		else
+		{
+			ChangeStat( cr );
+		}
+	}
+	else if( stat < STAT_END && val != 0 )
+	{
+		cr.StatBase[ stat ] += val;
+	}
+	else
+	{
+		Log( "StatChange values out of bounds! cr.Id: " + cr.Id + " stat " + stat + " val " + val );
+	}
+}
+
+void DeleteItem( Critter& cr, uint16 pid, int slot )
+{
+    Item@ item = cr.GetItem( pid, slot );
+    
+    if( valid( item ) )
+    {
+        DeleteItem( item ); 
+    }
 }

@@ -71,6 +71,11 @@
 # define EXPORT_UNINITIALIZED       extern "C" __attribute__( ( visibility( "default" ) ) )
 #endif
 
+#define ISFLAG(x, flag)     ( (x & flag) != 0 )
+#define ISFLAGS(x, flags)   ( (x & flags) == flags )
+#define SETFLAG(x,flag)     ( x |= flag )
+#define UNSETFLAG(x, flag ) ( x &= (~flag) )
+
 // STL
 #include <stdlib.h>
 #include <string.h>
@@ -503,8 +508,8 @@ struct GameOptions
     const ScriptString ProxyUser;
     const ScriptString ProxyPass;
     const ScriptString Name;
-    const int          ScrollDelay;
-    const uint         ScrollStep;
+    const uint         ScrollDelay;
+    const int          ScrollStep;
     const bool         ScrollCheck;
     const ScriptString FoDataPath;
     const int          FixedFPS;
@@ -549,8 +554,8 @@ struct GameOptions
     const float        SpritesZoomMin;
     const float        EffectValues[ EFFECT_SCRIPT_VALUES ];
     const bool         AlwaysRun;
-    const int          AlwaysRunMoveDist;
-    const int          AlwaysRunUseDist;
+    const uint         AlwaysRunMoveDist;
+    const uint         AlwaysRunUseDist;
     const ScriptString KeyboardRemap;
     const uint         CritterFidgetTime;
     const uint         Anim2CombatBegin;
@@ -561,67 +566,76 @@ struct GameOptions
     const ScriptString ClientPath;
     const ScriptString ServerPath;
     const bool         ShowCorners;
-    const bool         ShowCuttedSprites;
+    const bool         ShowSpriteCuts;
     const bool         ShowDrawOrder;
     const bool         SplitTilesCollection;
 
     // Engine data
-    void               ( * CritterChangeParameter )( Critter& cr, uint index );                            // Call for correct changing critter parameter
-    CritterType*       CritterTypes;                                                                       // Array of critter types, maximum is MAX_CRIT_TYPES
+    void         ( * CritterChangeParameter )( Critter& cr, uint index );                               // Call for correct changing critter parameter
+    CritterType* CritterTypes;                                                                          // Array of critter types, maximum is MAX_CRIT_TYPES
 
-    Field*             ClientMap;                                                                          // Array of client map hexes, accessing - ClientMap[ hexY * ClientMapWidth + hexX ]
-    uint8*             ClientMapLight;                                                                     // Hex light, accessing - ClientMapLight[ hexY * ClientMapWidth * 3 + hexX * 3 {+ 0(R), 1(G), 2(B)} ]
-    uint               ClientMapWidth;                                                                     // Map width
-    uint               ClientMapHeight;                                                                    // Map height
+    Field*       ClientMap;                                                                             // Array of client map hexes, accessing - ClientMap[ hexY * ClientMapWidth + hexX ]
+    uint8*       ClientMapLight;                                                                        // Hex light, accessing - ClientMapLight[ hexY * ClientMapWidth * 3 + hexX * 3 {+ 0(R), 1(G), 2(B)} ]
+    uint         ClientMapWidth;                                                                        // Map width
+    uint         ClientMapHeight;                                                                       // Map height
 
-    Sprite**           ( *GetDrawingSprites )( uint & count );                                             // Array of currently drawing sprites, tree is sorted
-    SpriteInfo*        ( *GetSpriteInfo )(uint sprId);                                                     // Sprite information
-    uint               ( * GetSpriteColor )( uint sprId, int x, int y, bool affectZoom );                  // Color of pixel on sprite
-    bool               ( * IsSpriteHit )( Sprite* sprite, int x, int y, bool checkEgg );                   // Is position hitting sprite
+    Sprite**     ( *GetDrawingSprites )( uint & count );                                                // Array of currently drawing sprites, tree is sorted
+    SpriteInfo*  ( *GetSpriteInfo )(uint sprId);                                                        // Sprite information
+    uint         ( * GetSpriteColor )( uint sprId, int x, int y, bool affectZoom );                     // Color of pixel on sprite
+    bool         ( * IsSpriteHit )( Sprite* sprite, int x, int y, bool checkEgg );                      // Is position hitting sprite
 
-    const char*        ( *GetNameByHash )(uint hash);                                                      // Get name of file by hash
-    uint               ( * GetHashByName )( const char* name );                                            // Get hash of file name
+    const char*  ( *GetNameByHash )(uint hash);                                                         // Get name of file by hash
+    uint         ( * GetHashByName )( const char* name );                                               // Get hash of file name
 
-    bool               ( * ScriptLoadModule )( const char* moduleName );
-    uint               ( * ScriptBind )( const char* moduleName, const char* funcDecl, bool temporaryId ); // Returning bindId
-    bool               ( * ScriptPrepare )( uint bindId );
-    void               ( * ScriptSetArgInt8 )( int8 value );
-    void               ( * ScriptSetArgInt16 )( int16 value );
-    void               ( * ScriptSetArgInt )( int value );
-    void               ( * ScriptSetArgInt64 )( int64 value );
-    void               ( * ScriptSetArgUInt8 )( uint8 value );
-    void               ( * ScriptSetArgUInt16 )( uint16 value );
-    void               ( * ScriptSetArgUInt )( uint value );
-    void               ( * ScriptSetArgUInt64 )( uint64 value );
-    void               ( * ScriptSetArgBool )( bool value );
-    void               ( * ScriptSetArgFloat )( float value );
-    void               ( * ScriptSetArgDouble )( double value );
-    void               ( * ScriptSetArgObject )( void* value );
-    void               ( * ScriptSetArgAddress )( void* value );
-    bool               ( * ScriptRunPrepared )();
-    int8               ( * ScriptGetReturnedInt8 )();
-    int16              ( * ScriptGetReturnedInt16 )();
-    int                ( * ScriptGetReturnedInt )();
-    int64              ( * ScriptGetReturnedInt64 )();
-    uint8              ( * ScriptGetReturnedUInt8 )();
-    uint16             ( * ScriptGetReturnedUInt16 )();
-    uint               ( * ScriptGetReturnedUInt )();
-    uint64             ( * ScriptGetReturnedUInt64 )();
-    bool               ( * ScriptGetReturnedBool )();
-    float              ( * ScriptGetReturnedFloat )();
-    double             ( * ScriptGetReturnedDouble )();
-    void*              ( *ScriptGetReturnedObject )( );
-    void*              ( *ScriptGetReturnedAddress )( );
+    bool         ( * ScriptLoadModule )( const char* moduleName );
+    uint         ( * ScriptBind )( const char* moduleName, const char* funcDecl, bool temporaryId );    // Returning bindId
+    bool         ( * ScriptPrepare )( uint bindId );
+    void         ( * ScriptSetArgInt8 )( int8 value );
+    void         ( * ScriptSetArgInt16 )( int16 value );
+    void         ( * ScriptSetArgInt )( int value );
+    void         ( * ScriptSetArgInt64 )( int64 value );
+    void         ( * ScriptSetArgUInt8 )( uint8 value );
+    void         ( * ScriptSetArgUInt16 )( uint16 value );
+    void         ( * ScriptSetArgUInt )( uint value );
+    void         ( * ScriptSetArgUInt64 )( uint64 value );
+    void         ( * ScriptSetArgBool )( bool value );
+    void         ( * ScriptSetArgFloat )( float value );
+    void         ( * ScriptSetArgDouble )( double value );
+    void         ( * ScriptSetArgObject )( void* value );
+    void         ( * ScriptSetArgAddress )( void* value );
+    bool         ( * ScriptRunPrepared )();
+    int8         ( * ScriptGetReturnedInt8 )();
+    int16        ( * ScriptGetReturnedInt16 )();
+    int          ( * ScriptGetReturnedInt )();
+    int64        ( * ScriptGetReturnedInt64 )();
+    uint8        ( * ScriptGetReturnedUInt8 )();
+    uint16       ( * ScriptGetReturnedUInt16 )();
+    uint         ( * ScriptGetReturnedUInt )();
+    uint64       ( * ScriptGetReturnedUInt64 )();
+    bool         ( * ScriptGetReturnedBool )();
+    float        ( * ScriptGetReturnedFloat )();
+    double       ( * ScriptGetReturnedDouble )();
+    void*        ( *ScriptGetReturnedObject )( );
+    void*        ( *ScriptGetReturnedAddress )( );
 
     // Callbacks
-    uint               ( * GetUseApCost )( CritterMutual& cr, Item& item, uint8 mode );
-    uint               ( * GetAttackDistantion )( CritterMutual& cr, Item& item, uint8 mode );
+    uint         ( * GetUseApCost )( CritterMutual& cr, Item& item, uint8 mode );
+    uint         ( * GetAttackDistantion )( CritterMutual& cr, Item& item, uint8 mode );
+	
+	bool		 SpritesFiltering;
+	bool		 NewChatFont;
+	
+	int			 MapperAutosave;
 };
 EXPORT_UNINITIALIZED GameOptions* FOnline;
 
 struct Mutex
 {
+#if defined ( FO_X86 )
     const int Locker[ 6 ];      // CRITICAL_SECTION, include Windows.h
+#else // FO_X64
+    const int Locker[ 10 ];
+#endif
 };
 
 struct Spinlock
@@ -675,6 +689,7 @@ struct ProtoItem
     const uint8  LightFlags;
     const uint8  LightDistance;
     const int8   LightIntensity;
+    const uint8  ColorContour[ 3 ];
     const uint   LightColor;
     const bool   DisableEgg;
     const uint16 AnimWaitBase;
@@ -698,20 +713,19 @@ struct ProtoItem
     const uint8  BlockLines[ ITEM_MAX_BLOCK_LINES ];
     const uint16 ChildPids[ ITEM_MAX_CHILDS ];
     const uint8  ChildLines[ ITEM_MAX_CHILDS ][ ITEM_MAX_CHILD_LINES ];
-    int    ColorContour;
 
     // User data, binded with 'bindfield' pragma
     // Common
-    const int    MagicPower;		//-> 0
-	const uint16 IndefineValue; 	//-> 4
-	const uint16 IndefineStat; 		//-> 6
-    const uint8  Unused[ 92 ];
-    // Armor, offset 100
+    const int    MagicPower;
+    const uint16 IndefineValue;
+    const uint16 IndefineStat;
+    const uint8  Padding92[92];
+    // Armor
     const uint   Armor_CrTypeMale;
     const uint   Armor_CrTypeFemale;
     const int    Armor_AC;
-    const uint  Armor_Perk;
-	const int    Armor_DRNormal;
+    const uint8  Padding4[4];
+    const int    Armor_DRNormal;
     const int    Armor_DRLaser;
     const int    Armor_DRFire;
     const int    Armor_DRPlasma;
@@ -725,45 +739,67 @@ struct ProtoItem
     const int    Armor_DTElectr;
     const int    Armor_DTEmp;
     const int    Armor_DTExplode;
-    const uint8  Armor_Unused[ 28 ];
-    // Weapon, offset 200
-    const int    Weapon_DmgType[ 3 ];
-    const uint   Weapon_Anim2[ 3 ];
-    const int    Weapon_DmgMin[ 3 ];
-    const int    Weapon_DmgMax[ 3 ];
-    const uint16 Weapon_Effect[ 3 ];
-    const bool   Weapon_Remove[ 3 ];
-	const uint8  Padding0 [ 3 ];
+    const uint8  Padding20[20];
+    const int    Item_DtMod;
+    // HeadItem
+    const uint  HeadItem_Perk;
+    // Weapon
+    const int    Weapon_DmgType[3];
+    const uint   Weapon_Anim2_0;
+    const uint   Armor_Perk;
+    // Used to be 220, shifted after AS engine upgrade, anim2_1 moved to 220
+    const uint   Weapon_Anim2_1;
+    const int    Weapon_DmgMin[3];
+    const int    Weapon_DmgMax[3];
+    const uint16 Weapon_Effect[3];
+    const bool   Weapon_Remove[3];
+    const uint8	 Weapon_Recoil;
+    //padding 2 bytes
+    const uint8  Padding2[2];
+
     const uint   Weapon_ReloadAp;
     const int    Weapon_UnarmedCriticalBonus;
     const uint   Weapon_CriticalFailture;
     const bool   Weapon_UnarmedArmorPiercing;
-    const uint8  Weapon_Unused[ 27 ];
-    // Ammo, offset 300
-    const int    Ammo_AcMod;  		// -> 300
-    const int    Ammo_DrMod;  		// -> 304
-    const uint   Ammo_DmgMult;  	// -> 308
-    const uint   Ammo_DmgDiv;  		// -> 312
-    // Other
-    const uint16 Food_Thirst;       // -> 316
-    const uint16 Food_Restore;      // -> 318
-    const uint   Food_Flags;        // -> 320
-	const uint16 Wait_Time_0;       // -> 324"
-	const uint16 Wait_Time_1;       // -> 326"
-	const uint16 Wait_Time_2;       // -> 328"
-	const uint16 Wait_Time_3;       // -> 330"
-	const uint16 Item_UseAp;		// -> 332"
-	const uint16 BurnTime;			// -> 334"
-	const uint8  HeadItem_Perk;     // -> 336"
-	const uint8  Partial_Item;      // -> 337 кусочки 
-	const uint8  Fuel_Efficiency;	// -> 338 эффективность энергоресурса
-	
-	
-    const uint8  UnusedEnd[ 154 ];  // SUKA
-	const uint8  Item_Hitpoints;    // -> 493"
-	const uint8  Fire_Strength;     // -> 494"
-	const uint8  Blast_Radius;     	// -> 495"
-	const uint 	 EffectSpeed; 		// -> 496 скорость полета эффекта И ТОЛЬКО ФЛАЯ
+    const uint8  Item_Subtype;
+    const uint16 Windup_Time;
+    const int    Weapon_HearRadius;
+    const uint   Weapon_Anim2_2;
+    const uint   Weapon_MinDmgMod;
+    const uint   Weapon_MaxDmgMod;
+    // Ammo
+    const int    Ammo_Perk;
+    const int    Ammo_DmgType;
+    const int    Ammo_AcMod;
+    const int    Ammo_DrMod;
+    const uint   Ammo_DmgMin;
+    const uint   Ammo_DmgMax;
+    // Other                                                                
+    const uint16 Food_Thrist;
+    const uint16 Food_Restore;
+    const uint	 Food_Flags;
+    const uint16 Wait_Time[4];
+    const uint16 Item_UseAp;
+    const uint16 BurnTime;
+    
+    const uint8 Padding1;
+
+    const uint8  Partial_Item;
+    const uint8  Fuel_Efficiency;
+
+    const uint8  Look_BlockDir[6];
+    const uint8  Look_Block;
+
+    const uint8  Hear_BlockDir[6];
+    const uint8  Hear_Block;
+
+    //padding 140 bytes
+    const uint8 Padding140[140];
+
+    const uint8  Item_Hitpoints;
+    const uint8  Fire_Strength;
+    const uint8  Blast_Radius;
+    const uint	 FlyEffect_Speed;
 
     // Type specific data
     const bool   Weapon_IsUnarmed;
@@ -963,7 +999,6 @@ struct Item
     const uint8      Accessory;
     const bool       ViewPlaceOnMap;
     const int16      Reserved0;
-	int ColorContour;
 
     union
     {
@@ -1027,8 +1062,8 @@ struct Item
         const uint16 Charge;
         const int16  OffsetX;
         const int16  OffsetY;
-        const int16  Dir;
-        const char   Reserved[ 2 ];
+        const uint8  Dir;
+        const uint8  ColorContour [ 3 ];
     } Data;
 
     const int16        RefCounter;
@@ -1953,7 +1988,6 @@ inline int GetDistantion( int x1, int y1, int x2, int y2 )
     }
 }
 
-
 inline void static_asserts()
 {
     STATIC_ASSERT( sizeof( char )        == 1 );
@@ -1967,15 +2001,15 @@ inline void static_asserts()
     STATIC_ASSERT( sizeof( uint64 )      == 8 );
     STATIC_ASSERT( sizeof( bool )        == 1 );
 
-    #if defined ( _M_IX86 )
+    #if defined ( FO_X86 )
     STATIC_ASSERT( sizeof( string )       == 24   );
     STATIC_ASSERT( sizeof( IntVec )       == 12   );
     STATIC_ASSERT( sizeof( IntMap )       == 24   );
     STATIC_ASSERT( sizeof( IntSet )       == 24   );
     STATIC_ASSERT( sizeof( IntPair )      == 8    );
-    STATIC_ASSERT( sizeof( ProtoItem )    == 912  );
+    STATIC_ASSERT( sizeof( ProtoItem )    == 908  );
     STATIC_ASSERT( sizeof( Mutex )        == 24   );
-    STATIC_ASSERT( sizeof( GameOptions )  == 1320 );
+    STATIC_ASSERT( sizeof( GameOptions )  == 1328 );
     STATIC_ASSERT( sizeof( SpriteInfo )   == 36   );
     STATIC_ASSERT( sizeof( Field )        == 76   );
     # ifdef __MAPPER
@@ -1987,7 +2021,7 @@ inline void static_asserts()
     STATIC_ASSERT( offsetof( TemplateVar, Flags )              == 68   );
     STATIC_ASSERT( offsetof( NpcPlane, RefCounter )            == 96   );
     STATIC_ASSERT( offsetof( GlobalMapGroup, EncounterForce )  == 64   );
-    STATIC_ASSERT( offsetof( Item, IsNotValid )                == 150  );
+    STATIC_ASSERT( offsetof( Item, IsNotValid )                == 146  );
     STATIC_ASSERT( offsetof( CritterTimeEvent, Identifier )    == 12   );
     STATIC_ASSERT( offsetof( Critter, RefCounter )             == 9340 );
     STATIC_ASSERT( offsetof( Client, LanguageMsg )             == 9408 );
@@ -2002,7 +2036,12 @@ inline void static_asserts()
     # ifdef __SERVER
     STATIC_ASSERT( offsetof( ProtoMap, HexFlags )              == 304  );
     # endif
-    #endif // defined(_M_IX86)
+    #else // FO_X64
+    STATIC_ASSERT( sizeof( Mutex )        == 40   );
+    //int array[offsetof( Map, HexFlags )];
+    //int error = 1 / &array;
+    STATIC_ASSERT( offsetof( Map, Proto )       == 688  );
+    #endif
 }
 
 #endif     // __FONLINE__

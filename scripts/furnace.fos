@@ -9,34 +9,48 @@
 class MenuFurnace: CenteredMenuHandler
 {
     uint furnace_id;
+	uint furnace_type;
     uint map_id;
+	string furnace_id_str;
+	
 
-    MenuFurnace( Item& furnace, Map& map ) 
+    MenuFurnace( Item& furnace, Map& map, int furnace_type )
 	{
 		furnace_id = furnace.Id;
 		map_id = map.Id;
+		this.furnace_type = furnace_type;
     }
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
         Map@ map = GetMap( map_id );
-        Item@ furnace = GetItem( furnace_id );
-
-        if( map is null || furnace is null )
+        if( !valid( map ) )
 		{
             return false;
         }
-
-		if( MovementState( cr ) > 0 )
+		
+        Item@ furnace = GetItem( furnace_id );
+		if( !valid( furnace ) )
+		{
+            return false;
+        }
+		
+		if( MovementState( cr ) > MOVE_STATE_STILL )
 		{
 			return false;
 		}
 
-        if( menu.Button( "Examine" )  )
+        if( menu.ButtonMsg( STR_FURNITURE_MENU_EXAMINE )  )
 		{
+			
 			if( furnace.STATE == STATE_BURNING )
 			{
-				if( hasItems( cr, FurnaceTools, SLOT_HAND1 ) )
+				if( furnace_type == FURNACE_ENERGY_TYPE )
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FURNACE_OFF_REQUIRED );
+					return true;
+				}
+				else if( hasItems( cr, FurnaceTools, SLOT_HAND1 ) )
 				{
 					ShowContainer( cr, furnace, TRANSFER_HEX_CONT_DOWN );
 					return false;
@@ -47,151 +61,290 @@ class MenuFurnace: CenteredMenuHandler
 					return true;
 				}
 			}
+			
+			if( furnace_type == FURNACE_ENERGY_TYPE )
+			{
+				PlayGenericSound( map, furnace.HexX, furnace.HexY, "CLANK1.mp3", 15 );
+			}
+			
             ShowContainer( cr, furnace, TRANSFER_HEX_CONT_DOWN );
             return false; 
         }
-
-		if( furnace.STATE == STATE_EXTINGUISHED )
+		
+		if( furnace_type == FURNACE_WOOD_TYPE && furnace.STATE == STATE_EXTINGUISHED && menu.ButtonMsg( STR_FIRE_MENU_IGNITE )  )
 		{
-			if( menu.Button( "Ignite" )  )
+			if( hasItems( cr, Igniters ) )
 			{
-				if( hasItems( cr, Igniters ) )
-				{
-					Item@[] igniters = getItems( cr, Igniters );
-					Item@ igniter = igniters[0];
-					Ignite( cr, igniter, furnace );
-					return true;
-				}
-				else
-				{
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_LIGHTER );
-					return false;
-				}
+				Item@[] igniters = getItems( cr, Igniters );
+				Item@ igniter = igniters[0];
+				Ignite( cr, igniter, furnace );
+			}
+			else
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_LIGHTER );
 			}
 		}
-
-		if( menu.Button( "Extinguish" )  )
+		
+		if( furnace_type == FURNACE_ENERGY_TYPE && furnace.STATE == STATE_EXTINGUISHED && menu.ButtonMsg( STR_DEVICE_ACTIVATE ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			
+			if( !enableFurnace( furnace ) )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_POWER_IS_OFF );
+			}
+		}
+		
+		if( furnace_type == FURNACE_WOOD_TYPE && furnace.STATE == STATE_BURNING && menu.ButtonMsg( STR_FIRE_MENU_EXTINGUISH ) )
 		{
 			if( hasItems( cr, WaterSource ) )
 			{
 				Item@[] watersource = getItems( cr, WaterSource );
 				Item@ water = watersource[0];
 				Extinguish( cr, water, furnace );
-				return false;
 			}
 			else
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_WATER_FOR_FIRE );
-				return true;
 			}
 		}
 		
-		if( menu.Button( "Add fuel" ) )
+		if( furnace_type == FURNACE_ENERGY_TYPE && furnace.STATE == STATE_BURNING && menu.ButtonMsg( STR_DEVICE_DEACTIVATE ) )
 		{
-			if( hasItems( cr, FireFuel ) )
-			{
-				Item@[] fireFuel = getItems( cr, FireFuel );
-				Item@ fuel = fireFuel[0];
-				FeedTheFire( cr, fuel, furnace );
-				return true;
-			}
-			else
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRE_FIREFUEL_2 );
-				return false;
-			}
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			DisableFurnace( furnace);
+		}
+		
+		if( furnace_type == FURNACE_WOOD_TYPE && menu.ButtonMsg( STR_FIRE_MENU_ADD_FUEL ) )
+		{
+			return AddFuel( cr, furnace );
 		}
 
-		if( furnace.STATE == STATE_EXTINGUISHED && menu.Button( "Furniture Menu" ) )
+		if( furnace.STATE == STATE_EXTINGUISHED && menu.ButtonMsg( STR_FURNITURE_MENU_BUTTON ) )
 		{
 			_InitFurniture( furnace, true );
 			furnace.Update();
-			StartMenuFuriture( cr, furnace );
+			StartMenuFurniture( cr, furnace );
 			return false;
 		}
 		
-		if( menu.Button( "Close menu" ) )
+		if( menu.ButtonMsg( STR_CLOSE_MENU_BUTTON ) )
 		{
 			return false;
 		}
+		
 		return true;
 	}
 
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+	
+	int getDescriptionLine()
+	{
+		if( furnace_type == FURNACE_ENERGY_TYPE )
+		{
+			return STR_FURNACE_MENU_ENERGY_MAIN;
+		}
+		else
+		{
+			return STR_FURNACE_MENU_MAIN;
+		}
+	}		
+	
 	string@ Description( Critter& cr )
 	{
 		string info;
 		Item@ furnace = GetItem( furnace_id );
 		Item@[] MaterialsCheck;
-		furnace.GetItems( uint( -1 ), MaterialsCheck );
+		uint items_count = furnace.GetItems( uint( -1 ), MaterialsCheck );
 		Item@ material = null;
 		int check_kg = 0;
-
+		Map@ map = GetMap( map_id );
+		
 		if( furnace.MAX_FUEL == 0 )
 		{
             furnace.MAX_FUEL = 24000;
         }
+		
+		if( furnace_type == FURNACE_ENERGY_TYPE )
+		{
+			if( MapHasPower( map ) )
+			{
+				info += STR_CHECK_DEVICE_FLAG( "powerStatus", true );
+			}
+			else
+			{
+				info += STR_CHECK_DEVICE_FLAG( "powerStatus", false );
+			}
+		}
+		
+		if( furnace_type == FURNACE_WOOD_TYPE )
+		{
+			info += "$fuel" + furnace.CURRENT_FUEL * 100 / furnace.MAX_FUEL;
+		}
+ 		
+		info += "$temp" + furnace.FIRE_STRENGTH;
 
- 		info += "|0x3CF800 Fuel: |0xFFFF00 " + furnace.CURRENT_FUEL * 100 / furnace.MAX_FUEL + "|0x3CF800 % Temprature: |0xFFFF00 " + furnace.FIRE_STRENGTH + "|0x3CF800 C.";
-		info += "\n|0x3CF800 Smelted products:";
-
+		info += "$iron";
 		if( furnace.FURN_IRON > 0 )
 		{
-			info += "\n|0x3CF800 Iron: |0xFFFF00 " + ( furnace.FURN_IRON / 1000.0f ) + "|0x3CF800  kg."; 
+			info += STR_INSERT_TEXT_LINE( STR_FURNACE_MENU_IRON_WEIGHT ) + "\n"
+				 + "$ironW" + ( furnace.FURN_IRON / 1000.0f ); 
 			check_kg++;
 		}
 
+		info += "$gold";
 		if( furnace.FURN_GOLD > 0 )
 		{
-			info += "\n|0x3CF800 Gold: |0xFFFF00 " + ( furnace.FURN_GOLD / 1000.0f ) + "|0x3CF800  kg."; 
+			info += STR_INSERT_TEXT_LINE( STR_FURNACE_MENU_GOLD_WEIGHT ) + "\n"
+   			     + "$goldW" + ( furnace.FURN_GOLD / 1000.0f ); 
 			check_kg++; 
 		}
 
-		if( furnace.FURN_LEAD > 0 )
+		info += "$nf_metal";
+		if( furnace.FURN_NF_METAL > 0 )
 		{
-			info += "\n|0x3CF800 Led: |0xFFFF00 " + ( furnace.FURN_LEAD / 1000.0f ) + "|0x3CF800  kg."; 
+			info += STR_INSERT_TEXT_LINE( STR_FURNACE_MENU_NF_METAL_WEIGHT ) + "\n"
+			     + "$nf_metalW" + ( furnace.FURN_NF_METAL / 1000.0f ); 
 			check_kg++;
 		}
 
-		if( furnace.FURN_COPPER > 0 )
-		{
-			info += "\n|0x3CF800 Cupper: |0xFFFF00 " + ( furnace.FURN_COPPER / 1000.0f ) + "|0x3CF800  kg."; 
-			check_kg++;
-		}
-
+		info += "$glass";
 		if( furnace.FURN_GLASS > 0 )
 		{
-			info += "\n|0x3CF800 Glass: |0xFFFF00 " + ( furnace.FURN_GLASS / 1000.0f ) + "|0x3CF800  kg."; 
+			info += STR_INSERT_TEXT_LINE( STR_FURNACE_MENU_GLASS_WEIGHT ) + "\n" 
+			     + "$glassW" + ( furnace.FURN_GLASS / 1000.0f ); 
 			check_kg++;
 		}
 
-		if ( check_kg < 1 )
+		info += "$empty";
+		if( check_kg < 1 && items_count < 1 )
 		{
-			info += "\n|0xFFFF00 The furnace is empty!";
+			info += STR_INSERT_TEXT_LINE( STR_EMPTY );
 		}
+
 		return info;
     }
 	
-    string@ ButtonCancel()
-	{
-        return ButtonDecorator( " ", null );
-    }
-
 	bool ShouldRedraw( Critter& cr )
 	{
+		Item@ furnace = GetItem( furnace_id );
+		if( !valid( furnace ) || GetDistantion( cr.HexX, cr.HexY, furnace.HexX, furnace.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
 		return true;
     }
+}
+
+bool enableFurnace( Item& furnace )
+{
+	if( !valid( furnace ) ) 
+	{
+		return false;
+	}
+	
+	Map@ map = GetMap( furnace.MapId );
+	
+	if( MapHasPower( map ) )
+	{
+		furnace.STATE = STATE_BURNING;
+		uint[] values = { furnace.Id, map.Id };
+		
+		if( furnace.FIRE_EVENT != 0 )
+		{
+			EraseTimeEvent( furnace.FIRE_EVENT );
+		}
+		
+		furnace.FIRE_EVENT = CreateTimeEvent( AFTER( REAL_MS( 1500 ) ),"furnace@e_FurnaceWork", values, true );
+		setAnimState( furnace );
+		
+		return true;
+	}
+	
+	return false;
+}
+
+void DisableFurnace( Item& furnace )
+{
+	Map@ map = GetMap ( furnace.MapId );
+	
+	if( valid( map ) )
+	{
+		PlayGenericSound( map, furnace.HexX, furnace.HexY, "STEAM.mp3", 30 );
+	}
+	
+	furnace.STATE = STATE_EXTINGUISHED;
+	setAnimState( furnace );
+}
+
+int CheckFurnaceType( Item& furnace )
+{
+	uint pid = furnace.GetProtoId();
+	
+	switch ( pid )
+	{
+		case( PID_FURNACE_SMALL ):
+		case( PID_ADV_FURNACE ):
+		{
+			return FURNACE_WOOD_TYPE;
+		}
+		case( PID_ARC_FURNACE ):
+		{
+			return FURNACE_ENERGY_TYPE;
+		}
+	}
+	return -1;
+}
+
+void setAnimState( Item& furnace )
+{
+	uint pid = furnace.GetProtoId();
+	
+	if( furnace.STATE == STATE_BURNING )
+	{	
+		if( pid == PID_ARC_FURNACE )
+		{
+			furnace.PicMap = PIC_ARC_FURNACE_ANIM_ON;
+		}
+		
+		UNSETFLAG( furnace.Flags, ITEM_SHOW_ANIM_EXT );
+		SETFLAG( furnace.Flags, ITEM_LIGHT );
+		SETFLAG( furnace.Flags, ITEM_CAN_USE );
+		UNSETFLAG( furnace.Flags, ITEM_CAN_PICKUP );
+	}
+	else
+	{
+		furnace.PicMap = furnace.Proto.PicMap;
+		SETFLAG( furnace.Flags, ITEM_SHOW_ANIM_EXT );
+		UNSETFLAG( furnace.Flags, ITEM_LIGHT );
+	}
+	
+	furnace.Update();
 }
 
 void StartMenuFurnace( Critter& cr, Item& furnace )
 {
     Map@ map = cr.GetMap();
-    if( map is null )
+    if( !valid(map) )
 	{
         return;
     }
-
-    iMenuHandler@ handler = MenuFurnace( furnace, map );
-    iDialogBox@ menu = OpenMenu( cr, "Furnace", handler );
+	
+	int furnace_type = CheckFurnaceType( furnace );
+	
+	if( furnace_type < 0 )
+	{
+		cr.Say( SAY_NETMSG, "Incorrect Furnace! PID = "+furnace.GetProtoId() );
+		return;
+	}
+	
+	iMenuHandler@ handler = MenuFurnace( furnace, map, furnace_type );
+	iDialogBox@ menu = OpenMenu( cr, "Furnace", handler );
+	return;
 }
 
 void FurnaceStage( Item& furnace )
@@ -207,23 +360,46 @@ void FurnaceStage( Item& furnace )
 		return;
 	}
 	
+	int furnace_type = CheckFurnaceType( furnace );
+	
 	if( furnace.FIRE_STRENGTH < 0 )
 	{
-		furnace.FIRE_STRENGTH <= 0;
-		EraseTimeEvent( furnace.EVENT );
-		furnace.EVENT = 0;
+		furnace.FIRE_STRENGTH = 0;
+		EraseTimeEvent( furnace.FIRE_EVENT );
+		furnace.FIRE_EVENT = 0;
 		return;
 	}
+	
+	uint furnace_off = 0;
 
 	if( furnace.STATE == STATE_EXTINGUISHED && furnace.FIRE_STRENGTH > 0 )
 	{
+		furnace_off += 1;
+	}
+	
+	if( furnace.STATE == STATE_BURNING && furnace_type == FURNACE_ENERGY_TYPE  && !MapHasPower( map ) )
+	{
+		DisableFurnace( furnace );
+		furnace_off += 1;
+	}
+	
+	if( furnace_off > 0 )
+	{
 		uint[] values = { furnace.Id };
-		CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_CoolDown", values, true );
+		CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "furnace@e_CoolDown", values, true );
 	}
 
-	if( furnace.STATE == 1 && furnace.FIRE_STRENGTH < 1800 )
+	int fireStrength = furnace.GetProtoId() == PID_FURNACE_SMALL ? SMALL_FURNACE_FIRE_STR_MAX : FURNACE_FIRE_STRENGTH_MAX;
+	if( furnace.STATE == STATE_BURNING && furnace.FIRE_STRENGTH < fireStrength )
 	{
-		furnace.FIRE_STRENGTH += FUEL_BURN_AMOUNT / 2;
+		if( furnace_type == FURNACE_ENERGY_TYPE )
+		{
+			furnace.FIRE_STRENGTH += int(ARC_FURNACE_HEATINGPOWER * ARC_FURNACE_HEATING_MODIFIER);
+		}
+		else
+		{
+			furnace.FIRE_STRENGTH += FUEL_BURN_AMOUNT / 2;
+		}
 	}
 
 	Item@[] resources;
@@ -253,27 +429,15 @@ void FurnaceStage( Item& furnace )
 		}
 	}
 
-	if( furnace.FURN_COPPER > 0 )
+	if( furnace.FURN_NF_METAL > 0 )
 	{
-		ProtoItem@ MaterialProto = GetProtoItem( PID_COPPER_BAR );	
-		burn_check = furnace.FURN_COPPER - MaterialProto.Weight;
+		ProtoItem@ MaterialProto = GetProtoItem( PID_NF_METAL_BAR );	
+		burn_check = furnace.FURN_NF_METAL - MaterialProto.Weight;
 
 		if( ( burn_check ) >= 0 )
 		{
-			furnace.FURN_COPPER = burn_check;
-			furnace.AddItem( PID_COPPER_BAR, 1, 0 );
-		}
-	}
-
-	if( furnace.FURN_LEAD > 0 )
-	{
-		ProtoItem@ MaterialProto = GetProtoItem( PID_LEAD_INGOT );	
-		burn_check = furnace.FURN_LEAD - MaterialProto.Weight;
-
-		if ( ( burn_check ) >= 0 )
-		{
-			furnace.FURN_LEAD = burn_check;
-			furnace.AddItem( PID_LEAD_INGOT, 1, 0 );
+			furnace.FURN_NF_METAL = burn_check;
+			furnace.AddItem( PID_NF_METAL_BAR, 1, 0 );
 		}
 	}
 
@@ -290,6 +454,7 @@ void FurnaceStage( Item& furnace )
 	}
 	
 	int count = furnace.GetItems( uint ( -1 ) , resources );
+	
 	if( count > 0 )
 	{
 		int n = Random( 0, count - 1 );
@@ -301,15 +466,23 @@ void FurnaceStage( Item& furnace )
 		{
 			if( MaterialProto.Material == MATERIAL_STONE )
 			{
-				if ( materialPid == PID_METAL_ORE || materialPid == PID_GOLD_NUGGET || materialPid == PID_GOLD_ORE || materialPid == PID_COPPER_ORE 
-					|| materialPid == PID_COPPER_NUGGET || materialPid == PID_LEAD_NUGGET || materialPid == PID_LEAD_ORE )
+				if( materialPid == PID_IRON_ORE || materialPid == PID_GOLD_NUGGET || materialPid == PID_GOLD_ORE || materialPid == PID_NF_METAL_ORE 
+					|| materialPid == PID_NF_METAL_NUGGET )
 				{
 					type = BURN_TYPE_ORE;
 				}
 			}
+			else if( MaterialProto.Material == MATERIAL_DIRT )
+			{
+				if( materialPid == PID_SAND )
+				{
+					type = BURN_TYPE_SAND;
+				}
+			}
 			else
 			{
-				if( materialPid == PID_IRON_BAR || materialPid == PID_GOLDEN_BAR || materialPid == PID_COPPER_BAR || materialPid == PID_LEAD_INGOT || materialPid == PID_GLASS_BAR )
+				if( materialPid == PID_GOLDEN_BAR || materialPid == PID_NF_METAL_BAR || materialPid == PID_GLASS_BAR || materialPid == PID_MINERAL_DUST 
+					|| materialPid == PID_STEEL_REAGENT || materialPid == PID_STEEL_BAR )
 				{
 					type = 101;
 				}
@@ -332,7 +505,7 @@ void FurnaceStage( Item& furnace )
 
 		if( type != 101 )
 		{
-			BurnItem ( furnace, resources[n], type );
+			BurnItem( furnace, resources[n], type );
 			if( Explosives.find( materialPid ) != -1 )
 			{
 				uint[] values = { furnace.Id };
@@ -342,6 +515,31 @@ void FurnaceStage( Item& furnace )
 	}
 }
 
+uint e_FurnaceWork( uint[]@ values )
+{
+	Map@ map = GetMap( values[1] );
+	if( !valid( map ) )
+	{
+		return 0;
+	}
+	
+	Item@ furnace = GetItem( values[0] );
+	if( valid( furnace ) )  
+	{
+		if( furnace.STATE != STATE_BURNING || ( CheckFurnaceType( furnace ) == FURNACE_ENERGY_TYPE && MapHasPower( map ) != true )  )
+		{
+			FurnaceStage( furnace );
+			return 0;
+		}
+
+		PlayGenericSound( map, furnace.HexX, furnace.HexY, "arc_furnace_work.mp3", 30 );
+		FurnaceStage( furnace );
+		return ARC_FURNACE_CYCLE_TIME;
+	}
+	
+	return 0;
+}
+
 uint e_CoolDown( uint[]@ values )
 {
 	Item@ furnace = GetItem( values[0] );
@@ -349,20 +547,36 @@ uint e_CoolDown( uint[]@ values )
 	{
 		return 0;
 	}
+
+	int furnace_type = CheckFurnaceType( furnace );
 	
 	if( furnace.STATE == STATE_BURNING )
 	{
 		return 0;
 	}
 	
-	furnace.FIRE_STRENGTH -= int( FUEL_BURN_AMOUNT * FUEL_MODIFIER );
+	if( furnace_type == FURNACE_ENERGY_TYPE )
+	{
+		furnace.FIRE_STRENGTH -= int( ARC_FURNACE_HEATINGPOWER * ARC_FURNACE_HEATING_MODIFIER );
+	}
+	else
+	{
+		furnace.FIRE_STRENGTH -= int( FUEL_BURN_AMOUNT * FURNACE_HEATING_MOD );
+	}
+	
 	if( furnace.FIRE_STRENGTH <= 0 )
 	{
 		furnace.FIRE_STRENGTH = 0;
-		EraseTimeEvent( furnace.EVENT );
-		furnace.EVENT = 0;
+		EraseTimeEvent( furnace.FIRE_EVENT );
+		furnace.FIRE_EVENT = 0;
 		return 0;
 	}
+	
+	if( furnace_type == FURNACE_ENERGY_TYPE )
+	{
+		return ARC_FURNACE_CYCLE_TIME;
+	}
+	
 	return FIRE_BURNING_TIME;
 }
 
@@ -370,15 +584,16 @@ void BurnItem( Item& furnace, Item& resource, uint16 type )
 {
     Map@ map = GetMap( furnace.MapId );
 
-	if( furnace.FIRE_STRENGTH == 0 || furnace.STATE == 0 )
+	if( furnace.FIRE_STRENGTH == 0 || furnace.STATE == STATE_EXTINGUISHED )
 	{
 		return;
 	}
 
-    Item@ fireFX = map.AddItem( furnace.HexX, furnace.HexY, PID_SMOKE, 1 );
-    uint[] values = { fireFX.Id };
-    fireFX.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ),"firestarter@e_fireFX", values, true );
-
+	if( CheckFurnaceType( furnace ) == FURNACE_WOOD_TYPE )
+	{
+		map.RunEffect( PID_EFFECT_SMOKE, furnace.HexX, furnace.HexY, 0 );
+	}
+	
 	float burn_k = 0.0f;
 
     switch( type )
@@ -400,46 +615,50 @@ void BurnItem( Item& furnace, Item& resource, uint16 type )
             break;
     }
 	
-	if( resource.Proto.Material == MATERIAL_GOLD )
-	{
-		burn_k = GOLD_K;
-	}
-
-	if( resource.Proto.Material == MATERIAL_GLASS )
-	{
-		burn_k = GLASS_K;
-	}
-
 	string resourceType;
     int SmeltingTemp;
-
+	uint16 pid = resource.GetProtoId();
+	
     switch( resource.Proto.Material )
     {
-        case( MATERIAL_METAL ):
-            resourceType = "FURN_IRON";
-            SmeltingTemp = BURN_IRON;
+        case( MATERIAL_IRON ):
+		{
+            if( pid == PID_IRON_BAR )
+			{
+				resourceType = "FURN_STEEL";
+				SmeltingTemp = BURN_STEEL;
+			}
+			else
+			{
+				resourceType = "FURN_IRON";
+				SmeltingTemp = BURN_IRON;
+            }
+			break;
+		}
+		case( MATERIAL_DIRT ):
+			burn_k = SAND_K;
+			resourceType = "FURN_GLASS";
+            SmeltingTemp = BURN_SAND;
             break;
         case( MATERIAL_GOLD ):
+			burn_k = GOLD_K;
             resourceType = "FURN_GOLD";
             SmeltingTemp = BURN_GOLD;
             break;
-        case( MATERIAL_LEAD ):
-            resourceType = "FURN_LEAD";
-            SmeltingTemp = BURN_LEAD;
-            break;
-        case( MATERIAL_COPPER ):
-            resourceType = "FURN_COPPER";
-            SmeltingTemp = BURN_COPPER;
+        case( MATERIAL_NF_METAL ):
+            resourceType = "FURN_NF_METAL";
+            SmeltingTemp = BURN_NF_METAL;
             break;
         case( MATERIAL_GLASS ):
+			burn_k = GLASS_K;
             resourceType = "FURN_GLASS";
             SmeltingTemp = BURN_GLASS;
             break;
         case( MATERIAL_STONE ):
         {
-            switch( resource.GetProtoId() )
+            switch( pid )
             {
-                case( PID_METAL_ORE ):
+                case( PID_IRON_ORE ):
                     resourceType = "FURN_IRON";
                     SmeltingTemp = BURN_IRON;
                     break;
@@ -448,15 +667,12 @@ void BurnItem( Item& furnace, Item& resource, uint16 type )
                     resourceType = "FURN_GOLD";
                     SmeltingTemp = BURN_GOLD;
                     break;
-                case( PID_COPPER_ORE ):
-                case( PID_COPPER_NUGGET ):
-                    resourceType = "FURN_COPPER";
-                    SmeltingTemp = BURN_COPPER;
+                case( PID_NF_METAL_ORE ):
+                case( PID_NF_METAL_NUGGET ):
+                    resourceType = "FURN_NF_METAL";
+                    SmeltingTemp = BURN_NF_METAL;
                     break;
-                case( PID_LEAD_NUGGET ):
-                case( PID_LEAD_ORE ):
-                    resourceType = "FURN_LEAD";
-                    SmeltingTemp = BURN_LEAD;
+				default:
                     break;
             }
             break;
@@ -466,35 +682,207 @@ void BurnItem( Item& furnace, Item& resource, uint16 type )
             break;
     }
 
-	if ( furnace.FIRE_STRENGTH >= SmeltingTemp && SmeltingTemp != 0 )
+	if( furnace.FIRE_STRENGTH >= SmeltingTemp && SmeltingTemp != 0 )
 	{
-		if ( resourceType == "FURN_IRON" )
+		if( resourceType == "FURN_IRON" )
 		{
 			furnace.FURN_IRON += int( resource.Proto.Weight * burn_k );
 		}
 
-		if ( resourceType == "FURN_GOLD" )
+		if( resourceType == "FURN_GOLD" )
 		{
 			furnace.FURN_GOLD += int( resource.Proto.Weight * burn_k );
 		}
 
-		if ( resourceType == "FURN_COPPER" )
+		if( resourceType == "FURN_NF_METAL" )
 		{
-			furnace.FURN_COPPER += int( resource.Proto.Weight * burn_k );
+			furnace.FURN_NF_METAL += int( resource.Proto.Weight * burn_k );
 		}
-
-		if ( resourceType == "FURN_LEAD" )
+		
+		if( resourceType == "FURN_STEEL" )
 		{
-			furnace.FURN_LEAD += int( resource.Proto.Weight * burn_k );
+			Item@ reagent = furnace.GetItem( PID_STEEL_REAGENT, 0 );
+			if( valid( reagent ) )
+			{
+				_SubItem( resource, 1 );
+				_SubItem( reagent, 1 );
+				furnace.AddItem( PID_STEEL_BAR, 1, 0 );
+				return;
+			}
+			else
+			{
+				return;
+			}
 		}
-
-		if ( resourceType == "FURN_GLASS" )
+		
+		if( resourceType == "FURN_GLASS" )
 		{
+			if( pid == PID_SAND  )
+			{
+				if( resource.GetCount() >= 5 )
+				{
+					Item@ mineral = furnace.GetItem( PID_MINERAL_DUST, 0 );
+					if( valid( mineral ) )
+					{
+						_SubItem( mineral, 1 );
+						_SubItem( resource, 5 );
+						furnace.FURN_GLASS += int( resource.Proto.Weight * 5 * burn_k );
+						return;
+					}
+					else
+					{
+						return;
+					}
+				}
+				else
+				{
+					return;
+				}
+			}
+
 			furnace.FURN_GLASS += int( resource.Proto.Weight * burn_k );
 		}
+		
 		_SubItem( resource, 1 );
 	}
+	
 	return;
+}
+
+void BlockArcFurnace( Item& furnace )
+{
+	uint16 hx = 0, hy = 0;
+	Map@ map = furnace.GetMapPosition( hx, hy );
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	UNSETFLAG( furnace.Flags, ITEM_NO_BLOCK );
+	UNSETFLAG( furnace.Flags, ITEM_CAN_PICKUP );
+	
+	map.MoveHexByDir( hx, hy, 4, 1 );
+	Item@ blocker0 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker0 ) )
+	{
+		blocker0.PARENT_ITM_ID = furnace.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 3, 1 );
+	Item@ blocker1 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker1 ) )
+	{
+		blocker1.PARENT_ITM_ID = furnace.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 5, 1 );
+	Item@ blocker2 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker2 ) )
+	{
+		blocker2.PARENT_ITM_ID = furnace.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker3 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker3 ) )
+	{
+		blocker3.PARENT_ITM_ID = furnace.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker4 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker4 ) )
+	{
+		blocker4.PARENT_ITM_ID = furnace.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker5 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker5 ) )
+	{
+		blocker5.PARENT_ITM_ID = furnace.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker6 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker6 ) )
+	{
+		blocker6.PARENT_ITM_ID = furnace.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker7 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker7 ) )
+	{
+		blocker7.PARENT_ITM_ID = furnace.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker8 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker8 ) )
+	{
+		blocker8.PARENT_ITM_ID = furnace.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker9 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker9 ) )
+	{
+		blocker9.PARENT_ITM_ID = furnace.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 3, 1 );
+	Item@ blocker10 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker10 ) )
+	{
+		blocker10.PARENT_ITM_ID = furnace.Id;
+	}
+	
+	furnace.SetEvent( ITEM_EVENT_FINISH, "furniture@_DeleteBlockers" );
+}
+
+void BlockFurnace( Item& furnace )
+{
+	uint16 hx = 0, hy = 0;
+	Map@ map = furnace.GetMapPosition( hx, hy );
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	UNSETFLAG( furnace.Flags, ITEM_NO_BLOCK );
+	UNSETFLAG( furnace.Flags, ITEM_CAN_PICKUP );
+	
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker0 = map.AddItem( hx, hy, PID_STONE_BLOCKER, 1 );
+	if( valid( blocker0 ) )
+	{
+		blocker0.PARENT_ITM_ID = furnace.Id;
+	}	
+	
+	furnace.SetEvent( ITEM_EVENT_FINISH, "furniture@_DeleteBlockers" );
+}
+
+void BlockAdvFurnace( Item& furnace )
+{
+	uint16 hx = 0, hy = 0;
+	Map@ map = furnace.GetMapPosition( hx, hy );
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	UNSETFLAG( furnace.Flags, ITEM_NO_BLOCK );
+	UNSETFLAG( furnace.Flags, ITEM_CAN_PICKUP );
+	
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker0 = map.AddItem( hx, hy, PID_STONE_BLOCKER, 1 );
+	if( valid( blocker0 ) )
+	{
+		blocker0.PARENT_ITM_ID = furnace.Id;
+	}	
+	
+	furnace.SetEvent( ITEM_EVENT_FINISH, "furniture@_DeleteBlockers" );
 }
 
 #endif //FURNACE

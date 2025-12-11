@@ -5,6 +5,7 @@
 #include "fish_h.fos"
 #include "_ltp.fos"
 #include "critter_skills_h.fos"
+#include "speed_h.fos"
 
 import uint8 checkSand( Map& map, uint16 tx, uint16 ty ) from "qmap_sand";
 import uint8 checkWaterAround( Map& map, uint16 tx, uint16 ty, uint8 coast_flags, uint8 radius, bool smartRadius ) from "qmap_water";
@@ -143,9 +144,9 @@ class FishCollection
 
 FishCollection@ fishes = FishCollection()
 //             	 Pid,         size, max_depth, stamina, 						 preffered bait
-	.fish( PID_FISH_SMALLEST,   1,		1,		150 ).bait( PID_MAGGOT ).bait( PID_ROACH ).bait( PID_MANTIS_MEAT ).bait( PID_MUTMUSH )
-	.fish( PID_FISH_SMALL,      2,		2,		300 ).bait( PID_MAGGOT ).bait( PID_ROACH ).bait( PID_MANTIS_MEAT ).bait( PID_MUTMUSH )
-	.fish( PID_FISH,			3,		3,		450 ).bait( PID_MANTIS_MEAT ).bait( PID_MUTMUSH ).bait( PID_RAD_MEAT ).bait( PID_PLAYERS_EAR ).bait( PID_THORAX ).bait( PID_FISH_SMALLEST )
+	.fish( PID_FISH_SMALLEST,   1,		1,		150 ).bait( PID_MAGGOT ).bait( PID_ROACH ).bait( PID_MANTIS_MEAT ).bait( PID_MUSH_LOW )
+	.fish( PID_FISH_SMALL,      2,		2,		300 ).bait( PID_MAGGOT ).bait( PID_ROACH ).bait( PID_MANTIS_MEAT ).bait( PID_MUSH_LOW )
+	.fish( PID_FISH,			3,		3,		450 ).bait( PID_MANTIS_MEAT ).bait( PID_MUSH_LOW ).bait( PID_RAD_MEAT ).bait( PID_PLAYERS_EAR ).bait( PID_THORAX ).bait( PID_FISH_SMALLEST )
 	.fish( PID_FISH_BIG,      	4,		4,		600 ).bait( PID_RAD_MEAT ).bait( PID_PLAYERS_EAR ).bait( PID_THORAX ).bait( PID_FISH_SMALLEST ).bait( PID_RAT_MEAT ).bait( PID_MEAT )
 	.fish( PID_FISH_BIGGEST,	5,		4,	    750 ).bait( PID_THORAX ).bait( PID_FISH_SMALLEST ).bait( PID_RAT_MEAT ).bait( PID_MEAT );
 
@@ -224,6 +225,10 @@ void check_tiles( Critter& cr, Item& fishingRod, int hexX, int hexY )
 			Item@ floatCheck = floaters[i];
 			if( floatCheck.FISHERMAN_ID == int( cr.Id ) )
 			{
+				cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+				DeleteItem( floatCheck );
+				cr.ParamBase[ ST_LTP_TIME ] = -1;
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_TAKE_ROD_OUT );
 				return;
 			}
 		}
@@ -235,7 +240,7 @@ void check_tiles( Critter& cr, Item& fishingRod, int hexX, int hexY )
 	floater.DEPTH = CheckDepth( map, floater );
 	
 	uint[] values = { floater.Id, cr.Id };
-	floater.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 3 ) ), "e_floaterCheck", values, true );
+	floater.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 3 ) ), "fish@e_floaterCheck", values, true );
 
 	start_fishing( cr, fishingRod, floater, map );
 }
@@ -255,6 +260,7 @@ bool start_fishing( Critter& cr, Item& fishingRod, Item& floater, Map& map )
 	}
    	cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_CAST_ROD );
 	PlayGenericSound( map, cr.HexX, cr.HexY, "rod_throw.ogg", 8 );
+	
 	StartProcess( cr, LTP_FISHING, 0, floater.Id, fishingRod.Id, 1000 );
 	cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP_UNARMED );
 	return true;
@@ -315,7 +321,7 @@ uint process_fishing( Critter@ cr, int& param0, int& param1, int& param2 )
 	}
 	else
 	{
-		cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 		DeleteItem( floater );
 		return 0;
 	}
@@ -334,34 +340,38 @@ uint e_floaterCheck( uint[]@ values )
 	Critter@ cr = GetCritter( crtterId );
 	if( !valid( cr ) )
 	{ 
-		EraseTimeEvent( floater.EVENT );
-		floater.EVENT = 0;
-		DeleteItem( floater );
+		DeleteFloater( floater );
 		return 0;		
 	}
 
-	if( cr.ParamBase[ ST_LTP_TIME ] == -1 || cr.ParamBase[ ST_LTP_TYPE_DIR_HEX ] == 0 || ( floater.HAS_BAIT == 0 && floater.HAS_FISH == 0 ) )
+	if( cr.ParamBase[ ST_LTP_TIME ] == -1 || cr.ParamBase[ ST_LTP_TYPE_DIR_HEX ] == 0 || ( floater.HAS_BAIT == 0 && floater.HAS_FISH == 0 ) || !cr.IsOnline() )
 	{
-		if( floater.HAS_FISH > 0 )
-		{
-			StartMenuFishing( cr, floater );
-			return 0;
-		}
-		
-		if( valid( cr ) )
+		if( !cr.IsOnline() )
 		{
 			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_TAKE_ROD_OUT );
 			FinishFishing( cr, floater );
 		}
+		else if( floater.HAS_FISH > 0 )
+		{
+			StartMenuFishing( cr, floater );
+		}
 		else
 		{
-			EraseTimeEvent( floater.EVENT );
-			floater.EVENT = 0;
-			DeleteItem( floater );
-		}				
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_TAKE_ROD_OUT );
+			FinishFishing( cr, floater );
+		}
+		
 		return 0;
 	}
-	return REAL_SECOND( 1 );
+	
+	return REAL_MS( 1500 );
+}
+
+void DeleteFloater( Item& floater )
+{
+	EraseTimeEvent( floater.EVENT );
+	floater.EVENT = 0;
+	DeleteItem( floater );
 }
 
 void floaterBite( Critter& cr, Item& floater, Item& fishingRod )
@@ -388,10 +398,16 @@ void floaterBite( Critter& cr, Item& floater, Item& fishingRod )
 				}
 				
 				fishAction( cr, floater );
-				CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_hookedFish", values, true );
+				CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "fish@e_hookedFish", values, true );
 			}
 		}
-		CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_floaterUp", values, true );
+		
+		if( floater.HAS_FISH != 0 && Random( 1, 2 ) == 2 )
+		{
+			cr.ParamBase[ ST_LTP_TIME ] = -1;
+		}
+		
+		CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "fish@e_floaterUp", values, true );
 	}
 	else
 	{		
@@ -456,27 +472,27 @@ uint e_hookedFish( uint[]@ values)
 		
 		if( floater.FISH_SIZE == 1 )
 		{
-			return REAL_SECOND( 150 );
+			return REAL_SECOND( 180 );
 		}
 		
 		if( floater.FISH_SIZE == 2 )
 		{
-			return REAL_SECOND( 120 );
+			return REAL_SECOND( 150 );
 		}
 		
 		if( floater.FISH_SIZE == 3 )
 		{
-			return REAL_SECOND( 90 );
+			return REAL_SECOND( 120 );
 		}
 		
 		if( floater.FISH_SIZE == 4 )
 		{
-			return REAL_SECOND( 60 );
+			return REAL_SECOND( 90 );
 		}
 		
 		if( floater.FISH_SIZE == 5 )
 		{
-			return REAL_SECOND( 30 );
+			return REAL_SECOND( 60 );
 		}
 	}
 	
@@ -494,8 +510,13 @@ uint e_hookedFish( uint[]@ values)
 
 uint CheckDepth( Map& map, Item& floater ) 
 {
+	return CheckDepth( map, floater.HexX, floater.HexY );
+}
+
+uint CheckDepth( Map& map, uint16 X, uint16 Y ) //exported
+{
 	uint8 depth = 4;
-	uint16 hexX = floater.HexX, hexY = floater.HexY;
+	uint16 hexX = X, hexY = Y;
 	
 	for( uint i = 0, len = 5; i < len; i++ )
 	{
@@ -505,8 +526,8 @@ uint CheckDepth( Map& map, Item& floater )
 			depth--;
 			break;
 		}
-		hexX = floater.HexX;
-		hexY = floater.HexY;
+		hexX = X;
+		hexY = Y;
 	}
 	
 	for( uint i = 0, len = 5; i < len; i++ )
@@ -517,8 +538,8 @@ uint CheckDepth( Map& map, Item& floater )
 			depth--;
 			break;
 		}
-		hexX = floater.HexX;
-		hexY = floater.HexY;
+		hexX = X;
+		hexY = Y;
 	}
 	
 	for( uint i = 0, len = 5; i < len; i++ )
@@ -529,8 +550,8 @@ uint CheckDepth( Map& map, Item& floater )
 			depth--;
 			break;
 		}
-		hexX = floater.HexX;
-		hexY = floater.HexY;
+		hexX = X;
+		hexY = Y;
 	}
 	return depth;
 }
@@ -557,7 +578,14 @@ class MenuFishing: CenteredMenuHandler
 			return false; 
 		}
 		
-		if( menu.Button( "Drag" ) )
+		if( !cr.IsOnline() )
+		{
+			floater.HAS_BAIT = 0;
+			FinishFishing( cr, floater );
+			return false;
+		}
+		
+		if( menu.ButtonMsg( STR_FISH_MENU_DRAG ) )
 		{
 			if( floater.FISH_ACTION == ACTION_JINK )
 			{
@@ -569,10 +597,12 @@ class MenuFishing: CenteredMenuHandler
 				floater.FISH_STAMINA = floater.FISH_STAMINA - FisherResponseModifier( floater );
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FISH_SUBMITS ); 
 			}
+			
 			fishAction( cr, floater );
 			return true;
 		}
-		if( menu.Button( "Strike" ) )
+		
+		if( menu.ButtonMsg( STR_FISH_MENU_STRIKE ) )
 		{
 			if( floater.FISH_ACTION == ACTION_PULL )
 			{
@@ -584,11 +614,12 @@ class MenuFishing: CenteredMenuHandler
 				floater.FISH_STAMINA = floater.FISH_STAMINA - FisherResponseModifier( floater );
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FISH_SUBMITS ); 
 			}
+			
 			fishAction( cr, floater );
 			return true;
 		}
 		
-		if( menu.Button( "Pull out" ) )
+		if( menu.ButtonMsg( STR_FISH_MENU_PULL_OUT ) )
 		{
 			if( PlayerSkill( cr ) >= floater.FISH_STAMINA )
 			{
@@ -604,7 +635,7 @@ class MenuFishing: CenteredMenuHandler
 			}
 		}
 		
-		if( menu.Button( "Cut the fishing line" ) )
+		if( menu.ButtonMsg( STR_FISH_MENU_CUT_LINE ) )
 		{
 			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_TAKE_ROD_OUT );
 			FinishFishing( cr, floater );
@@ -612,46 +643,58 @@ class MenuFishing: CenteredMenuHandler
 			{
 				SingleItemProtoChange( cr, PID_ROD, SLOT_HAND1 );
 			}
+			
 			return false;
 		}
+		
 		return true;
     }
+	
+	int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_FISH_MENU_MAIN;
+	}
 	
     string@ Description( Critter& cr )
 	{
 		Item@ floater = GetItem( target_id );
+		
+		string info = "$pullOutFish";
 		if( !valid( floater ) )
 		{
-			string info = "The fish is gone!";
+			info += STR_INSERT_TEXT_LINE( STR_FISH_MENU_FISH_GONE );
 			return info;
 		}
 		
-		string info = "There is a fish on the hook!";
-		string depth = floater.DEPTH;
-		string fish_size = "Fish size: "; 
+		info += STR_INSERT_TEXT_LINE( STR_FISH_MENU_FISH_ON_HOOK )
+			 + "$fishDepth" + floater.DEPTH;
+		
+		info += "$fishSize";
 		if( floater.SHOW_FISH == 1 )
 		{
-			fish_size += GetMsgStr( 1, TEXTMSG_ITEM, floater.HAS_FISH * 100 );
+			info += floater.FISH_SIZE;
 		}
 		else
 		{
-			fish_size += " You can't determine.";
+			info += STR_INSERT_TEXT_LINE( STR_FISH_MENU_CANT_DETERMINE );
 		}
 		
+		info += "$fishAction";
 		uint8 fish_action = floater.FISH_ACTION;
-		string action = "Fish action: ";
 		if( floater.SHOW_ACTION == 1 )
 		{
-			action += fish_action == 1 ? "Is pulling" : "Moves rapidly";
+			info += STR_INSERT_TEXT_LINE( fish_action == 1 ? STR_FISH_MENU_IS_PULLING : STR_FISH_MENU_MOVES_RAPIDLY );
 		}
 		else
 		{
-			action += " You can't determine.";
+			info += STR_INSERT_TEXT_LINE( STR_FISH_MENU_CANT_DETERMINE );
 		}
 		
-		info += "\nDepth: " + depth;
-		info += "\n" + fish_size;
-		info += "\n" + action;
         return info;
     }
 
@@ -677,17 +720,12 @@ class MenuFishing: CenteredMenuHandler
 			return false;
 		}
 	}
-
-    string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Hide menu", null);
-    }
 }
 
 void StartMenuFishing( Critter& cr, Item& floater )
 {
     Map@ map = cr.GetMap();
-    if( map is null )
+    if( !valid(map) )
 	{
         return;
     }
@@ -707,9 +745,7 @@ void FinishFishing( Critter& cr, Item& floater )
 			fishingRod.HAS_BAIT = 0;
 		}
 		
-		EraseTimeEvent( floater.EVENT );
-		floater.EVENT = 0;
-		DeleteItem( floater );
+		DeleteFloater( floater );
 		
 		if( valid( cr ) )
 		{
@@ -756,6 +792,7 @@ void Profit( Critter& cr, Item& floater )
 	raiseSkill( cr, skillNum );
 	
 	cr.StatBase[ST_EXPERIENCE] += 25;
+	ChangeCritterSpeed( cr );
 }
 
 void fishAction( Critter& cr, Item& floater )
@@ -768,7 +805,7 @@ void fishAction( Critter& cr, Item& floater )
 	
 	floater.SHOW_ACTION = 0;
 
-	if( Random( 1, 100 ) <= 5 )
+	if( Random( 1, 100 ) <= 1 )
 	{
 		if( Random( 1, 100 ) > ( cr.Stat[ST_LUCK] * 2 ) )
 		{
@@ -792,6 +829,7 @@ void fishAction( Critter& cr, Item& floater )
 				return;
 			}
 		}
+		
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FISH_ATE_BAIT );
 		floater.HAS_BAIT = 0;
 		FinishFishing( cr, floater );
@@ -810,7 +848,7 @@ void fishAction( Critter& cr, Item& floater )
 uint FisherResponseModifier( Item& floater )
 {
 	uint modifier = floater.FISH_STAMINA;
-	modifier = CLAMP( ( modifier * 120 / 100 - modifier ), 0, modifier );
+	modifier = CLAMP( ( modifier * FISH_STAMINA_MOD / 100 - modifier ), 0, modifier );
 	return modifier;
 }
 

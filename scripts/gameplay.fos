@@ -4,6 +4,7 @@
 #include "_utils.fos"
 #include "_global_events.fos"
 #include "gathering_h.fos"
+#include "gameplay_h.fos"
 #include "wildplant_h.fos"
 #include "waterworks_h.fos"
 #include "local_population_h.fos"
@@ -19,6 +20,11 @@
 #include "globalmap_group_h.fos"
 #include "weather_h.fos"
 #include "entire_h.fos"
+#include "gasses_h.fos"
+
+import uint CountMapPlayers( Map@ map ) from "manager";
+import void _DoorsInit( Critter& player, int param0, int param1, int param2 ) from "gateway";
+import void _ForceArenaInit( Critter& player, int param0, int param1, int param2 ) from "map_arena";
 
 bool SwitchGameMode( Critter& cr, int mode )
 {
@@ -99,7 +105,7 @@ class Gameplay : iManagerModule, iManager_loop,
 
         if( !IsInGame( cr ) )
         {
-            if( cr.ParamBase[ QST_GAMEMODE ] > GAME_START && (map is null) )
+            if( cr.ParamBase[ QST_GAMEMODE ] > GAME_START && !valid(map) )
             {
                 CreateModeStart( cr );
             }
@@ -123,6 +129,11 @@ class Gameplay : iManagerModule, iManager_loop,
 			return true;
 		}
 		
+		if( cr.StatBase[ST_GLOBAL_OVERDOSE] > 0 && cr.GetTimeEvents( CTE_GLOBAL_OVERDOSE, null, null, null ) < 1 )
+		{
+			cr.AddTimeEvent( "cte_Global_Overdose", REAL_MS( cr.Param[ CR_GLOBAL_OVERDOSE_SPEED ] ), CTE_GLOBAL_OVERDOSE, 0 );				
+		}
+
 		uint16 mapPid = map.GetProtoId();
 		if( cr.IsPlayer() )
 		{
@@ -135,12 +146,14 @@ class Gameplay : iManagerModule, iManager_loop,
 			{
 				if( !valid( map ) || ( mapPid != MAP_UTILITY_START && mapPid != MAP_TLJ_ARENA1 && mapPid != MAP_TLJ_ARENA2 ) )
 				{
-					cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_NO_ACTIVATION );
 					cr.ParamBase[ QST_GAMEMODE ] = GAME_SURVIVAL;
-					cr.ToDead( ANIM2_DEAD_EXPLODE, null );
+					if( !isGM( cr ) )
+					{
+						cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_NO_ACTIVATION );
+						cr.ToDead( ANIM2_DEAD_EXPLODE, null );
+					}
 				}
 			}
-			cr.ParamBase[ CR_ITEMS_WEIGHT ] = ItemsWeight( cr );
 		}
 		
 		if( cr.IsDead() && cr.IsPlayer() )
@@ -163,6 +176,7 @@ class Gameplay : iManagerModule, iManager_loop,
 									cr.TransitToMap( map.Id, 241 );
 								}
 							}
+							
 							cr.ToLife();
 							FullHeal( cr );
 							return true;
@@ -183,9 +197,9 @@ class Gameplay : iManagerModule, iManager_loop,
 			}
 		}
 
-		if( cr.StatBase[ ST_DYSPNEA ] < 100 && cr.GetTimeEvents( CTE_DYSPNEA, null, null, null ) < 1 )
+		if( cr.Stat[ ST_DYSPNEA ] > 0 && cr.GetTimeEvents( CTE_DYSPNEA, null, null, null ) < 1 )
 		{
-			DypsneaCr( cr );
+			DypsneaCr( cr, 0, 0 );
 		}
 		
 		if( cr.Stat[ ST_POISONING_LEVEL ] > 0 && cr.GetTimeEvents( CTE_POISON, null, null, null ) < 1 )
@@ -204,6 +218,20 @@ class Gameplay : iManagerModule, iManager_loop,
             Log( "Error! Death map is null" );
             return false;
         }
+		
+		if( cr.IsNpc() )
+		{
+			if( cr.ParamBase[ MERC_MASTER_ID ] != 0 )
+			{
+				Critter@ owner = GetCritter( cr.ParamBase[ MERC_MASTER_ID ] );
+				if( valid( owner ) )
+				{
+					owner.RunClientScript( "client_gui@_LostCritterControl", cr.Id, 0, 0, null, null );
+					cr.ParamBase[ MERC_MASTER_ID ] = 0;
+					cr.ParamBase[ CR_CONTROLLED_GROUP ] = 0;
+				}
+			}
+		}
 
 		cr.ParamBase[ CR_IS_WINDUPED ] = 0;
 		cr.ParamBase[ CR_IS_RELAXING ] = 0;
@@ -313,7 +341,7 @@ class Gameplay : iManagerModule, iManager_loop,
     bool global_player_login( uint ip, string& name, uint id, uint& textMsg, uint& strNum )
     {
         Critter@ cr = GetCritter( id );
-        if( cr !is null )
+        if( valid(cr) )
 		{
             AfterLogin( cr );
         }
@@ -322,6 +350,12 @@ class Gameplay : iManagerModule, iManager_loop,
 	
     void AfterLogin( Critter& cr )
 	{
+		string@ lex = lexem_length_check( cr.GetLexems() );
+		if( valid( lex ) )
+		{
+			 cr.SetLexems( lex );
+		}	
+
 		if( !cr.IsPlayer() )
 		{
 			return;
@@ -387,9 +421,9 @@ class Gameplay : iManagerModule, iManager_loop,
 			cr.SkillBase[ SK_COOKING ] += 0 + 5 * cr.StatBase[ ST_INTELLECT ] + 4 * cr.StatBase[ ST_PERCEPTION ] + 3 * cr.StatBase[ ST_AGILITY ];
 		}
 		
-		if( cr.SkillBase[ SK_SEX ] == 0 )
+		if( cr.SkillBase[ SK_HERBALISM ] == 0 )
 		{
-			cr.SkillBase[ SK_SEX ] += 0 + 5 * cr.StatBase[ ST_STRENGTH ] + 4 * cr.StatBase[ ST_AGILITY ] + 3 * cr.StatBase[ ST_INTELLECT ];
+			cr.SkillBase[ SK_HERBALISM ] += 0 + 5 * cr.StatBase[ ST_INTELLECT ] + 4 * cr.StatBase[ ST_PERCEPTION ] + 3 * cr.StatBase[ ST_AGILITY ];
 		}
 		
 		if( isGM( cr ) )
@@ -417,16 +451,6 @@ class Gameplay : iManagerModule, iManager_loop,
 			{
 				cr.AddTimeEvent( "cte_Drunk", REAL_SECOND( cr.Param[ CR_DRUNK_SPEED ] ), CTE_DRUNK, 0 );
 			}
-			
-			if (cr.StatBase [ ST_GLOBAL_OVERDOSE ] > 0 && cr.GetTimeEvents( CTE_GLOBAL_OVERDOSE, null, null, null ) < 1 )
-			{
-				cr.AddTimeEvent ( "cte_Global_Overdose", REAL_SECOND( cr.Param[ CR_GLOBAL_OVERDOSE_SPEED ] ), CTE_GLOBAL_OVERDOSE, 0);
-			}
-			//Jet-type drugs
-			if( cr.GetTimeEvents( DrugsIdentifiers.find( PID_JET ), null, null, null ) < 1 && cr.GetTimeEvents( DrugsIdentifiers.find( PID_TREB ), null, null, null ) < 1 && cr.GetTimeEvents( DrugsIdentifiers.find( PID_VINT ), null, null, null ) < 1 )
-			{
-				cr.ParamBase[ CR_JETTED ] = 0;
-			}
 		}		
 		
 		if( cr.GetTimeEvents( CTE_DIRT, null, null, null ) < 1 )
@@ -434,7 +458,7 @@ class Gameplay : iManagerModule, iManager_loop,
 			cr.AddTimeEvent( "cte_Dirt", 0, CTE_DIRT, 0 );			
 		}
 
-		if (cr.StatBase [ ST_WETNESS ] > 0 && cr.GetTimeEvents( CTE_WETNESS, null, null, null ) < 1 )
+		if( cr.StatBase [ ST_WETNESS ] > 0 && cr.GetTimeEvents( CTE_WETNESS, null, null, null ) < 1 )
 		{
 			cr.AddTimeEvent( "cte_Wetness", REAL_SECOND( cr.Param[ CR_WETNESS_SPEED ] ), CTE_WETNESS, 0);
 		}
@@ -445,49 +469,66 @@ class Gameplay : iManagerModule, iManager_loop,
 		{
 			cr.StatBase[ ST_UNSPENT_PERKS ] = 0;
 		}
+		
+		uint[] durations;
+		if( cr.GetTimeEvents( PID_PILLS, null, durations, null ) > 0 )
+		{
+			cr.TimeoutBase[ TO_PILLS ] = __FullSecond + durations[0];
+		}
 	}
 
     bool global_time( int8 type )
     {
         Map@[] maps;
+		Map@ mapM = null;
+		Map@ mapH = null;
         uint mapsLength = GetAllMaps( 0, maps );
-		uint[] ignored_map_pids = { MAP_UTILITY_START, MAP_DREAM, MAP_HEAVEN, MAP_HELL };
 		
 		if( type == TIME_NEW_MINUTE )
 		{
 			for( uint i = 0; i < mapsLength; i++ )
 			{
-				if( ignored_map_pids.find( maps[i].GetProtoId() ) != -1 )
+				@ mapM = maps[i];
+				if( !valid( mapM ) )
+				{
+					continue;
+				}
+			
+				if( ignored_map_pids.find( mapM.GetProtoId() ) != -1 )
+				{
+					continue;
+				}
+
+				if( CountMapPlayers( mapM ) == 0 )
 				{
 					continue;
 				}
 				
-				Map@ map = maps[i];
-				if( !valid( map ) )
-				{
-					continue;
-				}
-				
-				uint8 rainIntensity = map.GetRain();
+				uint8 rainIntensity = mapM.GetRain();
 				if( rainIntensity > 0 )
 				{
-					Critter@[] crs;
-					if( map.GetCritters( 0, FIND_LIFE, crs ) > 0 )
+					Critter@[] critters;
+					Critter@ crit = null;
+					if( mapM.GetCritters( 0, FIND_LIFE | FIND_ONLY_PLAYERS, critters ) > 0 )
 					{
-						for( uint j = 0; j < crs.length(); j++ )
+						for( uint j = 0, len = critters.length(); j < len; j++ )
 						{
-							if( !map.HasRoof( crs[j].HexX, crs[j].HexY ) )
-							{
-								applyWetness( crs[j] );
+							@ crit = critters[j];
+							if( !valid( crit ) ) continue;
 
-								if( crs[j].Param[ CR_DIRTINESS ] >= 30 )
+							if( !mapM.HasRoof( crit.HexX, crit.HexY ) )
+							{
+								applyWetness( crit );
+
+								if( crit.Param[ CR_DIRTINESS ] >= 30 )
 								{
-									uint8 dirt = crs[j].Param[ CR_DIRTINESS ];
-									crs[j].ParamBase[ CR_DIRTINESS ] -= MIN( ( rainIntensity / 17 ), dirt );
+									uint8 dirt = crit.Param[ CR_DIRTINESS ];
+									crit.ParamBase[ CR_DIRTINESS ] -= MIN( ( rainIntensity / 17 ), dirt );
 								}
 							}
 						}
 					}
+					critters.resize(0);
 				}
 			}
 		}
@@ -495,7 +536,7 @@ class Gameplay : iManagerModule, iManager_loop,
         if( type == TIME_NEW_HOUR )
         {
            	GameVar@ cycle = GetGlobalVar( GVAR_rotten_cycle );
-			if(valid(cycle)) 
+			if( valid( cycle ) ) 
 			{
 				if( cycle.GetValue() < 999 )
 				{ 
@@ -509,57 +550,33 @@ class Gameplay : iManagerModule, iManager_loop,
 
 			for( uint i = 0; i < mapsLength; i++ )
 			{
-				if( ignored_map_pids.find( maps[i].GetProtoId() ) != -1 )
+				@ mapH = maps[i];
+				if( !valid( mapH ) )
 				{
 					continue;
 				}
-	
-				if( !valid( maps[i] ) )
+
+				if( ignored_map_pids.find( mapH.GetProtoId() ) != -1 )
 				{
 					continue;
 				}
-		
-				RottenFood( maps[i] );
-
-				Critter@[] crs;
-				if( maps[i].GetCritters( 0, FIND_ONLY_PLAYERS, crs ) > 0 )
-				{
-					for( uint j = 0; j < crs.length(); j++ )
-					{
-						RottenFood( crs[j] );
-					}
-				}
-
-				if( __AllowRealDayTime != 0 )
-				{
-					int timeH = GetRealHour() * 60;
-					int timeM = GetRealMinute();
-					int time = timeH + timeM;
-					if( GetMapLevelByPid( maps[i].GetProtoId() ) >= 0 )
-					{
-						maps[i].SetTime( time );
-						//Log( "time set: " + time + " on map: " + maps[i].Id );
-					}
-				}
-				else if( __AllowRealDayTime == 0 && maps[i].GetTime() != -1 )
-				{
-					if( GetMapLevelByPid( maps[i].GetProtoId() ) >= 0 )
-					{
-						maps[i].SetTime( -1 );
-					}
-				}
+				
+				RottenFood( mapH );
+				RottenCrittersFoodOnMap( mapH );
+				MapHourTimeLoop( mapH );
+				GrowWildplants( mapH );
 			}
+			
+			MapLootInit();
+			WildplantInit();
 		}
 
         if( type == TIME_NEW_DAY )       // 142
         {
-			MapLootInit();
-			OreInit();
-			JunkInit();
 			WildplantInit();
-			MobsSpawnInit();
 			CutTreeManager();
         }
+		
         return true;
     }
 }
@@ -594,10 +611,12 @@ bool _RespawnCritter( Critter& cr )
 			FullHeal( cr );
 			ChangeCritterSpeed( cr );
 			cr.RunClientScript( "client_main@__ChosenRefreshMap", 0, 0, 0, null, null );
+			
 			if( !cr.IsNpc() && cr.Stat[ ST_LEVEL ] != 12 )
 			{
 				cr.StatBase[ ST_EXPERIENCE ] += 100000;
 			}
+			
 			cr.ParamBase[ CR_DEATH_STAGE ] = 0;
 			RefreshClientsMap( dieMap );
 			return true;
@@ -615,12 +634,12 @@ bool _RespawnCritter( Critter& cr )
 	{
 		Location@ loc = GetLocationByPid( LOCATION_Deadloc, 0 );
 
-		if( loc is null )
+		if( !valid(loc) )
 		{
 			uint locid = CreateLocation( LOCATION_Deadloc, cr.WorldX, cr.WorldY, null );
 			@loc = GetLocation( locid );
 
-			if( not valid( loc ) )
+			if( !valid( loc ) )
 			{
 				Log( "can't create dead loc" );
 				return false;
@@ -629,7 +648,7 @@ bool _RespawnCritter( Critter& cr )
 
 		@map = loc.GetMapByIndex( 0 );
 
-		if( not valid( map ) )
+		if( !valid( map ) )
 		{
 			Log( "can't get dead map" );
 			return false;
@@ -646,7 +665,7 @@ bool _RespawnCritter( Critter& cr )
 		@map = @dieMap;
 		hx = cr.HexX;
 		hy = cr.HexY;
-		if( not map.IsHexPassed( hx, hy ) )
+		if( !map.IsHexPassed( hx, hy ) )
 		{
 			bool found = false;
 			for( int x = -1; x <= 1; x++ )
@@ -680,7 +699,7 @@ bool _RespawnCritter( Critter& cr )
 				}
 			}
 
-			if( not found )
+			if( !found )
 			{
 				// Continue dead
 				cr.TimeoutBase[ TO_REPLICATION ] = __FullSecond + REAL_MINUTE( 1 );
@@ -719,12 +738,18 @@ bool _RespawnCritter( Critter& cr )
 			skeleton.Val5 = cr.StatBase[ ST_STRENGTH ];
 			skeleton.Val6 = cr.StatBase[ ST_ENDURANCE ];
 			skeleton.Val7 = cr.StatBase[ ST_AGILITY ];
-			string@ lexem = "Notisable features: " + cr.GetLexems() + ".";
-			skeleton.SetLexems( lexem );
+			
+			string @crLex = cr.GetLexems();
+			if( valid( crLex ) ) 
+			{
+				crLex = crLex;
+				setLexDesc( skeleton, crLex );
+				setOverridenDesc( skeleton, true );
+			}
 			
 			MoveItems( items, skeleton, 0 );
 			uint[] values = { dieMap.Id, skeleton.Id };
-			CreateTimeEvent( __FullSecond + REAL_MINUTE( 180 ), "e_deleteBody", values, true );
+			CreateTimeEvent( __FullSecond + REAL_MINUTE( 180 ), "gameplay@e_deleteBody", values, true );
 			
 			setCorpsePicMap( skeleton, dir );
 		}
@@ -735,7 +760,7 @@ bool _RespawnCritter( Critter& cr )
 	}
 
 	cr.ToLife();
-	cr.StatBase[ ST_CURRENT_HP ] = cr.Stat[ ST_MAX_LIFE ];
+	cr.StatBase[ ST_CURRENT_HP ] = ( cr.Stat[ ST_MAX_LIFE ] + cr.Stat[ ST_MAX_LIFE_EXT ] );
 
 	return true;
 }
@@ -760,21 +785,28 @@ bool setCorpsePicMap( Item& item, uint dir )
 		return false;
 	}
 	
-	item.Val0 = dir;
 	item.PicMap = GetStrHash( "art\\items\\misc\\corpse\\corpse" + dir + ".png" );
 	item.Update();
 	
 	return true;
 }
 
+//~run gameplay StartServer 0 0 0
+void StartServer( Critter& cr, int p0, int p1, int p2 )
+{
+	RespawnWorld( cr, p0, p1, p2 );
+	_DoorsInit( cr, p0, p1, p2 );
+	_ForceArenaInit( cr, p0, p1, p2 );
+	///smoke global timer
+	///fire global timer
+	cr.Say( SAY_NETMSG, "|0xFFFF00 Server global functions initiated" );
+}
+
 //~run gameplay RespawnWorld 0 0 0
 void RespawnWorld( Critter& cr, int p0, int p1, int p2 )
 {
 	MapLootInit();
-	OreInit();
-	JunkInit();
 	WildplantInit();
-	MobsSpawnInit();
 	FoceWellsCharge();
 	FoceWaterPumpsCharge();
 	
@@ -800,10 +832,10 @@ uint cte_Dirt( Critter& cr, int identifier, uint& rate )
 	uint8 Dirt = 1;
 	uint16 Chance = 1;
 	uint moved = MovementState( cr );
-	if( moved > 0 )
+	if( moved > MOVE_STATE_STILL )
 	{
-		Chance += ( 100 * ItemsWeight( cr ) / cr.Stat[ ST_CARRY_WEIGHT ] );
-		if( moved == 1 )
+		Chance += ( 100 * cr.Param[ CR_ITEMS_WEIGHT ] / cr.Stat[ ST_CARRY_WEIGHT ] );
+		if( moved == MOVE_STATE_RUN )
 		{
 			Dirt += 1;
 			Chance += 100;
@@ -814,26 +846,27 @@ uint cte_Dirt( Critter& cr, int identifier, uint& rate )
 	if( Random( Chance, 200 ) == 200 )
 	{
 		Dirtiness += Dirt;
-		if( Random( 1, 10 ) == 10 )
-		{
-			cr.StatBase[ ST_THIRST ] -= 10;
-		}
-		
-		if( Random( 1, 20 ) == 20 )
-		{
-			cr.StatBase[ ST_HUNGER ] -= 10;
-		}
 	}
 
-	cr.ParamBase[ CR_DIRTINESS ] = CLAMP( Dirtiness, 0, 100 );
-	
-	if( cr.Param[ CR_DIRTINESS ] >= 85 )
+	if( cr.Param[ CR_DIRTINESS ] > 100 )
 	{
-		DirtCharDebuff( cr );
+		cr.ParamBase[ CR_DIRTINESS ] = 100;
 	}
-	else
+	else if( cr.Param[ CR_DIRTINESS ] < 0 )
 	{
-		DirtCharRestore( cr );
+		cr.ParamBase[ CR_DIRTINESS ] = 0;
+	}
+	
+	if( !cr.IsNpc() )
+	{
+		if( cr.Param[ CR_DIRTINESS ] >= 85 )
+		{
+			DirtCharDebuff( cr );
+		}
+		else
+		{
+			DirtCharRestore( cr );
+		}
 	}
 	
 	return REAL_SECOND( 10 );
@@ -879,23 +912,26 @@ uint cte_Thirst( Critter& cr, int identifier, uint& rate )
 		return REAL_MINUTE( 1 );
 	}
 
-	cr.StatBase[ ST_THIRST ] -= Random( 0, 2 ) * 10;
+	cr.StatBase[ ST_THIRST ] += Random( 0, 2 ) * 10;
 
-	if( cr.StatBase[ ST_THIRST ] <= 0 )
+	if( !cr.IsNpc() )
 	{
-		ThirstCharDebuff( cr );
-	}
-	else
-	{
-		ThirstCharRestore( cr );
-	}
+		if( cr.StatBase[ ST_THIRST ] >= MAX_STARVATION_LIMIT )
+		{
+			ThirstCharDebuff( cr );
+		}
+		else
+		{
+			ThirstCharRestore( cr );
+		}
+	}		
 
 	return REAL_SECOND( cr.Param[ CR_THIRST_SPEED ] );
 }
 
 void ThirstCharDebuff( Critter& cr ) 
 {
-	if( cr.ParamBase[ CR_THIRSTY ] <= 0 )
+	if( cr.ParamBase[ CR_THIRSTY ] == 0 )
 	{
 		cr.ParamBase[ CR_THIRSTY ] = 1;
 		cr.StatBase[ ST_ACTION_POINTS ] -= 20;
@@ -906,7 +942,7 @@ void ThirstCharDebuff( Critter& cr )
 
 void ThirstCharRestore( Critter& cr )
 {
-	if( cr.ParamBase[ CR_THIRSTY ] > 0 )
+	if( cr.ParamBase[ CR_THIRSTY ] == 1 )
 	{
 		cr.ParamBase[ CR_THIRSTY ] = 0;
 		cr.StatBase[ ST_ACTION_POINTS ] += 20;
@@ -923,6 +959,39 @@ uint cte_Hunger( Critter& cr, int identifier, uint& rate )
 		return 0;
 	}
 	
+	if( cr.IsNpc() && cr.GetProtoId() == NPC_PID_PET_DOG )
+	{
+		if( cr.Param[ PET_HUNGER ] < 24 )
+		{
+			cr.ParamBase[ PET_HUNGER ] ++;
+			return REAL_MINUTE( Random( 50, 70 ) );
+		}
+		else
+		{
+			cr.ParamBase[ PET_LOYALTY ] -- ;
+			Log( "Pet: " + cr.Id + " Has dropped loyalty!!! Current loyalty: " + cr.Param[ PET_LOYALTY ] );
+ 			if( cr.Param[ PET_LOYALTY ] <= -100 )
+			{
+				cr.ClearEnemyStack();
+				cr.DropPlanes();
+				cr.EraseTimeEvents( CTE_NPC_FOLLOW );
+				cr.ModeBase[ MODE_NO_HOME ] = 1;
+				cr.ParamBase[ PET_PROTECT_ID ] = 0;
+				cr.ParamBase[ PET_GUARD_ID ] = 0;
+				cr.SetScript( "ai_mob@_MobInit" );
+				Map@ map = cr.GetMap();
+				if( valid( map ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "MADDOGGR.mp3", 10 );
+				}
+				
+				return 0;		
+			}
+			
+			return REAL_MINUTE( Random( 50, 70 ) );
+		}
+	}
+	
 	if( isGM( cr ) || cr.IsDead() || cr.Param[ QST_GAMEMODE ] == GAME_START )
 	{
 		return REAL_MINUTE( 10 );
@@ -933,15 +1002,18 @@ uint cte_Hunger( Critter& cr, int identifier, uint& rate )
 		return REAL_MINUTE( 1 );
 	}
 
-	cr.StatBase[ ST_HUNGER ] -= Random( 0, 2 ) * 10;
+	cr.StatBase[ ST_HUNGER ] += Random( 0, 2 ) * 10;
 
-	if( cr.StatBase[ ST_HUNGER ] <= 0 )
+	if( !cr.IsNpc() )
 	{
-		HungerCharDebuff( cr );
-	}
-	else
-	{
-		HungerCharRestore( cr );
+		if( cr.StatBase[ ST_HUNGER ] >= MAX_STARVATION_LIMIT )
+		{
+			HungerCharDebuff( cr );
+		}
+		else
+		{
+			HungerCharRestore( cr );
+		}		
 	}
 	
 	return REAL_SECOND( cr.Param[ CR_HUNGER_SPEED ] );
@@ -949,7 +1021,7 @@ uint cte_Hunger( Critter& cr, int identifier, uint& rate )
 
 void HungerCharDebuff( Critter& cr ) 
 {
-	if( cr.ParamBase[ CR_HUNGRY ] <= 0 )
+	if( cr.ParamBase[ CR_HUNGRY ] == 0 )
 	{
 		cr.ParamBase[ CR_HUNGRY ] = 1;
 		cr.StatBase[ ST_ACTION_POINTS ] -= 20;
@@ -960,7 +1032,7 @@ void HungerCharDebuff( Critter& cr )
 
 void HungerCharRestore( Critter& cr )
 {
-	if( cr.ParamBase[ CR_HUNGRY ] > 0 )
+	if( cr.ParamBase[ CR_HUNGRY ] == 1 )
 	{
 		cr.ParamBase[ CR_HUNGRY ] = 0;
 		cr.StatBase[ ST_ACTION_POINTS ] += 20;
@@ -992,9 +1064,9 @@ uint cte_Drunk( Critter& cr, int identifier, uint& rate )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FEEL_SICK );
 				uint vomitTime = Random( 5, 15 );
-				cr.AddTimeEvent( "poison@cte_vomit", REAL_MINUTE( vomitTime ), CTE_VOMIT, 0 );
+				cr.AddTimeEvent( "vomit@cte_vomit", REAL_MINUTE( vomitTime ), CTE_VOMIT, 0 );
 				vomitTime --;
-				cr.AddTimeEvent( "poison@cte_vomit_warn", REAL_MINUTE( vomitTime ), CTE_VOMIT_WARN, 0 );
+				cr.AddTimeEvent( "vomit@cte_vomit_warn", REAL_MINUTE( vomitTime ), CTE_VOMIT_WARN, 0 );
 			}
 		}
 	}
@@ -1086,7 +1158,7 @@ void start()
 {
     iManagerModule@  module = gameplay;
     iManagerElement@ manager = manager_add_module( module, "Gameplay", 40 );
-    if( manager is null )
+    if( !valid(manager) )
 	{
         return;
 	}
@@ -1112,7 +1184,7 @@ bool TeleportToStart( Critter& cr )
 
 bool respawn_npc( Critter& cr, Map@ map )
 {
-    if( not valid( map ) ) // On global, delete
+    if( !valid( map ) ) // On global, delete
     {
         DeleteNpc( cr );
         return true;
@@ -1121,7 +1193,7 @@ bool respawn_npc( Critter& cr, Map@ map )
     uint16 hx = cr.HexX,
            hy = cr.HexY;
 
-    if( not map.IsHexPassed( hx, hy ) )
+    if( !map.IsHexPassed( hx, hy ) )
     {
         bool founded = false;
         for( int x = -1; x <= 1; x++ )
@@ -1159,7 +1231,7 @@ bool respawn_npc( Critter& cr, Map@ map )
 			}
 		}
 
-        if( not founded )
+        if( !founded )
         {
             // Continue dead
             cr.TimeoutBase[ TO_REPLICATION ] = __FullSecond + REAL_MINUTE( 1 );
@@ -1180,12 +1252,12 @@ bool respawn_npc( Critter& cr, Map@ map )
     cr.DamageBase[ DAMAGE_RIGHT_LEG ] = 0;
     cr.DamageBase[ DAMAGE_LEFT_LEG ] = 0;
 
-    cr.StatBase[ ST_CURRENT_HP ] = cr.Stat[ ST_MAX_LIFE ];
+    cr.StatBase[ ST_CURRENT_HP ] = ( cr.Stat[ ST_MAX_LIFE ] + cr.Stat[ ST_MAX_LIFE_EXT ] );
     cr.Stat[ ST_ACTION_POINTS ] * 100;
 
     DropPoison( cr );
     DropRadiation( cr );
-    DropDrugEffects( cr );
+    clearDrugs( cr );
     cr.DropTimers();
     for( uint i = TIMEOUT_BEGIN; i <= TIMEOUT_END; i++ )
 	{
@@ -1260,6 +1332,7 @@ void CheckDragging( Critter& cr )
 		if( !valid( target ) )
 		{
 			cr.ParamBase[ CR_YOU_DRAG ] = 0;
+			return;
 		}
 		
 		Map@ cMap = cr.GetMap();
@@ -1339,6 +1412,13 @@ void TeleportIt( Critter& cr, Critter& target )
 	}
 	
 	PreviousHex( cr, hx, hy );
+
+	if( GetDistantion( hx, hy, cr.HexX, cr.HexY ) > 1 )
+	{
+		hx = cr.HexX;
+		hy = cr.HexY;
+		cMap.MoveHexByDir( hx, hy, _RevDir( cr.Dir ), 1 );
+	}
 	
 	if( tMap.IsHexPassed( hx, hy ) )
 	{
@@ -1364,6 +1444,26 @@ void TeleportIt( Critter& cr, Critter& target )
 		}
 	}
 	ChangeCritterSpeed( cr );
+}
+
+void unsafe_DragAndDrop( Critter& player, int id, int itemId, int param2, string@ param3, int[] @ param4 )
+{
+    if( player.IsDead() || player.IsKnockout() )
+	{
+		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_DO_THAT );
+		return;
+	}
+	
+	Critter @ target = GetCritter( id );
+	
+	if( !valid( target ) )
+	{
+		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MISS_KNOCK );
+		return;
+	}
+
+	DragAndDrop( player, target );
+	player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 3 );
 }
 
 void DragAndDrop( Critter& cr, Critter@ target )
@@ -1410,11 +1510,37 @@ void DragAndDrop( Critter& cr, Critter@ target )
 		return;	
 	}
 	
+	if( !isGM(cr) && tooMuchWeight( cr, target ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_HEAVY );
+		return;
+	}	
+	
+	if( !isGM(cr) && tooMuchVolume( cr, target ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_DO_THAT );
+		return;
+	}
+	
 	target.ParamBase[ CR_DRAGS_YOU] = cr.Id;
 	cr.ParamBase[ CR_YOU_DRAG ] = target.Id;
 	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_START_DRAGGING );
 	ChangeCritterSpeed( cr );
 	cr.AddTimeEvent( "cte_dragging", 0, CTE_DRAGGING, 0 );
+}
+
+bool tooMuchWeight( Critter& cr, Critter& target )
+{
+	float max = cr.Stat[ ST_CARRY_WEIGHT ] * DRAGGING_CARRY_WEIGHT_MULTIPLIER;
+	float sum = ItemsWeight( cr ) + ItemsWeight( target );
+	return( sum > max );
+}
+
+bool tooMuchVolume( Critter& cr, Critter& target )
+{
+	float max = cr.Param[ST_MAX_VOLUME] * DRAGGING_CARRY_VOLUME_MULTIPLIER;
+	float sum = cr.ItemsVolume() + target.ItemsVolume();
+	return( sum > max );
 }
 
 uint cte_dragging( Critter& cr, int identifier, uint& rate )
@@ -1450,60 +1576,6 @@ void DropCr( Critter@ cr, Critter@ target )
 	target.ParamBase[ CR_DRAGS_YOU ] = 0;
 	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STOPED_DRAGGING );
 	ChangeCritterSpeed( cr );
-}
-
-//Dyspnea and suffocation
-void DypsneaCr( Critter& cr )
-{
-	if( cr.GetTimeEvents( CTE_DYSPNEA, null, null, null ) > 0 )
-	{
-		cr.EraseTimeEvents( CTE_DYSPNEA );
-	}
-	
-	if( cr.StatBase[ ST_DYSPNEA ] < 100 )
-	{
-		cr.AddTimeEvent( "cte_Dyspnea", 0, CTE_DYSPNEA, 0 );
-	}
-}
-
-uint cte_Dyspnea( Critter& cr, int identifier, uint& rate )
-{
-    Map @ map = cr.GetMap();
-    if( !(map is null) )
-    {
-        if( map.GetData( 25 ) > 0 )
-        {
-            GameVar @ dyspnea = GetLocalVar( LMVAR_Dyspnea, map.Id );
-            if( !( dyspnea is null ) )
-            {
-                Item@ respirator = _CritGetItemHead( cr );
-                if( valid( respirator ) )
-                {
-					uint pid = respirator.GetProtoId();
-					if( pid == PID_RESPIRATOR || pid == PID_RESPIRATOR2 || pid == PID_RESPIRATOR3 || pid == PID_CIVIL_GAS_MASK || pid == PID_GASMASK )
-					{
-						cr.StatBase[ ST_DYSPNEA ]--;					
-					}
-                }
-                else
-                {
-                    if( Random( 0, 4 ) == 0 )
-					{
-						cr.StatBase[ ST_DYSPNEA ]--;
-					}
-				}
-            }
-        }
-        else
-        {
-			cr.StatBase[ ST_DYSPNEA ]++;
-			if ( cr.StatBase[ ST_DYSPNEA ] >= 100 ) 
-			{
-				return 0;
-			}
-        }
-    }
-    return REAL_SECOND( 6 );
 }
 
 #endif //GAMEPLAY

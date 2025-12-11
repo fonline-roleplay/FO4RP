@@ -1,75 +1,18 @@
-shared string itemText( ItemMutual@ item, int max_length = 0 )
-{
-	if( !valid( item ) ) return "[null]";
-	
-	string@ name;
-	if( item.Val9 == PID_POPUP || item.GetProtoId() == PID_POPUP )
-	{
-		#ifdef __SERVER
-			@name = Item_GetLexems( item );
-		#endif
-		
-		#ifdef __CLIENT
-			@name = "" + item.Lexems;
-		#endif
-	}
-	else
-	{
-		#ifdef __SERVER
-			@name = GetMsgStr( 0, TEXTMSG_ITEM, STR_ITEM_INFO( item ) );
-		#endif
-		
-		#ifdef __CLIENT
-			@name = GetMsgStr( TEXTMSG_ITEM, STR_ITEM_INFO( item ) );
-		#endif
-	}
-	
-	string result = TRIM_DOTS( name );
-	if( max_length > 0 && pixelength( result ) > max_length )
-	{
-		result = substring( result, 0, MIN( uint( max_length / 7.5f ), result.length() ) ) + "..";
-	}
-	
-	return itemColor(item) + result + COLOR_NETMSG;
-}
-
-shared string getItemTextName(string lexems)
-{
-	string colorSuffix = lexems.length() > COLOR_NETMSG.length() && COLOR_NETMSG == substring(
-		lexems, 
-		lexems.length() - COLOR_NETMSG.length(), 
-		COLOR_NETMSG.length()
-	) ? COLOR_NETMSG : "";
-			
-	return substring( lexems, 0, findFirst( lexems, ". " ) ) + colorSuffix;
-}
-
-shared string getItemTextDescription(string lexems)
-{
-	if( lexems.length() < 1 )
-	{
-		return "";
-	}
-	int pos = findFirst( lexems, ". " );
-	int off = lexems[ pos + 1 ] == ' ' ? 1 : 0;
-	return pos > 0 ? substring( lexems, pos + off + 1, lexems.length() - pos ) : "";
-}
-
 shared bool isDisabledSkill( uint skillIndex )
 {
-	uint[] disabled_skills = { SK_SPEECH, SK_SNEAK, SK_GAMBLING };
+	uint[] disabled_skills = { SK_GAMBLING, SK_OUTDOORSMAN };
 	return( disabled_skills.find( skillIndex ) != -1 );
 }
 
 shared bool isFarmingSkill( uint skillIndex )
 {
-	uint[] farming_skills = { SK_MINING, SK_CHOPPING, SK_SCAVENGING, SK_HUNTING, SK_FISHING, SK_FARMING, SK_COOKING, SK_SEX };
+	uint[] farming_skills = { SK_MINING, SK_CHOPPING, SK_SCAVENGING, SK_HUNTING, SK_FISHING, SK_FARMING, SK_COOKING, SK_HERBALISM };
 	return( farming_skills.find( skillIndex ) != -1 );
 }
 
-shared string itemColor( ItemMutual& item )
+shared string protoColor( const ProtoItem@ proto )
 {
-	switch( item.GetType() )
+	switch( proto.Type )
 	{
 		case( ITEM_TYPE_NONE ):
 			return COLOR_NONE; 
@@ -107,8 +50,15 @@ shared string itemColor( ItemMutual& item )
 			return COLOR_SMOKER;
 		case( ITEM_TYPE_FLASK ):
 			return COLOR_FLASK;
+		case( ITEM_TYPE_TRAP ):
+			return COLOR_TRAP;
 	}
 	return COLOR_NETMSG;
+}
+
+shared string itemColor( ItemMutual& item )
+{
+	return protoColor(item.Proto);
 }
 
 shared string cutter( string input, int min_line_length = 20, int max_line_length = 30, int max_string_length = 126 )
@@ -139,7 +89,7 @@ shared string cutter( string input, int min_line_length = 20, int max_line_lengt
 		if( current_length + word_len >= min_line_length )
 		{
 			current_length = 0;
-			result += words[i] + "\n";
+			result += words[i] + " " + "\n";
 			continue;
 		}
 		
@@ -210,7 +160,7 @@ shared uint CalculateItemCost( ItemMutual& item, CritterMutual& cr, CritterMutua
     uint16 pid = item.GetProtoId();
     uint cost = item.Proto.Cost;
 
-    if( pid == PID_BOTTLE_CAPS || pid == PID_REAL_BOTTLE_CAPS )
+    if( pid == PID_BOTTLE_CAPS || pid == PID_REAL_BOTTLE_CAPS || pid == PID_PREWAR_DOLLAR_1 )
 	{
         return 1;
 	}
@@ -220,17 +170,17 @@ shared uint CalculateItemCost( ItemMutual& item, CritterMutual& cr, CritterMutua
 		return 10;
 	}
 	
-	if( pid == PID_DOLLAR_100 )
+	if( pid == PID_DOLLAR_100 || pid == PID_PREWAR_DOLLAR_100 )
 	{
 		return 100;
 	}
 	
-	if( pid == PID_DOLLAR_20 )
+	if( pid == PID_DOLLAR_20 || pid == PID_PREWAR_DOLLAR_20 )
 	{
 		return 20;
 	}
 	
-	if( pid == PID_DOLLAR_5 )
+	if( pid == PID_DOLLAR_5 || pid == PID_PREWAR_DOLLAR_5 )
 	{
 		return 5;
 	}
@@ -263,19 +213,23 @@ shared uint CalculateItemCost( ItemMutual& item, CritterMutual& cr, CritterMutua
 		
         if( itemType == ITEM_TYPE_WEAPON && !item.IsStackable() )
         {
-            cost += GetProtoItem( item.AmmoPid ).Cost * item.AmmoCount;
-        }
+			ProtoItem@ ammo = GetProtoItem( item.AmmoPid );
+			if( valid( ammo ) )
+			{
+				cost += ammo.Cost * item.AmmoCount;
+			}
+		}
     }
 
 	//Check for partial pids and NPC price cap
-	ProtoItem@ protoItem = GetProtoItem( pid );
-	if( protoItem.Partial_Item > 0 && protoItem.Type != ITEM_TYPE_FLASK )
+	if( item.Proto.Partial_Item > 0 && item.Proto.Type != ITEM_TYPE_FLASK )
 	{
-		cost = cost * item.Val0 / protoItem.Partial_Item;
+		cost = cost * item.Val0 / item.Proto.Partial_Item;
 	}
 	
 	int skill_range = 150;
-	int skill = int( CLAMP( cr.Skill[ SK_BARTER ] - npc.Skill[ SK_BARTER ], -skill_range, skill_range ) * ( 1.0 / skill_range ) ); 
+	float skill = CLAMP( cr.Skill[ SK_BARTER ] - npc.Skill[ SK_BARTER ], -skill_range, skill_range );
+	skill = skill / skill_range * 25; //That makes value from [-1..1] to [-25..25]
 
 	if( sell )
 	{
@@ -283,7 +237,8 @@ shared uint CalculateItemCost( ItemMutual& item, CritterMutual& cr, CritterMutua
 	}
 	else
 	{
-		cost = uint( cost * ( 0.75 - ( skill / 4 ) ) );
+		cost *= 75 - int( skill ); //from 50% to 100% of cost
+		cost /= 100;
 	}
 	
 	if( cost < 1 )
@@ -294,7 +249,7 @@ shared uint CalculateItemCost( ItemMutual& item, CritterMutual& cr, CritterMutua
 	return cost;
 }
 
-bool SameFaction( CritterCl& cr1, CritterCl& cr2 )
+shared bool SameFaction( CritterMutual& cr1, CritterMutual& cr2 )
 {
 	if( cr1.ParamBase[ ST_FACTION ] != 0 )
 	{
@@ -302,4 +257,57 @@ bool SameFaction( CritterCl& cr1, CritterCl& cr2 )
 	}
 	
 	return false;
+}
+
+shared bool IsHuman( CritterMutual& cr )
+{
+	const uint[] mutants = { BT_MEN, BT_WOMEN, BT_CHILDREN };
+	return mutants.find( cr.Stat[ ST_BODY_TYPE ] ) != -1;
+}
+
+shared bool IsRobot( CritterMutual& cr )
+{
+	const uint[] robots = { BT_ROBOT };
+	return robots.find( cr.Stat[ ST_BODY_TYPE ] ) != -1;
+}
+
+shared bool IsMutant( CritterMutual& cr )
+{
+	const uint[] mutants = { BT_SUPER_MUTANT, BT_GHOUL, BT_BIG_BAD_BOSS };
+	return mutants.find( cr.Stat[ ST_BODY_TYPE ] ) != -1;
+}
+
+shared bool IsAnimal( CritterMutual& cr )
+{
+	const uint[] animals = { BT_BRAHMIN, BT_RADSCORPION, BT_RAT, BT_DOG, BT_MANTI, BT_PLANT, BT_GECKO, BT_LAVASH };
+	return animals.find( cr.Stat[ ST_BODY_TYPE ] ) != -1;
+}
+
+shared bool IsMonster( CritterMutual& cr )
+{
+	const uint[] animals = { BT_DEATHCLAW, BT_YAO, BT_CENTAUR, BT_FLOATER, BT_ALIEN, BT_SWAMP_LURKER, BT_CROCS };
+	return animals.find( cr.Stat[ ST_BODY_TYPE ] ) != -1;
+}
+
+shared bool IsInsect( CritterMutual& cr )
+{
+	const uint[] animals = { BT_MANTI, BT_GIANT_ANT, BT_GIANT_BEETLE, BT_GIANT_WASP, BT_MILLEPEDE, BT_SPIDER };
+	return animals.find( cr.Stat[ ST_BODY_TYPE ] ) != -1;
+}
+
+shared bool isSitting( Critter& cr )
+{
+	const uint[] relaxing_states_sitting = { RELAXING_STATE_DUCK_1, RELAXING_STATE_DUCK_2, RELAXING_STATE_DUCK_3, RELAXING_STATE_DUCK_4 };
+	return _Contains( relaxing_states_sitting, cr.ParamBase[CR_IS_RELAXING] );
+}
+
+shared bool isLaying( Critter& cr )
+{
+	if( cr.IsDead() || cr.IsKnockout() )
+	{
+		return true;
+	}
+	
+	const uint[] relaxing_states_lying = { RELAXING_STATE_PRONE_1, RELAXING_STATE_PRONE_2, RELAXING_STATE_PRONE_3 };
+	return _Contains( relaxing_states_lying, cr.ParamBase[CR_IS_RELAXING] );
 }

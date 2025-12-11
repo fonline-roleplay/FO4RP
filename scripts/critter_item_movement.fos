@@ -13,6 +13,10 @@
 	# define Item       ItemCl
 #endif // __CLIENT
 
+#ifdef __SERVER
+	import void TryEquipArmor( Critter& cr, Item& armor, uint8 toSlot ) from "armor_equip";
+#endif // __SERVER
+
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on something critter want move item from one slot to another.
 // Return true to allow transaction, false to disallow.
@@ -30,7 +34,7 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 
     int fromSlot = item.CritSlot;
 	uint16 pid = item.GetProtoId( );
-
+	
 #ifdef __SERVER
 	if( item.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE && item.BONDAGE_STATE == BONDAGE_STATE_ON )
     {
@@ -38,13 +42,54 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 		return false;
     }
 
-	if( ( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR ) && HandsTied( cr ) )
+	if( ( toSlot == SLOT_ARMOR || toSlot == SLOT_HAND1 || toSlot == SLOT_HAND2 || toSlot == SLOT_HEAD ) && FLAG( item.BrokenFlags, BI_BROKEN ) )
 	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FREE_HANDS );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ITEM_BROKEN );
 		return false;
 	}
 
-	if( pid == PID_WORKBENCH_TOKEN || pid == PID_FIREPLACE_TOKEN )
+	if( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR )
+	{
+		if( HandsTied( cr ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FREE_HANDS );
+			return false;
+		}
+		
+		if( cr.IsPlayer() )
+		{
+			Item@ back = _CritGetItemBack( cr );
+			if( valid( back ) )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CLOGGED_BAG );
+				return false;
+			}
+	
+			if( toSlot == SLOT_ARMOR && valid( itemSwap ) )
+			{
+				cr.Say( SAY_NETMSG, "Remove your current armor before wearing another!");
+				return false;
+			}
+
+			if( cr.Param[ ST_CAN_EQUIP_ARMOR ] == 1 )
+			{
+				cr.ParamBase[ ST_CAN_EQUIP_ARMOR ] = 0;
+				return true;
+			}
+
+			if( cr.IsKnockout() || cr.IsDead() )
+			{
+				return true;
+			}
+
+			TryEquipArmor( cr, item, toSlot );
+			return false;
+		}
+
+		return true;
+	}
+
+	if( pid == PID_WORKBENCH_TOKEN || pid == PID_FIREPLACE_TOKEN || pid == PID_AMMOBENCH_TOKEN )
 	{
         DeleteItem( item );
 		return false;
@@ -58,35 +103,18 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 			return false;
 		}
 	}
-#endif // __SERVER
-    bool  moveFreeze = false,
-          dropFreeze = false;
 
-#ifndef __CLIENT
 	if( toSlot == SLOT_GROUND )
 	{
-		uint16 itmPid = item.GetProtoId();
-		if( itmPid == PID_SINGLE_SANDBAG || ContainersX1.find( itmPid ) != -1 )
+		if( !FLAG( item.Flags, ITEM_NO_BLOCK ) )
 		{
 			Item@[] ground;
 			Map@ map = cr.GetMap();
 			if( map.GetItems( cr.HexX, cr.HexY, ground ) > 0 )
 			{
-				for( uint i = 0; i < ground.length(); i++ )
+				for( uint i = 0, len = ground.length(); i < len; i++ )
 				{
-					uint16 groundPid = ground[i].GetProtoId();
-					
-					uint16[] list;
-					if( itmPid == PID_SINGLE_SANDBAG )
-					{
-						list = Sandbags;
-					}
-					else
-					{
-						list = ContainersX1;
-					}
-					
-					if( list.find( groundPid ) != -1 )
+					if( !FLAG( ground[i].Flags, ITEM_NO_BLOCK ) )
 					{
 						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MOVE_TO_PLACE );
 						return false;
@@ -98,8 +126,8 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 		LogItemMovement( cr, item, "puts on ground" );
 		if( item.IsStackable() )
 		{
-			uint[] values = { item.Id };
-			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "e_stack_items", values, true );
+			uint[] values = { item.Id, cr.Id };
+			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "critter_item_movement@e_stack_items", values, true );
 		}
 	}
 	else
@@ -148,17 +176,18 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 				actionStr = "removes from back";
 				break;
 		}
+		
 		LogItemMovement( cr, item, actionStr );
 	}
-#endif // __CLIENT
+#endif // __SERVER
 	
     // Drop
     if( toSlot == SLOT_GROUND )
 	{
-        return !dropFreeze;
+        return true;
 	}	
 	
-	if( @itemSwap !is null )
+	if( valid(itemSwap) )
 	{
 		if( itemSwap.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE && itemSwap.BONDAGE_STATE == BONDAGE_STATE_ON )
 		{
@@ -172,11 +201,6 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
     // If busy, then allow only hands item swapping
     bool handsSwap = ( ( fromSlot == SLOT_HAND1 && toSlot == SLOT_HAND2 ) || ( fromSlot == SLOT_HAND2 && toSlot == SLOT_HAND1 ) );
     if( cr.IsPlayer() && valid( itemSwap ) && !handsSwap )
-	{
-        return false;
-	}
-	
-    if( cr.IsPlayer() && moveFreeze && !handsSwap )
 	{
         return false;
 	}
@@ -204,7 +228,17 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 		}
     }
 
-    // Armor animation
+	// Armor animation
+	uint16 skin = cr.Stat[ ST_BASE_CRTYPE ];
+	if( skin == 0 )
+	{
+		skin = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
+	}
+	
+	bool isRoboPlayer = skin_robot.find( skin ) != -1;
+	bool isRoboArmor = armor_robots.find( pid ) != -1;
+	bool isMutePlayer = skin_supermute.find( skin ) != -1;
+	bool isMuteArmor = armor_supermutants.find( pid ) != -1;
     if( toSlot == SLOT_ARMOR )
     {
         if( item.GetType() != ITEM_TYPE_ARMOR )
@@ -212,28 +246,11 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
             return false;
         }
 		
-		if( item.Proto.Slot != SLOT_INV )
-		{
-            return false;
-		}
-
-		uint16 skin = cr.Stat[ ST_BASE_CRTYPE ];
-		if( skin == 0 )
-		{
-			skin = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
-		}
-		
-		bool isRoboPlayer = skin_robot.find( skin ) != -1;
-		bool isRoboArmor = armor_robots.find( pid ) != -1;
-		bool isMutePlayer = skin_supermute.find( skin ) != -1;
-		bool isMuteArmor = armor_supermutants.find( pid ) != -1;
-		
-		if( isRoboPlayer != isRoboArmor || isMutePlayer != isMuteArmor || ( cr.Stat[ ST_BODY_TYPE ] != BT_DOG && pid == PID_DOG_ARMOR ) )
+		if( ( !isRoboPlayer && isRoboArmor ) || ( isRoboPlayer && !isRoboArmor ) || isMutePlayer != isMuteArmor || ( cr.Stat[ ST_BODY_TYPE ] != BT_DOG && pid == PID_DOG_ARMOR ) )
 		{
 			#ifdef __CLIENT
 			Message( TEXTMSG_TEXT, STR_HUMANS_CANT_WEAR ); 
 			#endif // __CLIENT
-			//cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HUMANS_CANT_WEAR );
 			return false;
 		}
 	}
@@ -241,9 +258,33 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
     // Custom slot checks
     if( toSlot > SLOT_ARMOR )
     {
-        if( toSlot != item.Proto.Slot )
+        if( toSlot != item.Proto.Slot || ( fromSlot == SLOT_ARMOR && toSlot == SLOT_BACK ) )
 		{
             return false;
+		}
+		
+		if( toSlot == SLOT_BACK && item.GetType() == ITEM_TYPE_ARMOR )
+		{
+			if( isRoboPlayer || isMutePlayer || ( !IsHuman( cr ) && cr.Stat[ ST_BODY_TYPE ] != BT_GHOUL ) )
+			{
+				#ifdef __CLIENT
+				Message( "|0xFFFF00 You can't wear robes like that!" ); 
+				#endif // __CLIENT
+				return false;
+			}
+			
+			Item@ armor = _CritGetItemArmor( cr );
+			if( valid( armor ) )
+			{
+				uint16 armor_pid = armor.GetProtoId();
+				if( FLAG( armor.Proto.Armor_Perk, ARMOR_PERK_FULLBODY ) || PowerArmors.find( armor_pid ) != -1 )
+				{
+					#ifdef __CLIENT
+					Message( "|0xFFFF00 You can't wear robe over this type or armor" ); 
+					#endif // __CLIENT
+					return false;
+				}
+			}
 		}
 	}
 
@@ -255,62 +296,51 @@ bool critter_check_move_item( Critter& cr, Item& item, uint8 toSlot, Item@ itemS
 
 #include "speed_h.fos"
 #include "windup_h.fos"
+#include "_ltp.fos"
+#include "effects_h.fos"
+
+import void LookDataRefresh( Critter& critter ) from "main";
 
 // Call on critter item moved.
-
 void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 {
-	ChangeRunningAP( cr );
 	uint8 toSlot = item.CritSlot;
-	
+	uint16 pid = item.GetProtoId();
+	uint8 type = item.GetType();
+
 	if( toSlot == SLOT_HEAD || fromSlot == SLOT_HEAD )
 	{	
 		int signH = ( toSlot == SLOT_HEAD ? int(1) : -1 );
-		switch( item.Proto.HeadItem_Perk )
-        {
-			case( HEAD_PERK_COOL ):
-                cr.StatBase[ ST_CHARISMA_EXT ] += 1 * signH;
-                break;
-            case( HEAD_PERK_GLASSES ):
+		
+		if( FLAG( item.Proto.HeadItem_Perk, HEAD_PERK_COOL ))
+		{
+			if( cr.StatBase[ ST_CHARISMA ] > 1 )
 			{
-				if( cr.StatBase[ ST_PERCEPTION ] <= 3 )
-				{
-					cr.StatBase[ ST_PERCEPTION_EXT ] += 2 * signH;
-				}
-				else if( cr.StatBase[ ST_PERCEPTION ] == 4 )
-				{
-					cr.StatBase[ ST_PERCEPTION_EXT ] += 1 * signH;
-				}
-                break;
-			}
-			case( HEAD_PERK_VERY_COOL ):
-				cr.StatBase[ ST_CHARISMA_EXT ] += 2 * signH;
-				break;
-			case( HEAD_PERK_LUCKY_CHARM ):
-				cr.StatBase[ ST_LUCK_EXT ] += 1 * signH;
-				break;
-			case( HEAD_PERK_COOL_LUCKY_CHARM ):
 				cr.StatBase[ ST_CHARISMA_EXT ] += 1 * signH;
-				cr.StatBase[ ST_LUCK_EXT ] += 1 * signH;
-				break;
-			case( HEAD_PERK_COOL_GLASSES ):
-			{
-				if( cr.StatBase[ ST_PERCEPTION ] <= 3 )
-				{
-					cr.StatBase[ ST_PERCEPTION_EXT ] += 2 * signH;
-				}
-				else if( cr.StatBase[ ST_PERCEPTION ] == 4 )
-				{
-					cr.StatBase[ ST_PERCEPTION_EXT ] += 1 * signH;
-				}
-				cr.StatBase[ ST_CHARISMA_EXT ] += 1 * signH;
-				break;
 			}
 		}
-		cr.StatBase[ ST_CURRENT_HEAD_ITEM_PERK ] = ( toSlot == SLOT_HEAD ? item.Proto.HeadItem_Perk : 0 );
+			
+		if( FLAG( item.Proto.HeadItem_Perk, HEAD_PERK_VERY_COOL ))
+		{
+			if( cr.StatBase[ ST_CHARISMA ] > 1 )
+			{
+				cr.StatBase[ ST_CHARISMA_EXT ] += 2 * signH;
+			}
+		}
+		
+		if( FLAG( item.Proto.HeadItem_Perk, HEAD_PERK_LUCKY_CHARM ))
+		{
+			cr.StatBase[ ST_LUCK_EXT ] += 1 * signH;
+		}
+
+		// STA module
+		if( FLAG( item.Proto.HeadItem_Perk, HEAD_PERK_STA ) )
+		{
+			cr.ParamBase[ CR_STA_EQUIPPED ] += 1 * signH;
+		}
+		
 		//face mask
-		uint16 pid = item.GetProtoId();
-		if( toSlot == SLOT_HEAD && HidefaceMasks.find( pid ) != -1 )
+		if( toSlot == SLOT_HEAD && FLAG( item.Proto.HeadItem_Perk, HEAD_PERK_HIDE_FACE ))
 		{
 			SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_FACE_MASK );
 		}
@@ -318,28 +348,80 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 		{
 			UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_FACE_MASK );
 		}
-		ArmorEffects( cr, item );
-	}	
 		
-	if( cr.ParamBase[ CR_IS_WINDUPED ] != 0 && fromSlot == SLOT_HAND1 && item.GetType() == ITEM_TYPE_WEAPON )
+		if( toSlot == SLOT_HEAD && pid == PID_SANDBAG_EMPTY )
+		{
+			FlushScreen( cr, COLOR_BLACK, 0, 3000 ); 
+		}
+		
+		ArmorEffects( cr, item );
+	}
+	
+	if( cr.ParamBase[ CR_IS_WINDUPED ] != 0 && fromSlot == SLOT_HAND1 && type == ITEM_TYPE_WEAPON )
 	{
 		ChangeWindup( cr, true );
 	}
 	
-	//Armor skins change
-	if( item.GetType() == ITEM_TYPE_ARMOR && ( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR ) )
+	bool isMale = ( cr.Stat[ ST_GENDER ] == GENDER_MALE );
+	uint armor_skin = ( isMale ? item.Proto.Armor_CrTypeMale : item.Proto.Armor_CrTypeFemale );
+	
+	//Robes overide current skin in back slot
+	if( type == ITEM_TYPE_ARMOR && ( fromSlot == SLOT_BACK || toSlot == SLOT_BACK ) )
 	{
-		bool isMale = ( cr.Stat[ ST_GENDER ] == GENDER_MALE );
-		uint armor_skin = ( isMale ? item.Proto.Armor_CrTypeMale : item.Proto.Armor_CrTypeFemale );
+		uint crType = cr.Stat[ ST_ARMOR_SKIN ] == 0 ? cr.Stat[ ST_BASE_CRTYPE ] : cr.Stat[ ST_ARMOR_SKIN ];
+
+		if( GetCritterAnimType( cr.CrType ) != ANIM_TYPE_3D )
+		{
+			if( toSlot == SLOT_BACK )
+			{
+				if( skin_robe.find( armor_skin ) != -1 )
+				{
+					if( skin_small.find( cr.Stat[ ST_BASE_CRTYPE ] ) != -1 )
+					{
+						crType = CRTYPE_SMALL_ROBE;  //kids, dwarfs and goris
+					}
+					else
+					{
+						crType = armor_skin;
+					}
+					
+					cr.StatBase[ ST_ARMOR_SKIN ] = cr.CrType;
+				}
+				
+				//Flags for face, avatar and description hiding items
+				if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_HAS_HOOD ) )
+				{
+					SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HOOD );
+				}
+			}
+			else
+			{
+				cr.StatBase[ ST_ARMOR_SKIN ] = 0;
+				
+				if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_HAS_HOOD ) )
+				{
+					UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HOOD );
+				}
+			}
+			
+			ArmorEffects( cr, item );
+		}
 		
+		if( cr.CrType != crType ) 
+		{
+			cr.ChangeCrType( crType );
+		}
+	}
+	
+	//Armor skins change
+	if( type == ITEM_TYPE_ARMOR && ( fromSlot == SLOT_ARMOR || toSlot == SLOT_ARMOR ) )
+	{
 		if( cr.Stat[ ST_BASE_CRTYPE ] == 0 )
 		{
 			cr.StatBase[ ST_BASE_CRTYPE ] = ( isMale ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
 		}
 		
 		uint crType = cr.Stat[ ST_BASE_CRTYPE ];
-		
-		uint16 pid = item.GetProtoId();
 
 		if( GetCritterAnimType( cr.CrType ) != ANIM_TYPE_3D )
 		{
@@ -377,6 +459,26 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 								break;
 							}
 						}
+					}
+					//Tribal gear overide
+					else if( pid == PID_TRIBAL_APPAREL )
+					{
+						crType = cr.Stat[ ST_BASE_CRTYPE ];
+					}
+					//Lab coat overide
+					else if( pid == PID_LAB_COAT && ( crType == CRTYPE_BL_TRIBAL || crType == CRTYPE_FR_TRIBAL_F || crType == CRTYPE_OLDW_TRIBAL_F ) )
+					{
+						crType = CRTYPE_BLOND_WHITE_DRESS;
+					}
+					//Bold CA green overide
+					else if( ( pid == PID_COMBAT_ARMOR_MK1 || pid == PID_COMBAT_ARMOR_MK2 || pid == PID_COMBAT_ARMOR_MK3 || pid == PID_RIOT_ARMOR || pid == PID_CA_BROTHERHOOD || pid == PID_CA_MOD_MK1 || pid == PID_CA_MOD_MK2 || pid == PID_CA_MOD_MK3 ) && crType == CRTYPE_BLD_TRIBAL )
+					{
+						crType = CRTYPE_CA_BALD;
+					}
+					//Bold CA gray overide
+					else if( ( pid == PID_CA_LGRAY_MK1 || pid == PID_CA_LGRAY_MK2 || pid == PID_CA_LGRAY_MK3 || pid == PID_CA_REBERA || pid == PID_CA_REBERA_MK_II ) && cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_BLD_TRIBAL )
+					{
+						crType = CRTYPE_CA_BALD_BLACK;
 					}
 					else // other skins
 					{
@@ -435,9 +537,13 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 								{
 									crType = CRTYPE_DOG_K9;
 								}
-								else
-								{ 
-									//if default is socual skin
+								else   //if default is social skin
+								{
+									if( armor_social.find( pid ) != -1 )
+									{
+										crType = armor_skin;
+									}
+									
 								}
 							}
 						}
@@ -457,87 +563,172 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 				}
 				
 				//Flags for face, avatar and description hiding items
-				if( HidefaceHoods.find( pid ) != -1 )
+				if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_HAS_HOOD ))
 				{
 					SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HOOD );
 				}
 				
-				if( HidefaceArmor.find( pid ) != -1 )
+				if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_FULLBODY ))
 				{
 					SETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_SUIT );
 				}
 			}
 			else
 			{
-				if( HidefaceHoods.find( pid ) != -1 )
+				if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_HAS_HOOD ))
 				{
 					UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_HOOD );
 				}
 				
-				if( HidefaceArmor.find( pid ) != -1 )
+				if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_FULLBODY ))
 				{
 					UNSETFLAG( cr.ParamBase[ CR_HIDEFACE_ITM ], ITM_ARMOR_SUIT );
 				}
 			}
+			
 			ArmorEffects( cr, item );
 		}
 		
 		if( cr.CrType != crType ) 
 		{
 			cr.ChangeCrType( crType );
-			ChangeCritterSpeed( cr );
 		}
 
         // Armor modifiers
         // Also look Armor perk validation in critter_init
         int sign = ( toSlot == SLOT_ARMOR ? int(1) : -1 );
-
-        switch( item.Proto.Armor_Perk )
-        {
-			case( ARMOR_PERK_POWERED ):         // +3 strength, +30 radiation resist
-				cr.StatBase[ ST_STRENGTH_EXT ] += 3 * sign;
-				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 30 * sign;
-				cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
-				break; 
-			case( ARMOR_PERK_COMBAT ):         // +20 radiation resist
-				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 20 * sign;
-				break;
-			case( ARMOR_PERK_ADVANCED_I ):     // +4 strength, +60 radiation resist
-				cr.StatBase[ ST_STRENGTH_EXT ] += 4 * sign;
-				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 60 * sign;
-				cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
-				break;
-			case( ARMOR_PERK_ADVANCED_II ):         // +4 strength, +75 radiation resist
-				cr.StatBase[ ST_STRENGTH_EXT ] += 4 * sign;
-				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 75 * sign;
-				cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
-				break;
-			case( ARMOR_PERK_CHARISMA ):         // +1 charisma
-				cr.StatBase[ ST_CHARISMA_EXT ] += 1 * sign;
-				break;
-			case( ARMOR_PERK_ECZO ):         // +2 strength, +50 radiation resist
-				cr.StatBase[ ST_STRENGTH_EXT ] += 2 * sign;
-				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 50 * sign;
-				cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
-				break; 
-			case( ARMOR_PERK_ECZO_2 ):         // +3 strength, +10 radiation resist
-				cr.StatBase[ ST_STRENGTH_EXT ] += 3 * sign;
-				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 10 * sign;
-				cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign;
-				break; 			
-			case( ARMOR_PERK_UGLY ):         // -1 charisma
-				cr.StatBase[ ST_CHARISMA_EXT ] -= 1 * sign;
-				break;
-			case( ARMOR_PERK_ANTIRAD ):         // +70 radiation resist
-				cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 70 * sign;
-				break;			
-			case( ARMOR_PERK_VERY_COOL ):         // +2 charisma
-				cr.StatBase[ ST_CHARISMA_EXT ] += 2 * sign;
-				break;			
-			default:
-				break;
-        }
-        cr.StatBase[ ST_CURRENT_ARMOR_PERK ] = ( toSlot == SLOT_ARMOR ? item.Proto.Armor_Perk : 0 );
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_ST_I ))
+		{
+			cr.StatBase[ ST_STRENGTH_EXT ] += 1 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_ST_II ))
+		{
+			cr.StatBase[ ST_STRENGTH_EXT ] += 2 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_ST_III ))
+		{
+			cr.StatBase[ ST_STRENGTH_EXT ] += 3 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_ST_IV ))
+		{
+			cr.StatBase[ ST_STRENGTH_EXT ] += 4 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_CH_I ))
+		{
+			cr.StatBase[ ST_CHARISMA_EXT ] += 1 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_CH_II ))
+		{
+			cr.StatBase[ ST_CHARISMA_EXT ] += 2 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_CH_III ))
+		{
+			cr.StatBase[ ST_CHARISMA_EXT ] += 3 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_DEC_CH_I ))
+		{
+			cr.StatBase[ ST_CHARISMA_EXT ] -= 1 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_DEC_CH_II ))
+		{
+			cr.StatBase[ ST_CHARISMA_EXT ] -= 2 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_DEC_CH_III ))
+		{
+			cr.StatBase[ ST_CHARISMA_EXT ] -= 3 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_RAD_RES_I ))
+		{
+			cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 10 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_RAD_RES_II ))
+		{
+			cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 30 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_RAD_RES_III ))
+		{
+			cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 60 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_RAD_RES_IV ))
+		{
+			cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] += 75 * sign;
+		}
+				
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_POWERED ))
+		{
+			cr.StatBase[ ST_CARRY_WEIGHT ] += item.Proto.Weight * sign; 
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_STA ) )
+		{
+			cr.ParamBase[ CR_STA_EQUIPPED ] += 1 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_NIMBLE ) )
+		{	
+			if( sign > 0 )
+			{
+				cr.ParamBase[ CR_ARMOR_NIMBLE_EQUIPPED ] += ( cr.Stat[ ST_ARMOR_CLASS ] * ARMOR_PERK_NIMBLE_BONUS / 100 ) - cr.Stat[ ST_ARMOR_CLASS ];
+				cr.StatBase[ ST_ARMOR_CLASS_EXT ] += cr.Param[ CR_ARMOR_NIMBLE_EQUIPPED ];
+			}
+			else
+			{
+				if( cr.Param[ CR_ARMOR_NIMBLE_EQUIPPED ] == 0 )
+				{
+					cr.StatBase[ ST_ARMOR_CLASS_EXT ] += ( ( cr.Stat[ ST_ARMOR_CLASS ] * ARMOR_PERK_NIMBLE_BONUS / 100 ) - cr.Stat[ ST_ARMOR_CLASS ] ) * sign;
+				}
+				else
+				{
+					cr.StatBase[ ST_ARMOR_CLASS_EXT ] -= cr.Param[ CR_ARMOR_NIMBLE_EQUIPPED ];
+					cr.ParamBase[ CR_ARMOR_NIMBLE_EQUIPPED ] = 0;
+				}
+			}
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_CLUMSY ) )
+		{
+			if( sign > 0 )
+			{
+				cr.ParamBase[ CR_ARMOR_CLUMSY_EQUIPPED ] += ( cr.Stat[ ST_ARMOR_CLASS ] * ARMOR_PERK_CLUMSY_MALUS / 100 ) - cr.Stat[ ST_ARMOR_CLASS ];
+				cr.StatBase[ ST_ARMOR_CLASS_EXT ] -= cr.Param[ CR_ARMOR_CLUMSY_EQUIPPED ];
+			}
+			else
+			{
+				if( cr.Param[ CR_ARMOR_CLUMSY_EQUIPPED ] == 0 )
+				{
+					cr.StatBase[ ST_ARMOR_CLASS_EXT ] += ( ( cr.Stat[ ST_ARMOR_CLASS ] * ARMOR_PERK_CLUMSY_MALUS / 100 ) - cr.Stat[ ST_ARMOR_CLASS ] ) * sign;
+				}
+				else
+				{
+					cr.StatBase[ ST_ARMOR_CLASS_EXT ] += cr.Param[ CR_ARMOR_CLUMSY_EQUIPPED ];
+					cr.ParamBase[ CR_ARMOR_CLUMSY_EQUIPPED ] = 0;
+				}
+			}
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_BRISK ) )
+		{
+			cr.ParamBase[ CR_ARMOR_BRISK_EQUIPPED ] += 1 * sign;
+		}
+		
+		if( FLAG( item.Proto.Armor_Perk, ARMOR_PERK_SLUGGISH ) )
+		{
+			cr.ParamBase[ CR_ARMOR_SLUGGISH_EQUIPPED ] += 1 * sign;
+		}
     }
 	
 	if( cr.IsNpc() )
@@ -564,6 +755,10 @@ void critter_move_item( Critter& cr, Item& item, uint8 fromSlot )
 			cr.MoveItem( offhand.Id, offhand.GetCount(), SLOT_INV );
 		}
 	}
+	
+	ChangeCritterSpeed( cr );
+	LookDataRefresh( cr );
+	cr.RefreshVisible();
 }
 
 // ####################################################################################################
@@ -579,7 +774,7 @@ void PAAuth( Critter& cr, Item& armor )
 		}
 		else
 		{
-			cr.AddTimeEvent( "cte_PAAuthFail", REAL_SECOND( 10 ), CTE_PA_AUTH, 0 ); 
+			cr.AddTimeEvent( "cte_PAAuthFail", REAL_SECOND( KILL_TIMER ), CTE_PA_AUTH, 0 ); 
 			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_PA_FAILSWITCH ); 
 		}
 	}
@@ -617,7 +812,7 @@ void ArmorEffects( Critter& cr, Item@ item )
 	{
 		if( ABS( cr.Param[ QST_MEDIUM ] ) != 2 )
 		{
-			if( valid( item ) && HidefaceArmor.find( item.GetProtoId() ) == -1 )
+			if( valid( item ) && FLAG( item.Proto.Armor_Perk, ARMOR_PERK_FULLBODY ) )
 			{
 				cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_HIDE_FACE );
 			}
@@ -630,7 +825,7 @@ void ArmorEffects( Critter& cr, Item@ item )
 	{
 		if( cr.Param[ QST_MEDIUM ] == 2 )
 		{
-			if( valid( item ) && HidefaceArmor.find( item.GetProtoId() ) == -1 )
+			if( valid( item ) && FLAG( item.Proto.Armor_Perk, ARMOR_PERK_FULLBODY ) )
 			{
 				cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_SHOW_FACE );
 			}
@@ -640,7 +835,7 @@ void ArmorEffects( Critter& cr, Item@ item )
 		}
 	}
 
-	if( valid( item ) )
+	if( valid( item ) && item.CritSlot != SLOT_BACK )
 	{
 		bool PAhelmetOn = hasItems( cr, HelmetsPA, SLOT_HEAD );
 		bool CAhelmetOn = hasItems( cr, HelmetsCA, SLOT_HEAD );
@@ -648,19 +843,20 @@ void ArmorEffects( Critter& cr, Item@ item )
 		if( valid( armor ) )
 		{
 			uint16 armorPid = armor.GetProtoId();
-			if( PowerArmors.find( armorPid ) != -1 )
+			if( armorPid == PID_POWERED_ARMOR || armorPid == PID_HYENA_PA || armorPid == PID_HYENA_PA_MK2 || armorPid == PID_POWERED_ARMOR_NEVADA )
 			{
-				cr.ChangeCrType( PAhelmetOn ? CRTYPE_PA : CRTYPE_PA_HEADLESS ); 
+				cr.ChangeCrType( PAhelmetOn ? CRTYPE_PA : CRTYPE_PA_HEADLESS );
 			}
 			else if( armorPid == PID_HARDENED_POWER_ARMOR )
 			{
-				cr.ChangeCrType( PAhelmetOn ? CRTYPE_PA_HARDY : CRTYPE_PA_HARDY_HEADLESS ); 
+				cr.ChangeCrType( PAhelmetOn ? CRTYPE_PA_HARDY : CRTYPE_PA_HARDY_HEADLESS );
 			}
-			else if( cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_CA_BALD )
+			else if( ( armorPid == PID_COMBAT_ARMOR_MK1 || armorPid == PID_COMBAT_ARMOR_MK2 || armorPid == PID_COMBAT_ARMOR_MK3 || armorPid == PID_RIOT_ARMOR || armorPid == PID_CA_BROTHERHOOD 
+					|| armorPid == PID_CA_MOD_MK1 || armorPid == PID_CA_MOD_MK2 || armorPid == PID_CA_MOD_MK3 ) && cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_BLD_TRIBAL )
 			{
 				cr.ChangeCrType( CAhelmetOn ? CRTYPE_CA_M : CRTYPE_CA_BALD ); 
 			}
-			else if( cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_CA_BALD_BLACK )
+			else if( ( armorPid == PID_CA_LGRAY_MK1 || armorPid == PID_CA_LGRAY_MK2 || armorPid == PID_CA_LGRAY_MK3 || armorPid == PID_CA_REBERA || armorPid == PID_CA_REBERA_MK_II ) && cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_BLD_TRIBAL )
 			{
 				cr.ChangeCrType( CAhelmetOn ? CRTYPE_CA_REBERA_M : CRTYPE_CA_BALD_BLACK ); 
 			}
@@ -673,7 +869,7 @@ void ArmorEffects( Critter& cr, Item@ item )
 		GetAllPlayers( crs );
 		for( uint i = 0, l = crs.length(); i < l; i++ )
 		{
-			crs[ i ].RunClientScript( "client_main@NamesUpdater", 0, 0, 0, null, null );
+			crs[ i ].RunClientScript( "client_main@_sinf", crs[ i ].Param[ CR_SINF_MODE ], 0, 0, null, null );
 		}
 	}
 }
@@ -720,8 +916,16 @@ uint ArmorSkin( Critter& cr, uint skin )
 //Autostack items upon drop to ground - maybe move to somwhere else
 uint e_stack_items( uint[]@ values ) 
 {
-    uint itemId = values[0];
-    Item@ item = GetItem( itemId );
+	if( values.length() == 2 )
+	{
+		Critter@ cr = GetCritter( values[1] );
+		if( valid( cr ) )
+		{
+			ChangeCritterSpeed( cr );
+		}
+	}
+	
+    Item@ item = GetItem( values[0] );
 	if( !valid( item ) )
 	{
 		return 0;
@@ -736,50 +940,86 @@ uint e_stack_items( uint[]@ values )
     Map@ map = item.GetMapPosition( x, y );
 
     Item@[] items;
-    uint count = map.GetItems ( x, y, items );
+    uint count = map.GetItems( x, y, items );
+	
+	Item@ groundItm = null;
+	Item@ stackable = null;
+	
     for( uint i = 0; i < count; i++ )
 	{
-        if( !valid( items[i] ) || !items[i].IsStackable() )
+		@ groundItm = items[i];
+        if( !valid( groundItm ) )
 		{
 			continue;
 		}
 		
-        uint16 protoid = items[i].GetProtoId();
-        uint itemCount = items[i].GetCount();
-
+		if( !groundItm.IsStackable() )
+		{
+			continue;
+		}
+		
+        uint16 protoid = groundItm.GetProtoId();
+        uint itemCount = groundItm.GetCount();
+		
         for( uint j = i + 1; j < count; j++ )
 		{
-			if( !valid( items[j] ) )
+			@ stackable = items[j];
+			if( !valid( stackable ) )
 			{
 				continue;
 			}
 
-            if( protoid == items[j].GetProtoId() )
+            if( protoid == stackable.GetProtoId() )
 			{
-                itemCount += items[j].GetCount();
-                DeleteItem( items[j] );
+                itemCount += stackable.GetCount();
+                DeleteItem( stackable );
                 @items[j] = null;
             }
         }
 
-        items[i].SetCount( itemCount );
+        groundItm.SetCount( itemCount );
+		groundItm.Update( );
 		
 		switch( protoid ) 
 		{
-			case( PID_BOTTLE_CAPS):
-				CoinAmountChanger( items[i], itemCount );
+			case( PID_PREWAR_DOLLAR_1 ):
+			case( PID_PREWAR_DOLLAR_5 ):
+			case( PID_PREWAR_DOLLAR_20 ):
+			case( PID_GOLDEN_COIN ):
+			case( PID_BOTTLE_CAPS ):
+				CoinAmountChanger( groundItm, itemCount );
 				break;
-			case( PID_SHELL_CASING):
-				ShellAmountChanger( items[i], itemCount );
+			case( PID_SHELL_CASING ):
+				ShellAmountChanger( groundItm, itemCount );
+				break;
+			case( PID_CIGARETTE_BUTT ):
+				CigButtAmountChanger( groundItm, itemCount );
 				break;
 		}
-        items[i].Update( );
     }
+	
+	items.resize(0);
+	
     return 0;
 }
 
+// Change PicMap for dropped cig butts - Util func
+void CigButtAmountChanger( Item& item, uint amount )
+{
+    if( amount <= 4 )
+	{
+		item.PicMap = CigButtAmoutHash[ amount ];
+	}
+	else
+	{
+		item.PicMap = CigButtAmoutHash[ 0 ];
+	}
+	
+    item.Update();
+}
+
 // Change PicMap for dropped coins - Util func
-void CoinAmountChanger( Item& item, uint amount)
+void CoinAmountChanger( Item& item, uint amount )
 {
     if( amount <= 8 )
 	{
@@ -789,11 +1029,12 @@ void CoinAmountChanger( Item& item, uint amount)
 	{
 		item.PicMap = CoinAmoutHash[ 0 ];
 	}
+	
     item.Update();
 }
 
 // Change PicMap for shells - Util func
-void ShellAmountChanger( Item& item, uint amount)
+void ShellAmountChanger( Item& item, uint amount )
 {
     if( amount <= 8 )
 	{
@@ -803,193 +1044,100 @@ void ShellAmountChanger( Item& item, uint amount)
 	{
 		item.PicMap = ShellAmoutHash[ 0 ];
 	}
+	
     item.Update();
 }
 
-// Steal container or armor
-bool StealContainerOrArmor( Critter& cr, Critter@ targetCr, Item@ targetItem )
+// Armor removal LTP
+bool ltp_removeArmor_inited = false;
+void ltp_removeArmor_init()
 {
-	bool LootedBackpack = false;
-	Item@[] RuckSacks;
-
-	if( valid( targetCr ) )
-	{
-		if( !isGM( cr ) && targetCr.Mode[ MODE_NO_STEAL ] == 1 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_NO_LOOT );
-			return true;
-		}
-		targetCr.GetItems( -1, RuckSacks );
-	}
-	else if( valid( targetItem ) )
-	{
-		targetItem.GetItems( uint( -1 ), RuckSacks );
-	}
-	else
-	{
-		return false;
-	}
-	
-	for( uint i = 0, iEnd = RuckSacks.length(); i < iEnd; i++ )
-	{
-		int pid = RuckSacks[i].GetProtoId();
-		bool isContainer = RuckSacks[i].GetType() == ITEM_TYPE_CONTAINER;
-		bool isBag = ( pid == PID_BAG );
-		bool isPack = ( pid == PID_BACKPACK );
-		if( isBag || isPack || isContainer )
-		{
-			if( !isGM( cr ) )
-			{
-				uint action_text = isPack ? STR_EMOTE_TAKE_BACKPACK : STR_EMOTE_TAKE_ITEM;
-				cr.SayMsg(SAY_EMOTE, TEXTMSG_TEXT, action_text );
-				
-				CrimeLog( cr, crInfo( cr ) + " has taken item from " + crInfo( targetCr ) );
-				
-				MoveItem( RuckSacks[i], 1, cr.GetMap(), cr.HexX, cr.HexY );
-				
-				uint victim_text = isPack ? STR_CANT_RESIST_BACKPACK : STR_CANT_RESIST_ITEM;
-				targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, victim_text );
-				cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
-			}
-			else
-			{
-				MoveItem( RuckSacks[i], 1, cr );
-				
-				uint containerRemoval = isPack ? STR_YOU_TAKE_BACKPACK : STR_YOU_TAKE_ITEM;
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, containerRemoval );
-				
-				CrimeLog( cr, crInfo( cr ) + " takes item with gm power " + crInfo( targetCr ) );
-			}
-			LootedBackpack = true;
-			return true;
-		}
-	}
-	
-	if( valid( targetCr ) && !LootedBackpack )
-	{
-		Item@[] armors;
-		uint count = targetCr.GetItems( SLOT_ARMOR, armors );
-		if( count == 0 || !valid( armors[0] ) )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DID_NOTHING );
-			return true;
-		}
-		
-		CrimeLog( cr, crInfo( cr ) + " is trying to take armor off " + crInfo( targetCr ) );
-		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_ATTEMPT_TAKE_ARMOR );
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_TAKE_EVERYTHING );
-		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ARMOR_IS_BEING_REMOVED );
-		
-		if( uint( cr.Stat[ ST_LAST_STEAL_CR_ID ] ) == targetCr.Id )
-		{
-			cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
-			cr.StatBase[ ST_STEAL_COUNT ] ++;
-			TryToTakeArmor( cr, targetCr );
-		}
-		else
-		{
-			if( isGM( cr ) )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_GM_TAKE_ARMOR );
-				CrimeLog( cr, crInfo( cr ) + " takes armour by GM powers from " + crInfo( targetCr ) );
-				cr.StatBase[ ST_STEAL_COUNT ] = 7;
-				TryToTakeArmor( cr, targetCr );
-			}
-			cr.StatBase[ ST_STEAL_COUNT ] = 0;
-			cr.StatBase[ ST_LAST_STEAL_CR_ID ] = targetCr.Id;
-		}
-		return true;
-	}
-	return false;
+	LTPREG( LTP_REMOVE_ARMOR, process_removeArmor )
+	ltp_removeArmor_inited = true;
 }
 
-int[][] armor_delay =
+void TryToTakeArmor( Critter& cr, Critter& targetCr, Item& armor )
 {
-	{ PID_POWERED_ARMOR, PID_HARDENED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR, PID_ADVANCED_POWER_ARMOR_MK2 },
-	{ PID_PURPLE_ROBE, PID_BLACK_ROBE, PID_SANDROBE },
-	{ PID_LEATHER_JACKET, PID_CURED_LEATHER_ARMOR, PID_CURED_LEATHER_ARMOR_MK_II },
-	{ PID_LEATHER_ARMOR, PID_LEATHER_ARMOR_MK_II, PID_LEATHER_ARMOR_MK_III },
-	{ PID_METAL_ARMOR, PID_METAL_ARMOR_MK_II, PID_TESLA_ARMOR},
-};
-
-void TryToTakeArmor( Critter& cr, Critter& targetCr ) 
-{
-	if( !valid( targetCr ) )
+	if( isGM( cr ) )
 	{
-		return;
-	}
-	
-	bool success = false;
-	Item@[] armors;
-	uint count = targetCr.GetItems( SLOT_ARMOR, armors );
-	
-	if( count == 0 || !valid( armors[0] ) )
-	{
-		return;
-	}
-	
-	int armor = armors[0].GetProtoId();
-	
-	if( armor_delay[0].find( armor ) != -1 ) // Cant take power armour off
-	{
-		return;
-	}
-	
-	uint delay = cr.Stat[ST_STEAL_COUNT], i = 1, iEnd = armor_delay.length();
-	for( ; i < iEnd; i++ )
-	{
-		if( armor_delay[i].find( armor ) != -1 )
-		{
-			success = true;
-			break;
-		}
-	}
-	
-	if( delay >= 6 )
-	{ 
-		success = true;
-	}
-	
-	if( success && delay >= i)
-	{
-		MoveItem( armors[0], 1, cr );
+		MoveItem( armor, armor.GetCount(), cr );
 		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOUR_ARMOR_REMOVED );
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_TAKE_ARMOR );
-		CrimeLog( cr, crInfo( cr ) + " takes armour from " + crInfo( targetCr ) );
+		CrimeLog( cr, crInfo( cr ) + " takes armour by GM powers from " + crInfo( targetCr ) );
+		return;
 	}
-	else
+	
+	if( !ltp_removeArmor_inited )
 	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_PARTIALLY_TAKE_ARMOR );
+		ltp_removeArmor_init();
 	}
+	
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = armorDelay( armor );
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = 0;
+	StartProcess( cr, LTP_REMOVE_ARMOR, 0, targetCr.Id, armor.Id, cr.Param[ ST_LTP_SEQUENCE_WAIT ] );
+	cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_ATTEMPT_TAKE_ARMOR );
+	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
 }
 
-//weight check for running AP calculations
-void ChangeRunningAP( Critter& cr )
+uint process_removeArmor( Critter@ cr, int& param0, int& param1, int& param2 )
 {
-	float weight_penalty = ( 5.0f * ItemsWeight( cr ) ) / ( cr.Stat[ ST_CARRY_WEIGHT ] * 0.7f );
-	cr.ParamBase[ QST_AP_COST_RUN ] = ExoCheck( cr ) ? 100 : int( 100 * ( 1 + weight_penalty ) );
-	//Log( "AP cost for running: " + cr.ParamBase[ QST_AP_COST_RUN ] + " " + ExoCheck( cr ) );
+    LTPROCESSD( LTP_REMOVE_ARMOR )
 
-}
-
-bool ExoCheck( Critter& cr )
-{
-	Item@ armor = _CritGetItemArmor( cr );
-	if( valid( armor ) )
+	Critter@ targetCr = GetCritter( param1 );
+	Item@ armor = GetItem( param2 );
+	if( valid( targetCr ) && valid( armor ) )
 	{
-		switch( armor.Proto.Armor_Perk )
+		targetCr.MoveItem( armor.Id, armor.GetCount(), SLOT_INV );
+		targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOUR_ARMOR_REMOVED );
+		
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_TAKE_ARMOR );
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_TAKES_ARMOR );
+		
+		CrimeLog( cr, crInfo( cr ) + " removes armor from " + crInfo( targetCr ) );
+		
+		if( targetCr.IsNpc() )
 		{
-			case( ARMOR_PERK_POWERED ):
-			case( ARMOR_PERK_ADVANCED_I ):
-			case( ARMOR_PERK_ADVANCED_II ):
-			case( ARMOR_PERK_ECZO ):
-			case( ARMOR_PERK_ECZO_2 ):
-				return true;
-			default:
-				return false;
+			SETFLAG( armor.BrokenFlags, BI_NOTRESC );
 		}
 	}
-	return false;
+
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+
+	return 0;
+}
+
+int armorDelay( Item& armor )
+{
+	uint16 pid = armor.GetProtoId();
+	int delay = 1000;
+	
+	uint8 armor_material = _GetItemMaterial( armor );
+	switch( armor_material )
+	{
+		case( MATERIAL_FABRIC ):
+			delay = 5000;
+			break;
+		case( MATERIAL_LEATHER ):
+			delay = 10000;
+			break;
+		case( MATERIAL_ARMORED_LEATHER ):
+			delay = 15000;
+			break;
+		case( MATERIAL_IRON ):
+			delay = 20000;
+			break;
+		case( MATERIAL_POLYMER ):
+			delay = 30000;
+			break;
+		case( MATERIAL_COMPOSITE ):
+			delay = 50000;
+			break;
+		default:
+			delay = 10000;
+			break;
+	}
+	
+	return delay;
 }
 
 #endif // __SERVER

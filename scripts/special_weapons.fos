@@ -1,10 +1,14 @@
-#include "_macros.fos"
+#ifndef SPECIAL_WEAPONS
+#define SPECIAL_WEAPONS
+
+#include "_utils.fos"
+#include "effects_h.fos"
+#include "special_weapons_h.fos"
 
 void _ItemInit( Item& item, bool FirstTime )
 {
     item.SetEvent( ITEM_EVENT_DROP, "_nodrop" );
-    // item.SetEvent( ITEM_EVENT_MOVE, "_nomove" );
-    item.SetEvent( ITEM_EVENT_ATTACK, "_stopReload" );
+	item.SetEvent( ITEM_EVENT_MOVE, "_nomove" );
 }
 
 void _nodrop( Item& item, Critter& crit )
@@ -23,11 +27,189 @@ void _nomove( Item& item, Critter& crit, uint8 fromSlot )
     }
 }
 
-bool _stopReload( Item& item, Critter& crit, Critter& target )
+void ApplyFlashEff( Critter& target, uint8 dist )
 {
-    uint[] indexes;
-    uint[] durations;
-    if( crit.GetTimeEvents( 10, indexes, durations, null ) != 0 )
-        crit.EraseTimeEvents( 10 );
-    return false;
+	target.SayMsg( SAY_EMOTE, TEXTMSG_GAME, STR_COMBAT_FLASHBANG );
+	
+	if( dist == 0 )
+	{
+		target.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 120, target.HexX, target.HexY );
+	}
+	
+	int time = target.Stat[ ST_PERCEPTION ] / 2;
+	FlushScreen( target, 0, COLOR_WHITE, 500 );
+	FlushScreen( target, COLOR_WHITE, COLOR_WHITE, time * 1000 );
+	FlushScreen( target, COLOR_WHITE, 0, time * 1000 );
 }
+
+void GenerateSmoke( Map& map, int x, int y, int radius )
+{
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	Item@ initialSmoke = null;
+	Item@ smoke = null;
+	
+	if( !map.IsHexRaked( x, y ) )
+	{
+		return;
+	}
+	
+	if( !CheckSmoke( map, x, y ) )
+	{
+		@initialSmoke = map.AddItem( x, y, PID_SMOKE_9, 1 );
+	}
+	else
+	{
+		for( uint j = 0, len = Smokes.length(); j < len; j++ )
+		{
+			Item@ check = map.GetItem( x, y, Smokes[j] );
+			if( valid( check ) )
+			{
+				@initialSmoke = check;
+			}
+		}
+	}
+	
+	if( !valid( initialSmoke ) )
+	{
+		return;
+	}
+	
+	SayLog( map, "[ Spot in smoke: ]", x, y );
+	
+	initialSmoke.SMOKE_AMOUNT = CalcualteCharges( radius );
+	initialSmoke.SMOKE_STAGE = 9;
+	
+	uint[] active_smokes = { initialSmoke.Id };
+	initialSmoke.SMOKE_EVENT = CreateTimeEvent( AFTER( SMOKE_BURNING_TIME ), "e_SmokeBurn", active_smokes, true );
+	
+	if( radius > 0 )
+	{
+		SmokeCircle( map, x, y, active_smokes );
+		for( int i = 1, len = initialSmoke.SMOKE_AMOUNT; i < len ; i++ )
+		{
+			uint16 zx = 0, zy = 0;
+			@smoke = GetItem( _GetOneRandom( active_smokes ) );
+			if( valid( smoke ) )
+			{
+				smoke.GetMapPosition( zx, zy );
+				SmokeCircle( map, zx, zy, active_smokes );
+			}
+		}
+	}
+}
+
+void SmokeCircle( Map@ map, int x, int y, uint[]@ active_smokes )
+{
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	if( active_smokes.length() == 0 )
+	{
+		return;
+	}
+	
+	Item@ initialSmoke = GetItem( active_smokes[0] );
+	Item@ smoke = null;
+	
+	int charge = initialSmoke.SMOKE_AMOUNT;
+	
+	uint16 tx = 0, ty = 0;
+	
+	for( uint i = 0; i < 6; i++ )
+	{
+		tx = x; ty = y;
+		map.MoveHexByDir( tx, ty, i, 1 );
+		
+		if( !map.IsHexRaked( tx, ty ) )
+		{
+			continue;
+		}
+	
+		if( !CheckSmoke( map, tx, ty ) )
+		{	
+			uint pos = uint( CLAMP( charge / 6 - 1, 0, 9 ) );
+			@smoke = map.AddItem( tx, ty, Smokes[ pos ], 1 );
+			smoke.SMOKE_STAGE = pos;
+			uint[] values = { smoke.Id };
+			smoke.SMOKE_EVENT = CreateTimeEvent( AFTER( SMOKE_BURNING_TIME ), "e_SmokeBurn", values, true );
+			initialSmoke.SMOKE_AMOUNT--;
+		}
+		else
+		{
+			continue;
+		}
+		
+		active_smokes.insertLast( smoke.Id );
+
+		if( initialSmoke.SMOKE_AMOUNT <= 0 )
+		{
+			return;
+		}
+	}
+}
+
+uint e_SmokeBurn( uint[]@ values )
+{
+	if( !valid( values ) )
+	{
+		return 0;
+	}
+	CallStackOpen( "e_SmokeBurn" );
+	Item@ smoke = GetItem( values[0] );
+	if( valid( smoke ) )
+	{
+		if( smoke.SMOKE_STAGE != 0 )
+		{
+			smoke.SMOKE_STAGE --;
+			smoke.ChangeProto( Smokes[smoke.SMOKE_STAGE] );
+			smoke.Update();
+			CallStackClose();
+			return SMOKE_BURNING_TIME;
+		}
+		
+		DeleteItem( smoke );
+	}
+	CallStackClose();
+	return 0;
+}
+
+bool CheckSmoke( Map& map, int x, int y )
+{
+	uint pid = 0;
+	Item@[] smokes;
+	Item@ smoke = null;
+	uint count = map.GetItems( x, y, smokes );
+	for( uint i = 0; i < count; i++ )
+	{
+		@ smoke = smokes[i];
+		if( valid( smoke ) )
+		{
+			if( Smokes.find( smoke.GetProtoId() ) != -1 )
+			{
+				return true;
+			}
+		}
+	}
+	
+	smokes.resize(0);
+	return false;
+}
+
+uint CalcualteCharges( uint radius )
+{
+	uint charge = 0;
+	for ( uint i = 1; i <= radius; i++ )
+	{
+		charge += 6 * i;
+	}
+	
+	return charge;
+}
+
+#endif //SPECIAL_WEAPONS

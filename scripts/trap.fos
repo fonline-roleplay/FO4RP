@@ -1,614 +1,434 @@
-// Author: rifleman17
-// Ћовушки, установленные на дверь или контейнер.
-// ¬ качестве сложности ловушки используетс€ свойство LockerComplexity.
+#ifndef TRAP_MODULE
+#define TRAP_MODULE
+
 #include "_utils.fos"
-#include "firestarter_h.fos"
-#include "poison_h.fos"
-#include "lockers_h.fos"
-#include "effects_h.fos"
+#include "trap_h.fos"
 #include "combat_h.fos"
-#include "explode_h.fos"
 
-#define DL    # (str)
- 
-// ѕризнак, можно ли установить ловушку на контейнер/дверь
-// onItem - дверь/контейнер, на который нужно поставить ловушку
-bool _ValidForTrap( Item& onItem )
+class TrapItem
 {
-    bool  isValid = false;
-    uint8 iType = onItem.GetType();
-    isValid = ( iType == ITEM_TYPE_DOOR || iType == ITEM_TYPE_CONTAINER );
-
-    return isValid;
-}
-
-// ѕризнак: предмет=ловушка
-bool _IsItemTrap( Item& trap )
-{
-    // предмет должен иметь флаг ITEM_HIDDEN
-    if( !FLAG( trap.Flags, ITEM_HIDDEN ) )
-        return false;
-    if( !FLAG( trap.Flags, ITEM_TRAP ) )
-        return false;
-    return ( _CanItemTrap( trap ) );
-}
-
-// ѕризнак: предмет может выступать в роли ловушки. ѕока только дл€ гранат
-bool _CanItemTrap( Item& trap )
-{
-    return _CanItemTrap( trap.GetProtoId() );
-}
-/* old
-   bool _CanItemTrap(uint pid)
-   {
-        uint[] trapPids = {PID_MOLOTOV_COCKTAIL, PID_FRAG_GRENADE, PID_PLASMA_GRENADE, PID_PULSE_GRENADE, PID_SHOTGUN, PID_SAWED_OFF_SHOTGUN};
-        for(uint i=0, l=trapPids.length();i<l;i++)
-        {
-                if(pid==trapPids[i]) return true;
-        }
-
-        return false;
-   }*/
-
-bool _CanItemTrap( uint pid )     
-{
-    uint[] trap_pids = { PID_MOLOTOV_COCKTAIL, PID_FRAG_GRENADE, PID_PLASMA_GRENADE, PID_PULSE_GRENADE, PID_SHOTGUN, PID_SAWED_OFF_SHOTGUN, PID_TRAP_KNIFES, PID_TRAP_ELECTRIC, PID_TRAP_ITEM_BREAKER, PID_TRAP_FIRE_BREATH, PID_TRAP_POISON_BLADE, PID_TRAP_STUNNER, PID_TRAP_SLEDGE_HAMMER, PID_TRAP_CANISTER_SHOT, PID_TRAP_STAKE};
-	return trap_pids.find( pid ) != -1;
-}
-
-// ѕризнак, дверь заминирована
-bool _IsItemTrapped( Item& trappedItem )
-{
-    return ( valid( GetTrap( trappedItem ) ) );
-}
-
-// Ћовушка на данной двери
-Item @ GetTrap( Item & door ) // , bool trapCount)
-{
-    DL( "getting trap" );
-    if( !_ValidForTrap( door ) )
-        return null;
-    DL( "door valid for trap" );
-    Map @ map = GetMap( door.MapId );
-    if( !valid( map ) )
-        return null;
-    DL( "map valid" );
-    uint x = door.HexX;
-    uint y = door.HexY;
-
-    Item@[] traps;
-    if( map.GetItems( x, y, traps ) == 0 )
-        return null;
-
-    // if(trapCount) return traps.length();
-
-    for( uint i = 0, l = traps.length(); i < l; i++ )
-    {
-        DL( "cycle" );
-        Item@ trap = traps[ i ];
-        if( !valid( trap ) )
-            continue;
-
-        if( _IsItemTrap( trap ) )
-        {
-            return trap;
-        }
-    }
-    return null;
-}
-
-int GetTrapCount( Item& door )
-{
-    if( !_ValidForTrap( door ) )
-        return -1;
-    DL( "door valid for trap" );
-    Map @ map = GetMap( door.MapId );
-    if( !valid( map ) )
-        return -1;
-    DL( "map valid" );
-    uint x = door.HexX;
-    uint y = door.HexY;
-
-    Item@[] traps;
-    if( map.GetItems( x, y, traps ) == 0 )
-        return 0;
-
-    return traps.length();
-}
-
-void RemoveItem( Item& item )
-{
-    if( !valid( item ) )
-        return;
-    if( item.GetType() == ITEM_TYPE_MISC || item.GetCount() <= 1 )
-        DeleteItem( item );
-	else
-		item.SetCount( item.GetCount() - 1 );
-    item.Update();
-}
-
-// ”становка ловушки
-// TODO: прописывать сложность ловушки в гранату. ѕока установки сложности съема гранаты нет
-bool _TrySetupTrap( Item& door, Item @ trap, Critter& player )
-{
-    if( !valid( trap ) )
-        return false;
-    if( !_ValidForTrap( door ) )
-        return false;
-    if( !_CanItemTrap( trap ) )
-        return false;
-    Map@ map = GetMap( door.MapId );
-    if( !valid( map ) )
-        return false;
-    if( player.Timeout[ TO_SK_LOCKPICK ] > 0 )
-    {
-        player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_WEARINESS );
-        return false;
-    }
-    // bool trapCount = false;
-    uint16 pid = trap.GetProtoId();
-    if( ( pid == PID_TRAP_ITEM_BREAKER && door.GetType() != ITEM_TYPE_CONTAINER ) || ( pid == PID_TRAP_SLEDGE_HAMMER && door.GetType() != ITEM_TYPE_DOOR ) )
-    {
-        player.Say( SAY_NETMSG, "Ёту ловушку нельз€ установить сюда." );
-        return false;
-    }
-
-    uint8  trapCount = GetTrapCount( door );
-    uint16 addComplexity = 0;
-
-    if( trapCount > 1 )
-        addComplexity = trapCount * 40;
-
-    GameVar @ complexity_trap = GetLocalVar( LIVAR_item_trap_comp, trap.Id );
-
-    int base = player.Skill[ SK_TRAPS ] - ( complexity_trap.GetValue() / 1.5 ) - addComplexity;
-    // player.Say(SAY_NORM, ""+base);
-    base = CLAMP( base, 0, 95 );
-    int chance = Random( 1, 100 );
-
-    // player.Say(SAY_NORM,""+trapCount);
-
-    if( base >= chance ) // && !trapCount)
-    {
-        // ловушка установлена
-        player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_TRAPS_SET_SUCC );
-
-
-
-        uint16[] trapVal = { trap.Val0, , , , };
-        if( trap.GetType() == ITEM_TYPE_MISC )
-        {
-            trapVal[ 0 ] = trap.Val1;
-            trapVal[ 1 ] = trap.Val3;
-            trapVal[ 2 ] = trap.Val4;
-            trapVal[ 3 ] = trap.Val5;
-            trapVal[ 4 ] = trap.Val6;
-        }
-
-        // DeleteItem(trap);
-        RemoveItem( trap );
-
-        if( _SetDoorTrap( door, pid, trapVal ) )    // , player))
-        {
-            uint16 tempComp = ( player.Stat[ ST_AGILITY ] * 5 ) + ( player.Skill[ SK_TRAPS ] / 2 );
-            GameVar @ complexity_door = GetLocalVar( LIVAR_item_trap_comp, door.Id );
-            complexity_door = tempComp;
-            GameVar @ identy = GetLocalVar( LIVAR_item_trap, door.Id );
-            identy = player.Id;
-
-            uint16 addExp = 0;
-
-            switch( pid )
-            {
-            case PID_MOLOTOV_COCKTAIL:
-                addExp = 50;
-                break;
-            case PID_FRAG_GRENADE:
-                addExp = 100;
-                break;
-            default:
-                break;
-            }
-
-            //player.StatBase[ ST_EXPERIENCE ] += complexity_door.GetValue() / 2 + addExp;
-        }
-    }
-    else
-    {
-        // не установлена
-        player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_TRAPS_SET_FAIL );
-        if( chance <= 5 || base < 5 )
-        {
-            TrapDamagePlayer( trap, player, door );           // ≈сть некий шанс, что ловушка сработает при установке(граната взорветс€)
-        }
-    }
-
-    // player.TimeoutBase[TO_SK_LOCKPICK]=TRAPS_TIMEOUT(player)*2;// удвоенный таймаут на установку
-    return true;
-}
-
-bool _SetDoorTrap( Item& door, uint trapPid, uint16[] trapVal ) // , Critter@ cr)
-{
-    uint16 x = 0, y = 0;
-    Map    @map = door.GetMapPosition( x, y );
-
-    if( !valid( map ) )
-        return false;
-    Item @ trap = map.AddItem( x, y, trapPid, 1 );
-
-
-    if( valid( trap ) )
-    {
-        /*
-           GameVar @ complexity = GetLocalVar(LIVAR_item_trap_comp, door.Id);
-           complexity += cr.StatBase[SK_TRAPS] / 2;
-
-           if(cr != null)
-           {
-                        GameVar @ identy = GetLocalVar(LIVAR_item_trap, door.Id);
-                        identy = cr.Id;
-           }
-         */
-
-        if( trapVal[ 0 ] != 0 )
-        {
-            trap.Val0 = 0;
-			trap.Val1 = trapVal[ 0 ];
-			trap.Val3 = trapVal[ 1 ];
-            trap.Val4 = trapVal[ 2 ];
-            trap.Val5 = trapVal[ 3 ];
-            trap.Val6 = trapVal[ 4 ];
-        }
-
-        SETFLAG( trap.Flags, ITEM_TRAP );
-        SETFLAG( trap.Flags, ITEM_HIDDEN );
-        trap.Update();
-        return true;
-    }
-    return false;
-}
-
-// —н€тие ловушки
-//import bool _TryRemoveTrap( Item& door, Critter& player ) from "trap";
-bool _TryRemoveTrap( Item& door, Critter& player ) //exported
-{
-    if( !_ValidForTrap( door ) )
-        return false;
-    if( !_IsItemTrapped( door ) )
-        return false;
-
-    if( player.Timeout[ TO_SK_LOCKPICK ] > 0 )
-    {
-        player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_WEARINESS );
-        return false;
-    }
-
-    Item @ trap = GetTrap( door );
-    if( !valid( trap ) )
-        return false;
-
-    GameVar @ complexity = GetLocalVar( LIVAR_item_trap_comp, trap.Id );
-
-    int base = ( player.Skill[ SK_TRAPS ] + player.Stat[ ST_AGILITY ] * 5 ) - complexity.GetValue(); // door.LockerComplexity;
-    base = CLAMP( base, 0, 95 );
-    int chance = Random( 1, 100 );
-    if( base >= chance )
-    {
-        player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_TRAPS_SUCC );      // ¬ы смогли разминировать ловушку.
-        Item @ addTrap = player.AddItem( trap.GetProtoId(), 1 );
-
-        if( @addTrap != null )
-        {
-            addTrap.Val0 = trap.Val1;
-			addTrap.Val1 = player.Id;
-			addTrap.Val3 = trap.Val3;
-            addTrap.Val4 = trap.Val4;
-            addTrap.Val5 = trap.Val5;
-            addTrap.Val6 = trap.Val6;
-        }
-
-        DeleteItem( trap );
-        // uint16 tempExp = complexity;
-        //player.StatBase[ ST_EXPERIENCE ] += complexity.GetValue();
-    }
-    else
-    {
-        player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_TRAPS_FAIL ); // ¬ы не смогли сн€ть ловушку.
-        if( chance <= 5 || base < 5 )
-        {
-            TrapDamagePlayer( trap, player, door );                      // ≈сть некий шанс, что ловушка сработает при разминировании
-        }
-
-    }
-    player.TimeoutBase[ TO_SK_LOCKPICK ] = TRAPS_TIMEOUT( player );
-    return true;
-}
-
-// Ќанесение дамага игроку от ловушки
-void TrapDamagePlayer( Item& trap, Critter& player, Item& trappedItem )
-{
-    if( !_IsItemTrap( trap ) )
-        return;
-
-    uint damage = 0, damageType = 0, trapPid = trap.GetProtoId();
-    // пока все только дл€ гранат реализовано
-    /*
-       if(trap.GetType()==ITEM_TYPE_WEAPON)
-       switch(trap.GetType())
-       {
-       case ITEM_TYPE_WEAPON :
-     */
-
-    GameVar @ identy = GetLocalVar( LIVAR_item_trap, trappedItem.Id );
-
-    if( trap.GetType() == ITEM_TYPE_WEAPON )
-    {
-        // c оружием просто - нужно выполнить нанесение дамага
-        ProtoItem@ weap = GetProtoItem( trapPid );
-        if( !valid( weap ) )
-            return;
-
-        uint damage = Random( weap.Weapon_DmgMin_0, weap.Weapon_DmgMax_0 );
-        uint damageType = weap.Weapon_DmgType_0;
-        Map @ map = player.GetMap();
-        if( valid( map ) )
-        {
-            uint tx = player.HexX;
-            uint ty = player.HexY;
-            if( trapPid == PID_MOLOTOV_COCKTAIL )
-            {
-                GenerateFire( map, tx, ty, 3, 2, player.Id );
-				ExplodeEx( map, tx, ty, PID_EXPLODE_FIRE_BIG, 1, damage, damageType, 1, identy.GetValue() ); // Export
-                // map.RunEffect(PID_EXPLODE_FIRE_BIG,tx,ty,2);
-                // QuakeScreen(map);
-            }
-            else if( trapPid == PID_FRAG_GRENADE || trapPid == PID_HOLY_HAND_GRENADE )
-            {
-                ExplodeEx( map, tx, ty, PID_EXPLODE_FIRE_SMALL, 2, damage, damageType, 2, identy.GetValue() );
-                // map.RunEffect(PID_EXPLODE_FIRE_SMALL,tx,ty,2);
-                // QuakeScreen(map);
-            }
-            else if( trapPid == PID_PULSE_GRENADE )
-                map.RunEffect( PID_EXPLODE_EMP, tx, ty, 2 );
-            else if( trapPid == PID_PLASMA_GRENADE )
-            {
-                // map.RunEffect(PID_EXPLODE_PLASMA,tx,ty,2);
-                // QuakeScreen(map);
-            }
-            else if( trapPid == PID_SAWED_OFF_SHOTGUN || trapPid == PID_SHOTGUN )
-            {
-                player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( Random( 0, 1 ) == 0 ? true : false ), Random( 20, 100 ) * 10, player.HexX, player.HexY );
-            }
-
-        }
-
-        InjureCritter( player, damage, damageType, GetDirection( trap.HexX, trap.HexY, player.HexX, player.HexY ), player.Id );
-        DeleteItem( trap );
-        return;
-    }
-    else
-    {
-        if( trap.GetType() == ITEM_TYPE_MISC )
-        {
-            bool  crHurt = true;
-            uint8 countUses = trap.Val6;
-            damage = Random( trap.Val3, trap.Val4 );
-            damageType = trap.Val5;
-			uint trapperId = trap.Val1;
-			if( trapperId == 0 )
-				trapperId = player.Id;
-
-            if( trapPid == PID_TRAP_KNIFES )
-            {}
-
-            else if( trapPid == PID_TRAP_POISON_BLADE )
-            {
-                AffectPoison( player, 30 );
-            }
-            else if( trapPid == PID_TRAP_ELECTRIC )
-            {}
-            else if( trapPid == PID_TRAP_ITEM_BREAKER )
-            {
-                crHurt = false;
-                Item @[] items;
-                trappedItem.GetItems( 0, items );
-                DeleteItems( items );
-            }
-            else if( trapPid == PID_TRAP_FIRE_BREATH )
-            {}
-            else if( trapPid == PID_TRAP_STUNNER || trapPid == PID_TRAP_SLEDGE_HAMMER )
-            {
-                player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( Random( 0, 1 ) == 0 ? true : false ), Random( 20, 100 ) * 10, player.HexX, player.HexY );
-            }
-            else if( trapPid == PID_TRAP_CANISTER_SHOT )
-            {
-                damage = damage * ( 100 - ( player.Stat[ ST_ARMOR_CLASS ] + player.Stat[ ST_LUCK ] * 2.5 + player.Stat[ ST_AGILITY ] * 2.5 ) );
-                /*
-                   for(uint8 i = 0; i < 99; i++)
-                   {
-                   InjureCritter(player,damage,damageType, GetDirection(trap.HexX, trap.HexY, player.HexX, player.HexY), 0);
-                   }
-                   return;
-                 */
-            }
-
-            if( crHurt )
-            {
-                InjureCritter( player, damage, damageType, GetDirection( trap.HexX, trap.HexY, player.HexX, player.HexY ), trapperId );
-            }
-
-            if( countUses > 0 )
-            {
-                trap.Val6 -= 1;
-            }
-            else
-            {
-                DeleteItem( trap );
-            }
-
-            return;
-        }
-    }
-}
-
-//import bool UseSkillOnTrappedItem( Item& trappedItem, Critter& cr, int skill ) from "trap";
-bool UseSkillOnTrappedItem( Item& trappedItem, Critter& cr, int skill ) // Export
-{
-    if( !_IsItemTrapped( trappedItem ) )
-        return false;
-
-	if( skill == SK_TRAPS )
-    {
-        _TryRemoveTrap( trappedItem, cr );
-        return true;
-    }
-
-    if( skill == SK_LOCKPICK )
-        return TrapDoorAction( cr, trappedItem );
-
-    if( skill == SKILL_PICK_ON_GROUND )
-        return TrapDoorAction( cr, trappedItem );
-
-	return false;
-}
-
-bool TrapDoorAction( Critter& cr, Item& trappedItem )
-{
-    GameVar @ identy = GetLocalVar( LIVAR_item_trap, trappedItem.Id );
-    GameVar @ complexity = GetLocalVar( LIVAR_item_trap_comp, trappedItem.Id );
-
-    Item @ trap = GetTrap( trappedItem );
-    if( !valid( trap ) )
-        return false;
-
-	if( IsKeyAviable( cr, trappedItem.LockerId ) || identy == cr.Id )
-    {
-		//cr.Say( SAY_EMOTE, "¬озитс€ с замком" );
-        //SwitchState( trappedItem );
-        return false;
-    }
-
-    bool isHead = false;
-    if( trap.GetProtoId() == PID_TRAP_FIRE_BREATH )
-        isHead = true;
-
-    if( cr.StatBase[ ST_LAST_DOOR_ID ] != int( trappedItem.Id ) && ( cr.Stat[ ST_PERCEPTION ] + cr.Skill[ SK_TRAPS ] / 50 > complexity.GetValue() / 20 || ( isHead && cr.Stat[ ST_PERCEPTION ] > 3 ) ) )
-    {
-        if( !isHead )
-            cr.Say( SAY_NETMSG, " ажетс€, здесь установлена ловушка!" );
-        else
-			cr.Say( SAY_NETMSG, "¬ы видите странную голову. Ќе стоит совать сюда руки." );
-        cr.StatBase[ ST_LAST_DOOR_ID ] = trappedItem.Id;
-        return true;
-    }
+	uint16 pid;
+	uint16 armed_pid;
+	uint8 trap_type;
+	bool can_rotate;
+	string sound_on;
+	string sound_off;
 	
-    TrapDamagePlayer( trap, cr, trappedItem );
-
-    return true;
+	TrapItem( uint16 pid, uint16 armed_pid, uint8 trap_type, bool can_rotate, string sound_on, string sound_off )
+	{
+        this.pid = pid;
+		this.armed_pid = armed_pid;
+		this.trap_type = trap_type;
+		this.can_rotate = can_rotate;
+		this.sound_on = sound_on;
+		this.sound_off = sound_off;
+	}
 }
-/*
-   bool _GetTrappedItem(Item& trap, Item@ trappedItem)
-   {
-        uint16 hexX = 0, hexY = 0;
-        Map @ map = trap.GetMapPosition(hexX, hexY);
-        if(map == null) return false;
-        @trappedItem = map.GetItem()
-   }
- */
-bool SetTrapOnItem( Critter& cr, Item& trap, Item& onItem ) // Export
+
+class TrapItemCollection
 {
-    if( _ValidForTrap( onItem ) )
-    {
-        if( _CanItemTrap( trap ) )
-        {
-            _TrySetupTrap( onItem, trap, cr );
-            return true;
-        }
-    }
-    return false;
+	TrapItem@[] trapItems;
+	TrapItemCollection()
+	{
+	}
+	
+	TrapItemCollection@ trapItem( uint16 pid, uint16 armed_pid, uint8 trap_type, bool can_rotate, string sound_on, string sound_off )
+	{
+		this.trapItems.insertLast( TrapItem( pid, armed_pid, trap_type, can_rotate, sound_on, sound_off ) );
+		return this;
+	}
+	
+	TrapItem@ get_by_pid( uint16 pid ) 
+	{
+		for( uint i = 0, len = this.trapItems.length(); i < len; i++ )
+		{
+			if( this.trapItems[i].pid == pid || this.trapItems[i].armed_pid == pid )
+			{
+				return this.trapItems[i];
+			}
+		}
+		return null;
+	}
 }
 
-// —крипт дл€ двери с самовопроизвод€щейс€ ловушкой
-// Val5 - врем€ респауна ловушки в игровых минутах
-// Val4 - прототип ловушки
-/*
-   void _TrappedDoorInit(Item & door, bool firstTime)
-   {
-        uint trapPid = door.Val4;
-        if(!_CanItemTrap(trapPid)) return;
+TrapItemCollection@ trapItems = TrapItemCollection()
+//					pid								armed_pid							   trap_type	  can_rotate		sound_on		  sound_off
+	.trapItem( PID_TRAP_DEACTIVATED			,	PID_TRAP_ACTIVE						,	TRAP_MECHANICAL	,	false	,	"trapsetup2.ogg"	,	"gotcha.ogg"		)
+	.trapItem( PID_MINE						,	PID_ACTIVE_MINE						,	TRAP_MINE		,	false	,	"mine.mp3"			,	"mine.mp3"			)
+	.trapItem( PID_MINE_PLASMA				,	PID_ACTIVE_MINE_PLASMA				,	TRAP_MINE		,	false	,	"mine.mp3"			,	"mine.mp3"			)
+	.trapItem( PID_MINE_PULSE				,	PID_ACTIVE_MINE_PULSE				,	TRAP_MINE		,	false	,	"mine.mp3"			,	"mine.mp3"			)
+	.trapItem( PID_IMPOVISED_TRAP			,	PID_IMPOVISED_TRAP_ACTIVE			,	TRAP_TRIPWIWE	,	true	,	"tripwire_set.mp3"	,	"tripwire_cut.mp3"	)
+	.trapItem( PID_IMPOVISED_TRAP_PLASMA	,	PID_IMPOVISED_TRAP_PLASMA_ACTIVE	,	TRAP_TRIPWIWE	,	true	,	"tripwire_set.mp3"	,	"tripwire_cut.mp3"	)
+	.trapItem( PID_IMPOVISED_TRAP_PULSE		,	PID_IMPOVISED_TRAP_PULSE_ACTIVE		,	TRAP_TRIPWIWE	,	true	,	"tripwire_set.mp3"	,	"tripwire_cut.mp3"	)
+	;
 
-        door.SetEvent(ITEM_EVENT_SKILL, "_TrappedDoorSkill");
-        if(_IsItemTrapped(door)) return;
-        _SetDoorTrap(door, trapPid);//, null);
-   }
+TrapItem@ GetTrapItem( Item@ item ) 
+{
+    uint16 pid = item.GetProtoId();
 
-   bool _TrappedDoorSkill(Item& door, Critter& cr, int skill)
-   {
-        if(cr.IsNpc()) return false;
+    return trapItems.get_by_pid( pid );
+}
 
-        if(UseSkillOnTrappedItem(door, cr,skill))
-        {
-                if(!_IsItemTrapped(door))// Ћовушка разминирована или взорвалась
-                {
-                        uint time = door.Val5;
-                        if(time>0)
-                        {
-                                CreateTimeEvent(__FullSecond+time*60,"e_RespawnTrap", door.Id, true);
-                        }
-                }
-                return true;
-        }
+bool TryPlantMine( Critter& cr, Item& trap, uint16 hexX, uint16 hexY )
+{
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return false;
+	}
+	
+	if( !valid( trap ) )
+	{
+		return false;
+	}
+	
+	if( GetDistantion( cr.HexX, cr.HexY, hexX, hexY ) > 1 )
+	{
+		return false;
+	}
+	
+	cr.Animate( 0, ANIM2_PICKUP, null, false, true );
+	
+	if( !CheckTrapInstallPlace( map, hexX, hexY ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TRAP_HEX_BUSY );
+		return false;
+	}
+	
+	TrapItem@ trapItm = GetTrapItem( trap );
+	if( !valid( trapItm ) )
+	{
+		return false;
+	}
+	
+	int hardness = 0;
+	if( Random( 0, 100 ) < cr.Skill[ SK_TRAPS ] )
+	{
+		hardness = cr.Skill[ SK_TRAPS ];
+	}
+	else if( !LuckCheck( cr ) )
+	{
+		trap.TRAP_OWNER = cr.Id;
+		if( trapItm.trap_type != TRAP_MECHANICAL )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOW_SKILL_TRAP_KABOOM );
+			DetonateTrap( trap );
+		}
+		else
+		{
+			InjureCritter( cr, Random( trap.Proto.Weapon_DmgMin_0, trap.Proto.Weapon_DmgMax_0 ), trap.Proto.Weapon_DmgType_0, cr.Dir, cr.Id, Random( 0, 1 ) == 0 ? HIT_LOCATION_LEFT_ARM : HIT_LOCATION_RIGHT_ARM, false );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SNARE_FAILED );
+			PlayGenericSound( map, hexX, hexY, trapItm.sound_off, 6 );
+		}
+		return true;
+	}
+	else
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOW_SKILL_TRAP_LUCKY );
+		return true;
+	}
+
+	cr.StatBase[ ST_CURRENT_AP ] -= 5000;
+	
+	Item@ armedTrap = map.AddItem( hexX, hexY, trapItm.armed_pid, 1 );
+	if( !valid( armedTrap ) )
+	{
+		return false;
+	}
+	
+	PlayGenericSound( map, hexX, hexY, trapItm.sound_on, 6 );
+	
+	armedTrap.TRAP_SKILL = cr.Skill[ SK_TRAPS ];
+	armedTrap.TrapValue = hardness;
+	armedTrap.TRAP_HARDNESS = hardness;
+	armedTrap.TRAP_OWNER = cr.Id;
+	armedTrap.TRAP_CRITICAL_CHANCE = cr.Stat[ ST_CRITICAL_CHANCE ];
+	armedTrap.Update();
+	_SubItem( trap, 1 );
+	return true;
+}
+
+void _InitTrap( Item& armedTrap, bool firstTime )
+{
+	armedTrap.SetEvent( ITEM_EVENT_SKILL, "_OnTrapSkillUse" );
+	armedTrap.SetEvent( ITEM_EVENT_WALK, "_TrapWalk" );
+}
+
+bool _OnTrapSkillUse( Item& trap, Critter& cr, int skill )
+{
+	TrapItem@ trapItm = GetTrapItem( trap );
+	if( !valid( trapItm ) )
+	{
+		return false;
+	}
+	
+	switch( skill )
+	{
+		case( SK_TRAPS ):
+		{
+			TryDisarm( trap, cr );
+			break;
+		}
+		case( SK_REPAIR ):
+		{
+			if( trapItm.can_rotate )
+			{
+				RotateTrap( trap );
+			}
+			else
+			{
+				if( trapItm.trap_type != TRAP_MECHANICAL )
+				{
+					DetonateTrap( trap );
+				}
+				else
+				{
+					TrapDisarm( trap );
+				}
+			}
+			break;
+		}
+		case( SKILL_PICK_ON_GROUND ):
+		{
+			if( trapItm.trap_type == TRAP_MECHANICAL )
+			{
+				TrapDisarm( trap );
+			}
+			else
+			{
+				DetonateTrap( trap );
+			}
+			break;
+		}
+		default:
+		{
+			if( trapItm.trap_type != TRAP_MECHANICAL )
+			{
+				DetonateTrap( trap );
+				break;
+			}
+			return false;
+		}
+	}
+	return true;
+}
+
+void RotateTrap( Item& trap )
+{
+	string vertHash = "";
+	string horHash = "";
+	
+	switch( trap.GetProtoId() )
+	{
+		case( PID_IMPOVISED_TRAP_ACTIVE ):
+			vertHash = "art/items/traps/tripwire_active_ns_itm.png";
+			horHash = "art/items/traps/tripwire_active_we_itm.png";
+			break;
+		case( PID_IMPOVISED_TRAP_PLASMA_ACTIVE ):
+			vertHash = "art/items/traps/tripwire_plasma_active_ns_itm.png";
+			horHash = "art/items/traps/tripwire_plasma_active_we_itm.png";
+			break;
+		case( PID_IMPOVISED_TRAP_PULSE_ACTIVE ):
+			vertHash = "art/items/traps/tripwire_pulse_active_ns_itm.png";
+			horHash = "art/items/traps/tripwire_pulse_active_we_itm.png";
+			break;
+		default:
+			return;
+	}
+	
+	uint vertical = GetStrHash( vertHash );
+	uint horizontal = GetStrHash( horHash );
+	
+	if( trap.PicMap != vertical )
+	{
+		trap.PicMap = vertical;
+	}
+	else
+	{
+		trap.PicMap = horizontal;
+	}
+	
+	trap.Update();
+}
+
+
+void _TrapWalk( Item& trap, Critter& cr, bool entered, uint8 dir )
+{
+	TrapItem@ trapItm = GetTrapItem( trap );
+	if( !valid( trapItm ) )
+	{
+		return;
+	}
+	
+	if( cr.Stat[ ST_LOCOMOTION_TYPE ] == LOCOMOTION_FLY )
+	{
+		return;
+	}
+	
+	if( isGM( cr ) )
+	{
+		return;
+	}
+	
+	cr.Wait( 0 );
+	
+	if( entered )
+	{
+		if( trapItm.trap_type == TRAP_MECHANICAL && cr.Mode[ MODE_NO_KNOCK ] == 0 )
+		{
+			int hardness = trap.TRAP_HARDNESS;
+
+			if( LuckCheck( cr ) )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SNARE_LUCKY );
+				return;
+			}
+			
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_STEP_SNARE );
+			Map@ map = cr.GetMap();
+			
+			bool isCritical = CritRoll( trap.TRAP_CRITICAL_CHANCE, cr, map, trap.HexX, trap.HexY );
+			InjureCritter( cr, Random( trap.Proto.Weapon_DmgMin_0, trap.Proto.Weapon_DmgMax_0 ), trap.Proto.Weapon_DmgType_0, dir, trap.TRAP_OWNER, Random( 0, 1 ) == 0 ? HIT_LOCATION_LEFT_LEG : HIT_LOCATION_RIGHT_LEG, isCritical );
+			
+			if( hardness > 0 )
+			{
+				HookHoldAttack( cr, hardness / 10 );
+			}
+			
+			TrapDisarm( trap );
+		}
+		else if( trapItm.trap_type == TRAP_TRIPWIWE )
+		{
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_STEP_TW );
+			DetonateTrap( trap );			
+		}			
+	}
+	else if( trapItm.trap_type == TRAP_MINE )
+	{
+		if( LuckCheck( cr ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MINE_LUCKY );
+		}
+		else
+		{
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_MINE_KABOOM );
+			DetonateTrap( trap );			
+		}
+	}
+}
+
+bool CheckTrapInstallPlace( Map& map, uint16 hexX, uint16 hexY )
+{
+	if( !map.IsHexPassed( hexX, hexY ) )
+	{
+		return false;
+	}
+	
+	Item@[] items;
+	map.GetItems( hexX, hexY, items );
+	uint len = items.length();
+	if( len > 0 )
+	{
+		return false;
+	}
+	
+    Critter@[] critters;
+    if( map.GetCrittersHex( hexX, hexY, 0, FIND_LIFE_AND_KO, critters ) > 0 )
+	{
         return false;
-   }
+	}
+	
+	return true;
+}
 
-   // ¬осстановление ловушки через врем€ указанное в Val5
-   uint e_RespawnTrap(uint[]@ values)
-   {
-        Item @ door = GetItem(values[0]);
-        if(!valid(door)) return 0;
-        uint trapPid = door.Val4;
-        if(!_CanItemTrap(trapPid)) return 0;
-        _SetDoorTrap(door, trapPid);//, null);
-        Map @map = GetMap(door.MapId);
-        if(valid(map)) // ѕопытка закрыть дверь
-        {
-                door.LockerClose();
-        }
-        return 0;
-   }*/
+void TryDisarm( Item& trap, Critter& cr )
+{
+	uint16 hexX = 0, hexY = 0;
+	Map@ map = trap.GetMapPosition( hexX, hexY );
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	TrapItem@ trapItm = GetTrapItem( trap );
+	if( valid( trapItm ) )
+	{
+		if( DisarmCheck( trap, cr ) )
+		{
+			TrapDisarm( trap );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TRAP_SUCCESS_DISARM );
+		}
+		else if( LuckCheck( cr ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TRAP_FAILED_DISARM );
+		}
+		else
+		{
+			if( trapItm.trap_type == TRAP_MECHANICAL )
+			{
+				bool isCritical = CritRoll( trap.TRAP_CRITICAL_CHANCE, cr, map, hexX, hexY );
+				InjureCritter( cr, Random( trap.Proto.Weapon_DmgMin_0, trap.Proto.Weapon_DmgMax_0 ), trap.Proto.Weapon_DmgType_0, cr.Dir, cr.Id, Random( 0, 1 ) == 0 ? HIT_LOCATION_LEFT_LEG : HIT_LOCATION_RIGHT_LEG, isCritical );
+			}
+			else
+			{
+				DetonateTrap( trap );
+			}
+		}
+	}
+}
 
-/*
+void DetonateTrap( Item& trap )
+{
+	uint16 hexX = 0, hexY = 0;
+	Map@ map = trap.GetMapPosition( hexX, hexY );
+	Critter@ owner = GetCritter( trap.TRAP_OWNER );
 
-   void _TellTrap(Critter& cr)
-   {
-   Map @ map = cr.GetMap();
-   if(map == null) return;
-   //map.GetItemsByType()
+	if( !valid( map ) )
+	{
+		return;
+	}
+		
+	if( trap.CritSlot == SLOT_HAND1 )
+	{
+		@ owner = GetCritter( trap.CritId );
+		if( !valid( owner ) )
+		{
+			return;
+		}
+		
+		hexX = owner.HexX;
+		hexY = owner.HexY;
+	}
+	
+	if( trap.TRAP_HARDNESS != 0 || trap.CritSlot == SLOT_HAND1 )
+	{
+		uint[] vals = { hexX, hexY, map.Id, trap.GetProtoId(), valid( owner ) ? owner.Id : 0, 0 };
+		CreateTimeEvent( __FullSecond + 1, "combat@e_DelayedExplosion", vals, true );
+	} 
+	else
+	{
+		TrapDisarm( trap );
+	}
+}
 
-   GetAnyData()
-   }
+void TrapDisarm( Item& trap )
+{
+	uint16 tx = 0, ty = 0;
+	Map@ map = trap.GetMapPosition( tx, ty );
+	if( valid( map ) )
+	{
+		TrapItem@ trapItm = GetTrapItem( trap );
+		if( valid( trapItm ) )
+		{
+			PlayGenericSound( map, trap.HexX, trap.HexY, trapItm.sound_off, 6 );
+			
+			Item@ disarmedTrap = map.AddItem( trap.HexX, trap.HexY, trapItm.pid, 1 );
+			if( valid( disarmedTrap ) )
+			{
+				DeleteItem( trap );
+			}
+		}
+	}
+}
 
-
-   Item _FindItem(Map& map, uint16 hexX, uint16 hexY)//, uint8 radius)
-   {
-   if(map == null) return null;
-   Item@[] items;
-   for(uin16 i = ITEM_TYPE_CONTAINER; i < ITEM_TYPE_DOOR; i++)
-   {
-
-    uint16 count = map.GetItemsByType(i, items);
-    for(i = 0; j < count; j++)
-    {
-      if(_IsItemTrapped(items[j]))
-      {
-        int x = (hexX-x0), y = (y1-y0);
-        uint rad = sqrt(x*x+y*y);
-      }
-    }
-
-    //for(uint16 j = he)
-   }
-   }
-
-
- */
+#endif // TRAP_MODULE

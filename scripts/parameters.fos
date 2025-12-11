@@ -3,22 +3,28 @@
 
 #include "_utils.fos"
 #include "parameters_h.fos"
+#include "skins_h.fos"
 
 #ifdef __CLIENT
 	#include "_client_defines.fos"
+	#include "client_karma_h.fos"
 	import void SetChosenTabLevelUp( bool enable )  from "chosen_tabs";
 	import int  GUI_GetActiveScreen() from "client_gui";
 #endif // __CLIENT
 
-#ifndef __CLIENT
-	#include "perks_h.fos"
-#endif // __CLIENT
-
 #ifdef __SERVER
 	#include "speed_h.fos"
-#endif // __SERVER
+	#include "perks_h.fos"
+	import void LookDataRefresh( Critter& critter ) from "main";
 
-#ifndef __CLIENT
+	void changedParam_MaxLifeExt( Critter& cr, uint, int oldValue )
+	{
+		if( cr.StatBase[ ST_CURRENT_HP ] > cr.Stat[ ST_MAX_LIFE ] )
+		{
+			cr.StatBase[ ST_CURRENT_HP ] = cr.Stat[ ST_MAX_LIFE ];
+		}
+	}
+	
 	void changedParam_CR_HUNGER_SPEED( Critter& cr, uint, int oldValue )
 	{
 		if( cr.GetTimeEvents( CTE_HUNGER, null, null, null ) > 0 )
@@ -61,7 +67,7 @@
 		{
 			cr.EraseTimeEvents( CTE_GLOBAL_OVERDOSE );
 		}
-		cr.AddTimeEvent( "gameplay@cte_Global_Overdose", REAL_SECOND( cr.Param[ CR_GLOBAL_OVERDOSE_SPEED ] ), CTE_GLOBAL_OVERDOSE, 0 );
+		cr.AddTimeEvent( "gameplay@cte_Global_Overdose", REAL_MS( cr.Param[ CR_GLOBAL_OVERDOSE_SPEED ] ), CTE_GLOBAL_OVERDOSE, 0 );
 	}
 
 	void changedParam_CR_WETNESS_SPEED( Critter& cr, uint, int oldValue)
@@ -128,18 +134,17 @@
 		if( exp > 0 )
 		{
 			uint level = cr.Stat[ ST_LEVEL ];
-			if( level >= __LevelCap && not __LevelCapAddExperience )
+			if( level >= __LevelCap && !__LevelCapAddExperience )
 			{
 				return;
 			}
 			
-			int trait_buff = cr.Trait[ TRAIT_SEX_APPEAL ] == 0 ? 2 : 1;
-			int trait_nerf = cr.Trait[ TRAIT_SKILLED ] == 0 ? 2 : 1;
+			int trait_nerf = cr.Trait[ TRAIT_SKILLED ] == 0 ? 1 : 2;
 			
 			if( cr.Param[ CR_EXP_LOCK ] == 0 )
 			{
-				exp *= trait_buff / trait_nerf;
-				testInfo( cr, "Gained exp: " + exp + " ( trait_buff: " + trait_buff + " trait_nerf: " + trait_nerf + " )" );
+				exp /= trait_nerf;
+				testInfo( cr, "Gained exp: " + exp + " ( trait_nerf: " + trait_nerf + " )" );
 			}
 			else
 			{
@@ -153,7 +158,7 @@
 				return;
 			}
 			
-			int perkUp = ( cr.Trait[ TRAIT_SKILLED ] != 0 ? 4 : 3 );
+			int perkUp = 3;
 			while( true )
 			{
 				if( cr.StatBase[ ST_EXPERIENCE ] >= NextLevelNeedExp( cr ) && level < __LevelCap )
@@ -162,7 +167,7 @@
 					
 					cr.StatBase[ ST_LEVEL ]++;
 
-					cr.StatBase[ ST_UNSPENT_SKILL_POINTS ] += 5 + cr.StatBase[ ST_LEVEL ] * cr.StatBase[ ST_INTELLECT ]; // Skill points
+					cr.StatBase[ ST_UNSPENT_SKILL_POINTS ] += 5 + cr.StatBase[ ST_LEVEL ] * cr.StatBase[ ST_INTELLECT ] + ( cr.Trait[ TRAIT_SKILLED ] > 0 ? cr.StatBase[ ST_LEVEL ] * cr.StatBase[ ST_INTELLECT ] / 2 : 0 ); // Skill points
 				}
 				else
 				{
@@ -208,7 +213,7 @@
 
 	void changedParam_GoodNatured( Critter& cr, uint, int oldValue )
 	{
-		int newValue = cr.Trait[TRAIT_GOOD_NATURED];
+		int newValue = cr.Trait[TRAIT_SURE_FOOTED];
 		if( oldValue == newValue || newValue < 0 || newValue > 1 )
 		{
 			return;
@@ -221,8 +226,8 @@
 		cr.SkillBase[ SK_BARTER ] 			+= 25 * sign;
 		
 		cr.SkillBase[ SK_SMALL_GUNS ]		-= 20 * sign;
-		cr.SkillBase[ SK_BIG_GUNS ] 		-= 20 * sign;
-		cr.SkillBase[ SK_ENERGY_WEAPONS ]	-= 20 * sign;
+		cr.SkillBase[ SK_MEDIUM_GUNS ] 		-= 20 * sign;
+		cr.SkillBase[ SK_BIG_GUNS ]			-= 20 * sign;
 		cr.SkillBase[ SK_UNARMED ] 			-= 20 * sign;
 		cr.SkillBase[ SK_MELEE_WEAPONS ] 	-= 20 * sign;
 		cr.SkillBase[ SK_THROWING ] 		-= 20 * sign;
@@ -252,6 +257,18 @@
 		cr.StatBase[ ST_ACTION_POINTS ] -= int( BRUISER_MAX_AP_MALUS )   * sign;
 	}
 
+	void changedParam_SexAppeal( Critter& cr, uint, int oldValue )
+	{
+		int sign = 1;
+		if( oldValue > 0 )
+		{
+			sign = -1;
+		}
+		cr.StatBase[ ST_CHARISMA ] += int( SEX_APPEAL_CH_BONUS ) * sign;
+		cr.StatBase[ ST_MAX_LIFE ] -= int( SEX_APPEAL_HP_MALUS ) * sign;
+		cr.StatBase[ ST_CURRENT_HP ] -= int( SEX_APPEAL_HP_MALUS ) * sign;
+	}
+
 	void changedParam_SmallFrame( Critter& cr, uint, int oldValue )
 	{
 		int sign = 1;
@@ -259,6 +276,7 @@
 		{
 			sign = -1;
 		}
+		
 		cr.StatBase[ ST_AGILITY ] += int( SMALL_FRAME_AGI_BONUS ) * sign;
 		cr.StatBase[ ST_CARRY_WEIGHT ] += int( SMALL_FRAME_CW_BONUS ) * sign;
 	}
@@ -273,6 +291,17 @@
 		cr.StatBase[ ST_CRITICAL_CHANCE ] += int( FINESSE_CRITCHANCE_BONUS ) * sign;
 	}
 
+	void changedParam_Jinxed( Critter& cr, uint, int oldValue )
+	{
+		int sign = 1;
+		if( oldValue > 0 )
+		{
+			sign = -1;
+		}
+		
+		cr.StatBase[ ST_INTELLECT ] += int( JINXED_INT_BONUS ) * sign;
+	}
+
 	void changedParam_Kamikaze( Critter& cr, uint, int oldValue )
 	{
 		int sign = 1;
@@ -280,8 +309,6 @@
 		{
 			sign = -1;
 		}
-		cr.StatBase[ ST_ARMOR_CLASS ] -= int( cr.StatBase[ ST_AGILITY ] * 5 ) * sign;
-		cr.StatBase[ ST_APREGEN ] -= int( cr.StatBase[ ST_AGILITY ] * KAMIKAZE_AP_REGEN_BONUS ) * sign;
 	}
 
 	void changedParam_HeavyHanded( Critter& cr, uint, int oldValue )
@@ -341,7 +368,176 @@
 		}
 		return 0;
 	}
-#endif
+
+
+	void changedParam_Hunger( Critter& cr, uint, int oldValue )
+	{
+		if( cr.Stat[ ST_BODY_TYPE ] == BT_ROBOT || !cr.IsPlayer() )
+		{
+			cr.StatBase[ ST_HUNGER ] = 0;
+			return;
+		}
+
+		cr.StatBase[ ST_HUNGER ] = CLAMP( cr.StatBase[ ST_HUNGER ], 0, MAX_STARVATION_LIMIT );
+
+		if( cr.StatBase[ ST_HUNGER ] >= MAX_STARVATION_LIMIT && !cr.IsDead() && !cr.IsKnockout() && ( cr.Param[ CR_IS_RELAXING ] == 0 || cr.Param[ CR_IS_RELAXING ] > 2 ) )
+		{
+			cr.StatBase[ ST_CURRENT_HP ] -= int( ( cr.Stat[ ST_ENDURANCE ] + cr.Stat[ ST_STRENGTH ] ) * 0.5 );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SUFFER_HUNGER );
+		}
+	}
+
+	void changedParam_Thrist( Critter& cr, uint, int oldValue )
+	{
+		if( cr.Stat[ ST_BODY_TYPE ] == BT_ROBOT || !cr.IsPlayer() )
+		{
+			cr.StatBase[ ST_THIRST ] = 0;
+			return;
+		}
+
+		cr.StatBase[ ST_THIRST ] = CLAMP( cr.StatBase[ ST_THIRST ], 0, MAX_STARVATION_LIMIT );
+
+		if( cr.StatBase[ ST_THIRST ] >= MAX_STARVATION_LIMIT && !cr.IsDead() && !cr.IsKnockout() && ( cr.Param[ CR_IS_RELAXING ] == 0 || cr.Param[ CR_IS_RELAXING ] > 2 ) )
+		{
+			cr.StatBase[ ST_CURRENT_HP ] -= int( ( cr.Stat[ ST_ENDURANCE ] + cr.Stat[ ST_STRENGTH ] ) * 0.5 );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SUFFER_THIRST );
+		}
+	}
+
+	void changedParam_Dyspnea( Critter& cr, uint, int oldValue )
+	{
+		if( cr.Stat[ ST_BODY_TYPE ] == BT_ROBOT || !cr.IsPlayer() || cr.IsDead() )
+		{
+			cr.StatBase[ ST_DYSPNEA ] = 0;
+			return;
+		}
+		
+		cr.StatBase[ ST_DYSPNEA ] = CLAMP( cr.StatBase[ ST_DYSPNEA ], 0, MAX_STARVATION_LIMIT );
+
+		if( cr.StatBase[ ST_DYSPNEA ] >= 750 )
+		{
+			cr.StatBase[ ST_DYS ] += 1;
+			testInfo( cr, "ST_DYS[" + cr.StatBase[ ST_DYS ] + "]++" );
+			if( cr.StatBase[ ST_DYS ] >= 30 && cr.StatBase[ ST_DYSPNEA ] >= 1000 )
+			{
+				cr.StatBase[ ST_CURRENT_HP ] -= 10;
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, STR_EMOTE_FAINT );
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_NEED_OXIGEN );
+			}
+			else
+			{
+				cr.StatBase[ ST_CURRENT_HP ] -= 5;
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, STR_EMOTE_LOUD_COUGHT );
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_NEED_BREATH );
+			}
+			KnockoutOnce( cr, 200 );
+		}
+		else if( cr.StatBase[ ST_DYSPNEA ] >= 300 )
+		{
+			cr.StatBase[ ST_DYS ] = 0;
+			uint Msg = Random( 0, 4 ) == 0 ? STR_EMOTE_HOARSE_BREATHING : STR_EMOTE_HARD_BREATHING;
+			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, Msg );
+			cr.StatBase[ ST_CURRENT_HP ] -= 1;
+		}
+		else
+		{
+			cr.StatBase[ ST_DYS ] = 0;
+		}
+	}
+
+	void changedParam_Drunk( Critter& cr, uint, int oldValue )
+	{
+		cr.StatBase[ ST_DRUNK ] = CLAMP( cr.StatBase[ ST_DRUNK ], 0, 100 );
+
+		if( cr.StatBase[ ST_DRUNK ] == 100 && !cr.IsDead() )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_DRUNK );
+		}
+	}
+
+	void changedParam_Overdose( Critter& cr, uint, int oldValue )
+	{
+		cr.StatBase[ ST_GLOBAL_OVERDOSE] = CLAMP( cr.StatBase[ ST_GLOBAL_OVERDOSE ], 0, 1000 );
+	}
+
+	void changedParam_Wetness( Critter& cr, uint, int oldValue )
+	{
+		cr.StatBase[ ST_WETNESS ] = CLAMP( cr.StatBase[ ST_WETNESS ], 0, 1000 );
+	}
+
+	void changedParam_SpeedMod( Critter& cr, uint, int oldValue )
+	{
+		ChangeCritterSpeed( cr );
+	}
+	
+	void changedParam_Windup( Critter& cr, uint param, int oldValue )
+	{
+		LookDataRefresh( cr );
+	}
+	
+	void changedParam_HoldPosition( Critter& cr, uint param, int oldValue )
+	{
+		bool isHoldingPosition = ( cr.ParamBase[ CR_HOLD_POSITION ] != 0 );
+		int new_value = ( isHoldingPosition ? 1 : 0 );
+		
+		cr.ModeBase[ MODE_NO_WALK ] = new_value;
+		cr.ModeBase[ MODE_NO_RUN ] = new_value;
+
+		cr.ParamBase[ CR_FIXED_SPEED ] = new_value;
+		
+		if( isHoldingPosition )
+		{
+			cr.StatBase[ ST_WALK_TIME ] = 0;
+			cr.StatBase[ ST_RUN_TIME ] = 0;
+		}
+		else
+		{
+			ChangeCritterSpeed( cr ); //recaltulates walk&run time with its own formula
+		}
+	}
+	
+	void changedParam_Perception( Critter& cr, uint param, int oldValue )
+	{
+		LookDataRefresh( cr );
+	}
+
+	void changedParam_PerceptionExt( Critter& cr, uint param, int oldValue )
+	{
+		LookDataRefresh( cr );
+	}
+
+	void changedParam_Vision( Critter& cr, uint param, int oldValue )
+	{
+		LookDataRefresh( cr );
+	}
+
+	void changedParam_Invis( Critter& cr, uint param, int oldValue )
+	{
+		LookDataRefresh( cr );
+	}
+	
+	void changedParam_Dazed( Critter& cr, uint param, int oldValue )
+	{
+		int sign = cr.Param[ param ] - oldValue;
+		cr.StatBase[ ST_ARMOR_CLASS_EXT ] -= DAZED_AC_MALUS * sign;
+	}
+	
+	void changedParam_Agility( Critter& cr, uint param, int oldValue )
+	{
+		SetBaseAC( cr );
+	}
+
+	void changedParam_AgilityExt( Critter& cr, uint param, int oldValue )
+	{
+		SetBaseAC( cr );
+	}
+	
+	void SetBaseAC( Critter& cr )
+	{
+		cr.StatBase[ ST_ARMOR_CLASS ] = ARMOR_CLASS_BASE + cr.Stat[ ST_AGILITY ] * ARMORCLASS_PER_AGI;
+	}
+
+#endif // __SERVER
 
 #ifdef __CLIENT
 	void changedParam_Level( CritterCl& cr, uint, int oldValue )
@@ -371,251 +567,189 @@
 		}
 	}
 
-#endif
-
-#ifdef __SERVER
-
-	void changedParam_Hunger( Critter& cr, uint, int oldValue )
+	void changedParam_ScaleFactor( CritterCl& cr, uint param, int oldValue )
 	{
-		if( cr.Stat[ ST_BODY_TYPE ] == BT_ROBOT || !cr.IsPlayer() )
-		{
-			cr.StatBase[ ST_HUNGER ] = 1000;
-			return;
-		}
-
-		cr.StatBase[ ST_HUNGER ] = CLAMP( cr.StatBase[ ST_HUNGER ], 0, 1000 );
-
-		if( cr.StatBase[ ST_HUNGER ] <= 0 && !cr.IsDead() && !cr.IsKnockout() && ( cr.Param[ CR_IS_RELAXING ] == 0 || cr.Param[ CR_IS_RELAXING ] > 2 ) )
-		{
-			cr.StatBase[ ST_CURRENT_HP ] -= int( ( cr.Stat[ ST_ENDURANCE ] + cr.Stat[ ST_STRENGTH ] ) * 0.5 );
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SUFFER_HUNGER );
-		}
+		int value = cr.Param[ param ];
+		if( value <= 0 )
+			value = 100;
+			
+		cr.SpriteZoom = value * 0.01f;
 	}
 
-	void changedParam_Thrist( Critter& cr, uint, int oldValue )
+void changedParam_QthreeMedium( CritterCl& cr, uint param, int oldValue )
+{
+	CritterCl@ ch = GetChosen();
+	// Default color
+	cr.ContourColor = ( cr.IsPlayer() ? COLOR_CONTOUR_YELLOW : COLOR_CONTOUR_RED );
+
+	if( valid( ch ) )
 	{
-		if( cr.Stat[ ST_BODY_TYPE ] == BT_ROBOT || !cr.IsPlayer() )
+		if( SameFaction( ch, cr ) )
 		{
-			cr.StatBase[ ST_THIRST ] = 1000;
-			return;
+			cr.ContourColor = ( cr.IsPlayer() ? COLOR_CONTOUR_GREEN : COLOR_CONTOUR_BLUE );
 		}
-
-		cr.StatBase[ ST_THIRST ] = CLAMP( cr.StatBase[ ST_THIRST ], 0, 1000 );
-
-		if( cr.StatBase[ ST_THIRST ] <= 0 && !cr.IsDead() && !cr.IsKnockout() && ( cr.Param[ CR_IS_RELAXING ] == 0 || cr.Param[ CR_IS_RELAXING ] > 2 ) )
+		else if( cr.Stat[ ST_FOLLOW_CRIT ] == int( ch.Id ) || cr.Param[ PET_OWNER_ID ] == int( ch.Id ) || cr.Param[ PET_PROTECT_ID ] == int( ch.Id ) )
 		{
-			cr.StatBase[ ST_CURRENT_HP ] -= int( ( cr.Stat[ ST_ENDURANCE ] + cr.Stat[ ST_STRENGTH ] ) * 0.5 );
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SUFFER_THIRST );
+			cr.ContourColor = ( cr.IsPlayer() ? COLOR_CONTOUR_GREEN : COLOR_CONTOUR_MNBLUE );
 		}
-	}
-
-	void changedParam_Dyspnea( Critter& cr, uint, int oldValue )
-	{
-		if( cr.Stat[ ST_BODY_TYPE ] == BT_ROBOT || !cr.IsPlayer() )
+		else if( ABS( cr.Param[ QST_MEDIUM ] ) != 2 )
 		{
-			cr.StatBase[ ST_DYSPNEA ] = 100;
-			return;
-		}
-		
-		cr.StatBase[ ST_DYSPNEA ] = CLAMP( cr.StatBase[ ST_DYSPNEA ], 0, 100 );
-
-		if( cr.StatBase[ ST_DYSPNEA ] <= 25 && !cr.IsDead() )
-		{
-			cr.StatBase[ ST_DYS ] += 1;
-			if( cr.StatBase[ ST_DYS ] >= 30 && cr.StatBase[ ST_DYSPNEA ] <= 0 )
+			uint crColor = GetCritterColor(cr);
+			if(crColor != 0)
 			{
-				cr.StatBase[ ST_CURRENT_HP ] -= 10;
-				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, STR_EMOTE_FAINT );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_NEED_OXIGEN );
+				cr.ContourColor = crColor;
 			}
-			else
-			{
-				cr.StatBase[ ST_CURRENT_HP ] -= 5;
-				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, STR_EMOTE_LOUD_COUGHT );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_NEED_BREATH );
-			}
-			cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( Random( 0, 1 ) == 1 ? true : false ) ), 200, cr.HexX, cr.HexY );
-		}
-		else if( cr.StatBase[ ST_DYSPNEA ] >= 26 && cr.StatBase[ ST_DYSPNEA ] <= 70 )
-		{
-			cr.StatBase[ ST_DYS ] = 0;
-			uint Msg = Random( 0, 4 ) == 0 ? STR_EMOTE_HOARSE_BREATHING : STR_EMOTE_HARD_BREATHING;
-			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, Msg );
-			cr.StatBase[ ST_CURRENT_HP ] -= 1;
-		}
-		else if( cr.StatBase[ ST_DYSPNEA ] >= 71 && cr.StatBase[ ST_DYSPNEA ] <= 99 )
-			cr.StatBase[ ST_DYS ] = 0;
-	}
-
-	void changedParam_Drunk( Critter& cr, uint, int oldValue )
-	{
-		cr.StatBase[ ST_DRUNK ] = CLAMP( cr.StatBase[ ST_DRUNK ], 0, 100 );
-
-		if( cr.StatBase[ ST_DRUNK ] == 100 && !cr.IsDead() )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_DRUNK );
 		}
 	}
+}
 
-	void changedParam_Overdose( Critter& cr, uint, int oldValue )
-	{
-		cr.StatBase[ ST_GLOBAL_OVERDOSE] = CLAMP( cr.StatBase[ ST_GLOBAL_OVERDOSE ], 0, 1000 );
-	}
-
-	void changedParam_Wetness( Critter& cr, uint, int oldValue )
-	{
-		cr.StatBase[ ST_WETNESS ] = CLAMP( cr.StatBase[ ST_WETNESS ], 0, 1000 );
-	}
-
-	void changedParam_SpeedMod( Critter& cr, uint, int oldValue )
-	{
-		ChangeCritterSpeed( cr );
-	}
-#endif // __SERVER
+#endif // __CLIENT
 
 #ifndef __CLIENT
 # define _param_    cr.ParamBase
 	void CritterGenerate( Critter& cr )
-#endif
+#endif // !__CLIENT
 
 #ifdef __CLIENT
 # define _param_    data
 	void CritterGenerate( int[]& data )
-#endif
-{
-    if( _param_[ ST_LEVEL ] <= 0 )
+#endif // __CLIENT
 	{
-        _param_[ ST_LEVEL ] = 1;
-	}
-	
-    if( _param_[ TRAIT_SMALL_FRAME ] != 0 )
-	{
-        _param_[ ST_AGILITY ] += SMALL_FRAME_AGI_BONUS;
-		_param_[ ST_CARRY_WEIGHT ] += SMALL_FRAME_CW_BONUS;
-	}
-	
-    if( _param_[ TRAIT_BRUISER ] != 0 )
-	{
-        _param_[ ST_STRENGTH ] += BRUISER_STRENGTH_BONUS;
-	    _param_[ ST_ACTION_POINTS ] -= BRUISER_MAX_AP_MALUS;
-	} 
-	
-    if( _param_[ TRAIT_GOOD_NATURED ] != 0 )
-    {
-        _param_[ SK_FIRST_AID ]			+= 25;
-        _param_[ SK_DOCTOR ]			+= 25;
-        _param_[ SK_BARTER ]			+= 25;
-        _param_[ SK_SMALL_GUNS ] 		-= 20;
-        _param_[ SK_BIG_GUNS ]			-= 20;
-        _param_[ SK_ENERGY_WEAPONS ]	-= 20;
-        _param_[ SK_UNARMED ]			-= 20;
-        _param_[ SK_MELEE_WEAPONS ]		-= 20;
-        _param_[ SK_THROWING ]			-= 20;
-    }
-    if( _param_[ TRAIT_SKILLED ] != 0 )
-    {
-		for( uint i = SK_SMALL_GUNS; i <= SK_OUTDOORSMAN; i++ )
+		if( _param_[ ST_LEVEL ] <= 0 )
 		{
-			_param_[ i ] += 10;
+			_param_[ ST_LEVEL ] = 1;
+		}
+		
+		if( _param_[ TRAIT_SMALL_FRAME ] != 0 )
+		{
+			_param_[ ST_AGILITY ] += SMALL_FRAME_AGI_BONUS;
+			_param_[ ST_CARRY_WEIGHT ] += SMALL_FRAME_CW_BONUS;
+		}
+		
+		if( _param_[ TRAIT_BRUISER ] != 0 )
+		{
+			_param_[ ST_STRENGTH ] += BRUISER_STRENGTH_BONUS;
+			_param_[ ST_ACTION_POINTS ] -= BRUISER_MAX_AP_MALUS;
+		}
+		
+		if( _param_[ TRAIT_NERD ] != 0 )
+		{
+			_param_[ ST_INTELLECT ] += JINXED_INT_BONUS;
+			_param_[ ST_MELEE_DAMAGE ] = 0;
+		}
+		
+		if( _param_[ TRAIT_SEX_APPEAL ] != 0 )
+		{
+			_param_[ ST_CHARISMA ] += SEX_APPEAL_CH_BONUS;
+			_param_[ ST_MAX_LIFE ] -= SEX_APPEAL_HP_MALUS;
+		}
+	
+		_param_[ ST_ARMOR_CLASS ] += ARMOR_CLASS_BASE + _param_[ ST_AGILITY ] * ARMORCLASS_PER_AGI;
+		
+		_param_[ SK_SMALL_GUNS ]	+= 3 * _param_[ ST_PERCEPTION ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_STRENGTH ]	;
+		_param_[ SK_MEDIUM_GUNS ]	+= 3 * _param_[ ST_STRENGTH ]	+ 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_AGILITY ]		;
+		_param_[ SK_BIG_GUNS ]		+= 3 * _param_[ ST_PERCEPTION ] + 2 * _param_[ ST_INTELLECT ]	+ 1 * _param_[ ST_AGILITY ]		;
+		_param_[ SK_UNARMED ]		+= 3 * _param_[ ST_STRENGTH ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_ENDURANCE ]	;
+		_param_[ SK_MELEE_WEAPONS ]	+= 3 * _param_[ ST_AGILITY ]	+ 2 * _param_[ ST_STRENGTH ]	+ 1 * _param_[ ST_ENDURANCE ]	;
+		_param_[ SK_THROWING ]		+= 3 * _param_[ ST_AGILITY ]	+ 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_STRENGTH ]	;
+		_param_[ SK_FIRST_AID ]		+= 3 * _param_[ ST_AGILITY ]	+ 2 * _param_[ ST_INTELLECT ]	+ 1 * _param_[ ST_PERCEPTION ]	;
+		_param_[ SK_DOCTOR ]		+= 3 * _param_[ ST_INTELLECT ]	+ 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_AGILITY ]		;
+		_param_[ SK_SNEAK ]			+= 3 * _param_[ ST_INTELLECT ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_PERCEPTION ]	;
+		_param_[ SK_LOCKPICK ]		+= 3 * _param_[ ST_AGILITY ]	+ 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_INTELLECT ]	;
+		_param_[ SK_STEAL ]			+= 3 * _param_[ ST_PERCEPTION ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_INTELLECT ]	;
+		_param_[ SK_TRAPS ]			+= 3 * _param_[ ST_PERCEPTION ] + 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_INTELLECT ]	;
+		_param_[ SK_SCIENCE ]		+= 3 * _param_[ ST_INTELLECT ]  + 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_LUCK ]		;
+		_param_[ SK_REPAIR ]		+= 3 * _param_[ ST_INTELLECT ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_STRENGTH ]	;
+		_param_[ SK_CRAFT ]			+= 3 * _param_[ ST_INTELLECT ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_PERCEPTION ]	;
+		_param_[ SK_BARTER ]		+= 3 * _param_[ ST_CHARISMA ]	+ 2 * _param_[ ST_INTELLECT ]	+ 1 * _param_[ ST_PERCEPTION ]	;
+		_param_[ SK_GAMBLING ]		=  0																							;
+		_param_[ SK_OUTDOORSMAN ]	=  0																							;
+		_param_[ SK_MINING ]		+= 5 * _param_[ ST_STRENGTH ] 	+ 3 * _param_[ ST_AGILITY ]		+ 2 * _param_[ ST_PERCEPTION ]	;
+		_param_[ SK_CHOPPING ]		+= 5 * _param_[ ST_STRENGTH ]	+ 3 * _param_[ ST_AGILITY ]		+ 2 * _param_[ ST_PERCEPTION ]	;
+		_param_[ SK_SCAVENGING ]	+= 5 * _param_[ ST_LUCK ]		+ 3 * _param_[ ST_INTELLECT ]	+ 2 * _param_[ ST_PERCEPTION ]	;
+		_param_[ SK_HUNTING ]		+= 5 * _param_[ ST_AGILITY ]	+ 3 * _param_[ ST_INTELLECT ] 	+ 2 * _param_[ ST_PERCEPTION ]	;
+		_param_[ SK_FISHING ]		+= 5 * _param_[ ST_LUCK ]		+ 3 * _param_[ ST_PERCEPTION ]	+ 2 * _param_[ ST_AGILITY ] 	;
+		_param_[ SK_FARMING ]		+= 5 * _param_[ ST_INTELLECT ]	+ 3 * _param_[ ST_PERCEPTION ]	+ 2 * _param_[ ST_STRENGTH ] 	;
+		_param_[ SK_COOKING ]		+= 5 * _param_[ ST_INTELLECT ]	+ 3 * _param_[ ST_PERCEPTION ]	+ 2 * _param_[ ST_AGILITY ]		;
+		_param_[ SK_HERBALISM ]		+= 5 * _param_[ ST_INTELLECT ]	+ 3 * _param_[ ST_PERCEPTION ]	+ 2 * _param_[ ST_AGILITY ]		;
+		
+		if( _param_[ TAG_SKILL1 ] != 0 && ( !isDisabledSkill( _param_[ TAG_SKILL1 ] ) && !isFarmingSkill( _param_[ TAG_SKILL1 ] ) ) )
+		{
+			_param_[ _param_[ TAG_SKILL1 ] ] += 50;
+		}
+		
+		if( _param_[ TAG_SKILL2 ] != 0 && ( !isDisabledSkill( _param_[ TAG_SKILL2 ] ) && !isFarmingSkill( _param_[ TAG_SKILL2 ] ) ) )
+		{
+			_param_[ _param_[ TAG_SKILL2 ] ] += 40;
+		}
+		
+		if( _param_[ TAG_SKILL3 ] != 0 && ( !isDisabledSkill( _param_[ TAG_SKILL3 ] ) && !isFarmingSkill( _param_[ TAG_SKILL3 ] ) ) )
+		{
+			_param_[ _param_[ TAG_SKILL3 ] ] += 30;
+		}
+		
+		if( _param_[ TRAIT_FAST_METABOLISM ] != 0 )
+		{
+			_param_[ ST_RADIATION_RESISTANCE ] -= _param_[ ST_ENDURANCE ] * RADIATION_RESIST_PER_END;
+			_param_[ ST_POISON_RESISTANCE ] -= _param_[ ST_ENDURANCE ] * POISON_RESIST_PER_END;
+			_param_[ ST_HEALING_RATE ] += _param_[ ST_ENDURANCE ];
+		}
+		
+		if( _param_[ TRAIT_HEAVY_HANDED ] != 0 )
+		{
+			_param_[ ST_MELEE_DAMAGE ] += (_param_[ ST_STRENGTH ] * HEAVY_HANDED_MELEE_DAMAGE_BONUS );
+			_param_[ ST_APREGEN ] -= ( _param_[ ST_STRENGTH ] * HEAVY_HANDED_AP_REGEN_MALUS );
+			_param_[ ST_MAX_CRITICAL ] -= HEAVY_HANDED_CRIT_MALUS;
+		}
+			
+		if( _param_[ TRAIT_FINESSE ] != 0 )
+		{
+			_param_[ ST_CRITICAL_CHANCE ] += FINESSE_CRITCHANCE_BONUS;
+		}
+
+		if( _param_[ TRAIT_KAMIKAZE ] != 0 )
+        {
+            _param_[ ST_ARMOR_CLASS ] -= ( ARMOR_CLASS_BASE + _param_[ ST_AGILITY ] * ARMORCLASS_PER_AGI );
+            _param_[ ST_APREGEN ] +=  _param_[ ST_AGILITY ] * KAMIKAZE_AP_REGEN_BONUS;
+        }
+
+		#ifdef __CLIENT
+			// Runtime calculations, only for client registration
+			// Check _defines.fos for stat defines, ctrl+f "Critter Stats Constants"
+			_param_[ ST_MAX_LIFE ] = HITPOINTS_BASE + ( _param_[ ST_ENDURANCE ] * HITPOINTS_PER_END ) + ( _param_[ ST_STRENGTH ] * HITPOINTS_PER_STR ) - ( _param_[ TRAIT_SEX_APPEAL ] * SEX_APPEAL_HP_MALUS );
+			_param_[ ST_ACTION_POINTS ] += APPOINTS_BASE;
+			_param_[ ST_CARRY_WEIGHT ] += 1000 * ( CW_BASE + (_param_[ ST_STRENGTH ] * ( CW_PER_STR - _param_[ TRAIT_SMALL_FRAME ] * SMALL_FRAME_CW_MALUS_DIV ) ) );
+			_param_[ ST_MELEE_DAMAGE ] += _param_[ TRAIT_NERD ] == 0 ? ( MELEE_DAMAGE_BASE + ( _param_[ ST_STRENGTH ] * MELEE_DAMAGE_PER_STR ) ) : 1;
+			_param_[ ST_POISON_RESISTANCE ] += _param_[ ST_ENDURANCE ] 	* POISON_RESIST_PER_END;
+			_param_[ ST_RADIATION_RESISTANCE ] += _param_[ ST_ENDURANCE ] 	* RADIATION_RESIST_PER_END;
+			_param_[ ST_SEQUENCE ] += _param_[ ST_PERCEPTION ] * SEQUENCE_PER_PE;
+			_param_[ ST_APREGEN ] += APREGEN_BASE + (_param_[ ST_AGILITY ] * APREGEN_PER_AGI) + (_param_[ST_ENDURANCE] * APREGEN_PER_END);
+			_param_[ ST_APREGEN ] = CLAMP( _param_[ ST_APREGEN ], 0, APREGEN_MAX );
+			_param_[ ST_HEALING_RATE ] += HEALINGRATE_BASE + _param_[ ST_ENDURANCE ] * HEALINGRATE_PER_END;
+			_param_[ ST_CRITICAL_CHANCE ] += _param_[ ST_LUCK ] * CRITCHANCE_PER_LUCK;
+		#endif
+
+		_param_[ ST_CURRENT_HP ] = _param_[ ST_MAX_LIFE ];
+		_param_[ ST_EXPERIENCE_MULTIPLIER ] = 1;
+
+		_param_[ ST_HUNGER ] = 0;
+		_param_[ ST_THIRST ] = 0;
+		_param_[ ST_DYSPNEA ] = 0;
+		_param_[ ST_SPEED_MOD ] = 100;
+
+		_param_[ PE_CRAFT_LIMIT ] = INITIAL_PROFESSION_POINTS;
+		_param_[ PE_CRAFTSMAN ] = DEFAULT_PROFESSION_LEVEL;
+		_param_[ PE_MECHANIC ] = DEFAULT_PROFESSION_LEVEL;
+		_param_[ PE_CHEMIST ] = DEFAULT_PROFESSION_LEVEL;
+		_param_[ PE_ELECTRICIAN ] = DEFAULT_PROFESSION_LEVEL;
+		
+		if( _param_[ ST_SCALE_FACTOR ] == 0 )
+		{
+			_param_[ ST_SCALE_FACTOR ] = 100;
 		}
 	}
 
-    _param_[ SK_SMALL_GUNS ] += 40 + 6 * _param_[ ST_AGILITY ];
-    _param_[ SK_BIG_GUNS ] += 20 + 3 * _param_[ ST_AGILITY ];
-    _param_[ SK_ENERGY_WEAPONS ] += 20 + 3 * _param_[ ST_AGILITY ];
-    _param_[ SK_UNARMED ] += 40 + 4 * ( _param_[ ST_AGILITY ] + _param_[ ST_STRENGTH ] );
-    _param_[ SK_MELEE_WEAPONS ] += 20 + 4 * ( _param_[ ST_AGILITY ] + _param_[ ST_STRENGTH ] );
-    _param_[ SK_THROWING ] += 20 + 6 * _param_[ ST_AGILITY ];
-    _param_[ SK_FIRST_AID ] += 20 + 5 * ( _param_[ ST_PERCEPTION ] + _param_[ ST_INTELLECT ] );
-    _param_[ SK_DOCTOR ] += 20 + 4 * ( _param_[ ST_PERCEPTION ] + _param_[ ST_INTELLECT ] );
-    //_param_[ SK_SNEAK ] += 20 + 5 * _param_[ ST_AGILITY ];
-    _param_[ SK_LOCKPICK ] += 10 + 4 * ( _param_[ ST_PERCEPTION ] + _param_[ ST_AGILITY ] );
-    _param_[ SK_STEAL ] += 0 + 10 * _param_[ ST_AGILITY ];
-    _param_[ SK_TRAPS ] += 10 + 4 * ( _param_[ ST_PERCEPTION ] + _param_[ ST_AGILITY ] );
-    _param_[ SK_SCIENCE ] += 20 + 8 * _param_[ ST_INTELLECT ];
-    _param_[ SK_REPAIR ] += 20 + 6 * _param_[ ST_INTELLECT ];
-    //_param_[ SK_SPEECH ] += 40 + 6 * _param_[ ST_CHARISMA ];
-    _param_[ SK_BARTER ] += 40 + 8 * _param_[ ST_CHARISMA ];
-    //_param_[ SK_GAMBLING ] += 20 + 8 * _param_[ ST_LUCK ];
-    _param_[ SK_OUTDOORSMAN ] += 40 + 5 * ( _param_[ ST_ENDURANCE ] + _param_[ ST_INTELLECT ] );
-	_param_[ SK_MINING ] += 0 + 5 * _param_[ ST_STRENGTH ] + 4 * _param_[ ST_AGILITY ] + 3 * _param_[ ST_PERCEPTION ] + 2 * _param_[ ST_INTELLECT ];
-	_param_[ SK_CHOPPING ] += 0 + 5 * _param_[ ST_STRENGTH ] + 4 * _param_[ ST_AGILITY ] + 3 * _param_[ ST_PERCEPTION ] + 2 * _param_[ ST_INTELLECT ];
-	_param_[ SK_SCAVENGING ] += 0 + 6 *_param_[ ST_LUCK ] + 5 * _param_[ ST_INTELLECT ] + 4 * _param_[ ST_PERCEPTION ] + 3 * _param_[ ST_AGILITY ] + 2 * _param_[ ST_STRENGTH ];
-	_param_[ SK_HUNTING ] += 0 + 5 * _param_[ ST_AGILITY ] + 4 * _param_[ ST_INTELLECT ] + 3 * _param_[ ST_PERCEPTION ] + 2 * _param_[ ST_STRENGTH ];
-	_param_[ SK_FISHING ] += 0 + 6 *_param_[ ST_LUCK ] + 5 * _param_[ ST_PERCEPTION ] + 4 * _param_[ ST_AGILITY ] + 3 * _param_[ ST_INTELLECT ] + 2 * _param_[ ST_STRENGTH ];
-	_param_[ SK_FARMING ] += 0 + 5 * _param_[ ST_INTELLECT ] + 4 * _param_[ ST_PERCEPTION ] + 3 * _param_[ ST_STRENGTH ] + 2 * _param_[ ST_AGILITY ];
-	_param_[ SK_COOKING ] += 0 + 5 * _param_[ ST_INTELLECT ] + 4 * _param_[ ST_PERCEPTION ] + 3 * _param_[ ST_AGILITY ];
-	_param_[ SK_SEX ] += 0 + 5 * _param_[ ST_STRENGTH ] + 4 * _param_[ ST_AGILITY ] + 3 * _param_[ ST_INTELLECT ];
-	
-    if( _param_[ TAG_SKILL1 ] != 0 && ( !isDisabledSkill( _param_[ TAG_SKILL1 ] ) && !isFarmingSkill( _param_[ TAG_SKILL1 ] ) ) )
-	{
-        _param_[ _param_[ TAG_SKILL1 ] ] += 50;
-	}
-	
-	if( _param_[ TAG_SKILL2 ] != 0 && ( !isDisabledSkill( _param_[ TAG_SKILL2 ] ) && !isFarmingSkill( _param_[ TAG_SKILL2 ] ) ) )
-	{
-        _param_[ _param_[ TAG_SKILL2 ] ] += 40;
-	}
-	
-	if( _param_[ TAG_SKILL3 ] != 0 && ( !isDisabledSkill( _param_[ TAG_SKILL3 ] ) && !isFarmingSkill( _param_[ TAG_SKILL3 ] ) ) )
-	{
-        _param_[ _param_[ TAG_SKILL3 ] ] += 30;
-	}
-	
-    if( _param_[ TRAIT_FAST_METABOLISM ] != 0 )
-    {
-        _param_[ ST_RADIATION_RESISTANCE ] -= _param_[ ST_ENDURANCE ] * RADIATION_RESIST_PER_END;
-        _param_[ ST_POISON_RESISTANCE ] -= _param_[ ST_ENDURANCE ] * POISON_RESIST_PER_END;
-        _param_[ ST_HEALING_RATE ] += _param_[ ST_ENDURANCE ];
-    }
-	
-    if( _param_[ TRAIT_KAMIKAZE ] != 0 )
-    {
-        _param_[ ST_ARMOR_CLASS ] -= _param_[ ST_AGILITY ] * 5;
-		_param_[ ST_APREGEN ] += (  _param_[ ST_AGILITY ] * KAMIKAZE_AP_REGEN_BONUS );
-    }
-	
-    if( _param_[ TRAIT_HEAVY_HANDED ] != 0 )
-	{
-        _param_[ ST_MELEE_DAMAGE ] += (_param_[ ST_STRENGTH ] * HEAVY_HANDED_MELEE_DAMAGE_BONUS );
-		_param_[ ST_APREGEN ] -= ( _param_[ ST_STRENGTH] * HEAVY_HANDED_AP_REGEN_MALUS );
-	    _param_[ ST_MAX_CRITICAL ] -= HEAVY_HANDED_CRIT_MALUS;
-	}
-		
-    if( _param_[ TRAIT_FINESSE ] != 0 )
-	{
-        _param_[ ST_CRITICAL_CHANCE ] += FINESSE_CRITCHANCE_BONUS;
-	}
-
-    #ifdef __CLIENT
-		// Runtime calculations, only for client registration
-		// Check _defines.fos for stat defines, ctrl+f "Critter Stats Constants"
-		_param_[ ST_ARMOR_CLASS ] += ARMOR_CLASS_BASE + _param_[ ST_AGILITY ] * ARMORCLASS_PER_AGI;
-		_param_[ ST_MAX_LIFE ] = HITPOINTS_BASE + ( _param_[ ST_ENDURANCE ] * HITPOINTS_PER_END ) + ( _param_[ ST_STRENGTH ] * HITPOINTS_PER_STR );
-		_param_[ ST_ACTION_POINTS ] += APPOINTS_BASE;
-		_param_[ ST_CARRY_WEIGHT ] += 1000 * ( CW_BASE + (_param_[ ST_STRENGTH ] * ( CW_PER_STR - _param_[ TRAIT_SMALL_FRAME ] * SMALL_FRAME_CW_MALUS_DIV ) ) );
-		_param_[ ST_MELEE_DAMAGE ] += MELEE_DAMAGE_BASE + ( _param_[ ST_STRENGTH ] * MELEE_DAMAGE_PER_STR );
-		_param_[ ST_POISON_RESISTANCE ] += _param_[ ST_ENDURANCE ] 	* POISON_RESIST_PER_END;
-		_param_[ ST_RADIATION_RESISTANCE ] += _param_[ ST_ENDURANCE ] 	* RADIATION_RESIST_PER_END;
-		_param_[ ST_SEQUENCE ] += _param_[ ST_PERCEPTION ] * SEQUENCE_PER_PE;
-		_param_[ ST_APREGEN ] = APREGEN_BASE;
-		_param_[ ST_HEALING_RATE ] += HEALINGRATE_BASE + _param_[ ST_ENDURANCE ] * HEALINGRATE_PER_END;
-		_param_[ ST_CRITICAL_CHANCE ] += _param_[ ST_LUCK ] * CRITCHANCE_PER_LUCK;
-    #endif
-
-    _param_[ ST_CURRENT_HP ] = _param_[ ST_MAX_LIFE ];
-    _param_[ ST_EXPERIENCE_MULTIPLIER ] = 1;
-
-    _param_[ ST_HUNGER ] = 1000;
-    _param_[ ST_THIRST ] = 1000;
-    _param_[ ST_DYSPNEA ] = 100;
-    _param_[ ST_SPEED_MOD ] = 100;
-}
-
 #ifdef __CLIENT
-	# include "_msgstr.fos"
-
-	# define STR_WRONG_GENDER    ( 324 )
 	// Check valid of input data
 	bool CritterGenerateCheck( int[]& data ) // Export to client_main@player_data_check
 	{
@@ -630,12 +764,37 @@
 			}
 			special += data[ i ];
 		}
+		
 		if( special != __StartSpecialPoints )
 		{
 			Message( GetMsgStr( TEXTMSG_GAME, STR_NET_WRONG_SPECIAL ) );
 			return false;
 		}
-
+		
+		if( data[ TRAIT_BRUISER ] != 0 && ( data[ ST_STRENGTH ] < 5 || data[ ST_STRENGTH ] > (10 - BRUISER_STRENGTH_BONUS) ) )
+		{
+			Message( GetMsgStr( TEXTMSG_GAME, STR_REG_BRUISER_SUM ) );
+			return false;
+		}
+		
+		if( data[ TRAIT_SMALL_FRAME ] != 0 && ( data[ ST_AGILITY ] < 3 || data[ ST_AGILITY ] > (10 - SMALL_FRAME_AGI_BONUS)) )
+		{
+			Message( GetMsgStr( TEXTMSG_GAME, STR_REG_SMALL_FRAME_SUM ) );
+			return false;
+		}
+		
+		if( data[ TRAIT_NERD ] != 0 && ( data[ ST_INTELLECT ] < 7 || data[ ST_INTELLECT ] > (10 - JINXED_INT_BONUS) ) )
+		{
+			Message( GetMsgStr( TEXTMSG_GAME, STR_REG_NERD_SUM ) );
+			return false;
+		}
+		
+		if( data[ TRAIT_SEX_APPEAL ] != 0 && ( data[ ST_CHARISMA ] < 4 || data[ ST_CHARISMA ] > (10 - SEX_APPEAL_CH_BONUS) ) )
+		{
+			Message( GetMsgStr( TEXTMSG_GAME, STR_REG_SEX_APPEAL_SUM ) );
+			return false;
+		}
+		
 		// Check choosed tag skills
 		if( ( data[ TAG_SKILL1 ] < int(SKILL_BEGIN) || data[ TAG_SKILL1 ] > int(SKILL_END) ) ||
 			( data[ TAG_SKILL2 ] < int(SKILL_BEGIN) || data[ TAG_SKILL2 ] > int(SKILL_END) ) ||
@@ -648,7 +807,9 @@
 		}
 
 		// Check trait combination
-		if( ( data[ TRAIT_BLOODY_MESS ] != 0 && data[ TRAIT_GOOD_NATURED ] != 0 ) || ( data[ TRAIT_CHEM_RELIANT ] != 0 && data[ TRAIT_CHEM_RESISTANT ] != 0 ) )
+		if( ( data[ TRAIT_CHEM_RELIANT ] != 0 && data[ TRAIT_CHEM_RESISTANT ] != 0 ) 
+			|| ( data[ TRAIT_SMALL_FRAME ] != 0 && data[ TRAIT_BRUISER ] != 0 )
+			|| ( data[ TRAIT_HEAVY_HANDED ] != 0 && data[ TRAIT_NERD ] != 0 ) )
 		{
 			Message( GetMsgStr( TEXTMSG_GAME, STR_WRONG_TRAIT_COMBO ) );
 			return false;
@@ -738,20 +899,28 @@ int getParam_CR_DRUNK_SPEED( Critter& cr, uint )
 
 int getParam_CR_GLOBAL_OVERDOSE_SPEED( Critter& cr, uint)
 {
-    int val = cr.ParamBase [ CR_GLOBAL_OVERDOSE_SPEED ];
+    int val = cr.ParamBase[CR_GLOBAL_OVERDOSE_SPEED];
     if( val == 0 )
 	{
-        int mod = cr.Trait[ TRAIT_FAST_METABOLISM ] != 0 ? 7 : 10;
-		return CLAMP( ( 4000 - ( cr.Stat[ ST_ENDURANCE ] * 100 ) - ( cr.Stat[ ST_STRENGTH ] * 100 ) ) * mod / 10, 1000, 10000 );
+		float time = 65 - ( cr.Stat[ ST_CHARISMA ] + cr.Stat[ ST_ENDURANCE ] );
+		if( cr.Trait[ TRAIT_FAST_METABOLISM ] != 0 )
+		{
+			time /= 2;
+		}
+		if( cr.Param[CR_DOUBLE_OVERDOSE_SPEED] != 0 )
+		{
+			time /= 2;
+		}
+		return CLAMP( int( time * 1000 ), 10000, 65000 );
 	}
-    return 1000;
+	
+    return 65000;
 }
 
 int getParam_CR_WETNESS_SPEED( Critter& cr, uint)
 {
     return 120000;
 }
-
 
 int getParam_Sequence( Critter& cr, uint )
 {
@@ -761,15 +930,26 @@ int getParam_Sequence( Critter& cr, uint )
 
 int getParam_MeleeDmg( Critter& cr, uint )
 {
-    int val = cr.StatBase[ ST_MELEE_DAMAGE ] + cr.StatBase[ ST_MELEE_DAMAGE_EXT ] + MELEE_DAMAGE_BASE; 
+    int val = cr.Trait[ TRAIT_NERD ] == 0 ? ( cr.StatBase[ ST_MELEE_DAMAGE ] + cr.StatBase[ ST_MELEE_DAMAGE_EXT ] + MELEE_DAMAGE_BASE ) : 1; 
     return CLAMP( val, 1, 9999 );
 }
 
+/*
 int getParam_MaxWeight( Critter& cr, uint )
 {
     int val = MAX( cr.StatBase[ ST_CARRY_WEIGHT ] + cr.ParamBase[ ST_CARRY_WEIGHT_EXT ], 0 );
     val += 1000 * ( CW_BASE + ( cr.Stat[ ST_STRENGTH ] * ( CW_PER_STR - cr.Trait[ TRAIT_SMALL_FRAME ] * SMALL_FRAME_CW_MALUS_DIV ) ) ); //40% carryweight loss from each Strength point if you have SMALL_FRAME
     return CLAMP( val, 0, 2000000000 );
+}*/
+
+int getParam_MaxVolume( Critter& cr, uint )
+{
+    int val = cr.ParamBase[ ST_MAX_VOLUME ];
+	if( val == 0 )
+	{	
+		return 1000;
+	}
+	return val;
 }
 
 int getParam_HealingRate( Critter& cr, uint )

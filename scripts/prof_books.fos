@@ -1,0 +1,251 @@
+#ifndef PROF_BOOKS
+#define PROF_BOOKS
+
+#include "_utils.fos"
+#include "_ltp.fos"
+#include "prof_books_h.fos"
+
+//TODO: Move this to professions utils, not books! - APAMk2
+void RecalcAvailableProfPoints( Critter& cr )
+{
+	if( !valid( cr ) )
+	{
+		return;
+	}
+	
+	int currProfsCount = cr.Perk[ PE_CRAFTSMAN ] + cr.Perk[ PE_MECHANIC ] + cr.Perk[ PE_CHEMIST ] + cr.Perk[ PE_ELECTRICIAN ];
+	cr.PerkBase[ PE_CRAFT_LIMIT ] = MAX_PROFESSION_LEVELS - currProfsCount;
+}
+
+class BookProperties
+{
+	uint16 PID = 0;
+	uint PerkId = 0;
+	int Tier = 0;
+
+	BookProperties( uint16 pid, uint perkId, uint tier )
+	{
+		this.PID = pid;
+		this.PerkId = perkId;
+		this.Tier = tier;
+	}
+}
+
+class BookPropertiesArray
+{
+	BookPropertiesArray@ Add( BookProperties@ newEntry)
+	{
+		Books.insertLast( newEntry );
+		Size = Books.length();
+		return this;
+	}
+
+	BookPropertiesArray@ Add( uint16 pid, uint perkId, int tier )
+	{
+		return Add( BookProperties( pid, perkId, tier ) );
+	}
+
+	BookProperties@ Find( uint16 pid )
+	{
+		for( uint i = 0; i < Size; i++ )
+		{
+			BookProperties@ entry = Books[i];
+			if( entry.PID == pid )
+			{
+				return entry;
+			}
+		}
+
+		return null;
+	}
+
+	BookProperties@[] Books;
+	uint Size = 0;
+}
+
+bool arrayInited = false;
+BookPropertiesArray BookArray;
+
+void InitBookArray()
+{
+	if( arrayInited )
+	{
+		return;
+	}
+	
+	BookArray
+	.Add( PID_BOOK_CRAFTSMAN_1, PE_CRAFTSMAN, 1 )
+	.Add( PID_BOOK_CRAFTSMAN_2, PE_CRAFTSMAN, 2 )
+	.Add( PID_BOOK_CRAFTSMAN_3, PE_CRAFTSMAN, 3 )
+	.Add( PID_BOOK_CRAFTSMAN_4, PE_CRAFTSMAN, 4 )
+	.Add( PID_BOOK_CRAFTSMAN_5, PE_CRAFTSMAN, 5 )
+	.Add( PID_BOOK_CRAFTSMAN_6, PE_CRAFTSMAN, 6 )
+	.Add( PID_BOOK_MECHANIC_1, PE_MECHANIC, 1 )
+	.Add( PID_BOOK_MECHANIC_2, PE_MECHANIC, 2 )
+	.Add( PID_BOOK_MECHANIC_3, PE_MECHANIC, 3 )
+	.Add( PID_BOOK_MECHANIC_4, PE_MECHANIC, 4 )
+	.Add( PID_BOOK_MECHANIC_5, PE_MECHANIC, 5 )
+	.Add( PID_BOOK_MECHANIC_6, PE_MECHANIC, 6 )
+	.Add( PID_BOOK_CHEMIST_1, PE_CHEMIST, 1 )
+	.Add( PID_BOOK_CHEMIST_2, PE_CHEMIST, 2 )
+	.Add( PID_BOOK_CHEMIST_3, PE_CHEMIST, 3 )
+	.Add( PID_BOOK_CHEMIST_4, PE_CHEMIST, 4 )
+	.Add( PID_BOOK_CHEMIST_5, PE_CHEMIST, 5 )
+	.Add( PID_BOOK_CHEMIST_6, PE_CHEMIST, 6 )
+	.Add( PID_BOOK_ELECTRICIAN_1, PE_ELECTRICIAN, 1 )
+	.Add( PID_BOOK_ELECTRICIAN_2, PE_ELECTRICIAN, 2 )
+	.Add( PID_BOOK_ELECTRICIAN_3, PE_ELECTRICIAN, 3 )
+	.Add( PID_BOOK_ELECTRICIAN_4, PE_ELECTRICIAN, 4 )
+	.Add( PID_BOOK_ELECTRICIAN_5, PE_ELECTRICIAN, 5 )
+	.Add( PID_BOOK_ELECTRICIAN_6, PE_ELECTRICIAN, 6 );
+
+	arrayInited = true;
+}
+
+bool ltp_reading_inited = false;
+void ltp_reading_init()
+{
+	LTPREG( LTP_READING, process_reading )
+	ltp_reading_inited = true;
+}
+
+bool TryUseProfBook( Critter& cr, Item& book )
+{
+	if( !valid( cr ) )
+	{
+		return false;
+	}
+	
+	if( !cr.IsLife() && !cr.IsKnockout() )
+	{
+		return false;
+	}
+	
+	if( cr.Perk[ PE_CRAFT_LIMIT ] <= 0 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BOOK_CRAFT_LIMIT );
+		return false;
+	}
+
+	if( !arrayInited )
+	{
+		InitBookArray();
+	}
+	
+	BookProperties@ properties = BookArray.Find( book.GetProtoId() );
+	if( !valid( properties ) )
+	{
+		return false;
+	}
+	
+	if( cr.Perk[ properties.PerkId ] >= properties.Tier )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BOOK_FAIL_LOW );
+		return false;
+	}
+	
+	if( cr.Perk[ properties.PerkId ] < properties.Tier - 1 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BOOK_FAIL_HIGH );
+		return false;
+	}
+
+	start_reading( cr, book );
+
+	return true;
+}
+
+bool start_reading( Critter& cr, Item& book )
+{
+	if( !ltp_reading_inited )
+	{
+		ltp_reading_init();
+	}
+	
+	if( valid( book ) )
+	{	
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = 3000;
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = 10;
+		Map@ map = cr.GetMap();
+		if( valid( map ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "IPICKUP1.mp3", 5 );
+		}
+		
+		Item@ hand = _CritGetItemHand( cr );
+		if( valid( hand ) )
+		{
+			if( hand.Id != book.Id )
+			{
+				cr.MoveItem( hand.Id, hand.GetCount(), SLOT_INV );
+			}
+		}
+		
+		cr.MoveItem( book.Id, book.GetCount(), SLOT_HAND1 );
+		
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_BOOK_START );
+		StartProcess( cr, LTP_READING, 0, book.Id, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+
+		return true;
+	}
+	return false;
+}
+
+uint process_reading( Critter@ cr, int& param0, int& book_id, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_READING )
+	Map@ map = cr.GetMap();
+    Item@ book = GetItem( book_id );
+  	if( valid( book ) )
+    {
+      	param0++;
+		if( param0 > cr.Param[ ST_LTP_SEQUENCE ] )
+		{
+			BookProperties@ properties = BookArray.Find( book.GetProtoId() );
+			if( !valid( properties ) )
+			{
+				return 0;
+			}
+			
+			cr.PerkBase[ properties.PerkId ] ++;
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BOOK_RESUT );
+			
+			if( valid( map ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "IPICKUP1.mp3", 5 );
+			}
+        }
+		else
+		{
+			cr.Animate( 0, ANIM2_USE, null, true, true );
+
+			if( valid( map ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "pagegrab.mp3", 5 );
+			}
+			
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+		}
+    }
+	
+	return 0;
+}
+
+bool IsProfBook( Item& item )
+{
+	if( !arrayInited )
+	{
+		InitBookArray();
+	}
+	
+	if( !valid( item ) )
+	{
+		return false;
+	}
+	
+	BookProperties@ properties = BookArray.Find( item.GetProtoId() );
+	
+	return valid( properties );
+}
+
+#endif //PROF_BOOKS

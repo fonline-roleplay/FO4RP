@@ -1,0 +1,799 @@
+#ifndef AI_MOB
+#define AI_MOB
+
+#include "_utils.fos"
+#include "npc_ai.fos"
+#include "lockers_h.fos"
+#include "_npc_pids.fos"
+#include "npc_planes_h.fos"
+
+import uint CountMapPlayers( Map@ map ) from "manager";
+
+#define DISTANCE_AGGRO			# (cr)	( ( cr.Stat[ ST_PERCEPTION ] + 2 ) * 3 )
+#define DISTANCE_UNAGGRO		# (cr)	( ( cr.Stat[ ST_PERCEPTION ] + 2 ) * 4 )
+
+#define VarWandering			StatBase[ ST_VAR5 ]
+
+void GM_MobInit( Critter& npc ) // Export
+{
+    npc.SetScript( "_MobInit" );
+	npc.Say( SAY_EMOTE, "hisses" );
+	npc.ParamBase[CR_VAL2] = 1;
+}
+
+void _MobInit( Critter& npc, bool firstTime )
+{
+	if( npc.IsPlayer() )
+	{
+		return;
+	}
+	
+    npc.ModeBase[ MODE_NO_HOME ] = 1;
+
+	npc.StatBase[ ST_REPLICATION_TIME ] = -1;
+
+	npc.SetEvent( CRITTER_EVENT_SHOW_CRITTER,   "_CritterBecameVisible" );
+	//npc.SetEvent( CRITTER_EVENT_HIDE_CRITTER, 	"_CritterOutOfSight" );
+    npc.SetEvent( CRITTER_EVENT_IDLE,        	"_Idle" );
+    npc.SetEvent( CRITTER_EVENT_MESSAGE,     	"_OnMessage" );
+    npc.SetEvent( CRITTER_EVENT_PLANE_BEGIN, 	"_PlaneBegin" );
+	npc.SetEvent( CRITTER_EVENT_PLANE_END, 	 	"_PlaneEnd" );
+    npc.SetEvent( CRITTER_EVENT_DEAD,        	"_MyDeath" );
+    npc.SetEvent( CRITTER_EVENT_RESPAWN,    	 null );
+    npc.SetEvent( CRITTER_EVENT_ATTACKED,    	"_Attacked" );
+	npc.SetEvent( CRITTER_EVENT_SMTH_KNOCKOUT,  "_TargetDown" );
+
+    npc.ShowCritterDist1 = DISTANCE_AGGRO( npc );
+    npc.SetEvent( CRITTER_EVENT_SHOW_CRITTER_1, "_CritterInAggroRange" );
+
+	npc.ShowCritterDist2 = DISTANCE_UNAGGRO( npc );
+	npc.SetEvent( CRITTER_EVENT_HIDE_CRITTER_2, "_CritterOutOfAggroRange" );
+}
+
+void _CritterBecameVisible( Critter& self, Critter& target )
+{
+	if( !valid( self ) )
+	{
+		return;
+	}
+	
+	if( self.IsDead() )
+	{
+		return;
+	}
+	
+	if( !valid( target ) )
+	{
+		return;
+	}
+	
+	if( target.IsDead() )
+	{
+		return;
+	}
+	
+	uint dist = GetDistantion( self.HexX, self.HexY, target.HexX, target.HexY );
+	if( int( dist ) > DISTANCE_AGGRO( self ) )
+	{
+		return;
+	}
+	
+    _ShowTarget( self, target );
+}
+
+void _CritterInAggroRange( Critter& self, Critter& target )
+{
+	if( !valid( self ) )
+	{
+		return;
+	}
+	
+	if( self.IsDead() )
+	{
+		return;
+	}
+	
+	if( !valid( target ) )
+	{
+		return;
+	}
+	
+	if( target.IsDead() )
+	{
+		return;
+	}
+	
+	if( !self.IsSee( target ) )
+	{
+		return;
+	}
+	
+    _ShowTarget( self, target );
+}
+
+void _CritterOutOfSight( Critter& self, Critter& target )
+{
+	if( !valid( self ) )
+	{
+		return;
+	}
+	
+	if( self.IsDead() )
+	{
+		return;
+	}
+	
+	if( !valid( target ) )
+	{
+		return;
+	}
+	
+	if( target.IsDead() )
+	{
+		return;
+	}
+	
+	AttackOrFind( self, target );
+}
+
+void _CritterOutOfAggroRange( Critter& self, Critter& target )
+{
+	if( !valid( self ) )
+	{
+		return;
+	}
+	
+	if( self.IsDead() )
+	{
+		return;
+	}
+	
+	if( !valid( target ) )
+	{
+		return;
+	}
+	
+	if( target.IsDead() )
+	{
+		return;
+	}
+}
+
+// CRITTER_EVENT_DEAD
+void _MyDeath( Critter& npc, Critter@ killer )
+{
+	npc.DropPlanes();
+    npc.ClearEnemyStack();
+	npc.AddTimeEvent ( "rotting@cte_rotten", 0, CTE_ROTTEN, 0 );
+}
+
+// CRITTER_EVENT_RESPAWN
+void _Respawn( Critter& npc )
+{
+	if( !valid( npc ) )
+	{
+		return;
+	}
+	
+    DeleteNpc( npc );
+}
+
+// ENEMY DOWN
+void _TargetDown( Critter& self, Critter& enemy, uint anim2begin, uint anim2idle, uint anim2end, uint lostAp, uint knockDist )
+{
+	if( !valid( self ) )
+	{
+		return;
+	}
+	
+	if( self.IsDead() )
+	{
+		return;
+	}
+	
+	if( !valid( enemy ) )
+	{
+		return;
+	}
+	
+	if( enemy.IsDead() )
+	{
+		return;
+	}
+	
+	if( enemy.Stat[ ST_CURRENT_HP ] <= 0 )
+	{
+		self.EraseEnemyFromStack( enemy.Id );
+		EraseAttackPlane( self, enemy );
+	}
+}
+
+// CRITTER_EVENT_SHOW_CRITTER
+void _ShowTarget( Critter& npc, Critter& target )
+{
+	if( !valid( npc ) )
+	{
+		return;
+	}
+	
+	if( npc.IsDead() )
+	{
+		return;
+	}
+		
+	Map@ map = npc.GetMap();
+	if( !valid( map ) )
+	{
+		return; 
+	}
+
+	if( CountMapPlayers( map ) == 0 )
+	{
+		return;
+	}
+	
+	if( !valid( target ) )
+	{
+		return;
+	}
+	
+	if( target.IsDead() )
+	{
+		return;
+	}
+	
+	if( target.IsNpc() && npc.Stat[ ST_TEAM_ID ] == target.Stat[ ST_TEAM_ID ] )
+	{
+		return;
+	}
+	
+	if( ( !target.IsPlayer() || ( target.IsNpc() && target.Param[ PET_OWNER_ID ] == 0 ) ) && npc.Param[ CR_IS_AGGRESSIVE ] == 0 )
+	{
+        return;
+	}
+
+	if( int( target.Id ) == npc.Stat[ ST_FOLLOW_CRIT ] || isGM( target ) )
+	{
+        npc.EraseEnemyFromStack( target.Id );
+        EraseAttackPlane( npc, target );
+		return;
+	}
+	
+	if( npc.Stat[ ST_BODY_TYPE ] == BT_DOG )  //Dogs.
+	{
+		uint dist = GetDistantion( target.HexX, target.HexY, npc.HexX, npc.HexY );
+		if( int( dist ) > 4 ) 
+		{
+			uint[] emote = { STR_EMOTE_SNIFF, STR_EMOTE_GRAWL, STR_EMOTE_GRIN, STR_EMOTE_BARK };
+			int n = Random( 0, 2 ) + Random( 0, 1 );
+			npc.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_COMBAT, emote[n] );
+			npc.SetDir( GetDirection( npc.HexX, npc.HexY, target.HexX, target.HexY ) );
+			return;
+		}
+	}
+	
+	if( npc.GetMap().GetPathLength( npc.HexX, npc.HexY, target.HexX, target.HexY, 1 ) == 0 )
+	{
+		return;
+	}
+	
+	npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
+	AddAttackPlane( npc, AI_PLANE_ATTACK_PRIORITY + 1, target );
+	npc.VarWandering = -1;
+	
+}
+
+// CRITTER_EVENT_MESSAGE Critter::SendMessage.
+void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
+{
+    if( npc.IsPlayer() || ( npc.IsNpc() && npc.Param[ PET_OWNER_ID ] > 0 ) )
+	{
+        return;
+	}
+	
+    if( !npc.IsLife() )
+	{
+        return;
+    }
+	
+	if( npc.Stat[ ST_TEAM_ID ] == 0 )
+	{
+        return;
+	}
+	
+	if( npc.Stat[ ST_TEAM_ID ] != fromCrit.Stat[ ST_TEAM_ID ] )
+	{
+	   return;
+	}
+
+    if( fromCrit.IsPlayer() )
+    {
+		return;
+    }
+
+    if( message == MSG_GROUP_ATTACK )
+	{
+        Critter@ target = ::GetCritter( value );
+        
+		if( !valid( target ) )
+		{
+			return;
+		}
+		
+		Map@ mapNpc = npc.GetMap();
+		Map@ mapTarget = target.GetMap();
+		
+		if( mapNpc.Id != mapTarget.Id )
+		{
+			return;
+		}
+		
+		uint dist = ::GetCrittersDistantion( npc, target ) ;
+		uint max_dist = DISTANCE_UNAGGRO( npc );
+        
+		if( dist >= max_dist )
+		{
+			return;
+		}
+		
+		uint[] enemies;
+		uint enemy_id = 0;
+		npc.GetEnemyStack( enemies );
+		for( uint i = 0, len = enemies.length(); i < len; i++ )
+		{
+			enemy_id = enemies[ i ];
+			if( enemy_id == target.Id )
+			{
+				return;
+			}
+		}
+		
+		AttackOrFind( npc, target );
+	}
+}
+
+// CRITTER_EVENT_IDLE
+void _Idle( Critter& npc )
+{
+	if( npc.Stat[ ST_FOLLOW_CRIT ] != 0 )
+	{
+		npc.DropPlanes();
+		return;
+	}
+	
+	if( npc.IsDead() || npc.IsKnockout() )
+	{
+		return;
+	}
+
+	if( npc.IsBusy() || !npc.IsNoPlanes() )
+	{
+		return;
+	}
+	
+	if( npc.IsPlayer() )
+	{
+		npc.SetEvent( CRITTER_EVENT_IDLE, null );
+		return;
+	}
+	
+	Map@ map = npc.GetMap();
+	if( !valid( map ) )
+	{
+		return; 
+	}
+
+	uint mapId = 0;
+	uint16 homeX = 0;
+	uint16 homeY = 0;
+	uint8 dir = 0;
+	npc.GetHomePos( mapId, homeX, homeY, dir );
+
+	if( CountMapPlayers( map ) == 0 )
+	{
+		if( npc.ModeBase[ MODE_NO_HOME ] == 1 )
+		{
+			if( map.Id != mapId )
+			{
+				return;
+			}
+		
+			if( npc.VarWandering != 1 )
+			{
+				uint dist = GetDistantion( homeX, homeY, npc.HexX, npc.HexY );
+
+				if( int( dist ) > DISTANCE_AGGRO( npc ) )
+				{
+					npc.DropPlanes();
+					AddWalkPlane( npc, 0, homeX, homeY, dir, false, 0 );
+				}
+
+				npc.MoveRandom();
+				npc.VarWandering = 1;
+			}
+		}
+		return;
+	}
+
+	if( npc.VarWandering == -1 )
+	{
+		npc.VarWandering = 0;
+	}
+
+	Critter@[] enemies;
+	uint len = map.GetCrittersHex( npc.HexX, npc.HexY, DISTANCE_UNAGGRO( npc ), FIND_ONLY_PLAYERS | FIND_KO, enemies );
+	if( len > 0 ) 
+	{
+		for( uint i = 0; i < len; i++ )
+		{
+			Critter@ target = enemies[ i ];
+			if( valid( target ) )
+			{
+				_ShowTarget( npc, target );
+			}
+		}
+	}	
+	
+	if( npc.VarWandering == -1 )
+	{
+		return;
+	}
+	
+	// DOG BEHAVIOUR
+	if( npc.Stat[ ST_BODY_TYPE ] == BT_DOG )
+	{
+		Critter@[] players;
+		uint len2 = map.GetCrittersHex( npc.HexX, npc.HexY, 15, FIND_ONLY_PLAYERS | FIND_LIFE, players );
+		if( len2 > 0 )
+		{
+			Critter@ closest = null;
+			uint min = 999;
+			
+			for( uint i = 0; i < len2; i++ )
+			{
+				uint dist = GetDistantion( players[i].HexX, players[i].HexY, npc.HexX, npc.HexY );
+				if( dist > 8 )
+				{
+					EraseAttackPlane( npc, players[i] );
+					continue;
+				}
+				
+				if( dist < 4 )
+				{
+					if( dist < min )
+					{
+						min = dist;
+						@closest = @players[i];
+					}
+				}
+				else
+				{
+					_ShowTarget( npc, players[i] );
+				}
+			}
+		
+			if( valid( closest ) )
+			{
+				npc.DropPlanes();
+				AddAttackPlane( npc, 0, closest );
+				return;
+			}
+			else
+			{
+				if( Random( 1, 100 ) == 100 )
+				{
+					npc.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_COMBAT, STR_EMOTE_HOWL );
+				}
+			}
+		}
+	}
+	
+	if( npc.ModeBase[ MODE_NO_HOME ] == 1 )
+	{
+		if( map.Id != mapId )
+		{
+			return;
+		}
+	
+		if( npc.VarWandering != 1 )
+		{
+			uint dist = GetDistantion( homeX, homeY, npc.HexX, npc.HexY );
+
+			if( int( dist ) > DISTANCE_AGGRO( npc ) )
+			{
+				npc.DropPlanes();
+				AddWalkPlane( npc, 0, homeX, homeY, dir, false, 0 );
+			}
+
+			npc.MoveRandom();
+			npc.VarWandering = 1;
+		}
+		else
+		{
+			npc.VarWandering = 0;
+			npc.Wait( Random( 1000, 3000 ) );
+		}
+	}
+}
+
+// CRITTER_EVENT_PLANE_BEGIN
+int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem )
+{
+	if( !valid( npc ) )
+	{
+		return PLANE_DISCARD;
+	}
+	
+	if( npc.IsDead() )
+	{
+		return PLANE_DISCARD;
+	}
+	
+	if( plane.Type == AI_PLANE_WALK )
+	{
+		if( !npc.IsCanWalk() )
+		{
+			return PLANE_DISCARD;
+		}
+	}
+	
+	Map@ map = npc.GetMap();
+	if( !valid( map ) )
+	{
+		return PLANE_DISCARD;
+	}
+	
+    if( plane.Type == AI_PLANE_ATTACK )
+    {
+        Critter@ target = GetCritter( plane.Attack_TargId );
+        if( !valid( target ) )
+		{
+			return PLANE_RUN_GLOBAL;
+		}
+
+        if( ( target.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] ) && target.Stat[ ST_TEAM_ID ] != 0 )
+		{
+			return PLANE_DISCARD;
+		}
+
+        if( reason == REASON_FOUND_IN_ENEMY_STACK || reason == REASON_FROM_SCRIPT )
+        {
+            uint distantion = GetCrittersDistantion( npc, target );
+			bool can_see = npc.IsSee(target);
+            if( int( distantion ) <= DISTANCE_UNAGGRO(npc) )
+            {
+				if( distantion > 1 )
+				{
+					uint pathLength = map.GetPathLength( npc, target.HexX, target.HexY, 1 );
+					if( pathLength == 0 )
+					{
+						return PLANE_DISCARD;
+					}
+					if( pathLength > distantion * 3 )
+					{
+						return PLANE_DISCARD;
+					}
+				}
+                return PLANE_KEEP;
+            }
+            else
+            {
+                return PLANE_DISCARD;
+            }
+        }
+    }
+
+    return PLANE_RUN_GLOBAL;
+}
+
+int _PlaneEnd( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@ someItem ) 
+{
+	if( npc.IsDead() )
+	{
+		return PLANE_DISCARD;
+	}
+	
+	if( reason == REASON_GAG_CRITTER && someCr.IsNpc() )
+	{
+        if( someCr.ParamBase[ ST_TEAM_ID ] != npc.ParamBase[ ST_TEAM_ID ] )
+		{
+            return PLANE_RUN_GLOBAL;
+		}
+		
+        if( TryLetPassage( someCr, npc ) )
+		{
+            npc.Wait( AI_REACTION_TIME );
+            return PLANE_KEEP;
+        }
+    }
+	
+	if( reason == REASON_GAG_ITEM || reason == REASON_DEADLOCK )
+	{
+        if( valid( someItem ) )
+		{
+            if( someItem.GetType() == ITEM_TYPE_DOOR && !FLAG( someItem.LockerCondition, LOCKER_ISOPEN ) && !FLAG(someItem.LockerCondition, LOCKER_ELECTRO) &&
+                npc.Stat[ST_BODY_TYPE] <= BT_GHOUL )
+			{
+				if(FLAG( someItem.LockerCondition, LOCKER_LOCKED ) && IsKeyAviable( npc, someItem.LockerId ))
+				{
+					NpcPlane@ child = CreatePlane();
+					child.Type = AI_PLANE_PICK;
+					child.Priority = 0;
+					child.Pick_HexX = someItem.HexX;
+					child.Pick_HexY = someItem.HexY;
+					child.Pick_Pid = someItem.GetProtoId();
+					child.Pick_UseItemId = GetKeyId( npc, someItem.LockerId );
+					child.Pick_ToOpen = true;
+					child.Run = plane.Run;
+					plane.SetChild( child );
+					return PLANE_RUN_GLOBAL;                 // Cancel deleting
+				}
+				else if(!FLAG( someItem.LockerCondition, LOCKER_LOCKED ))
+				{
+					NpcPlane@ child = CreatePlane();
+					child.Type = AI_PLANE_PICK;
+					child.Priority = 0;
+					child.Pick_HexX = someItem.HexX;
+					child.Pick_HexY = someItem.HexY;
+					child.Pick_Pid = someItem.GetProtoId();
+					child.Pick_ToOpen = true;
+					child.Run = plane.Run;
+					plane.SetChild( child );
+					return PLANE_RUN_GLOBAL;                 // Cancel deleting
+				}
+			}
+            /* WIP need to find a way to animate critter without dropping plane stack */
+            else if( someItem.Proto.Material == MATERIAL_WOOD && someItem.Proto.Item_Subtype == ITEM_SUBTYPE_FURNITURE )
+			{
+                NpcPlane@ child = CreatePlane();
+                child.Type = AI_PLANE_PICK;
+                child.Priority = 0;
+                child.Identifier = 228;
+                child.Pick_HexX = someItem.HexX;
+                child.Pick_HexY = someItem.HexY;
+                child.Pick_Pid = someItem.GetProtoId();
+                child.Run = plane.Run;
+                plane.SetChild( child );
+
+                npc.Animate( 0, ANIM2_PUNCH_RIGHT, null, true, true );
+
+                if( isContainer( someItem ) )
+                {
+                    DropContainerItems( npc.GetMap(), someItem);
+                }
+                DeleteItem( someItem );
+                
+                return PLANE_RUN_GLOBAL;
+            }	
+			else if( someItem.GetType() != ITEM_TYPE_DOOR )
+			{
+                NpcPlane@ child = CreatePlane();
+                child.Type = AI_PLANE_PICK;
+                child.Priority = 0;
+                child.Pick_HexX = someItem.HexX;
+                child.Pick_HexY = someItem.HexY;
+                child.Pick_Pid = someItem.GetProtoId();
+                child.Run = plane.Run;
+                plane.SetChild( child );
+                return PLANE_RUN_GLOBAL;                 // Cancel deleting
+            }			
+        }
+		
+		return PLANE_DISCARD;
+	}	
+	
+	return PLANE_RUN_GLOBAL;
+}
+
+// CRITTER_EVENT_ATTACKED
+bool _Attacked( Critter& self, Critter& attacker )
+{
+	if( !valid( self ) )
+	{
+		return false;
+	}
+	
+	if( self.IsDead() )
+	{
+		return false;
+	}
+	
+	if( !valid( attacker ) )
+	{
+		return false;
+	}
+	
+	if( attacker.IsDead() )
+	{
+		return false;
+	}
+	
+	if( int( attacker.Id ) == self.Stat[ ST_FOLLOW_CRIT ] )
+	{
+        self.EraseEnemyFromStack( attacker.Id );
+		EraseAttackPlane( self, attacker );
+		return true;
+	}
+	
+	NpcPlane@ plane = self.GetCurPlane();
+	if( valid( plane ) )
+	{
+		if( plane.Type == AI_PLANE_ATTACK )
+		{
+			uint enemy_id = plane.Attack_TargId;
+			Critter@ enemy = GetCritter( enemy_id );
+			if( valid( enemy ) )
+			{
+				if( enemy.Stat[ ST_CURRENT_HP ] <= 0 )
+				{
+					self.EraseEnemyFromStack( enemy.Id );
+					self.DropPlanes();
+				}
+			}
+		}
+	}
+	
+	self.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
+	AttackOrFind( self, attacker );
+    return true;
+}
+
+void AttackOrFind( Critter& self, Critter& target )
+{
+	if( !valid( self ) )
+	{
+		return;
+	}
+	
+	if( self.IsDead() )
+	{
+		return;
+	}
+	
+	if( !valid( target ) )
+	{
+		return;
+	}
+	
+	if( target.IsDead() )
+	{
+		self.EraseEnemyFromStack( target.Id );
+		EraseAttackPlane( self, target );
+	}
+	
+	NpcPlane@ plane = self.GetCurPlane();
+	if( valid( plane ) )
+	{
+		if( plane.Type == AI_PLANE_ATTACK )
+		{
+			uint enemy_id = plane.Attack_TargId;
+			Critter@ enemy = GetCritter( enemy_id );
+			if( valid( enemy ) )
+			{
+				if( target.Id != enemy.Id && self.IsSee( enemy ) )
+				{ 		
+					uint target_dist = GetDistantion( self.HexX, self.HexY, target.HexX, target.HexY );
+					uint enemy_dist = GetDistantion( self.HexX, self.HexY, enemy.HexX, enemy.HexY );
+					if( target_dist < enemy_dist )
+					{
+						self.DropPlanes();
+						AddAttackPlane( self, 0, target );
+					}
+				}
+			}
+		}
+	}
+	else
+	{
+		if( self.IsSee( target ) )
+		{
+			AddAttackPlane( self, 0, target );
+		}
+		else
+		{
+			AddWalkPlane( self, AI_PLANE_ATTACK_PRIORITY - 1, target.HexX, target.HexY, Random( 0, 5 ), true, 1 );
+		}
+	}
+}
+
+#endif // AI_MOB

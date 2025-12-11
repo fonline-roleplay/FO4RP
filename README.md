@@ -1,2 +1,2 @@
-# FO4RP
-Fallout Online for Role Play
+# TLJ
+The Long Journey - FOnline Roleplay Server

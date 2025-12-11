@@ -6,11 +6,16 @@
 #include "_ltp.fos"
 
 #include "autodoc_h.fos"
+#include "BBS_h.fos"
 #include "bootlegging_h.fos"
 #include "casino_h.fos"
+#include "chopping_h.fos"
 #include "combat_h.fos"
+#include "consumables_h.fos"
 #include "cooking_h.fos"
 #include "critter_item_movement_h.fos"
+#include "decraft.fosh"
+#include "defib_h.fos"
 #include "drugs_h.fos"
 #include "effects_h.fos"
 #include "explode_h.fos"
@@ -20,6 +25,7 @@
 #include "food_h.fos"
 #include "furnace_h.fos"
 #include "furniture_h.fos"
+#include "gasses_h.fos"
 #include "gateway_h.fos"
 #include "gathering_h.fos"
 #include "geiger_h.fos"
@@ -30,12 +36,14 @@
 #include "item_h.fos"
 #include "lockers_h.fos"
 #include "map_lights_h.fos"
+#include "milling_h.fos"
 #include "npc_names_holder_h.fos"
 #include "npc_planes_h.fos"
 #include "paralysis_h.fos"
 #include "parameters_h.fos"
 #include "perks_h.fos"
 #include "plants_h.fos"
+#include "prof_books_h.fos"
 #include "poison_h.fos"
 #include "radiation_h.fos"
 #include "recorder_h.fos"
@@ -46,13 +54,14 @@
 #include "sandbag_h.fos"
 #include "scenery_h.fos"
 #include "sex_h.fos"
+#include "skins_h.fos"
 #include "smithing_h.fos"
 #include "smoking_h.fos"
 #include "speed_h.fos"
 #include "teams_table.fos"
 #include "terminal_h.fos"
 #include "time_h.fos"
-#include "traps_h.fos"
+#include "trap_h.fos"
 #include "vending_h.fos"
 #include "waterworks_h.fos"
 #include "wait_time_h.fos"
@@ -63,9 +72,7 @@ import void InitializeGame() from "config";
 
 import void WorldmapInit() from "worldmap";
 
-import void skin( Critter& cr, int crType ) from "skins";
-
-import void kind_tele2( Critter& master, Critter@ slave, int val ) from "map_start";
+import void TeleportToGameZone( Critter& master, int val ) from "map_start";
 
 import void qmap_critter_in( uint mapId, Critter& cr ) from "qmap";
 import void qmap_critter_out( uint mapId, Critter& cr ) from "qmap";
@@ -76,11 +83,16 @@ import bool UseShovel( Critter& cr, Item& item ) from "qmap_farm";
 
 import NpcNamesHolder@ getNpcNamesHolder() from "npc_names_holder";
 
+import void hotkey_critter_anim( Critter& cr, int param0 ) from "general_unsafe";
+
+import void InitCraftList() from "craft_recipes";
+
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Called before world generation.
 void init()
 {
     InitializeGame();
+	InitSpeedArray();
 }
 
 uint16 GetVersionWorldSave( ::string@ time )
@@ -89,8 +101,10 @@ uint16 GetVersionWorldSave( ::string@ time )
     if( IsAnyData( "VersionWorldSave" ) && ::GetAnyData( "VersionWorldSave", data ) )
     {
         if( valid( time ) )
+		{
             time = "" + data[ 1 ] + "_" + data[ 2 ] + "_" + data[ 3 ] + "_" + data[ 4 ] + "_" + data[ 5 ];
-        return data[ 0 ] % 9999;
+        }
+		return data[ 0 ] % 9999;
     }
     return 0;
 }
@@ -102,7 +116,7 @@ bool SaveWorldNextVersion()
     ::array< uint > data = { GetVersionWorldSave( null ) + 1, Year, Month, Day, var, Hour, Minute };
 	file version;
 	if( version.open( "WorldVersion","w") != -1 )
-	{	
+	{
 		version.writeString( "" + data[0] );
 		version.close();
 	}
@@ -120,24 +134,27 @@ bool start()
     SetSendParameter( ST_GENDER, true );
     SetSendParameter( ST_AGE, true );
     SetSendParameter( ST_FOLLOW_CRIT, true );
+	SetSendParameter( PET_OWNER_ID, true );
+	SetSendParameter( PET_PROTECT_ID, true );
     //SetSendParameter( ST_PLAYER_KARMA, true );
     // Armor class, uses Agility
     SetSendParameter( ST_ARMOR_CLASS, true );
-    //SetSendParameter( ST_TURN_BASED_AC, true );
+	SetSendParameter( ST_ARMOR_CLASS_EXT, true );
     // Agility
     SetSendParameter( ST_AGILITY, true );
     // Hit points, uses Strenght and Endurance
     SetSendParameter( ST_MAX_LIFE, true );
+	SetSendParameter( ST_MAX_LIFE_EXT, true );
     SetSendParameter( ST_CURRENT_HP, true );
     // Strenght, uses battle timeout
     SetSendParameter( ST_STRENGTH, true );
-    // Battle timeout
-    //SetSendParameter( TO_BATTLE, true );
     // Endurance
     SetSendParameter( ST_ENDURANCE, true );
     // Charisma
     SetSendParameter( ST_CHARISMA, true );
 	SetSendParameter( ST_CHARISMA_EXT, true );
+	// Skills
+	SetSendParameter( SK_UNARMED, true );
     // Player Flags
     SetSendParameter( PLAYER_FLAGS, true );
     // Injures
@@ -159,17 +176,11 @@ bool start()
     SetSendParameter( MODE_NO_LOOT, true );
     SetSendParameter( MODE_NO_FLATTEN, true );
     SetSendParameter( MODE_NO_TALK, true );
+	SetSendParameter( MODE_QUESTGIVER, true );
+	SetSendParameter( MODE_NO_CORPSE_DECAY, true );
 	// Cover state
 	SetSendParameter( CR_IS_RELAXING, true );
 	SetSendParameter( CR_IN_COVER, true );
-    // 3d animation layers
-// #ifdef PLAYERS_3D
-    // Enable sending 3d layers, from Skin to Backpack
-    uint fromLayer = ST_ANIM3D_LAYERS + ANIM3D_LAYER_SKIN;
-    uint toLayer = ST_ANIM3D_LAYERS + ANIM3D_LAYER_BACKPACK;
-    for( uint i = fromLayer; i <= toLayer; i++ )
-        SetSendParameter( i, true );
-// #endif
     // Npc talk distance
     SetSendParameter( ST_TALK_DISTANCE, true );
     // Dialog id
@@ -183,28 +194,38 @@ bool start()
     SetSendParameter( ST_RUN_TIME, true );
 
     SetSendParameter( SK_BARTER, true );
-    // Game Modes
-    SetSendParameter( QST_GAMEMODE, true );
-    // Language barrier - binyan
-    SetSendParameter( ST_BODY_TYPE, true );
-	
-    SetSendParameter( QST_MEDIUM, true );
-	
-	SetSendParameter( CR_IS_AGGRESSIVE, true );
-	SetSendParameter( TRAIT_GOOD_NATURED, true );
-	SetSendParameter( TRAIT_BLOODY_MESS, true );
 
+    SetSendParameter( ST_BODY_TYPE, true );
+	SetSendParameter( ST_BASE_CRTYPE, true );
+	SetSendParameter( ST_FACTION, true );
+	SetSendParameter( ST_TEAM_ID, true );
+	SetSendParameter( ST_DRUNK, true );
+
+	SetSendParameter( ST_HEIGHT_GROUP, true );
+
+	SetSendParameter( ST_AVATAR_INDEX, true );
+	SetSendParameter( AVA_HASH_0, true );
+	SetSendParameter( AVA_HASH_1, true );
+	SetSendParameter( AVA_HASH_2, true );
+
+    SetSendParameter( QST_MEDIUM, true );
+    SetSendParameter( QST_GAMEMODE, true );
+	SetSendParameter( QST_INVIS, true );
+
+	SetSendParameter( TRAIT_SURE_FOOTED, true );
+	SetSendParameter( TRAIT_BLOODY_MESS, true );
+	SetSendParameter( TRAIT_KAMIKAZE, true );
+
+	SetSendParameter( CR_IS_AGGRESSIVE, true );
 	SetSendParameter( CR_DIRTINESS, true );
 	SetSendParameter( CR_TYPING_TIME, true );
 	SetSendParameter( CR_AFK_MODE, true );
-
-	SetSendParameter( ST_FACTION, true );
-    // charsheet&visibility
-	SetSendParameter( QST_CHAR_VER, true );
-    SetSendParameter( QST_CHAR_SECRET, true );
-	SetSendParameter( QST_INVIS, true );
-	
-	SetSendParameter( ST_AVATAR_HASH, true );
+    SetSendParameter( CR_SINF_MODE, true );
+	SetSendParameter( CR_CONTROLLED_GROUP, true );
+	SetSendParameter( CR_REMEMBERING_NAME, true );
+	SetSendParameter( CR_TALKING_TARGET_ID, true );
+	SetSendParameter( CR_STA_EQUIPPED, true );
+	SetSendParameter( MERC_MASTER_ID, true );
 
     // Send item data masks
     // Look fields in fonline.h 'struct Item::ItemData'
@@ -231,29 +252,25 @@ bool start()
     // old stuff
     qmap_load_all();
     WorldmapInit();
-	
+
 	// Inits
+	InitCraftList();
+	InitDecraft();
+	InitRepairList();
 
 	SetGvar(GVAR_is_first_time, 0);
 
 	GetVersionWorldSave( null );
-	
 	
     // Global Event Manager
     if( !manager_start() )
 	{
         return false;
 	}
-	registerScriptingItems();
-	getNpcNamesHolder().loadNpcNames();		
-	
-    return true;
-}
 
-void registerScriptingItems()
-{
-	registerTraps();
-	registerMines();
+	getNpcNamesHolder().loadNpcNames();
+
+    return true;
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -294,62 +311,135 @@ uint loop() // moved to loop.fos
 // Call on something critter attack another.
 void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo )
 {
-	if( cr.IsBusy() )
+	//cr.Say( SAY_NETMSG, "cr.Stat[ ST_CURRENT_AP ] " + cr.Stat[ ST_CURRENT_AP ] );
+	if( !cr.IsLife() )
 	{
 		return;
 	}
 	
+	if( cr.Param[CR_IS_SHOOTING] != 0 )
+	{
+		return;
+	}
+
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return;
+	}
+
+	if( !valid( target ) || target.IsDead() )
+	{
+		return;
+	}
+
 	if( cr.Param[ CR_IS_RELAXING ] != 5 )
 	{
 		cr.ParamBase[ CR_IS_RELAXING ] = 0;
 	}
-	
-	cr.ParamBase[ CR_IS_RELOADING ] = 0;
-	
-	uint8 mode = weaponMode;
-	
-	if( _WeaponModeAim( mode ) == HIT_LOCATION_NONE && _WeaponAim( weapon, mode & 0x0F ) )
+
+	if( !valid( weapon ) )
 	{
-		mode = ( weaponMode & 0x0F ) + ( cr.ParamBase[CR_AUTO_AIM] << 4 );
-		if( cr.ParamBase[CR_AUTO_AIM] != HIT_LOCATION_NONE )
-		{
-			int delta = int( _WeaponApCost( weapon, weaponMode ) ) * 20;
-			cr.StatBase[ ST_CURRENT_AP ] -= delta;
-		}
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_FIGHT );
+		return;
 	}
 
-	uint windupTime = GetProtoWindupTime(weapon, mode, cr);
+	int weaponPerk = weapon.Weapon_Perk;
+	int sneak_timeout = SNEAK_TIMEOUT( cr );
+	if( FLAG( weaponPerk, WEAPON_PERK_SILENT ) )
+	{
+		sneak_timeout /= 2;
+	}
 
-	uint[] vals = { cr.Id, target.Id, weapon.ProtoId, mode, 0, 0, 0 };
+	cr.ParamBase[ CR_SNEAKING ] = 0;
+	cr.TimeoutBase[ TO_SNEAK ] = SNEAK_TIMEOUT( cr );
+
+	cr.TimeoutBase[ TO_SNEAK ] = SNEAK_TIMEOUT( cr );
+	cr.ParamBase[ CR_SNEAKING ] = 0;
+	cr.ParamBase[ CR_IS_RELOADING ] = 0;
+
+	uint8 mode = weaponMode;
+
+	int needAp = attack_ap( cr, weapon, mode, ammo );
+	bool HasAllAP = cr.Stat[ ST_ACTION_POINTS ] == cr.Stat[ ST_CURRENT_AP ];
+	//cr.Say( SAY_NORM, "cr.Stat[ ST_CURRENT_AP ] " + cr.Stat[ ST_CURRENT_AP ] + " needAp " + needAp );
+	
+	if( ( !HasAllAP && cr.Stat[ ST_ACTION_POINTS ] < needAp ) || 
+		( cr.Stat[ ST_ACTION_POINTS ] >= needAp && cr.Stat[ ST_CURRENT_AP ] < needAp ) &&
+		  cr.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
+	{
+		//Log( "needAp " + needAp + " cr.Stat[ ST_CURRENT_AP ] " + cr.Stat[ ST_CURRENT_AP ] + " cr.Param[ CR_AUTO_ROUNDS_FIRED ] " + cr.Param[ CR_AUTO_ROUNDS_FIRED ] );
+		return;
+	}
+
+	uint windupTime = GetProtoWindupTime( weapon, mode, cr );
+	if( cr.Param[ CR_AUTO_AIM ] == HIT_LOCATION_NONE )
+	{
+		windupTime /= 2;
+	}
+	
+	uint waitTime = _GetProtoWaitTime( weapon, mode );
+	//Log( "windupTime " + windupTime + " waitTime " + waitTime  );
+	uint[] values = { cr.Id, target.Id, weapon.ProtoId, mode, 0, 0, 0, 0, 0 };
 	if( valid( ammo ) )
 	{
-		vals[4] = ammo.ProtoId;
+		values[4] = ammo.ProtoId;
 	}
-	
-	cr.SetDir( GetDirection( cr.HexX, cr.HexY, target.HexX, target.HexY ) );
+
+	uint16 hexX = target.HexX, hexY = target.HexY;
+
+	cr.SetDir( GetDirection( cr.HexX, cr.HexY, hexX, hexY ) );
 	Item@ realWeapon = _CritGetItemHand( cr );
 	uint8 weapon_Subtype = valid( realWeapon ) ? realWeapon.Proto.Item_Subtype : 0;
-	
-	if( cr.ParamBase[ CR_IS_WINDUPED ] == 0 )
+
+	uint16 toHx = hexX, toHy = hexY;
+    int dist = GetDistantion( cr.HexX, cr.HexY, hexX, hexY );
+	RustyGetHexCoord( map, cr.HexX, cr.HexY, toHx, toHy, 0.0f, dist );
+
+	if( hexX != toHx || hexY != toHy )
+    {
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_NEED_AIM_BLOCKED );
+        return;
+    }
+
+	int skillNum = _WeaponSkill( weapon, mode );
+
+	if( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS )
 	{
-		if( cr.IsPlayer() && weapon_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_MINIGUN )
+		cr.Wait( waitTime );
+	}
+    else if( cr.Param[ CR_IS_WINDUPED ] == 0 && _WeaponAnim2( weapon, mode ) != ANIM2_AUTO )
+    {
+        cr.Wait( windupTime );
+    }
+	else if( _WeaponAnim2( weapon, mode ) == ANIM2_AUTO )
+	{
+		if( cr.Param[ CR_AUTO_ROUNDS_FIRED ] > 0 )
 		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_COMBAT_SPIN_BARRELS );
-			return;
+			cr.Wait( _GetProtoWaitTime( weapon, mode ) );
 		}
-		cr.Wait( windupTime );
+		else
+		{
+			cr.Wait( windupTime );
+		}
 	}
-	else
+    else
+    {
+        cr.Wait( 10 );
+        windupTime = 0;
+    }
+
+	if( cr.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 || skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS )
 	{
-		cr.Wait( 10 );
-		windupTime = 5;
+		cr.StatBase[ ST_CURRENT_AP ] -= needAp * 100;
 	}
-	
-	int skillNum = ( valid( weapon ) ? _WeaponSkill( weapon, 0 ) : ( valid( realWeapon ) ? SK_MELEE_WEAPONS : SK_UNARMED ) );
-	uint8 weaponSubtype = ( skillNum == SK_SMALL_GUNS || skillNum == SK_BIG_GUNS || skillNum == SK_ENERGY_WEAPONS ) ? WS_GUN : 
-					( ( skillNum == SK_THROWING ) ? WS_THROWING : ( skillNum == SK_MELEE_WEAPONS ) ? WS_MELEE : WS_UNARMED );
-	
-	if( weaponSubtype == WS_GUN )
+
+	if( _WeaponAnim2( weapon, mode ) == ANIM2_AUTO )
+	{
+		cr.ParamBase[ CR_AUTO_ROUNDS_FIRED ] ++;
+	}
+
+	if( skillNum == SK_SMALL_GUNS || skillNum == SK_MEDIUM_GUNS || skillNum == SK_BIG_GUNS )
 	{
 		cr.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid( realWeapon ) ? realWeapon : null );
 		cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
@@ -358,43 +448,69 @@ void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weap
 			cr.EraseTimeEvents( CTE_SLOWRELOAD );
 			realWeapon.SetEvent( ITEM_EVENT_MOVE, null );
 		}
+
+		CreateTimeEvent( AFTER( REAL_MS( windupTime ) ), "combat@e_DelayedAttack", values, false );
+		cr.ParamBase[CR_IS_SHOOTING] = 1;
 	}
 	else
 	{
-		CombatAttack( cr, target, weapon, mode, ammo, 0, 0 );
-		cr.Wait( GetProtoTime( weapon, mode, cr ) );
-		return;
+		cr.ParamBase[CR_IS_SHOOTING] = 0;
+		CombatAttack( cr, target, weapon, mode, ammo, 0, 0, false, false, false );
 	}
-	
-	CreateTimeEvent( AFTER( REAL_MS( windupTime ) ), "combat@e_DelayedAttack", vals, false );
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on something critter attack another.
 void critter_attacked( Critter& cr, Critter& attacker )
 {
-    DEBUG_SAY( cr, "Main: " + crInfo( attacker ) + " attacks " + crInfo( cr ) );//DEBUG ONLY
-	
+    DEBUG_SAY( cr, "Main: " + crInfo( attacker ) + " attacks " + crInfo( cr ) );
+
 	attacker.ParamBase[ LAST_ATTACKED ] = cr.Id;
-	
+
 	if( manager_critter_attacked( cr, attacker ) )
 	{
-		DEBUG_SAY( cr, "MANAGER FAILED" );//DEBUG ONLY
+		DEBUG_SAY( cr, "MANAGER FAILED" );
 	}
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on something critter steal another.
+// //////////////////////////////////////////////////////////////////////////////////////////////////
+// LTP for looting critters
+bool ltp_inspect_inited = false;
+void ltp_inspect_init()
+{
+	LTPREG( LTP_INSPECT, process_inspect )
+	ltp_inspect_inited = true;
+}
+
 bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 {
+	string action_text = item.CritId == thief.Id ? "insert" : "steal";
+	if( isGM( thief ) )
+	{
+		CrimeLog( thief, crInfo( thief ) + " by use of Godly powers managed to " + action_text + " " + itemDesc( item ) + " ,victim: " + crInfo( cr ) );
+		return true;
+	}
+	
 	/* Battle & death check */
     if( cr.IsDead() )
     {
-        thief.StatBase[ST_LAST_STEAL_CR_ID] = 0;
-        thief.StatBase[ST_STEAL_COUNT] = 0;
+        thief.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
+        thief.StatBase[ ST_STEAL_COUNT ] = 0;
+		thief.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_INSPECTS );
+		if( !ltp_inspect_inited )
+		{
+			ltp_inspect_init();
+		}
+		
+		thief.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CRITTER_LOOT_DELAY;
+		thief.ParamBase[ ST_LTP_SEQUENCE ] = 0;
+		StartProcess( thief, LTP_INSPECT, 0, cr.Id, 0, thief.Param[ ST_LTP_SEQUENCE_WAIT ] );
+		thief.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
         return false;
     }
-	else if( cr.StatBase[ST_FOLLOW_CRIT] == int( thief.Id ) )
+	else if( cr.StatBase[ ST_FOLLOW_CRIT ] == int( thief.Id ) )
 	{
 		return true;
 	}
@@ -407,7 +523,7 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 	{
 		return true;
 	}
-		
+
     thief.TimeoutBase[ TO_AGGRESSOR ] = __FullSecond + REAL_MINUTE( 1 );
 
 	/* Target perception & steal skill modifiers */
@@ -457,14 +573,14 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 	{
         kDir = 6 - kDir;
 	}
-	
+
      /* Steal skill of thief */
     int steal = thief.Skill[ SK_STEAL ];
     if( steal <= 0 )
 	{
         steal = 1;
     }
-	
+
     /* Volume of an item */
 	int volume = item.Proto.Volume;
     int volumeModifier = 0;
@@ -473,7 +589,7 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
         volume = 1;
         volumeModifier = 10;
 	}
-    else if(volume <= 20 && volume > 0 )
+    else if( volume <= 20 && volume > 0 )
     {
         volumeModifier = 10;
     }
@@ -490,7 +606,7 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
     {
         weightModifier = 10;
     }
-	
+
     /* Count modifier */
     int kCount = count / steal;
     if( kCount <= 0 )
@@ -506,16 +622,16 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
         steal -= steal * stealCount * 9 / 100;
 	}
 
-    /* Final steal chance calculation 
-       
-       It's a sum of Steal % / 6 + PE + AG + LK 
+    /* Final steal chance calculation
+
+       It's a sum of Steal % / 6 + PE + AG + LK
        lowered by target's PE and Steal % / 6.
-       If item that's being stolen has volume lower 
+       If item that's being stolen has volume lower
        than 20 then chance's being raised by 10%.
-       Same if weight's lower than 500g then 
-       additional 10% is being summed up. 
-       
-       Can't steal items bigger than 100 volume or 
+       Same if weight's lower than 500g then
+       additional 10% is being summed up.
+
+       Can't steal items bigger than 100 volume or
        heavier than 2500g                           */
 
 		int StealCalculation = CLAMP( ( ( steal - kDir * 10 ) + basePeModifier + baseAgModifier + baseLkModifier + volumeModifier + weightModifier - targetPeModifier - targetStealModifier ) / kCount, 5, 95 );
@@ -526,18 +642,12 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
     if( volume > 100 || weight > 2500 )
     {
 		thief.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_STEAL_VOLUME );
-        string action_text = item.CritId == thief.Id ? "insert" : "steal";		
         CrimeLog( thief, crInfo( thief ) + " failed to " + action_text + " " + itemDesc( item ) + " ,victim: " + crInfo( cr ) );
-		
+
 		thief.Action( ACTION_PICK_CRITTER, 3, null );
         thief.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
         thief.StatBase[ ST_STEAL_COUNT ] = 0;
 
-        if( cr.IsNpc() )
-        {
-            int thiefHp = thief.Stat[ ST_CURRENT_HP ];
-			AddAttackPlane( cr, 0, thief, thiefHp < 10 || Random( 1, 10 ) > cr.Stat[ ST_LUCK ] + 4 || cr.Stat[ ST_CHARISMA ] < 3 ? __DeadHitPoints : Random( thiefHp / 4, thiefHp / 2 ) );
-        }
 		return false;
     }
 	/* Succesful steal attempt */
@@ -558,25 +668,26 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
             thief.StatBase[ ST_LAST_STEAL_CR_ID ] = cr.Id;
             thief.StatBase[ ST_STEAL_COUNT ] = 0;
         }
+		
 		thief.TimeoutBase[ TO_STEALING ] = STEAL_TIMEOUT( thief );
+		int crime_TO = GetGvar(GVAR_crime_TO);
+		if( crime_TO > 0 && thief.Timeout[ TO_REMOVE_FROM_GAME ] < REAL_HOUR( crime_TO ) )
+		{
+			thief.TimeoutBase[ TO_REMOVE_FROM_GAME ] = __FullSecond + REAL_HOUR( crime_TO );
+		}
 		thief.Action( ACTION_PICK_CRITTER, 1, null );
+		CrimeLog( thief, crInfo( thief ) + " managed to " + action_text + " " + itemDesc( item ) + " ,victim: " + crInfo( cr ) );
 		return true;
     }
 	/* Failed steal attempt */
     else
     {
 		thief.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_STEAL_FAIL );
-		string action_text = item.CritId == thief.Id ? "insert" : "steal";		
         CrimeLog( thief, crInfo( thief ) + " failed to " + action_text + " " + itemDesc( item ) + " ,victim: " + crInfo( cr ) );
-		
+
         thief.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
         thief.StatBase[ ST_STEAL_COUNT ] = 0;
 
-        if( cr.IsNpc() )
-        {
-            int thiefHp = thief.Stat[ ST_CURRENT_HP ];
-			AddAttackPlane( cr, 0, thief, thiefHp < 10 || Random( 1, 10 ) > cr.Stat[ ST_LUCK ] + 4 || cr.Stat[ ST_CHARISMA ] < 3 ? __DeadHitPoints : Random( thiefHp / 4, thiefHp / 2 ) );
-        }
 		return false;
     }
 }
@@ -585,26 +696,32 @@ bool critter_stealing( Critter& cr, Critter& thief, Item& item, uint count )
 // Call on something critter use item.
 bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param )
 {
-	if( !IsHuman( cr ) && !IsMutant( cr ) && item.GetType() != ITEM_TYPE_FOOD && item.GetType() != ITEM_TYPE_DRINK && item.GetType() != ITEM_TYPE_FLASK && item.GetType() != ITEM_TYPE_DRUG )
+	if( !IsHuman( cr ) && !IsRobot( cr ) && !IsMutant( cr ) && item.GetType() != ITEM_TYPE_FOOD && item.GetType() != ITEM_TYPE_DRINK && item.GetType() != ITEM_TYPE_FLASK && item.GetType() != ITEM_TYPE_DRUG )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOGS_CANT_DO_THAT );
 		return false;
 	}
-	
+
+	if( valid( targetCr ) && targetCr.Param[ PET_OWNER_ID ] == int( cr.Id ) )
+	{
+		return true;
+	}
+
 	string exception_catcher = cr.Id + "# in " + (valid(cr.GetMap())?"@"+cr.GetMap().Id:"global") + " used "
-		+ (valid(item)?item.Id:0) + ":" + (valid(item)?item.GetProtoId():0) + " on [" 
-		+ (valid(targetCr)?targetCr.Id:0) + ", " 
-		+ (valid(targetItem)?targetItem.Id:0) + ":" + (valid(targetItem)?targetItem.GetProtoId():0) + ", " 
+		+ (valid(item)?item.Id:0) + ":" + (valid(item)?item.GetProtoId():0) + " on ["
+		+ (valid(targetCr)?targetCr.Id:0) + ", "
+		+ (valid(targetItem)?targetItem.Id:0) + ":" + (valid(targetItem)?targetItem.GetProtoId():0) + ", "
 		+ (valid(targetScen)?targetScen.ProtoId:0) + "] with param " + param + ".";
 	DebugLog( exception_catcher, 2 );
-	
+
 	_testInfo( cr, CR_TEST_MODE_USED, SAY_NETMSG, exception_catcher );
 
     uint16 pid = item.GetProtoId();
-    bool useOnSelf = ( not valid( targetCr ) && not valid( targetItem ) && not valid( targetScen ) );
-	
+    bool useOnSelf = ( !valid( targetCr ) && !valid( targetItem ) && !valid( targetScen ) );
+
 	cr.Wait(GetProtoTime(item.Proto, 0, cr));
 	Map@ map = cr.GetMap();
+	uint16 tpid = valid( targetItem ) ? targetItem.GetProtoId() : 0;
 	
 	string action_info = crInfo( cr ) + " uses " + itemDesc( item ) + " on ";
 	if( useOnSelf )
@@ -617,21 +734,30 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		{
 			action_info += crInfo( targetCr );
 		}
-		
+
 		if( valid( targetItem ) )
 		{
 			action_info += itemDesc( targetItem );
-		}		
-		
+		}
+
 		if( valid( targetScen ) )
 		{
 			action_info += "scenery #" + targetScen.ProtoId;
 		}
 	}
 	SayLog( cr, action_info + "." );
-	
+
 	if( !valid( targetScen ) )
 	{
+		//Planting barrels
+		if( farm_seeds.find( pid ) != -1 )
+		{
+			if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_PLANTBARREL_EMPTY ) )
+			{
+				TryPlantSeed( cr, item, 0, 0, targetItem );
+				return true;
+			}
+		}
 		//Planting hydroponics
 		if( hydro_seeds.find( pid ) != -1 )
 		{
@@ -651,7 +777,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			}
 		}
 		// Plant Furtelizing
-		if( valid( targetItem ) && furtilizers.find( pid ) != -1 )
+		if( valid( targetItem ) && fertilizers.find( pid ) != -1 )
 		{
 			if( growing_plants.find( targetItem.GetProtoId() ) != -1 || empty_beds.find( targetItem.GetProtoId() ) != -1 || farm_seeds.find( targetItem.GetProtoId() ) != -1 )
 			{
@@ -684,6 +810,11 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		{
 			return true;
 		}
+		//Sawing
+		if( PrepareSawing( cr, item, targetItem ) )
+		{
+			return true;
+		}
 		//Flasks and other containers for liquids
 		if( FlaskCheck( cr, item, targetItem ) )
 		{
@@ -709,6 +840,12 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		{
 			return true;
 		}
+		//Container placing check
+		if( BarrelCheck( cr, item, targetItem ) )
+		{
+			return true;
+		}
+
 		//Still check
 		if( UseItemOnStill( cr, item, targetItem ) )
 		{
@@ -722,8 +859,13 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		// Armor painting
 		if( valid( item ) && valid( targetItem ) && pid == PID_COLORS && targetItem.GetType() == ITEM_TYPE_ARMOR )
 		{
-			TryPaintArmor( cr, item, targetItem ); 
-			return true; 
+			TryPaintArmor( cr, item, targetItem );
+			return true;
+		}
+		// lock install
+		if( valid( item ) && valid( targetItem ) && ( pid == PID_LOCK_LOW || pid == PID_LOCK_MED || pid == PID_LOCK_HARD || pid == PID_LOCK_CODE ) )
+		{
+			TryInstallLock( cr, item, targetItem );
 		}
 		//Shiv lex writing
 		if( valid( item ) && valid( targetItem ) && pid == PID_SHIV )
@@ -731,6 +873,56 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			ShivUse( cr, item, targetItem );
 			return true;
 		}
+		
+		//Shovel stashing
+		if( valid( item ) && valid( targetItem ) && ( pid == PID_SHOVEL || pid == PID_PRIMITIVE_SHOVEL ) )
+		{
+			if( TryDigStash(cr, item, targetItem) )
+			{
+				return true;
+			}
+		}
+
+		//Shovel cleaning bodies
+		if( ( pid == PID_SHOVEL || pid == PID_PRIMITIVE_SHOVEL ) && valid( targetCr ) && targetCr.IsDead() )
+		{
+			if( targetCr.IsNpc() )
+			{
+				targetCr.StatBase[ ST_CURRENT_HP ] -= 20;
+				
+				if( targetCr.Stat[ ST_CURRENT_HP ] + targetCr.Stat[ ST_MAX_LIFE ] < __DeadHitPoints )
+				{
+					Item@[] items;
+					targetCr.GetItems( -1, items );
+					MoveItems( items, map, targetCr.HexX, targetCr.HexY );
+					DeleteNpc( targetCr );
+					
+					string result = map_pos_time_stamp( map, cr.HexX, cr.HexY ) + crInfo( cr, true ) + " gets rid of " + crInfo( targetCr, true ) + " body.";
+					DiscordSendMessage( "crime_log", "```" + result + "```" );
+					LogInfo( "logs\\crimes.txt", result ); 
+				}
+			}
+		}
+
+		if( valid(item) && guitars.find(pid) != -1 )
+		{
+			TryPlayGuitar(item, cr);
+			return true;
+		}
+
+		//BBS Paper adding
+		if( valid( item ) && valid( targetItem ) && pid == PID_HOLODISK && tpid == PID_BBS_BOARD)
+		{
+			TryAddPaperToBBS(cr, targetItem, item);
+			return true;
+		}
+
+		if(valid(item) && item.GetProtoId() == PID_REAL_HOLODISK && !HasPipBoy( cr ))
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_YOU_NEED_PIPBOY );
+			return true;
+		}
+		
 		//Cards deck
 		if( valid( item ) && pid == PID_CARDS_DECK && !valid( targetScen ) )
 		{
@@ -739,10 +931,23 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 				CardsUse( cr, item, targetItem );
 				return true;
 			}
-			
-			if( valid( targetCr ) && targetCr.IsPlayer() && !useOnSelf )
+
+			if( valid( targetCr ) && targetCr.IsPlayer() )
 			{
 				CardsUse( cr, item, targetCr );
+				return true;
+			}
+
+			if( useOnSelf )
+			{
+				if( item.CritSlot == SLOT_HAND1 )
+				{
+					CardsUse( cr, item, cr );
+				}
+				else
+				{
+					ShowContainer( cr, item, TRANSFER_SELF_CONT );
+				}
 				return true;
 			}
 		}
@@ -759,6 +964,12 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		if( scenToiletList.find( targetScen.ProtoId ) > -1 )
 		{
 			FlushToilet( cr, item );
+			return true;
+		}
+
+		// Gathering dirty water
+		if( start_gathering_water( cr, targetScen.ProtoId ) )
+		{
 			return true;
 		}
 	}
@@ -782,22 +993,127 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		case( PID_FLUTE ):
 			FluteUse( cr );
 			return true;
+		case( PID_HARMONICA ):
+			HarmonicaUse( cr );
+			return true;
 		case( PID_MAGIC_8_BALL ):
 			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, Random( 1, 2 ) == 1 ? STR_MAGIC_BALL_YES : STR_MAGIC_BALL_NO );
 			return true;
-		case( PID_SHOVEL ): 
+		case( PID_SHOVEL ):
+		case( PID_PRIMITIVE_SHOVEL ):
 		case( PID_SPADE ):
 			CheckRemainsRemoval( cr, targetItem );
 			return true;
 		case( PID_SLAVE_COLLAR_SWITCH ):
 			StartMenuSCollar( cr, item );
 			return true;
-		case( PID_DYNAMITE ):	
-		case( PID_TNT_PACK ):	
+		case( PID_DYNAMITE ):
+		case( PID_TNT_PACK ):
 		case( PID_TNT_PACK_ACTIVE ):
 		case( PID_REMOTE_DETONATOR ):
+		case( PID_GM_REMOTE_DETONATOR ):
 			SetExplosives( cr, item, param );
 			return true;
+		case( PID_COMPAS ):
+			return TryUseCompass(cr, item);
+		case( PID_PERFUME ):
+			return TryUsePerfume( cr, item );
+		case( PID_STEALTH_BOY ):
+		case( PID_ACTIVE_STEALTH_BOY ):
+			return TryUseStealthboy( cr, item );
+		case( PID_MOTION_SENSOR ):
+		case( PID_ACTIVE_MOTION_SENSOR ):
+			return TryUseSensor( cr, item );
+		case( PID_SMALL_ENERGY_CELL ):
+		case( PID_CUENCELL_LOW ):
+		{
+			Item@ flashlight = _CritGetItemHand( cr );
+			if( valid( flashlight ) )
+			{
+				if( FLAG( flashlight.Proto.HeadItem_Perk, HEAD_PERK_FLASHLIGHT ) || FLAG( flashlight.Proto.Weapon_Perk, WEAPON_PERK_FLASHLIGHT ) )
+				{
+					ChargeFlashlight( cr, item, flashlight );
+					return true;
+				}
+			}
+		}
+		case( PID_MICRO_FUSION_CELL ):
+		{
+			Item@ hand = _CritGetItemHand( cr );
+			if( valid( hand ) )
+			{
+				uint16 hand_pid = hand.GetProtoId();
+				if( hand_pid == PID_REANIMATION_KIT )
+				{
+					ChargeDefib( cr, item, hand );
+					return true;
+				}
+				else if( hand_pid == PID_MOTION_SENSOR || hand_pid == PID_ACTIVE_MOTION_SENSOR )
+				{
+					ChargeSensor( cr, item, hand );
+					return true;
+				}
+			}
+		}
+		case( PID_PLANT_OIL ):
+		{
+			Item@ lamp = _CritGetItemHand( cr );
+			if( valid( lamp ) )
+			{
+				uint16 lamp_pid = lamp.GetProtoId();
+				if( lamp_pid == PID_OIL_LAMP )
+				{
+					ChargeLamp( cr, item, lamp );
+					return true;
+				}
+			}
+		}
+		case( PID_LIGHTER ):
+		{
+			if( useOnSelf )
+			{
+				@targetCr = cr;
+			}
+			
+			if( valid( targetCr ) )
+			{
+				Item@ smoker = _CritGetItemHand( targetCr );
+				if( valid( smoker ) )
+				{
+					uint16 smoker_pid = smoker.GetProtoId();
+					if( Smokers.find( smoker_pid ) != -1 || SmokingPipes.find( smoker_pid ) != -1 )
+					{
+						IgniteSmoker( cr, targetCr, smoker );
+						return true;
+					}
+				}
+				
+				@smoker = _CritGetItemHead( targetCr );
+				if( valid( smoker ) )
+				{
+					uint16 smoker_pid = smoker.GetProtoId();
+					if( Smokers.find( smoker_pid ) != -1 || SmokingPipes.find( smoker_pid ) != -1 )
+					{
+						IgniteSmoker( cr, targetCr, smoker );
+						return true;
+					}
+				}
+			}
+			else if( valid( targetItem ) && tpid == PID_CHOPPED_FIREWOOD )
+			{
+				return Ignite( cr, item, targetItem );
+			}
+		}
+	}
+	//Profession perk books
+	if( IsProfBook( item ) )
+	{
+		return TryUseProfBook( cr, item );
+	}
+	//Airtanks 
+	if( isAirtank( pid ) )
+	{
+		return useAirTank( cr, item );
 	}
 	//Show single Card
 	if( Cards.find( pid ) != -1 )
@@ -806,10 +1122,10 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		return true;
 	}
 	//Fishing
-	if( ( pid == PID_STRING || pid == PID_HOOK || Bait.find( pid ) != -1 ) && ( hasItem( cr, PID_ROD_STRING_HOOK, SLOT_HAND1 ) || hasItem( cr, PID_ROD_STRING, SLOT_HAND1 ) || hasItem( cr, PID_ROD, SLOT_HAND1 ) ) ) 
+	if( ( pid == PID_STRING || pid == PID_HOOK || Bait.find( pid ) != -1 ) && ( hasItem( cr, PID_ROD_STRING_HOOK, SLOT_HAND1 ) || hasItem( cr, PID_ROD_STRING, SLOT_HAND1 ) || hasItem( cr, PID_ROD, SLOT_HAND1 ) ) )
 	{
 		PrepareFishingRod( cr, item );
-		return true;		
+		return true;
 	}
 	//Soap
 	if( SoapItems.find( pid ) != -1 )
@@ -821,29 +1137,36 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			return true;
 		}
 	}
+	
 	// Knife use
 	if( CutCheck( cr, item, useOnSelf ? @cr : @targetCr ) )
-	{ 
+	{
 		return true;
 	}
 	//Blood wrapping
-	if( pid == PID_CRAFT_L_RAGS && valid( targetItem ) && targetItem.GetProtoId() >= PID_BLOOD_SMALL_1 && targetItem.GetProtoId() <= PID_BLOOD_BIG_3 )
+	if( ( pid == PID_CLOTH || pid == PID_BANDAGE || pid == PID_TOWEL || pid == PID_OLD_TOWEL ) && valid( targetItem ) && ( targetItem.GetProtoId() >= PID_BLOOD_TINY_0 && targetItem.GetProtoId() <= PID_BLOOD_LARGE_3 ) )
 	{
 		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_WIPE_BLOOD );
 		cr.Animate( 0, ANIM2_PICKUP, null, false, true );
 		targetItem.Val0 -= Random( 1, 3 );
-		
+		if( pid == PID_TOWEL )
+		{
+			item.ChangeProto( PID_OLD_TOWEL );
+			item.Update();
+		}
+
 		if( targetItem.Val0 < 1 )
 		{
 			DeleteItem( targetItem );
 		}
+		
 		return true;
 	}
 	//Doors
 	if( valid( targetItem ) && targetItem.GetType() == ITEM_TYPE_DOOR )
 	{
         cr.StatBase[ ST_LAST_DOOR_ID ] = targetItem.Id;
-    }
+	}
 	//Bandage
 	if( bandage_items.find( pid ) != -1 )
 	{
@@ -852,9 +1175,9 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SK_COOLDOWN );
 			return true;
 		}
-		
+
 		cr.TimeoutBase[ TO_SK_FIRST_AID ] = FIRST_AID_TIMEOUT( cr );
-		
+
 		if( useOnSelf )
 		{
 			UseBandageItem( cr, cr, item );
@@ -872,6 +1195,12 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		}
         return true;
     }
+	//Planting mine on something
+	if( valid( targetScen ) && item.GetType() == ITEM_TYPE_TRAP && item.Proto.Item_Subtype == ITEM_SUBTYPE_MINE )
+	{
+		TryPlantMine( cr, item, targetScen.HexX, targetScen.HexY );
+		return true;
+	}
 	//Skinning
 	if( valid( targetCr ) )
 	{
@@ -893,60 +1222,6 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		KeyBunchUse( cr, item, targetItem );
 		return true;
     }
-    //Hypo Poison
-    if( useOnSelf && pid == PID_HYPO_POISON && cr.Stat[ ST_BODY_TYPE ] != BT_ROBOT )
-	{
-		if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_NEUROTOX_SELF );
-			AffectParalysis( cr, 50 );
-			cr.DeleteItem( PID_HYPO_POISON, 1 );
-		}
-        return true;
-    }
-	
-    if( valid( targetCr ) && pid == PID_HYPO_POISON && targetCr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT )
-	{
-        targetCr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_NEUROTOX_YOU );
-        AffectParalysis( targetCr, 50 );
-        cr.DeleteItem( PID_HYPO_POISON, 1 );
-        return true;
-    }
-    //Antidote
-    if( useOnSelf && pid == PID_ANTIDOTE_2 )
-	{
-        if( cr.Param[ ST_PARALYSIS_LEVEL ] != 0 || cr.Param[ ST_POISONING_LEVEL ] != 0 ) {
-            DropPoison( cr );
-            DropParalysis( cr, 50 );
-            cr.DeleteItem( PID_ANTIDOTE_2, 1 );
-			cr.AddItem( PID_HYPODERMIC_NEEDLE, 1 );
-            return true;
-        }
-		else 
-		{
-            cr.DeleteItem( PID_ANTIDOTE_2, 1 );
-			cr.AddItem( PID_HYPODERMIC_NEEDLE, 1 );
-            return false;
-        }
-    }
-	
-    if( valid( targetCr ) && pid == PID_ANTIDOTE_2 )
-	{
-        if( targetCr.Param[ ST_PARALYSIS_LEVEL ] != 0 || targetCr.Param[ ST_POISONING_LEVEL ] != 0 )
-		{
-			DropPoison( targetCr );
-            DropParalysis( targetCr, 50 );
-            cr.DeleteItem( PID_ANTIDOTE_2, 1 );
-			cr.AddItem( PID_HYPODERMIC_NEEDLE, 1 );
-            return true;
-        }
-		else
-		{
-            cr.DeleteItem( PID_ANTIDOTE_2, 1 );
-			cr.AddItem( PID_HYPODERMIC_NEEDLE, 1 );
-            return false;
-        }
-    }
 	//Flasks
 	if( item.GetType() == ITEM_TYPE_FLASK )
 	{
@@ -962,7 +1237,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 				PourFlask( cr, item );
 			}
 			else if( valid( flask ) && item.CritSlot != SLOT_HAND1 && flask.Proto.Type == ITEM_TYPE_FLASK )
-			{ 
+			{
 				FlaskCheck( cr, item, flask );
 			}
 			else if( valid( targetItem ) )
@@ -985,17 +1260,17 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		}
 		return true;
 	}
-	
+
     // Radio
 	if( !useOnSelf && pid == PID_RADIO )
 	{
 		if( valid( targetItem ) && targetItem.GetType() == ITEM_TYPE_ARMOR && ( targetItem.Proto.Item_Subtype >= ITEM_SUBTYPE_ARMOR_AC20 && targetItem.Proto.Item_Subtype <= ITEM_SUBTYPE_ARMOR_AC50 ) )
-		{ 
+		{
 			InstallRadio( cr, targetItem );
 		}
 		return true;
 	}
-	
+
     if( FLAG( item.Flags, ITEM_RADIO ) && useOnSelf )
 	{
         if( cr.IsPlayer() )
@@ -1017,7 +1292,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 				return true;
 			}
 		}
-		
+
 		if( find_glassed_drinks( item ) )
 		{
 			uint body = cr.Stat[ ST_BODY_TYPE ];
@@ -1026,7 +1301,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WRONG_ANATOMY );
 				return true;
 			}
-			
+
 			string sound = "bottleOpen.ogg";
 			if( find_capped_bottles( item ) )
 			{
@@ -1035,14 +1310,14 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			}
 
 			PlayGenericSound( map, cr.HexX, cr.HexY, sound, 4 );
-			
+
 			uint16 drinkPid = item.GetProtoId();
 			int index = glass_bottles[1].find( drinkPid );
-			
+
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_OPEN_BOTTLE, "$proto@msg item " + ( drinkPid * 100 ) + "@\n");
-			
+
 			Item@ openedBottle = cr.AddItem( glass_bottles[2][index], 1 );
-			
+
 			openedBottle.REMAINING_USES = openedBottle.Proto.Partial_Item;
 			openedBottle.DRINK_DNA = openedBottle.Proto.StartValue_1;
 			openedBottle.EXTRA_WEIGHT = openedBottle.Proto.Partial_Item * 100;
@@ -1053,58 +1328,70 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			openedBottle.POLUTION_LEVEL = item.POLUTION_LEVEL;
 			openedBottle.FASK_TASTE = item.FASK_TASTE;
 			openedBottle.SPIRIT_LEVEL = item.SPIRIT_LEVEL;
-			
+
 			openedBottle.Update();
-			
+
 			string@ lexems = Item_GetLexems( item );
 			if( valid( lexems ) )
 			{
 				openedBottle.SetLexems( lexems );
 			}
-			
+
 			_SubItem( item, 1 );
-			
+
 			Item@ hands = cr.GetItem( 0, SLOT_HAND1 );
 			if( valid( hands ) )
 			{
 				cr.MoveItem( hands.Id, hands.GetCount(), SLOT_INV );
 			}
-			
+
 			cr.MoveItem( openedBottle.Id, openedBottle.GetCount(), SLOT_HAND1 );
-			
+
 			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_OPENS_BOTTLE );
-			
+
 			return true;
-		} 
-		
+		}
+
 		Item@ flask = _CritGetItemHand( cr );
 		if( valid( flask ) )
 		{
 			if( item.CritSlot != SLOT_HAND1 && flask.GetType() == ITEM_TYPE_FLASK )
-			{ 
+			{
 				FlaskCheck( cr, item, flask );
 				return true;
 			}
 		}
-			
+
 		if( item.CritSlot != SLOT_HAND1 )
 		{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MUST_HOLD_ITEM );
 			return true;
 		}
-		
+
 		if( useOnSelf )
 		{
-			cr.Action( ACTION_USE_ITEM, 2, item );
-			ProccessDrink( cr, cr, item );
+			if( !IsRobot( cr ) )
+			{
+				cr.Action( ACTION_USE_ITEM, 2, item );
+				ProccessDrink( cr, cr, item );
+			}
 		}
 		else if( valid( targetCr ) )
 		{
-			cr.Action( ACTION_USE_ITEM, 1, item );
-			ProccessDrink( cr, targetCr, item );
+			if( !IsRobot( targetCr ) )
+			{
+				cr.Action( ACTION_USE_ITEM, 1, item );
+				ProccessDrink( cr, targetCr, item );
+			}
 		}
         return true;
     }
+	// Defibrilator
+	if( !useOnSelf && valid( targetCr ) && pid == PID_REANIMATION_KIT )
+	{
+		TryReanimate( cr, targetCr, item );
+		return true;
+	}
 	// Bondage
 	if( item.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE )
 	{
@@ -1112,11 +1399,12 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		{
 			return false;
 		}
-		
+
 		if( useOnSelf )
 		{
 			@targetCr = cr;
 		}
+
 		TryBondageTarget( cr, targetCr, item );
 		return true;
 	}
@@ -1131,68 +1419,24 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		return true;
 	}
 	// Remove shackles and cuffs
-	if( pid == PID_WELDING || pid == PID_ENERGY_WELDIN )
+	if( ( pid == PID_WELDING || pid == PID_ENERGY_WELDIN || pid == PID_MULTI_TOOL || pid == PID_SUPER_TOOL_KIT ) && !valid( targetItem ) )
 	{
 		if( useOnSelf )
 		{
 			@targetCr = cr;
 		}
+
 		TryBreakBonds( cr, targetCr );
 		return true;
 	}
-    // Drugs
-    if( item.GetType() == ITEM_TYPE_DRUG || item.GetType() == ITEM_TYPE_FOOD )
-	{
-    	if( ( useOnSelf && cr.StatBase [ST_BODY_TYPE] == BT_ROBOT) || ( @targetCr != null && targetCr.StatBase [ST_BODY_TYPE] == BT_ROBOT ) )
-		{
-			return false;
-        }
-
-        if( useOnSelf )
-		{
-			if( heal_items.find( pid ) != -1 ) 
-			{
-				cr.Action( ACTION_USE_ITEM, 2, item );
-				UseHealingItem( cr, cr, item );
-				return true;
-			}
-			else
-			{
-				cr.Action( ACTION_USE_ITEM, 2, item );
-				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_CONSUMED, "$proto@msg item " + ( pid * 100 ) + "@" );
-			
-            	ProccessFood( cr, cr, item );
-
-				UseDrug( cr, item );
-				return true;
-			}
-		}
-		else if( valid( targetCr ) )
-		{
-			if( heal_items.find( pid ) != -1 ) 
-			{
-				cr.Action( ACTION_USE_ITEM, 2, item );
-				if( targetCr.IsLife() )
-				{
-					AskHealingItem( cr, targetCr, item, false );
-				}
-				else
-				{
-					UseHealingItem( cr, targetCr, item );
-				}
-				return true;
-			}
-			else
-			{
-				ProccessFood( cr, targetCr, item );
-				UseDrugOn( cr, targetCr, item );
-			}
-			cr.Action( ACTION_USE_ITEM, 1, item );
-			//cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_CONSUMED, "$proto@msg item " + ( pid * 100 ) + "@" );
-		}
-		return true;
-    }
 	
+	//new Drug - Consumables system
+	if( DrugUsage( cr, item, ( valid(targetCr) ? @targetCr : @cr ) ) )
+	{
+		askDrug( cr, item, ( valid(targetCr) ? @targetCr : @cr ) );
+		return true;
+	}
+
     //Oil Lamp
 	if( pid == PID_OIL_LAMP )
 	{
@@ -1200,28 +1444,29 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		return true;
 	}
 	//Flashlight
-    if( pid == PID_FLASHLIGHT_OFF )
+	if( FLAG( item.Proto.HeadItem_Perk, HEAD_PERK_FLASHLIGHT ) || FLAG( item.Proto.Weapon_Perk, WEAPON_PERK_FLASHLIGHT ) )
 	{
 		FlashlightUse( cr, item );
         return true;
     }
-		
+
 	// Flashlight charging
-	if( ( pid == PID_SMALL_ENERGY_CELL || pid == PID_CUENCELL_LOW ) && valid( targetItem ) && ( targetItem.GetProtoId() == PID_FLASHLIGHT_OFF || targetItem.GetProtoId() == PID_FLASHLIGHT_ON ) )
+	if( ( pid == PID_SMALL_ENERGY_CELL || pid == PID_CUENCELL_LOW ) && tpid != 0 
+	&& ( tpid == PID_FLASHLIGHT_OFF || tpid == PID_FLASHLIGHT_ON || tpid == PID_FLASHLIGHT_HELMET || tpid == PID_10MM_PISTOL_FLASHLIGHT || pid == PID_HELMET_RANGER ) )
 	{
-		targetItem.ITEM_CHARGE = pid == PID_SMALL_ENERGY_CELL ? 480 : 240;
-		PlayGenericSound( map, cr.HexX, cr.HexY, "WRJ1XXX1.mp3", 6 ); 
-		cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_RELOAD_FLASHLIGHT );
-		_SubItem( item, 1 );
+		ChargeFlashlight( cr, item, targetItem );
 		return true;
 	}
 	// OilLamp charging
-	if( pid == PID_PLANT_OIL && valid( targetItem ) && targetItem.GetProtoId() == PID_OIL_LAMP )
+	if( pid == PID_PLANT_OIL && valid( targetItem ) && tpid == PID_OIL_LAMP )
 	{
-		PlayGenericSound( map, cr.HexX, cr.HexY, "ROBE.mp3", 6 );
-		cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_RELOAD_LAMP );
-		targetItem.ITEM_CHARGE = 120;
-		_SubItem( item, 1 );
+		ChargeLamp( cr, item, targetItem );
+		return true;
+	}
+	// Reanimation Kit charging
+	if( pid == PID_MICRO_FUSION_CELL && valid( targetItem ) && tpid == PID_REANIMATION_KIT )
+	{
+		ChargeDefib( cr, item, targetItem );
 		return true;
 	}
 	// Flare extinguish
@@ -1245,7 +1490,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
         return true;
     }
 	// Fires
-	if( ( ( pid == PID_LIGHTER || pid == PID_FLINT ) && valid( targetItem ) && targetItem.GetProtoId() == PID_CHOPPED_FIREWOOD ) )
+	if( pid == PID_FLINT && valid( targetItem ) && tpid == PID_CHOPPED_FIREWOOD )
 	{
 		return Ignite( cr, item, targetItem );
 	}
@@ -1269,9 +1514,11 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		return true;
 	}
 	//Locker removal
-    if( ( pid == PID_CROWBAR || pid == PID_MULTI_TOOL ) && @targetItem != null )
+    if( valid( targetItem ) && ( pid == PID_CROWBAR || pid == PID_MULTI_TOOL || pid == PID_SUPER_TOOL_KIT ) 
+		&& ( targetItem.GetType() == ITEM_TYPE_DOOR || targetItem.GetType() == ITEM_TYPE_CONTAINER ) && targetItem.LOCK_TYPE != LOCK_NONE
+		&& FLAG( targetItem.LockerCondition, LOCKER_ISOPEN ) )
 	{
-        LockerRemoval( cr, item, targetItem );
+        TryRemoveLock( cr, item, targetItem );
 		return true;
     }
     // Geiger counter
@@ -1279,7 +1526,7 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 	{
         return true;
 	}
-	
+
     if( valid( targetItem ) && targetItem.GetProtoId() == PID_GEIGER_COUNTER && UseItemOnGeiger( cr, targetItem, item ) )
 	{
         return true;
@@ -1293,10 +1540,8 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 	// Item use on locker
     if( valid( targetItem ) && ( targetItem.GetType() == ITEM_TYPE_DOOR || targetItem.GetType() == ITEM_TYPE_CONTAINER ) )
 	{
-		UseItemOnLocker( cr, targetItem, item );
-        return true;
+		return UseItemOnLocker( cr, targetItem, item );
 	}
-
     // Take process to engine
     return false;
 }
@@ -1330,9 +1575,9 @@ void informAboutSkill( Critter& cr, int skill, Critter@ targetCr, Item@ targetIt
 		default:
 			return;
 	}
-	
+
 	string action_info = crInfo( cr ) + " applies " + skill_name + " on ";
-	
+
 	if( valid( targetCr ) )
 	{
 		action_info += crInfo( targetCr );
@@ -1349,78 +1594,91 @@ void informAboutSkill( Critter& cr, int skill, Critter@ targetCr, Item@ targetIt
 	{
 		action_info += "self";
 	}
+	
 	SayLog( cr, action_info + "." );
+}
+
+uint process_inspect( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESSD( LTP_INSPECT )
+
+	Critter@ targetCr = GetCritter( param1 );
+    if( !valid( targetCr ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+        return 0;
+	}
+	
+	hotkey_critter_anim( cr, 5 );
+	ShowContainer( cr, targetCr, TRANSFER_CRIT_LOOT );
+
+	return 0;
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Call on something critter use skill.
 bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen )
 {
-	bool isSentientCritter = ( IsHuman( cr ) || IsMutant( cr ) );
+	bool isSentientCritter = ( IsHuman( cr ) || IsMutant( cr ) || IsRobot( cr ) );
 	if( cr.Param[ CR_INIT_SEX ] != 0 )
 	{
 		skill = SK_SEX;
 	}
-	
+
 	if( cr.Param[ CR_INIT_DEVOUR ] != 0 )
 	{
 		skill = SK_HUNTING;
 	}
+	
+	Map@ map = cr.GetMap();
 
-	string exception_catcher = cr.Id + "# in " + (valid(cr.GetMap())?"@"+cr.GetMap().Id:"global") + " used " + skill + " on [" 
-		+ (valid(targetCr)?targetCr.Id:0) + ", " 
-		+ (valid(targetItem)?targetItem.Id:0) + ":" + (valid(targetItem)?targetItem.GetProtoId():0) + ", " 
+	string exception_catcher = cr.Id + "# in " + (valid(cr.GetMap())?"@"+cr.GetMap().Id:"global") + " used " + skill + " on ["
+		+ (valid(targetCr)?targetCr.Id:0) + ", "
+		+ (valid(targetItem)?targetItem.Id:0) + ":" + (valid(targetItem)?targetItem.GetProtoId():0) + ", "
 		+ (valid(targetScen)?targetScen.ProtoId:0) + "].";
 	DebugLog( exception_catcher, 2 );
 
 	informAboutSkill( cr, skill, targetCr, targetItem, targetScen );
-	
+
 	if( valid( targetItem ) )
 	{
 		CheckItemMovement( cr, targetItem, skill );
 	}
 
     bool onSelf = ( ( !valid( targetCr ) ) && ( !valid( targetItem ) ) && ( !valid( targetScen ) ) );
-	
+
 	if( skill != SKILL_PUT_CONT && skill != SKILL_TAKE_CONT )
 	{
 		cr.Wait( GetSkillTime( skill, cr ) );
 	}
-	
+
     // Geiger counter
     if( valid( targetItem ) && targetItem.GetProtoId() == PID_GEIGER_COUNTER && UseSkillOnGeiger( cr, targetItem, skill ) )
 	{
         return true;
 	}
 	// homebrew pot interface
-	if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_POT_ALCO ) )
-	{	
+	if( valid( targetItem ) && targetItem.GetProtoId() == PID_POT_ALCO )
+	{
 		switch( skill )
 		{
 			case( SK_REPAIR ):
 				LockInPlace( cr, targetItem );
 				break;
 			case( SKILL_PICK_ON_GROUND ):
-			{
-				if( !FLAG( targetItem.Flags, ITEM_CAN_PICKUP ) )
-				{
-					ShowMenuBrew( cr, targetItem );
-				}
-				else
-				{
-					PickItem( cr, targetItem );
-					ChangeCritterSpeed( cr );
-				}
+				ShowMenuBrew( cr, targetItem );
 				break;
-			}
 		}
 		return true;
 	}
-	// empty mushroom bed
-	if( valid( targetItem ) && ( targetItem.GetProtoId() ==PID_MUSHBED_EMPTY ) )
+	// empty Plant beds
+	if( valid( targetItem ) && ( targetItem.GetProtoId() == PID_MUSHBED_EMPTY || targetItem.GetProtoId() == PID_HYDRO_NS_EMPTY || targetItem.GetProtoId() == PID_HYDRO_EW_EMPTY || targetItem.GetProtoId() == PID_PLANTBARREL_EMPTY ) )
 	{
-			StartMenuMushbed( cr, targetItem );
+		if( skill != SKILL_PUT_CONT && skill != SKILL_TAKE_CONT )
+		{
+			StartMenuPlantBed( cr, targetItem );
 			return true;
+		}
 	}
 	// Still interface
 	if( valid( targetItem ) && IsStill( targetItem ) )
@@ -1439,7 +1697,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		return true;
 	}
 	// case for lockpickable containers with interface
-	if( skill != SK_LOCKPICK ) 
+	if( skill != SK_LOCKPICK )
 	{
 		if( valid( targetItem ) )
 		{
@@ -1490,27 +1748,158 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				}
 				return true;
 			}
-			// Smelter interface
-			if( Pid == PID_FURNACE_SMALL )
+			// Mill interface
+			if( Pid == PID_BASIC_MILL )
 			{
 				switch( skill )
 				{
 					case( SK_REPAIR ):
-					{ 
+						LockInPlace( cr, targetItem );
+						break;
+					case( SKILL_PICK_ON_GROUND ):
+						StartMenuMill( cr, targetItem );
+						break;
+					default:
+						break;
+				}
+				return true;
+			}
+			// sawhorse interface
+			if( Pid == PID_SAWHORSE )
+			{
+				switch( skill )
+				{
+					case( SK_REPAIR ):
+						LockInPlace( cr, targetItem );
+						break;
+					case( SKILL_PICK_ON_GROUND ):
+						StartMenuSawhorse( cr, targetItem );
+						break;
+					default:
+						break;
+				}
+				return true;
+			}
+			
+			// Power generator
+			if( Pid == PID_COAL_POWERGEN )
+			{
+				switch( skill )
+				{
+					case( SK_REPAIR ):
+						LockInPlace( cr, targetItem );
+						break;
+					case( SKILL_PICK_ON_GROUND ):
+						StartMenuPowerGen( cr, targetItem );
+						break;
+					default:
+						break;
+				}
+				return true;
+			}
+			// Smelter interface
+			if( Pid == PID_FURNACE_SMALL || Pid == PID_ARC_FURNACE || Pid == PID_ADV_FURNACE )
+			{
+				switch( skill )
+				{
+					case( SK_REPAIR ):
+					{
 						if( targetItem.STATE == STATE_EXTINGUISHED )
 						{
 							if( !FLAG( targetItem.Flags, ITEM_CAN_PICKUP ) )
 							{
 								LockInPlace( cr, targetItem );
 							}
+
 							_InitFurniture( targetItem, true );
 							targetItem.Update();
-							StartMenuFuriture( cr, targetItem );
+							StartMenuFurniture( cr, targetItem );
 							break;
 						}
 					}
 					case( SKILL_PICK_ON_GROUND ):
 						StartMenuFurnace( cr, targetItem );
+						break;
+					default:
+						break;
+				}
+				return true;
+            }
+			// Crusher-3000 interface
+			if( Pid == PID_CRUSHER_2000 )
+			{
+				switch( skill )
+				{
+					case( SK_REPAIR ):
+					{
+						if( targetItem.STATE == STATE_OFF )
+						{
+							if( !FLAG( targetItem.Flags, ITEM_CAN_PICKUP ) )
+							{
+								LockInPlace( cr, targetItem );
+							}
+
+							_InitFurniture( targetItem, true );
+							targetItem.Update();
+							StartMenuFurniture( cr, targetItem );
+							break;
+						}
+					}
+					case( SKILL_PICK_ON_GROUND ):
+						StartMenuCrusher( cr, targetItem );
+						break;
+					default:
+						break;
+				}
+				return true;
+            }
+			// Wood Cutter interface
+			if( Pid == PID_WOOD_CUTTER )
+			{
+				switch( skill )
+				{
+					case( SK_REPAIR ):
+					{
+						if( targetItem.STATE == STATE_OFF )
+						{
+							if( !FLAG( targetItem.Flags, ITEM_CAN_PICKUP ) )
+							{
+								LockInPlace( cr, targetItem );
+							}
+
+							_InitFurniture( targetItem, true );
+							targetItem.Update();
+							StartMenuFurniture( cr, targetItem );
+							break;
+						}
+					}
+					case( SKILL_PICK_ON_GROUND ):
+						StartMenuWoodCutter( cr, targetItem );
+						break;
+					default:
+						break;
+				}
+				return true;
+            }
+			// Bulletin Board Menu
+			if( Pid == PID_BBS_BOARD )
+			{
+				switch( skill )
+				{
+					case( SK_REPAIR ):
+					{
+						if( !FLAG( targetItem.Flags, ITEM_CAN_PICKUP ) )
+						{
+							LockInPlace( cr, targetItem );
+						}
+
+						_InitFurniture( targetItem, true );
+						targetItem.Update();
+						StartMenuFurniture( cr, targetItem );
+						break;
+					}
+					case( SKILL_PICK_ON_GROUND ):
+						StartMenuBBS( cr, targetItem );
 						break;
 					default:
 						break;
@@ -1539,14 +1928,31 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOGS_CANT_DO_THAT );
 			return false;
 		}
-
-		UseSkillOnLocker( cr, targetItem, skill );
-		return true;
+		
+		if( targetItem.Proto.Item_Subtype != ITEM_SUBTYPE_STOVE )
+		{
+			UseSkillOnLocker( cr, targetItem, skill );
+			return true;
+		}
+	}
+	
+	if( valid(targetItem) && FLAG(targetItem.Flags, ITEM_HOLODISK) && skill == SK_SCIENCE ) // Multihex flag is unused, so i can use this as Read-only flag - APAMk2
+	{
+		if( targetItem.GetProtoId() == PID_REAL_HOLODISK && !HasPipBoy(cr) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_YOU_NEED_PIPBOY );
+			return true;
+		}
+		if(FLAG(targetItem.Flags, ITEM_MULTI_HEX))
+		{
+			TryReadHolodisk(targetItem, cr);
+			return true;
+		}
 	}
 	// Check for all skills for critter
     switch( skill )
     {
-		case( SKILL_PICK_ON_GROUND ): 
+		case( SKILL_PICK_ON_GROUND ):
 		{
 			// Scenery
 			if( valid( targetScen ) )
@@ -1557,14 +1963,8 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 					Cleaning( cr, 0, targetScen.ProtoId );
 					return true;
 				}
-				// cooking
-				if( isSentientCritter && CanCook( targetScen ) )
-				{
-					AskCooking( cr );
-					return true;
-				}
 			}
-			
+
 			// Items
 			if( valid( targetItem ) )
 			{
@@ -1586,39 +1986,46 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				}
 				// Open fire cooking
 				if( ( Pid == PID_FIREPLACE2 || Pid == PID_CHOPPED_FIREWOOD ) && targetItem.Val0 >= 1 )
-				{	
-					AskCooking( cr );
-					return true; 
-				} 
-				// Locked in place firesource
-				if( Pid == PID_FIREBARREL || Pid == PID_BRAZIER )
-				{	
-					StartMenuFireBarrel( cr, targetItem );
-					return true; 
+				{
+					AskCooking( cr, targetItem, false );
+					return true;
 				}
-				// Power generator
-				if( Pid == PID_COAL_POWERGEN )
-				{	
-					StartMenuPowerGen( cr, targetItem );
-					return true; 
+				// Open stove cooking
+				if( Pid == PID_STOVE_02 || Pid == PID_STOVE_03 || Pid == PID_STOVE_04 || Pid == PID_STOVE_05 || Pid == PID_STOVE_06 || Pid == PID_STOVE_07 || Pid == PID_STOVE_08 )
+				{
+					if( MapHasPower( map ) )
+					{
+						AskCooking( cr, targetItem, true );
+					}
+					else
+					{
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_POWER_IS_OFF );
+					}
+					return true;
+				}
+				// Locked in place firesource
+				if( Pid == PID_FIREBARREL || Pid == PID_BRAZIER || Pid == PID_STOVE_01 )
+				{
+					StartMenuFireBarrel( cr, targetItem );
+					return true;
 				}
 				// Light Switches
 				if( Pid == PID_SWITCH1_DIR2 || Pid == PID_SWITCH1_DIR3 || Pid == PID_SWITCH2_DIR2 || Pid == PID_SWITCH2_DIR3 || Pid == PID_SWITCH3_DIR2 || Pid == PID_SWITCH3_DIR3 )
 				{
 					UseLightSwitch( cr, targetItem );
-					return true; 
+					return true;
 				}
 				// Gather wildplant
 				if( Wildplants.find( Pid ) != -1 )
 				{
 					PickPlant( cr, targetItem );
-					return true; 
+					return true;
 				}
 				// Take sandbag
 				if( Sandbags.find( Pid ) != -1 )
 				{
 					TakeSandbag( cr, targetItem );
-					return true; 
+					return true;
 				}
 				// seeds
 				if( Wildplants.find( Pid ) != -1 )
@@ -1633,57 +2040,79 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 					}
 					targetItem.PLANT_WATERING = 0;
 					targetItem.PLANT_FERTILITY = 0;
-					
+
 					PickItem( cr, targetItem );
 					ChangeCritterSpeed( cr );
-					return true; 
+					return true;
 				}
 				// Any other item
 				PickItem( cr, targetItem );
 				ChangeCritterSpeed( cr );
-				return true; 
+				return true;
 			}
-			return true; 
+			return true;
 		}
 
 		case( SKILL_PUT_CONT ):
 		{
-			if( cr.ParamBase[ ST_LAST_CONT_ID ] == 0 )
+			if( cr.Param[ ST_LAST_CONT_ID ] == 0 )
 			{
 				return false;
 			}
-			
-			Item@ cont = GetItem( cr.ParamBase[ ST_LAST_CONT_ID ] );
+
+			Item@ cont = GetItem( cr.Param[ ST_LAST_CONT_ID ] );
 			if( !valid( cont ) )
 			{
 				return false;
 			}
-			
-			if( !canPutItemInContainer( targetItem, cont ) || cont.Id == targetItem.Id )
+
+			if( !canPutItemInContainer( cr, targetItem, cont ) || cont.Id == targetItem.Id )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CONTAINER_TOO_SMALL );
 				return true;
 			}
-			
+
 			uint16 contPid = cont.GetProtoId();
 			//Homebrew pot
 			if( contPid == PID_POT_ALCO )
 			{
 				TransferToPot( cr, targetItem, cont );
 				return true;
-			}	
+			}
+			//sawhorse change pic
+			if( contPid == PID_SAWHORSE )
+			{
+				MoveItem( targetItem, cr.ItemTransferCount(), cont, 0 );
+				ShowContainer( cr, cont, TRANSFER_HEX_CONT_UP );
+				
+				Item@[] contItems;
+				uint amount = cont.GetItems( uint( -1 ), contItems);
+				if( amount > 0 )
+				{
+					ChangeFrame( cont, 1 );
+					cont.Update();
+				}
+				
+				return true;
+			}
 			//Computer terminal
 			if( contPid == PID_TERMINAL )
 			{
 				TransferToTerminal( cr, targetItem, cont );
 				return true;
-			}	
+			}
+			//Recorder
+			if( contPid == PID_TAPE_RECORDER )
+			{
+				TransferToRecorder( cr, targetItem, cont );
+				return true;
+			}
 			// bootlegging still
 			if( contPid == PID_STILL_S )
 			{
 				TransferToStill( cr, targetItem, cont );
 				return true;
-			}	
+			}
 			// hand of cards
 			if( contPid == PID_CARDS_HAND )
 			{
@@ -1692,12 +2121,13 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			}
 			//Cart picture update
 			CheckCartPicMap( cont );
-			uint[] val = { cont.Id };
-			CreateTimeEvent( AFTER( REAL_MS( 10 ) ), "e_UpdateContainer", val, true );
-			return false; 
+			uint[] val = { cont.Id, cr.Id };
+			CreateTimeEvent( AFTER( REAL_MS( 10 ) ), "main@e_UpdateContainer", val, true );
+			ChangeCritterSpeed( cr );
+			return false;
 		}
-		
-		case( SKILL_TAKE_CONT ): 
+
+		case( SKILL_TAKE_CONT ):
 		{
 			uint16 Pid = targetItem.GetProtoId();
 			if( targetItem.Accessory == ACCESSORY_CONTAINER || targetItem.CritId == cr.Id )
@@ -1731,7 +2161,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 					}
 				}
 			}
-			
+
 			if( valid( targetItem ) && targetItem.Accessory == ACCESSORY_CONTAINER )
 			{
 				int full_weight = ItemsWeight( targetItem, cr.ItemTransferCount() );
@@ -1747,29 +2177,53 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 					return true;
 				}
 			}
-			
+
 			if( cr.ParamBase[ ST_LAST_CONT_ID ] == 0 )
 			{
 				return false;
 			}
-			
+
 			Item@ cont = GetItem( cr.ParamBase[ ST_LAST_CONT_ID ] );
 			if( !valid( cont ) )
 			{
 				return false;
 			}
-			
+
 			uint16 contPid = cont.GetProtoId();
-			
+
 			if( contPid == PID_POT_ALCO )
 			{
 				TransferFromPot( cr, targetItem, cont );
 				return true;
 			}
-			
+
 			if( contPid == PID_TERMINAL )
 			{
 				TransferFromTerminal( cr, targetItem, cont );
+				return true;
+			}
+
+			if( contPid == PID_TAPE_RECORDER )
+			{
+				TransferFromRecorder( cr, targetItem, cont );
+				return true;
+			}
+			
+			//sawhorse change pic
+			if( contPid == PID_SAWHORSE )
+			{
+				MoveItem( targetItem, cr.ItemTransferCount(), cr );
+				ShowContainer( cr, cont, TRANSFER_HEX_CONT_UP );
+				
+				Item@[] contItems;
+				uint amount = cont.GetItems( uint( -1 ), contItems);
+				if( amount == 0 )
+				{
+					ChangeFrame( cont, 0 );
+				}
+				
+				uint[] val = { cont.Id, cr.Id };
+				CreateTimeEvent( AFTER( REAL_MS( 10 ) ), "main@e_UpdateContainer", val, true );
 				return true;
 			}
 			
@@ -1778,40 +2232,58 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				TransferFromCardsHand( cr, targetItem, cont );
 				return true;
 			}
-
-			CheckCartPicMap( cont ); // changes cart picture
-			uint[] val = { cont.Id };
-			CreateTimeEvent( AFTER( REAL_MS( 10 ) ), "e_UpdateContainer", val, true );
+			//Cart picture update
+			CheckCartPicMap( cont );
+			uint[] val = { cont.Id, cr.Id };
+			CreateTimeEvent( AFTER( REAL_MS( 10 ) ), "main@e_UpdateContainer", val, true );
+			ChangeCritterSpeed( cr );
+			
 			return false; // in order for items to transfer return false!
 		}
-		
-		case( SKILL_TAKE_ALL_CONT ): 
+
+		case( SKILL_TAKE_ALL_CONT ):
 		{
 			//Disabled
 			return false;
 		}
-		
-		case( SKILL_LOOT_CRITTER ): 
+
+		case( SKILL_LOOT_CRITTER ):
 		{
-			if( !valid( targetCr ) )
-			{			
-				return false;
+			if( valid( targetCr ) )
+			{
+				cr.Action( ACTION_PICK_CRITTER, 0, null );
+				if( isGM( cr ) )
+				{
+					hotkey_critter_anim( cr, 5 );
+					ShowContainer( cr, targetCr, TRANSFER_CRIT_LOOT );
+					return true;
+				}
+				
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_INSPECTS );
+				if( !ltp_inspect_inited )
+				{
+					ltp_inspect_init();
+				}
+				
+				cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CRITTER_LOOT_DELAY * 2;
+				cr.ParamBase[ ST_LTP_SEQUENCE ] = 0;
+				StartProcess( cr, LTP_INSPECT, 0, targetCr.Id, 0, cr.Param[ ST_LTP_SEQUENCE_WAIT ] );
+				cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
 			}
-			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_INSPECTS );
-			cr.Action( ACTION_PICK_CRITTER, 0, null );
 			
-			ShowContainer( cr, targetCr, TRANSFER_CRIT_LOOT );
-			return true; 
+			return true;
 		}
-		
-		case( SKILL_PUSH_CRITTER ): 
+
+		case( SKILL_PUSH_CRITTER ):
 		{
 			if( !valid( targetCr ) )
-			{			
+			{
 				return false;
 			}
+
 			cr.Action( ACTION_PICK_CRITTER, 2, null );
 			cr.StatBase[ ST_CURRENT_AP ] -= 5000;
+
 			if( ( targetCr.IsPlayer() || ( targetCr.IsNoPlanes() && targetCr.GetTalkedPlayers( null ) == 0 ) ) && targetCr.Mode[MODE_NO_PUSH] == 0 && targetCr.MoveToDir( cr.Dir ) )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PUSH_TARGET );
@@ -1822,17 +2294,18 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_RESIST );
 				SayLog( cr, crInfo( cr ) + " can't push " + crInfo( targetCr ) + "." );
 			}
-			return true; 
+
+			return true;
 		}
 
-		case( SK_FIRST_AID ): 
+		case( SK_FIRST_AID ):
 		{
 			if( !isSentientCritter )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOGS_CANT_DO_THAT );
 				return false;
 			}
-			
+
 			bool alreadyAllowed = false;
 			if( valid( targetItem ) || valid( targetScen ) )
 			{
@@ -1845,7 +2318,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				@targetCr = cr;
 				alreadyAllowed = true;
 			}
-			
+
 			if( targetCr.Stat[ ST_BODY_TYPE ] == BT_ROBOT )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
@@ -1863,30 +2336,30 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SK_COOLDOWN );
 				return true;
 			}
-			
+
 			AskFirstAid( cr, targetCr, alreadyAllowed );
-			return true; 
+			return true;
 		}
-		
-		case( SK_DOCTOR ): 
+
+		case( SK_DOCTOR ):
 		{
 			if( !isSentientCritter )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOGS_CANT_DO_THAT );
-				return false;
+				return true;
 			}
-			
+
 			if( valid( targetItem ) || valid( targetScen ) )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
 				return true;
 			}
 
-			if( not valid( targetCr ) )
+			if( !valid( targetCr ) )
 			{
 				@targetCr = cr;
 			}
-			
+
 			if( targetCr.Stat[ ST_BODY_TYPE ] == BT_ROBOT )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_USE_NOTHING );
@@ -1905,11 +2378,20 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				return true;
 			}
 
-			ProccessDoctorSkill( cr, targetCr, false );
-			return true; 
+			if( targetCr.IsKnockout() )
+			{
+				ProccessDoctorSkill( cr, targetCr, true );
+			}
+			else
+			{
+				ProccessDoctorSkill( cr, targetCr, false );
+
+			}
+			
+			return true;
 		}
-		
-		case( SK_SCIENCE ): 
+
+		case( SK_SCIENCE ):
 		{
 			if( !isSentientCritter )
 			{
@@ -1917,27 +2399,39 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				return false;
 			}
 			
-			if( valid( targetItem ) && targetItem.Accessory == ACCESSORY_CRITTER )
+			if( valid( targetItem ) )
 			{
-				StartMenuAskAction( cr, targetItem );
-				return true;
+				if( targetItem.Accessory == ACCESSORY_CRITTER )
+				{
+					StartMenuAskAction( cr, targetItem );
+					return true;
+				}
+				
+				uint16 tiPid = targetItem.GetProtoId();
+				if( tiPid == PID_REMOTE_DETONATOR || tiPid == PID_GM_REMOTE_DETONATOR || tiPid == PID_SLAVE_COLLAR_SWITCH || ( tiPid == PID_SLAVE_COLLAR && targetItem.BONDAGE_STATE == BONDAGE_STATE_OFF ) )
+				{
+					int[] data = {0};
+					cr.RunClientScript( "client_screen_numberpad@ShowScreen", targetItem.Id, 0, 0, "Input radio frequency", data );
+					return true;
+				}
 			}
-			break; 
+
+			break;
 		}
-		
-		case( SK_REPAIR ): 
+
+		case( SK_REPAIR ):
 		{
 			if( !isSentientCritter )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOGS_CANT_DO_THAT );
 				return false;
 			}
-			
+
 			if( onSelf )
 			{
 				@targetCr = cr;
 			}
-			
+
 			if( valid( targetCr ) )
 			{
 				if( targetCr.Stat[ ST_BODY_TYPE ] == BT_ROBOT )
@@ -1947,16 +2441,21 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 						cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SK_COOLDOWN );
 						return true;
 					}
-					
+
 					robotRepairSkill( cr, targetCr, false );
 					ChangeCritterSpeed( targetCr );
 					cr.TimeoutBase[ TO_SK_REPAIR ] = REPAIR_TIMEOUT( cr );
 					return true;
-					
+
 				}
 				else
 				{
 					if( onSelf )
+					{
+						return false;
+					}
+					
+					if( targetCr.IsNpc() && targetCr.IsLife() && !isGM( cr ) )
 					{
 						return false;
 					}
@@ -1966,163 +2465,241 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 						if( !targetCr.IsDead() )
 						{
 							targetCr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_RESISTS_TAKE_ITEM );
+							targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_RESIST_ITEM );
 						}
+						
 						cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_TRIES_TAKE_ITEM);
 						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TIRED_TAKE_ITEM );
 						CrimeLog( cr, crInfo( cr ) + " is trying to take item from " + crInfo( targetCr ) );
 						return true;
 					}
-
-					Item@[] items;
-					Item@[] items0;
-					Item@[] items1;
-					Item@[] items2;
-					Item@[] items3;
-					uint itemscount = targetCr.GetItems( SLOT_HAND1, items );
-					uint itemscount0 = targetCr.GetItems( SLOT_HAND2, items0 );
-					uint itemscount1 = targetCr.GetItems( SLOT_HEAD, items1 );
-					uint itemscount2 = targetCr.GetItems( SLOT_BACK, items2 );
-					uint itemscount3 = targetCr.GetItems( SLOT_MISC, items3 );
-					
-					if( targetCr.IsKnockout() || targetCr.IsDead() || CantResist( targetCr ) || isGM( cr ) )
+					else if( !isGM( cr ) && targetCr.ModeBase[ MODE_NO_STEAL ] != 0 )
 					{
-						if( itemscount > 0 )
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TARGET_NO_LOOT );
+						return true;
+					}
+					else if( targetCr.IsKnockout() || targetCr.IsDead() || CantResist( targetCr ) )
+					{
+						bool empty_slots = true;
+						Item@ hand = _CritGetItemHand( targetCr );
+						Item@ hand_ext = _CritGetItemHandExt( targetCr );
+						Item@ misc = _CritGetItemMisc( targetCr );
+						Item@ head = _CritGetItemHead( targetCr );
+						Item@ back = _CritGetItemBack( targetCr );
+						
+						if( valid( hand ) )
 						{
 							if( !HandsTied( cr ) )
 							{
-								targetCr.MoveItem( items[ 0 ].Id, itemscount, SLOT_INV );
+								targetCr.MoveItem( hand.Id, hand.GetCount(), SLOT_INV );
+								CrimeLog( cr, crInfo( cr ) + " removes hand item from " + crInfo( targetCr ) );
 							}
+							
+							empty_slots = false;
 						}
 						
-						if( itemscount0 > 0 )
+						if( valid( hand_ext ) )
 						{
 							if( !HandsTied( cr ) )
 							{
-								targetCr.MoveItem( items0[ 0 ].Id, itemscount, SLOT_INV );
+								targetCr.MoveItem( hand_ext.Id, hand_ext.GetCount(), SLOT_INV );
+								CrimeLog( cr, crInfo( cr ) + " removes hand_ext item from " + crInfo( targetCr ) );
 							}
+							
+							empty_slots = false;
 						}
 
-						if( itemscount1 > 0 )
+						if( valid( misc ) )
 						{
-							Item@ head = items1[0];
-							if( valid( head ) )
-							{
-								int pid = head.GetProtoId();
-								if( pid != PID_ACTIVE_SLAVE_COLLAR )
-								{
-									targetCr.MoveItem( items1[ 0 ].Id, itemscount, SLOT_INV );
-								}
-							}
-						}
-
-						if( itemscount2 > 0 )
-						{
-							Item@ back = items2[0];
-							if( valid( back ) )
-							{
-								int pid = back.GetProtoId();
-								targetCr.MoveItem( items2[ 0 ].Id, itemscount, SLOT_INV );
-							}
-						}
-						
-						if( itemscount3 > 0 )
-						{
-							Item@ misc = items3[0];
 							if( valid( misc ) )
 							{
-								int pid = misc.GetProtoId();
-								targetCr.MoveItem( items3[ 0 ].Id, itemscount, SLOT_INV );
+								if( misc.Proto.Item_Subtype != ITEM_SUBTYPE_BONDAGE && misc.BONDAGE_STATE != BONDAGE_STATE_ON )
+								{
+									targetCr.MoveItem( misc.Id, misc.GetCount(), SLOT_INV );
+									CrimeLog( cr, crInfo( cr ) + " removes misc item from " + crInfo( targetCr ) );
+								}
 							}
+							
+							empty_slots = false;
 						}
 
-						if( StealContainerOrArmor( cr, targetCr, targetItem ) )
+						if( valid( head ) )
 						{
-							return true;
+							if( valid( head ) )
+							{
+								if( head.Proto.Item_Subtype != ITEM_SUBTYPE_BONDAGE && head.BONDAGE_STATE != BONDAGE_STATE_ON )
+								{
+									targetCr.MoveItem( head.Id, head.GetCount(), SLOT_INV );
+									CrimeLog( cr, crInfo( cr ) + " removes head item from " + crInfo( targetCr ) );
+								}
+								else if( head.GetProtoId() == PID_SLAVE_COLLAR && head.BOND_SLAVE_ID != int( cr.Id ) )
+								{
+									cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HANDCUFFS_SHOW_FREQ, "$frequency@msg text " + head.BOND_FREQUENCY + "@" );
+									CrimeLog( cr, crInfo( cr ) + " looks at slave collar of " + crInfo( targetCr ) );
+								}
+							}
+							
+							empty_slots = false;
 						}
+
+						if( valid( back ) )
+						{
+							if( valid( back ) )
+							{
+								targetCr.MoveItem( back.Id, back.GetCount(), SLOT_INV );
+								CrimeLog( cr, crInfo( cr ) + " removes back item from " + crInfo( targetCr ) );
+							}
+							
+							empty_slots = false;
+						}
+						
+						if( !empty_slots )
+						{
+							cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_TAKE_ITEM );
+							targetCr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_RESIST_ITEM );
+						}
+						
+						if( empty_slots )
+						{
+							Item@ armor = _CritGetItemArmor( targetCr );
+							if( valid( armor ) )
+							{
+								TryToTakeArmor( cr, targetCr, armor );
+							}
+						}
+					}
+					
+					if( !isGM( cr ) )
+					{
+						cr.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 15 );
+					}
+						
+					return true;
+				}
+			}
+			
+			if( valid( targetItem ) )
+			{
+				uint16 tiPid = targetItem.GetProtoId();
+				//Explosives
+				if( tiPid == PID_TNT_PACK_ACTIVE || tiPid == PID_ACTIVE_DYNAMITE )
+				{
+					Explode( targetItem );
+					return true;
+				}
+				//X3 container stack decrease
+				if( ContainersX3.find( tiPid ) != -1 )
+				{
+					TakeX3Container( cr, targetItem );
+					return true;
+				}
+				//X2 container stack decrease
+				if( ContainersX2.find( tiPid ) != -1 )
+				{
+					TakeX2Container( cr, targetItem );
+					return true;
+				}
+				// take barrel
+				if( Barrels.find( tiPid ) != -1 )
+				{
+					TakeBarrel( cr, targetItem );
+					return true;
+				}
+				//Move of locked furniture
+				if( ( tiPid == PID_FIREBARREL || tiPid == PID_BRAZIER ) && targetItem.Val0 == 0 )
+				{
+					LockInPlace( cr, targetItem );
+					return true;
+				}
+				//Dog bowl
+				if( tiPid == PID_DOG_BOWL )
+				{
+					LockInPlace( cr, targetItem );
+					return true;
+				}
+				//Cards deck shuffle
+				if( tiPid == PID_CARDS_DECK )
+				{
+					ShuffleDeck( cr, targetItem );
+					return true;
+				}
+				//Cards in hand actions
+				if( tiPid == PID_CARDS_HAND )
+				{
+					CheckCardsHand( cr, targetItem );
+					return true;
+				}
+				//Single gamble card action
+				if( Cards.find( tiPid ) != -1 )
+				{
+					StartMenuCard( cr, targetItem );
+					return true;
+				}
+				//General attempt at repair
+				if( targetItem.IsDeteriorable() || targetItem.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE )
+				{
+					TryRepairItem( cr, targetItem );
+					return true;
+				}
+			}
+			
+			break;
+		}
+
+		case( SK_SNEAK ):
+		{
+			if( cr.Param[ CR_SNEAKING ] == 0 )
+			{
+				if( cr.IsPlayer() && cr.Timeout[ TO_SNEAK ] > 0 )
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SK_COOLDOWN );
+					return true;
+				}
+				else
+				{
+					cr.ParamBase[ CR_SNEAKING ] = 1;
+					uint[] index;
+					if( cr.GetTimeEvents( CTE_SNEAKING, index, null, null ) == 0 )
+					{
+						cr.AddTimeEvent( "cte_sneaking", REAL_MS( 500 ), CTE_SNEAKING, 0 );
 					}
 				}
 			}
+			else
+			{
+				cr.TimeoutBase[ TO_SNEAK ] = SNEAK_TIMEOUT( cr );
+				cr.ParamBase[ CR_SNEAKING ] = 0;
+			}
 
-			uint16 tiPid = targetItem.GetProtoId();
-			//Explosives
-			if( valid( targetItem ) && tiPid == PID_REMOTE_DETONATOR )
-			{
-				cr.RunClientScript( "client_screen_numberpad@ShowScreen", targetItem.Id, 0, 0, "Input radio frequency", null );
-				return true;
-			}
-			if( valid( targetItem ) && ( tiPid == PID_TNT_PACK_ACTIVE || tiPid == PID_ACTIVE_DYNAMITE ) )
-			{
-				Explode( targetItem );
-				return true;
-			}
-			//X3 container stack decrease
-			if( valid( targetItem ) && ContainersX3.find( tiPid ) != -1 )
-			{
-				TakeX3Container( cr, targetItem );
-				return true;
-			}
-			//X2 container stack decrease
-			if( valid( targetItem ) && ContainersX2.find( tiPid ) != -1 )
-			{
-				TakeX2Container( cr, targetItem );
-				return true;
-			}
-			//Move of locked furniture
-			if( valid( targetItem ) && ( tiPid == PID_FIREBARREL || tiPid == PID_BRAZIER ) && targetItem.Val0 == 0 )
-			{
-				LockInPlace( cr, targetItem );
-				return true;
-			}
-			//Cards deck shuffle
-			if( valid( targetItem ) && ( tiPid == PID_CARDS_DECK ) )
-			{
-				ShuffleDeck( cr, targetItem );
-				return true;
-			}
-			//Cards in hand actions
-			if( valid( targetItem ) && ( tiPid == PID_CARDS_HAND ) )
-			{
-				CheckCardsHand( cr, targetItem );
-				return true;
-			}
-			//Single gamble card action
-			if( valid( targetItem ) && Cards.find( tiPid ) != -1 )
-			{
-				StartMenuCard( cr, targetItem );
-				return true;
-			}
-			//General attempt at repair
-			if( targetItem.IsDeteriorable() || targetItem.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE )
-			{
-				TryRepairItem( cr, targetItem );
-				return true;
-			}
-			break; 
+			LookDataRefresh( cr );
+			ChangeCritterSpeed( cr );
+			return true;
 		}
-		
-		case( SK_SNEAK ): 
-		{
-			cr.Say( SAY_NETMSG, "|0xFF0000 Skill disabled." );
-			return true; 
-		}
-		
-		case( SK_STEAL ): 
+
+		case( SK_STEAL ):
 		{
 			if( cr.IsPlayer() && cr.Timeout[ TO_SK_STEAL ] > 0 )
 			{
 				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SK_COOLDOWN );
 				return true;
 			}
-			
+
 			if( valid( targetItem ) )
 			{
+				if(targetItem.GetProtoId() == PID_CR_CART && targetItem.Val7 != 0)
+				{
+					Critter@ holder = GetCritter(targetItem.Val7);
+					if(valid(holder))
+					{
+						StopDragging( holder, targetItem );
+					}
+				}
 				UseSkillOnLocker( cr, targetItem, SK_STEAL );
 				return true;
 			}
-			
+
 			if( valid( targetCr ) )
 			{
-				Item@ hands = _CritGetItemHand ( targetCr );
 				if( HandsTied( targetCr ) )
 				{
 					CrimeLog( cr, crInfo( cr ) + " looks at inventory of: " + crInfo( targetCr ) + " who is tied up." );
@@ -2130,7 +2707,6 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				else if( targetCr.IsDead() )
 				{
 					CrimeLog( cr, crInfo( cr ) + " look into inventory of dead: " + crInfo( targetCr ) + "." );
-					cr.Action( ACTION_PICK_CRITTER, 0, null );
 				}
 				else
 				{
@@ -2138,24 +2714,27 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 					cr.TimeoutBase[ TO_SK_STEAL ] = STEAL_TIMEOUT( cr );
 					cr.StatBase[ ST_LAST_STEAL_CR_ID ] = 0;
 					cr.StatBase[ ST_STEAL_COUNT ] = 0;
-					
+
 					if( !isGM( cr ) )
 					{
-						int InvCheckCalculation = ( cr.SkillBase[ SK_STEAL ] / 3 ) - ( ( targetCr.SkillBase[ SK_STEAL ] / 24 ) + targetCr.StatBase[ ST_LUCK ] + targetCr.StatBase[ ST_PERCEPTION ] );
-						if( Random( 1, 100 ) < InvCheckCalculation )
+						int InvCheckCalculation = ( ( cr.Skill[ SK_STEAL ] / 3 ) + cr.Stat[ ST_PERCEPTION ] ) - ( ( targetCr.Skill[ SK_STEAL ] / 30 ) + targetCr.Stat[ ST_PERCEPTION ] );
+						int roll = Random( 1, 100 );
+						//Log("InvCheckCalculation" + InvCheckCalculation);
+						if( roll >= InvCheckCalculation )
 						{
 							CrimeLog( targetCr, crInfo( targetCr ) + " detected his inventory being checked!" );
 							targetCr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_STEAL_NOTIFICATION );
 						}
 					}
 				}
+
 				ShowContainer( cr, targetCr, TRANSFER_CRIT_STEAL );
 				return true;
 			}
 			break;
 		}
-		
-		case( SK_LOCKPICK ): 
+
+		case( SK_LOCKPICK ):
 		{
 			if( onSelf || valid( targetCr ) )
 			{
@@ -2163,13 +2742,33 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				{
 					@targetCr = cr;
 				}
-				
+
 				Item@ gagItm = _CritGetItemHead( targetCr );
 				if( valid( gagItm ) )
 				{
 					if( gagItm.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE )
 					{
 						TryRemoveGag( cr, targetCr, gagItm );
+						return true;
+					}
+				}
+
+				@gagItm = _CritGetItemHand( targetCr );
+				if( valid( gagItm ) )
+				{
+					if( gagItm.GetProtoId() == PID_HANDCUFFS )
+					{
+						TryLockpickBondage( cr, targetCr );
+						return true;
+					}
+				}
+
+				@gagItm = _CritGetItemMisc( targetCr );
+				if( valid( gagItm ) )
+				{
+					if( gagItm.GetProtoId() == PID_SHACKLES )
+					{
+						TryLockpickBondage( cr, targetCr );
 						return true;
 					}
 				}
@@ -2180,18 +2779,18 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				{
 					if( targetItem.Accessory == ACCESSORY_CRITTER )
 					{
-						cr.Say( SAY_NETMSG, "|0xFFFF00 Item must not be in inventory" );
+						cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_ITEM_MUST_NOT_BE_INVENTORY );
 						return false;
 					}
-				
+
 					UseSkillOnLocker( cr, targetItem, SK_LOCKPICK );
 					return true;
 				}
 			}
 			break;
 		}
-		
-		case( SK_TRAPS ): 
+
+		case( SK_TRAPS ):
 		{
 			if( valid( targetItem ) )
 			{
@@ -2201,16 +2800,10 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 					ExplosivesDisarm( cr, targetItem );
 					return true;
 				}
-				
-				if( targetItem.GetType() == ITEM_TYPE_CONTAINER )
-				{
-					StealContainerOrArmor( cr, targetCr, targetItem );
-					return true;
-				}
 			}
-			break; 
+			break;
 		}
-		
+
 		case( SK_SEX ):
 		{
 			cr.ParamBase[ CR_INIT_SEX ] = 0;
@@ -2219,7 +2812,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 				StartMenuSexPanel( cr, targetCr );
 				return true;
 			}
-			
+
 			if( valid( targetItem ) )
 			{
 				if( targetItem.GetProtoId() == PID_BLOW_UP_DOLL )
@@ -2230,7 +2823,7 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 			}
 			break;
 		}
-		
+
 		case( SK_HUNTING ):
 		{
 			cr.ParamBase[ CR_INIT_DEVOUR ] = 0;
@@ -2242,9 +2835,10 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 					return true;
 				}
 			}
+
 			break;
 		}
-		
+
 		default:
 		{
 			break;
@@ -2266,7 +2860,17 @@ void Say( Critter@ target, uint type, string text )
 // If ammo is not valid than only unload.
 void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo )
 {
-	ReloadWeapon( cr, weapon, ammo );
+	cr.ParamBase[ CR_IS_WINDUPED ] = 0;
+	cr.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	if( cr.Mode[ MODE_UNLIMITED_AMMO ] > 0 )
+	{
+		FindAmmo( cr, weapon, 0 );
+	}
+	else
+	{
+		ReloadWeapon( cr, weapon, ammo );
+	}
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2294,24 +2898,24 @@ void critter_init( Critter& cr, bool firstTime )
                 else
 				{
                     cr.TraitBase[ i ] = 0;
-				}  
+				}
 			}
 
             if( cr.StatBase[ ST_GENDER ] < 0 || cr.StatBase[ ST_GENDER ] > 1 )
 			{
                 cr.StatBase[ ST_GENDER ] = 0;
             }
-			
+
 			if( cr.StatBase[ ST_AGE ] < 14 || cr.StatBase[ ST_AGE ] > 80 )
 			{
                 cr.StatBase[ ST_AGE ] = 25;
             }
-			
+
 			for( uint i = ST_STRENGTH; i <= ST_LUCK; i++ )
 			{
                 cr.StatBase[ i ] = CLAMP( cr.StatBase[ i ], 1, 10 );
 			}
-			
+
             if( ( cr.StatBase[ ST_STRENGTH ] + cr.StatBase[ ST_PERCEPTION ] + cr.StatBase[ ST_ENDURANCE ] +
                   cr.StatBase[ ST_CHARISMA ] + cr.StatBase[ ST_INTELLECT ] + cr.StatBase[ ST_AGILITY ] + cr.StatBase[ ST_LUCK ] ) != __StartSpecialPoints )
             {
@@ -2328,182 +2932,146 @@ void critter_init( Critter& cr, bool firstTime )
 		{
             cr.TagSkillBase[ TAG_SKILL1 ] = 0;
 		}
-		
+
         if( cr.TagSkill[ TAG_SKILL2 ] < int(SKILL_BEGIN) || cr.TagSkill[ TAG_SKILL2 ] > int(SKILL_END) )
 		{
             cr.TagSkillBase[ TAG_SKILL2 ] = 0;
 		}
-		
+
         if( cr.TagSkill[ TAG_SKILL3 ] < int(SKILL_BEGIN) || cr.TagSkill[ TAG_SKILL3 ] > int(SKILL_END) )
 		{
             cr.TagSkillBase[ TAG_SKILL3 ] = 0;
 		}
-		
+
         if( cr.TagSkill[ TAG_SKILL1 ] == cr.TagSkill[ TAG_SKILL2 ] )
 		{
             cr.TagSkillBase[ TAG_SKILL1 ] = 0;
 		}
-		
+
         if( cr.TagSkill[ TAG_SKILL2 ] == cr.TagSkill[ TAG_SKILL3 ] )
 		{
             cr.TagSkillBase[ TAG_SKILL2 ] = 0;
 		}
-		
+
         if( cr.TagSkill[ TAG_SKILL3 ] == cr.TagSkill[ TAG_SKILL1 ] )
 		{
             cr.TagSkillBase[ TAG_SKILL3 ] = 0;
 		}
 
         CritterGenerate( cr );
-        cr.StatBase[ ST_CURRENT_HP ] = cr.Stat[ ST_MAX_LIFE ];
-        
+        cr.StatBase[ ST_CURRENT_HP ] = ( cr.Stat[ ST_MAX_LIFE ] + cr.Stat[ ST_MAX_LIFE_EXT ] );
+
         cr.StatBase[ ST_CURRENT_AP ] = cr.Stat[ ST_ACTION_POINTS ] * 100;
 
-		cr.StatBase[ST_SPEECH_VOLUME] = 25;
+		cr.StatBase[ ST_SPEECH_VOLUME ] = 25;
+		cr.StatBase[ ST_LTP_SEQUENCE ] = -1;
 
         for( uint i = REPUTATION_BEGIN; i < = REPUTATION_END; i++ )
 		{
-			cr.ParamBase[i]=int( 0x80000000 ); 
+			cr.ParamBase[i]=int( 0x80000000 );
 		}
-		
+
         if( cr.IsPlayer() )
         {
             for( uint i = ST_STRENGTH; i <= ST_LUCK; i++ )
 			{
                 cr.StatBase[ i ] = CLAMP( cr.StatBase[ i ], 1, 10 );
 			}
-			
+
             cr.StatBase[ ST_REPLICATION_COST ] = 100;
             cr.StatBase[ ST_REPLICATION_MONEY ] = 0;
             cr.StatBase[ ST_REPLICATION_COUNT ] = 0;
             cr.StatBase[ ST_TEAM_ID ] = 1;
             cr.StatBase[ ST_DAMAGE_TYPE ] = DAMAGE_NORMAL;
+			cr.ParamBase[ CR_AVATAR_RENDER_MODE ] = 1;
 
             skin( cr, cr.StatBase[ ST_BODY_TYPE ] );
             cr.StatBase[ ST_BODY_TYPE ] = 0;
-			
+
 			SETFLAG( cr.ParamBase[ PLAYER_FLAGS ], PLAYER_FLAG_RADIO_SAFETY );
-			SETFLAG( cr.ParamBase[ PLAYER_FLAGS ], PLAYER_FLAG_RTS );
+			SETFLAG( cr.ParamBase[ PLAYER_FLAGS ], PLAYER_FLAG_NPC_ICONS );
+			//SETFLAG( cr.ParamBase[ PLAYER_FLAGS ], PLAYER_FLAG_RTS );
 		}
         else
         {
             cr.ChangeCrType( cr.StatBase[ ST_BASE_CRTYPE ] );
 		}
-    }
+
+		if( cr.Param[ ST_SCALE_FACTOR ] == 0 )
+		{
+			cr.ParamBase[ ST_SCALE_FACTOR ] = 100;
+		}
+	}
     else
     {
+		if( cr.IsPlayer() )
+		{
+			Item@[] stuff;
+			Item@ item = null;
+			cr.GetItems( -1, stuff );
+			for( uint i = 0, len = stuff.length(); i < len; i++ )
+			{
+				@item = stuff[i];
+				if( valid( item ) )
+				{
+					uint16 pid = item.GetProtoId();
+					if( ( pid == PID_FLASHLIGHT_ON || pid == PID_FLASHLIGHT_HELMET || pid == PID_HELMET_RANGER || pid == PID_FLASHLIGHT_OFF || pid == PID_10MM_PISTOL_FLASHLIGHT ) && item.ITEM_CHARGE == 0 )
+					{
+						UNSETFLAG( item.Flags, ITEM_LIGHT );
+						UNSETFLAG( item.Flags, ITEM_COLORIZE );
+						UNSETFLAG( item.Flags, ITEM_COLORIZE_INV );
+						item.ITEM_STATE = 0;
+						if( item.ITEM_EVENT > 0 )
+						{
+							EraseTimeEvent( item.ITEM_EVENT );
+							item.ITEM_EVENT = 0;
+						}
+
+						item.Update();
+					}
+					else if( pid == PID_STEALTH_BOY )
+					{
+						if( ( GetDeteriorationProcent( item ) >= 100 || item.ITEM_STATE == 0 ) && cr.Stat[ ST_SCALE_FACTOR ] == 1 )
+						{
+							Stealthboy_off( cr, item );
+						}
+						else if( item.ITEM_STATE == 1 )
+						{
+							uint[] values = { cr.Id, item.Id };
+							item.ITEM_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "item@e_DepleteStealthboyCharge", values, true );
+						}
+					} 
+					else if( pid == PID_MOTION_SENSOR && ( item.ITEM_CHARGE == 0 || item.ITEM_STATE == 0 ) )
+					{
+						Sensor_off( item );
+					}
+				}
+			}
+			stuff.resize( 0 );
+		}
+
         // Current skin validation
         Item@ armor = _CritGetItemArmor( cr );
         if( cr.Stat[ ST_BASE_CRTYPE ] == 0 )
 		{
             cr.StatBase[ ST_BASE_CRTYPE ] = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
         }
-		
+
 		if( !valid( armor ) )
         {
             uint crType = cr.Stat[ ST_BASE_CRTYPE ];
             if( crType == 0 )
 			{
-                crType = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
+                crType = cr.Stat[ ST_GENDER ] == GENDER_MALE ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F;
             }
-			
+
 			cr.StatBase[ ST_BASE_CRTYPE ] = crType;
             if( cr.CrType != crType )
 			{
                 cr.ChangeCrType( crType );
 			}
 		}
-        
-        // Armor perk validation
-        if( !valid( armor ) && cr.Stat[ ST_CURRENT_ARMOR_PERK ] != 0 )
-        {
-            switch( cr.Stat[ ST_CURRENT_ARMOR_PERK ] )
-            {
-				case( ARMOR_PERK_POWERED ):
-					cr.StatBase[ ST_STRENGTH_EXT ] -= 3;
-					cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] -= 30;
-					break;
-				case( ARMOR_PERK_COMBAT ):
-					cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] -= 20;
-					break;
-				case( ARMOR_PERK_ADVANCED_I ):
-					cr.StatBase[ ST_STRENGTH_EXT ] -= 4;
-					cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] -= 60;
-					break;
-				case( ARMOR_PERK_ADVANCED_II ):
-					cr.StatBase[ ST_STRENGTH_EXT ] -= 4;
-					cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] -= 75;
-					break;
-				case( ARMOR_PERK_CHARISMA ):
-					cr.StatBase[ ST_CHARISMA_EXT ] -= 1;
-					break;
-				case( ARMOR_PERK_ANTIRAD ):
-					cr.StatBase[ ST_RADIATION_RESISTANCE_EXT ] -= 70;
-					break;
-				case( ARMOR_PERK_VERY_COOL ):
-					cr.StatBase[ ST_CHARISMA_EXT ] -= 2;
-					break;				
-				default:
-					break;
-            }
-            cr.StatBase[ ST_CURRENT_ARMOR_PERK ] = 0;
-        }
-        // Head Item Perk validation
-		Item@ head_item = _CritGetItemHead( cr );
-        if( !valid( head_item ) && cr.Stat[ ST_CURRENT_HEAD_ITEM_PERK ] != 0 )
-        {
-            switch( cr.Stat[ ST_CURRENT_HEAD_ITEM_PERK ] )
-            {
-				case( HEAD_PERK_COOL ):
-				{
-					cr.StatBase[ ST_CHARISMA_EXT ] -= 1;
-					break;
-				}
-				case( HEAD_PERK_GLASSES ):
-				{
-					if( cr.StatBase[ ST_PERCEPTION_EXT ] >= 2 )
-					{
-						cr.StatBase[ ST_PERCEPTION_EXT ] -= 2;
-					}
-					else if( cr.StatBase[ ST_PERCEPTION_EXT ] == 1 )
-					{
-						cr.StatBase[ ST_PERCEPTION_EXT ] -= 1;
-					}
-					break;
-				}
-				case( HEAD_PERK_VERY_COOL ):
-				{
-					cr.StatBase[ ST_CHARISMA_EXT ] -= 2;
-					break;
-				}
-				case( HEAD_PERK_LUCKY_CHARM ):
-				{
-					cr.StatBase[ ST_LUCK_EXT ] -= 1;
-					break;
-				}
-				case( HEAD_PERK_COOL_LUCKY_CHARM ):
-				{
-					cr.StatBase[ ST_CHARISMA_EXT ] -= 1;
-					cr.StatBase[ ST_LUCK_EXT ] -= 1;
-					break;
-				}
-				case( HEAD_PERK_COOL_GLASSES ):
-				{
-					if( cr.StatBase[ ST_PERCEPTION_EXT ] >= 2 )
-					{
-						cr.StatBase[ ST_PERCEPTION_EXT ] -= 2;
-					}
-					else if( cr.StatBase[ ST_PERCEPTION_EXT ] == 1 )
-					{
-						cr.StatBase[ ST_PERCEPTION_EXT ] -= 1;
-					}
-					cr.StatBase[ ST_CHARISMA_EXT ] -= 1;
-					break;
-				}
-			}
-            cr.StatBase[ ST_CURRENT_HEAD_ITEM_PERK ] = 0;
-		}
-
+		
         // Clear timeouts if too long (happens when saves got removed)
         for( uint i = TIMEOUT_BEGIN; i <= TIMEOUT_END; i++ )
 		{
@@ -2522,43 +3090,35 @@ void critter_init( Critter& cr, bool firstTime )
 		cr.StatBase[ ST_UNSPENT_PERKS ] = 0;
 	}
 
-	if( cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_GECKO_FIRE && _CritCountItem( cr, PID_FIRE_GECKO_FLAME_WEAPON ) == 0 )
-	{
-		cr.AddItem( PID_FIRE_GECKO_FLAME_WEAPON, 1 );
-	}
-	
-	if( cr.Stat[ ST_BASE_CRTYPE ] == CRTYPE_PLANT && _CritCountItem( cr, PID_PLANT_SPIKE ) == 0 )
-	{
-		cr.AddItem( PID_PLANT_SPIKE, 15 );
-	}
-	
     ChangeCritterSpeed( cr );
 
     manager_critter_init( cr, firstTime );
 
     DllCritterInit( cr, firstTime );
 	
+	SetCrHight( cr );
+
 	//FoRP - logout on global == dead
 	Map@ map = cr.GetMap();
 	if( !valid( map ) )
 	{
 		Location@ loc = GetLocationByPid( LOCATION_Deadloc, 0 );
 		if( !valid( loc ) )
-		{ 
+		{
 			Log( "Location does not exist!" );
-			return; 
+			return;
 		}
-		
+
 		Map@ map2 = loc.GetMapByIndex( 0 );
 		if( !valid( map2 ) )
 		{
-			Log( "Map does not exist!" ); 
-			return; 
+			Log( "Map does not exist!" );
+			return;
 		}
 		cr.SetWorldPos( loc.WorldX, loc.WorldY );
 		cr.TransitToMap( map2.Id, 170, 130, 6 );
 	}
-	
+
 	if( cr.IsPlayer() )
 	{
 		if( cr.Param[ LAST_LOGIN_DATE ] > 0 && ( __FullSecond - cr.Param[ LAST_LOGIN_DATE ] >= int( 10 * ( __TimeMultiplier * 60 * 60 * 24 ) ) ) )
@@ -2567,12 +3127,14 @@ void critter_init( Critter& cr, bool firstTime )
 
 			if( exceptions.find( map.GetProtoId() ) == -1 )
 			{
-				kind_tele2( cr, null, 369 );
+				TeleportToGameZone( cr, MAP_frisco2_2 );
 				cr.AddTimeEvent( "cte_message", REAL_SECOND( 10 ), 0, 0 );
 			}
 		}
 		cr.ParamBase[ LAST_LOGIN_DATE ] = __FullSecond;
 	}
+	
+	LookDataRefresh( cr );
 }
 
 uint cte_message( Critter& cr, int identifier, uint& rate )
@@ -2596,7 +3158,7 @@ void critter_finish( Critter& cr, bool toDelete )
 				shadow.Val0 = cr.Id;
 			}
 		}
-		uint year = 
+		uint year =
 		cr.ParamBase[ LAST_LOGIN_DATE ] = __FullSecond;
 	}
     manager_critter_finish( cr, toDelete );
@@ -2607,9 +3169,6 @@ void critter_finish( Critter& cr, bool toDelete )
 void critter_idle( Critter& cr )
 {
 	CritterRegen( cr );
-	
-	ChangeCritterSpeed( cr );
-
     manager_critter_idle( cr );
 }
 
@@ -2619,7 +3178,7 @@ void CritterRegen( Critter& cr )
 	{
 		return;
 	}
-	
+
     if( cr.Stat[ ST_BODY_TYPE ] != BT_ROBOT )
 	{
 		if( cr.Timeout[ TO_HEALING ] == 0 )
@@ -2630,88 +3189,108 @@ void CritterRegen( Critter& cr )
 				return;
 			}
 
-			if( RecoverMaxHP( cr ) )
+			RecoverMaxHP( cr );
+			
+			int max_life = cr.Param[ ST_MAX_LIFE ];
+			if( cr.Stat[ ST_CURRENT_HP ] == max_life )
 			{
 				return;
 			}
-			
-			if( cr.Stat[ ST_CURRENT_HP ] == cr.Stat[ ST_MAX_LIFE ] )
-			{
-				return;
-			}
-			
+
 			int regen = cr.Stat[ ST_HEALING_RATE ];
 			int penalty = 0;
-			if( FLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BULLET_OVER ) )
-			{ 
-				penalty += 5;
-			}
-			
-			if( FLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG ) )
+			if( cr.Param[ CR_PAINKILLER ] <= 0 )
 			{
-				penalty += 5;
+				if( FLAG( cr.Stat[ ST_CRSTATUS ], CR_STATUS_BULLET_OVER ) )
+				{
+					penalty += 5;
+				}
+
+				if( FLAG( cr.Stat[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG ) )
+				{
+					penalty += 5;
+				}
 			}
 			
 			regen = CLAMP( regen * ( 10 - penalty ) / 10, 1, regen );
-            cr.StatBase[ ST_CURRENT_HP ] += regen;
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REGENERATED_HP, "$regen" + regen );
-
-            if( cr.StatBase[ ST_CURRENT_HP ] > cr.Stat[ ST_MAX_LIFE ] )
+            
+			int hp_before = cr.Stat[ ST_CURRENT_HP ];
+			cr.StatBase[ ST_CURRENT_HP ] += regen;
+            if( cr.StatBase[ ST_CURRENT_HP ] > max_life )
 			{
-                cr.StatBase[ ST_CURRENT_HP ] = cr.Stat[ ST_MAX_LIFE ];
+                cr.StatBase[ ST_CURRENT_HP ] = max_life;
 			}
 			else
 			{
 				if( !cr.IsKnockout() )
 				{
-					cr.StatBase[ ST_HUNGER ] -= regen;
-					cr.StatBase[ ST_THIRST ] -= regen;
+					cr.StatBase[ ST_HUNGER ] += regen;
+					cr.StatBase[ ST_THIRST ] += regen;
 				}
+			}
+
+			int hp_after = cr.Stat[ ST_CURRENT_HP ];
+			int hp_delta = hp_after - hp_before;
+			if( hp_delta > 0 )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REGENERATED_HP, "$regen" + hp_delta );
 			}
 		}
 	}
 }
 
-bool RecoverMaxHP( Critter& cr )
+//~run main recover_max_hp times 0 0
+void recover_max_hp( Critter& cr, int times, int, int )
 {
-	if( cr.Stat[ ST_CURRENT_HP ] < cr.Stat[ ST_MAX_LIFE ] )
+	for( int i = 0; i < times; i++ )
 	{
-		return false;
+		RecoverMaxHP(cr);
 	}
-	
-	if( !cr.IsPlayer() )
+}
+
+void RecoverMaxHP( Critter& cr )
+{
+	if( cr.Stat[ ST_CURRENT_HP ] < ( cr.Stat[ ST_MAX_LIFE ] + cr.Stat[ ST_MAX_LIFE_EXT ] ) )
 	{
-		return false;
+		testInfo( cr, YELLOW + "HP[" + cr.Stat[ ST_CURRENT_HP ] + "] < MAX[" + ( cr.Stat[ ST_MAX_LIFE ] + cr.Stat[ ST_MAX_LIFE_EXT ] ) + "]" );
+		return;
 	}
 
-	if( cr.StatBase[ ST_MAX_LIFE ] >= 0 )
+	if( cr.StatBase[ ST_MAX_LIFE_EXT ] >= 0 )
 	{
 		cr.StatBase[ ST_HP_RECOVERY ] = 0;
-		return true;
+		testInfo( cr, YELLOW + "ST_MAX_LIFE_EXT[" + cr.StatBase[ ST_MAX_LIFE_EXT ] + "] >= 0" );
+		return;
 	}
 
-	bool malnourishment = cr.Stat[ ST_HUNGER ] < 500 || cr.Stat[ ST_THIRST ] < 500;
+	bool malnourishment = ( cr.Stat[ ST_HUNGER ] > MIN_STARVATION_LEVEL ) || ( cr.Stat[ ST_THIRST ] > MIN_STARVATION_LEVEL );
 	bool illness = cr.Param[ ST_POISONING_LEVEL ] != 0 || cr.Param[ ST_RADIATION_LEVEL ] > 100 || cr.Param[ ST_PARALYSIS_LEVEL ] != 0;
 	bool wounds = FLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BULLET_OVER ) || FLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG ) || cr.IsInjured();
-	
+
 	if( malnourishment || illness || wounds )
 	{
-		return true;
+		testInfo( cr, RED + flagValue(malnourishment,"malnourishment") + flagValue(illness," illness") + flagValue( wounds," wounds") );
+		return;
 	}
 
 	int regen = cr.Stat[ ST_HEALING_RATE ];
-	cr.StatBase[ ST_HP_RECOVERY ] += regen;
-	cr.StatBase[ ST_HUNGER ] -= 1;
-	cr.StatBase[ ST_THIRST ] -= 1;
 	
+	if( cr.StatBase[ ST_CHARISMA ] >= 5 )
+	{
+		regen += cr.StatBase[ ST_CHARISMA ];
+	}
+	
+	cr.StatBase[ ST_HP_RECOVERY ] += regen;
+	testInfo( cr, YELLOW + "RECOVERY[" + cr.StatBase[ ST_HP_RECOVERY ] + "] += " + regen );
+	cr.StatBase[ ST_HUNGER ] += 1;
+	cr.StatBase[ ST_THIRST ] += 1;
+
 	if( cr.Stat[ ST_HP_RECOVERY ] >= MAX_HP_RESTORE_TRIGGER )
 	{
 		cr.StatBase[ ST_HP_RECOVERY ] = 0;
-		cr.StatBase[ ST_MAX_LIFE ] ++;
+		cr.StatBase[ ST_MAX_LIFE_EXT ] ++;
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_RESTORED_MAX_HP, "$regen" + 1 );
 	}
-	
-	return true;
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2724,12 +3303,20 @@ void critter_dead( Critter& cr, Critter@ killer )
 	{
         Log( "Critter #" + cr.Id + " was killed on global." );
 	}
-	
+
     if( cr.IsNpc() )
 	{
 		cr.DropPlanes();
+		Item@ weapon = _CritGetItemHand( cr );
+		if( valid( weapon ) )
+		{
+			if( Random( 0, 1 ) == 1 )
+			{
+				SETFLAG( weapon.BrokenFlags, BI_NOTRESC );
+			}
+		}
 	}
-	
+
     manager_critter_dead( cr, killer );
 }
 
@@ -2738,43 +3325,22 @@ void critter_dead( Critter& cr, Critter@ killer )
 void critter_respawn( Critter& cr )
 {
     cr.TimeoutBase[ TO_REPLICATION ] = 0;
-    if( cr.CrType == 115 )
-    {
-        uint body = cr.Stat[ ST_BASE_CRTYPE ];
-        if( body == 0 )
-		{
-            body = ( cr.Stat[ ST_GENDER ] == GENDER_MALE ? CRTYPE_DEFAULT_M : CRTYPE_DEFAULT_F );
-        }
-		cr.ChangeCrType( body );
-    }
-    else if( cr.CrType == 81 )
-    {
-        Item@ weapon = cr.AddItem( PID_FIREBREATH, 1 );
-        cr.MoveItem( weapon.Id, 1, SLOT_HAND1 );
-        weapon.Update();
-    }
-    else if( cr.CrType == 51 || cr.CrType == 60 || cr.CrType == 100 )
-    {
-        Item@ weapon = cr.AddItem( PID_CLAW_EXT, 1 );
-        cr.MoveItem( weapon.Id, 1, SLOT_HAND1 );
-        weapon.Update();
-    }
 
     if( cr.Param[ ST_PARALYSIS_LEVEL ] != 0 )
 	{
         DropParalysisInstant( cr );
 	}
-	
+
 	if( cr.Param[ ST_POISONING_LEVEL ] != 0 )
 	{
         DropPoison( cr );
 	}
-	
+
 	if( cr.Param[ ST_RADIATION_LEVEL ] != 0 )
 	{
         DropRadiation( cr );
 	}
-	
+
     if( cr.Stat[ ST_DEAD_BLOCKER_ID ] != 0 )
     {
         Item@ block = ::GetItem( cr.Stat[ ST_DEAD_BLOCKER_ID ] );
@@ -2782,9 +3348,12 @@ void critter_respawn( Critter& cr )
 		{
             DeleteItem( block );
         }
+		
 		cr.StatBase[ ST_DEAD_BLOCKER_ID ] = 0;
     }
 
+	cr.ParamBase[ CR_DEATH_STAGE ] = 0; 
+	
     manager_critter_respawn( cr );
 }
 
@@ -2802,14 +3371,17 @@ void map_critter_in( Map& map, Critter& cr )
         if( LocIsCity( locPid ) )
         {
             GameVar@ lastCityVar = GetLocalVar( LVAR_last_city, cr.Id );
-            if( lastCityVar is null )
+            if( !valid(lastCityVar) )
 			{
                 return;
             }
+			
 			lastCityVar = locPid;
         }
     }
+	
     manager_map_critter_in( map, cr );
+	LookDataRefresh( cr );
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2822,6 +3394,8 @@ void map_critter_out( Map& map, Critter& cr )
 		cr.RunClientScript( "fofmod@__StopAll", 0, 0, 0, null, null );
     }
     manager_map_critter_out( map, cr );
+
+	LookDataRefresh( cr );
 }
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2841,34 +3415,44 @@ bool check_trap_look( Map& map, Critter& cr, Item& trap )
 	{
 		return true;
     }
-	
-	if( trap.GetProtoId() == PID_RADIATION_MARKER )
+
+	uint16 t_pid = trap.GetProtoId();
+
+	if( t_pid == PID_RADIATION_MARKER || t_pid == PID_GAS_MARKER || t_pid == PID_ORE_MARKER )
 	{
 		return false;
+	}
+	
+	if( t_pid == PID_STASH_BOX )
+	{	
+		int dist = GetDistantion( cr.HexX, cr.HexY, trap.HexX, trap.HexY );
+		int trapsBonus = ( cr.Skill[ SK_TRAPS ] >= 100 && cr.Skill[ SK_TRAPS ] - trap.TrapValue > 0 ) ? cr.Skill[ SK_TRAPS ] - trap.TrapValue / 50 : 0;
+		int min_dist = 1 + CLAMP(trapsBonus, 0, 6);
+        return dist <= min_dist;
 	}
 	
 	if( FLAG( trap.Flags, ITEM_TRAP ) )
     {
         int baseST = cr.Stat[ ST_PERCEPTION ] / 2;
-        
+
         int roll = cr.Skill[ SK_TRAPS ] - trap.TrapValue;
-        
+
         if( roll < -200 )
 		{
             roll = -200;
         }
-		
+
         if( roll > 200 )
 		{
             roll = 200;
         }
-		
+
         roll = int( roll * 0.05f );
 
         int min_dist = CLAMP( baseST + roll, 1, baseST * 2 );
-        
+
         int dist = GetDistantion( cr.HexX, cr.HexY, trap.HexX, trap.HexY );
-        
+
         return dist <= min_dist;
     }
     return true;
@@ -2890,12 +3474,12 @@ bool items_barter( Item@[]& saleItems, uint[]& saleItemsCount, Item@[]& buyItems
 {
     if( npc.Mode[ MODE_BARTER_ONLY_CASH ] > 0 )
     {
-		uint[][] money_tiers = 
+		uint[][] money_tiers =
 		{	{}, // extra tier just in case
-			{ PID_DOLLAR_100, PID_DOLLAR_20, PID_DOLLAR_5, PID_BOTTLE_CAPS, PID_GOLDEN_COIN },
+			{ PID_DOLLAR_100, PID_DOLLAR_20, PID_DOLLAR_5, PID_BOTTLE_CAPS, PID_GOLDEN_COIN, PID_PREWAR_DOLLAR_100, PID_PREWAR_DOLLAR_20, PID_PREWAR_DOLLAR_5, PID_PREWAR_DOLLAR_1 },
 			{ PID_REAL_BOTTLE_CAPS, PID_MORNING_STAR_MINE, PID_KOKOWEEF_MINE_SCRIP },
 		};
-		
+
         for( uint i = 0, j = saleItems.length(); i < j; i++ )
         {
 			bool isOk = false;
@@ -2954,7 +3538,7 @@ void items_crafted( Item@[]& items, uint[]& itemsCount, Item@[]& resources, Crit
 		{
             maxDeterioration = deterioration;
 		}
-		
+
 		if( item.GetType() == ITEM_TYPE_WEAPON && item.Proto.Weapon_MaxAmmoCount > 0 )
 		{
 			uint ammoCount = item.AmmoCount;
@@ -2968,6 +3552,7 @@ void items_crafted( Item@[]& items, uint[]& itemsCount, Item@[]& resources, Crit
 		}
     }
 
+	Map@ map = crafter.GetMap();
 	crafter.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_CRAFTED );
     for( uint i = 0, j = items.length(); i < j; i++ )
     {
@@ -2976,18 +3561,23 @@ void items_crafted( Item@[]& items, uint[]& itemsCount, Item@[]& resources, Crit
         {
             items[ i ].AmmoCount = 0;
         }
-		
-		// Set frequency
-		if( items[ i ].GetProtoId() == PID_REMOTE_DETONATOR )
+
+		//Set complexity
+		if( items[ i ].GetProtoId() == PID_HANDCUFFS || items[ i ].GetProtoId() == PID_SHACKLES )
 		{
-			items[ i ].SetLexems( "$frequency" + 0 );
+			items[ i ].LockerComplexity = crafter.Skill[ SK_LOCKPICK ];
+		}
+
+		if( !FLAG( items[i].Flags, ITEM_NO_BLOCK ) && valid( map ) )
+		{
+			MoveItem( items[i], items[i].GetCount(), map, crafter.HexX, crafter.HexY );
 		}
 		
-        SetDeterioration( items[ i ], maxDeterioration );
+		SetDeterioration( items[ i ], maxDeterioration );
 		crafter.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_CRAFTED_PID, "$proto@msg item " + ( items[ i ].Proto.ProtoId * 100 ) + "@" );
 		items[ i ].Update();
 	}
-	
+
 	ChangeCritterSpeed( crafter );
 }
 
@@ -3000,13 +3590,13 @@ void player_levelup( Critter& player, uint skillIndex, uint skillUp, uint perkIn
 		player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_DISABLED );
 		return;
 	}
-	
+
 	if( isFarmingSkill( skillIndex ) )
 	{
 		player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_RAISED_BY_USE );
 		return;
 	}
-	
+
     if( skillIndex >= SKILL_BEGIN && skillIndex <= SKILL_END )
     {
         for( ; skillUp != 0; skillUp-- )
@@ -3016,7 +3606,7 @@ void player_levelup( Critter& player, uint skillIndex, uint skillUp, uint perkIn
 			{
                 break;
 			}
-			
+
             int needPoints = 1;
             if( skillVal > __SkillModAdd6 )
 			{
@@ -3038,12 +3628,12 @@ void player_levelup( Critter& player, uint skillIndex, uint skillUp, uint perkIn
 			{
                 needPoints = 2;
 			}
-			
+
             if( player.StatBase[ ST_UNSPENT_SKILL_POINTS ] < needPoints )
 			{
                 break;
 			}
-			
+
             skillVal++;
             if( _CritIsTagSkill( player, skillIndex ) && skillVal < MAX_SKILL_VAL )
 			{
@@ -3070,140 +3660,22 @@ void player_levelup( Critter& player, uint skillIndex, uint skillUp, uint perkIn
 // Called on every round begin, return false to disable turn-based
 void turn_based_begin( Map& map )
 {
-    // Try end battle
-    if( map.TurnBasedRound > 0 )
-    {
-        uint[] crittersIds;
-        map.GetTurnBasedSequence( crittersIds );
-
-        bool continueBattle = false;
-        if( crittersIds.length() >= 2 )
-        {
-            for( uint i = 0, j = crittersIds.length(); i < j; i++ )
-            {
-                Critter@ cr = ::GetCritter( crittersIds[ i ] );
-                if( !( not valid( cr ) || cr.IsDead() ||
-                       ( cr.IsNpc() && cr.GetPlanes( AI_PLANE_ATTACK, null ) == 0 ) ||
-                       ( cr.IsPlayer() && ( cr.Mode[ MODE_END_COMBAT ] != 0 || cr.Stat[ ST_CURRENT_HP ] < 1 ) ) ) )
-                {
-                    continueBattle = true;
-                    break;
-                }
-            }
-        }
-
-        if( not continueBattle )
-		{
-            map.EndTurnBased();
-		}
-	}
+	map.EndTurnBased();
 }
 
 // Call on end turn-based battle
 void turn_based_end( Map& map )
 {
-    //
 }
 
 // Call on every begin and end turn
 void turn_based_process( Map& map, Critter& cr, bool beginTurn )
 {
-    if( beginTurn )
-    {
-        cr.StatBase[ ST_MOVE_AP ] = cr.Stat[ ST_MAX_MOVE_AP ];
-        cr.StatBase[ ST_TURN_BASED_AC ] = 0;
-    }
-    else
-    {
-        bool hthEvade = false;
-        cr.StatBase[ ST_TURN_BASED_AC ] = cr.Stat[ ST_CURRENT_AP ] * ( hthEvade ? 2 : 1 );
-        if( cr.Stat[ ST_TURN_BASED_AC ] < 0 )
-            cr.StatBase[ ST_TURN_BASED_AC ] = 0;
-        if( hthEvade && cr.Skill[ SK_UNARMED ] > 0 )
-            cr.StatBase[ ST_TURN_BASED_AC ] += cr.Skill[ SK_UNARMED ] / 12;
-        cr.StatBase[ ST_MOVE_AP ] = 0;
-    }
 }
 
 // Call when need generate turns sequence
 void turn_based_sequence( Map& map, Critter@[]& critters, Critter@ firstTurnCrit )
 {
-    // Check first turn critter
-    if( valid( firstTurnCrit ) && ( firstTurnCrit.IsDead() || firstTurnCrit.Stat[ ST_CURRENT_AP ] <= 0 ) )
-        @firstTurnCrit = null;
-
-    // Collect critters
-    SequenceCritter[] sequenceCritters;
-    for( uint i = 0, j = critters.length(); i < j; i++ )
-    {
-        Critter@ cr = critters[ i ];
-        if( valid( firstTurnCrit ) && firstTurnCrit.Id == cr.Id )
-            continue;
-        if( cr.IsDead() )
-            continue;
-        sequenceCritters.resize( sequenceCritters.length() + 1 );
-        @sequenceCritters.last().critter = cr;
-    }
-
-    // Sort sequence, see SequenceCritter::opCmp below
-    SequenceCritterRandom = Random( 0, 1 );
-    sequenceCritters.sortDesc();
-
-    // Fill result
-    critters.resize( 0 );
-    if( valid( firstTurnCrit ) )
-        critters.insertLast( firstTurnCrit );
-    for( uint i = 0, j = sequenceCritters.length(); i < j; i++ )
-        critters.insertLast( sequenceCritters[ i ].critter );
-}
-
-// Sequence sorter for turn_based_sequence
-int   SequenceCritterRandom = 0;
-class SequenceCritter
-{
-    Critter@ critter;
-    int opCmp( SequenceCritter& in other )
-    {
-        bool result;
-        Critter@ cr1 = critter;
-        Critter@ cr2 = other.critter;
-        int seq1 = cr1.Stat[ ST_SEQUENCE ];
-        int seq2 = cr2.Stat[ ST_SEQUENCE ];
-        if( seq1 == seq2 )
-        {
-            int ag1 = cr1.Stat[ ST_AGILITY ];
-            int ag2 = cr2.Stat[ ST_AGILITY ];
-            if( ag1 == ag2 )
-            {
-                int lk1 = cr1.Stat[ ST_LUCK ];
-                int lk2 = cr2.Stat[ ST_LUCK ];
-                if( lk1 == lk2 )
-                {
-                    if( SequenceCritterRandom == 0 )
-					{
-                        result = cr1.Id > cr2.Id;
-                    }
-					else
-					{
-                        result = cr1.Id < cr2.Id;
-					}
-				}
-                else
-				{
-                    result = lk1 > lk2;
-				}
-			}
-            else
-			{
-                result = ag1 > ag2;
-			}
-		}
-        else
-		{
-            result = seq1 > seq2;
-        }
-		return result ? int(1) : int(-1);
-    }
 }
 
 // Call on world saving
@@ -3219,7 +3691,7 @@ void world_save( uint currentIndex, uint[]& deleteIndexes )
             deleteIndexes[ i ] = 9999 - i;
 		}
 	}
-	
+
     else if( currentIndex > 4 )
     {
         deleteIndexes.resize( 1 );
@@ -3230,7 +3702,7 @@ void world_save( uint currentIndex, uint[]& deleteIndexes )
 	{
 		Log( "World save in memory is not actual." );
 	}
-	
+
     qmap_save_all();
 
     manager_world_save();
@@ -3241,7 +3713,7 @@ uint8 NpcCount( Critter@[]& group )
     uint8 x = 0;
     for( uint i = 0, len = group.length(); i < len; i++ )
     {
-        if( group[ i ] is null or group[ i ].IsPlayer() )
+        if( !valid(group[ i ]) || group[ i ].IsPlayer() )
             continue;
         x++;
     }
@@ -3258,10 +3730,14 @@ bool player_registration( uint ip, string& name, uint& textMsg, uint& strNum )
 // Return true to allow, false to disallow
 bool player_login( uint ip, string& name, uint id, uint& textMsg, uint& strNum )
 {
-	
+
 	Critter@ player = GetCritter( id );
-	if( valid( player ) ) 
+	if( valid( player ) )
 	{
+		if( player.ParamBase[ ST_LTP_SEQUENCE ] == 0 )
+		{
+			player.ParamBase[ ST_LTP_SEQUENCE ] = -1; // defence from gui null ptr
+		}
 		// character already in game thing
 		if( _IsOnline( player ) && player.GetCurrentIp() == ip )
 		{
@@ -3271,21 +3747,21 @@ bool player_login( uint ip, string& name, uint id, uint& textMsg, uint& strNum )
 			return false;
 		}
 	}
-	
+
     if( !manager_player_login( ip, name, id, textMsg, strNum ) )
 	{
         return false;
 	}
-	
+
     if ( !DllPlayerLogin( ip, name, id ) )
 	{
         return false;
 	}
-	
+
     if( valid( player ) )
     {
         player.ParamBase[ ST_QMAP ] = 0;
-        CreateTimeEvent( __FullSecond + REAL_MS( 100 ), "e_player_after_login", id, false );
+        CreateTimeEvent( __FullSecond + REAL_MS( 100 ), "main@e_player_after_login", id, false );
     }
 
     return true;
@@ -3293,7 +3769,7 @@ bool player_login( uint ip, string& name, uint id, uint& textMsg, uint& strNum )
 
 uint e_player_after_login( uint[] @ values )
 {
-    if( (values is null) || values.length() < 1 )
+    if( !valid(values) || values.length() < 1 )
     {
         Log( "there isn't id in values" );
         return 0;
@@ -3347,12 +3823,14 @@ bool player_allowcommand( Critter@ player, string@ adminPanel, uint8 command )
 	{
         return true;
 	}
-	
+
     switch( command )
     {
 		// ACCESS_CLIENT
-		case COMMAND_CHANGE_PASSWORD:
 		case COMMAND_DELETE_ACCOUNT:
+			player.Say( SAY_NETMSG, "Command Disabled." );
+			return false;
+		case COMMAND_CHANGE_PASSWORD:
 		case COMMAND_EXIT:
 		case COMMAND_GETACCESS:
 		case COMMAND_MYINFO:
@@ -3441,56 +3919,95 @@ void unsafe_swap_invis( Critter& cr, int, int, int, string@, int[]@ )
 		}
 		return;
 	}
-		
+
 	cr.ParamBase[ QST_INVIS ] = CLAMP( 1 - cr.ParamBase[ QST_INVIS ], 0, 1 );
 	cr.RefreshVisible();
-	cr.Say( SAY_NETMSG, "|0xFFFFFF GM stealth mode " + ( cr.ParamBase[ QST_INVIS ] == 1 ? "en" : "dis" ) + "abled." );
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, ( cr.ParamBase[ QST_INVIS ] == 1 ? STR_GM_STEALTH_MODE_ON : STR_GM_STEALTH_MODE_OFF ) );
 }
 
 void unsafe_set_aim( Critter& cr, int aim, int, int, string@, int[]@ )
 {
-   cr.ParamBase[CR_AUTO_AIM] = aim;
+   cr.ParamBase[ CR_AUTO_AIM ] = aim;
 }
 
-bool canPutItemInContainer( Item@ item, Item@ container )
+bool canPutItemInContainer( Critter& cr, Item@ item, Item@ container )
 {
 	if( !valid( item ) || !valid( container ) )
 	{
 		return false;
 	}
-	
+
 	uint container_pid = container.GetProtoId();
 	uint pid = item.GetProtoId();
 	uint type = item.GetType();
-	
-	
+	uint subtype = item.Proto.Item_Subtype;
+
+	if( container_pid == pid )
+	{
+		return false;
+	}
+
+	if( container_pid == PID_AMMO_PACK )
+	{
+		if( type != ITEM_TYPE_AMMO )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_PACK_FOR_AMMO );
+			return false;
+		}
+	}
+
+	if( container_pid == PID_AMMO_BELT )
+	{
+		if( item.Proto.Volume > 25 )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_ITEM_TOO_LARGE );
+			return false;
+		}
+	}
+
+	if( container_pid != PID_CR_CART && subtype == ITEM_SUBTYPE_FURNITURE )
+	{
+		return false;
+	}
+	else if( subtype == ITEM_SUBTYPE_VENDING || subtype == ITEM_SUBTYPE_TERMINAL || subtype == ITEM_SUBTYPE_STOVE )
+	{
+		return false;
+	}
+
 	uint[] proper_paper_containment_pids =
 	{
-		PID_HOLODISK, PID_MORNING_STAR_MINE, PID_KOKOWEEF_MINE_SCRIP, PID_GOLDEN_COIN, PID_GOLDEN_JEWELRY, PID_BLUE_PASS_KEY, PID_DOG_TAGS,
-		PID_BOTTLE_CAPS, PID_REAL_BOTTLE_CAPS, PID_TANKER_PASS, PID_TALISMAN, PID_DOLLAR_100, PID_DOLLAR_20, PID_DOLLAR_5, PID_RPSTUFF2, PID_RPSTUFF4, PID_PICTURE
+		PID_HOLODISK, PID_MORNING_STAR_MINE, PID_KOKOWEEF_MINE_SCRIP, PID_GOLDEN_COIN, PID_GOLDEN_JEWELRY, PID_BLUE_PASS_KEY, PID_DOG_TAGS, PID_BOTTLE_CAPS, PID_REAL_BOTTLE_CAPS, PID_TANKER_PASS, PID_TALISMAN, PID_DOLLAR_100, PID_DOLLAR_20, PID_DOLLAR_5,
+		PID_RPSTUFF2, PID_RPSTUFF4, PID_PICTURE, PID_PREWAR_DOLLAR_1, PID_PREWAR_DOLLAR_5, PID_PREWAR_DOLLAR_20, PID_PREWAR_DOLLAR_100, PID_BP_COLT6520, PID_BP_MOUSER, PID_BP_45REVOLVER, PID_BP_SIG14MM, PID_BP_DEAGLE, PID_BP_COLT1911, PID_BP_ANACONDA,
+		PID_BP_INJECTOR, PID_BP_GAUSSPIS, PID_BP_223PISTOL, PID_BP_SMG10MM, PID_BP_GGUN, PID_BP_P90, PID_BP_G11, PID_BP_DOMINION_ROBUR, PID_BP_DOMINION_LATENS, PID_BP_HUNTING, PID_BP_XL5MM, PID_BP_SNIPER223, PID_BP_AK112, PID_BP_FNFL, PID_BP_TOMMYGUN,
+		PID_BP_GAUSSGUN, PID_BP_DOUBLESHOTGUN, PID_BP_COMBSHOTGUN, PID_BP_CAWS, PID_BP_JHUMMER, PID_BP_REMINGTON870, PID_BP_LASPIST, PID_BP_PLASPIST, PID_BP_PULSEPIST, PID_BP_LASRIFLE, PID_BP_PLASRIFLE, PID_BP_PULSERIFLE, PID_BP_GATLING, PID_BP_AUCUSTIC,
+		PID_BP_EMP_PROBOINIK, PID_BP_FLAMER, PID_BP_MINIGUN, PID_BP_BAZOOKA, PID_BP_VINDICATOR, PID_BP_M60, PID_BP_LSW, PID_BP_BOZAR, PID_BP_AUTOCANNON, PID_BP_M32, PID_BP_RAIDER_CANNON, PID_BP_SHOCKER, PID_BP_PFIST, PID_BP_SSLEDGE, PID_BP_RIPPER,
+		PID_BP_HAND_SAW, PID_BP_ESSENCE, PID_BP_FRAG_GRENADE, PID_BP_PLAS_GRENADE, PID_BP_EMP_GRENADE, PID_BP_THROW_KNIFE, PID_BP_40MM, PID_BP_FRAGMIS, PID_BP_KRAKMIS, PID_BP_CASELESS, PID_BP_GAUSAMMO, PID_BP_FREACTOR, PID_BP_TESLA_ARMOR, PID_BP_CA_ARMOR,
+		PID_BP_PA_ARMOR, PID_BP_APA_ARMOR, PID_BP_HOUND_ARMOR, PID_BP_DEFIB, PID_BP_FPRESS, PID_BP_CENTRF, PID_BP_MENTATS, PID_BP_BUFFOUT, PID_BP_RADAWAY, PID_BP_RAD_LX, PID_BP_PSYCHO, PID_BP_EXTRACT, PID_BP_HYPO_POISON, PID_BP_TRAUMATIN,
+		PID_RUIN_MAP, PID_RAIDERS_MAP, PID_RANGER_MAP, PID_MAP, PID_PACKAGE_CHEK,
+		PID_HANDWRITINGS, PID_WALLET, PID_CRAFT_RECIPES, PID_PASSPORT, PID_LETTER, PID_POSTMAN_LETTER, PID_PAPERS_JAMMED,
+		PID_ELRON_FIELD_REP, PID_CLIPBOARD, PID_FLIST08, PID_FLIST09, PID_StrpBlt, PID_NEWSPAPER, PID_CONFIRMATION_FORM
 	};
-	
+
 	uint[] paper_container_pids =
 	{
-		PID_HANDWRITINGS, PID_WALLET, PID_CRAFT_RECIPES, PID_PASSPORT, PID_LETTER, PID_POSTMAN_LETTER, PID_PAPERS_JAMMED,
-		PID_ELRON_FIELD_REP, PID_CLIPBOARD, PID_FLIST08, PID_FLIST09, PID_StrpBlt, PID_mgzn01
+		PID_HANDWRITINGS, PID_WALLET, PID_CRAFT_RECIPES, PID_PASSPORT, PID_LETTER, PID_POSTMAN_LETTER, PID_PAPERS_JAMMED, PID_ELRON_FIELD_REP, PID_CLIPBOARD, PID_FLIST08, PID_FLIST09, PID_StrpBlt, PID_NEWSPAPER, PID_MAILBOX
 	};
-	
+
 	if( ( proper_paper_containment_pids.find( pid ) == -1 && type != ITEM_TYPE_KEY ) && paper_container_pids.find( container_pid ) != -1 )
 	{
 		return false;
 	}
-	
-	uint[] key_container_pids = 
+
+	uint[] key_container_pids =
 	{
 		PID_KEY_BUNCH, PID_FNKEYBT
 	};
-	
+
 	if( type != ITEM_TYPE_KEY && key_container_pids.find( container_pid ) != -1 )
 	{
 		return false;
 	}
-	
+
 	if( pid == container_pid )
 	{
 		return false;
@@ -3500,26 +4017,26 @@ bool canPutItemInContainer( Item@ item, Item@ container )
 	{
 		if( !FLAG( container.Flags, ITEM_CAN_PICKUP ) )
 		{
-			return true; 
+			return true;
 		}
-		
+
 		if( paper_container_pids.find( container_pid ) != -1 || key_container_pids.find( container_pid ) != -1 )
 		{
 			return false;
 		}
-		
+
 		if( paper_container_pids.find( pid ) != -1 || key_container_pids.find( pid ) != -1 )
 		{
 			return true;
 		}
-		
+
 		int item_size = -1, container_size = -1;
-		
-		uint[][] size_table = 
+
+		uint[][] size_table =
 		{
 			{ //Large containers:
 				PID_BACKPACK,
-				PID_STUFF_SUPPLIES,
+				PID_TRAVEL_BAG,
 			},
 			{ //Medium containers".
 				PID_SUPER_TOOL_KIT,
@@ -3532,15 +4049,15 @@ bool canPutItemInContainer( Item@ item, Item@ container )
 				PID_PARAMEDICS_BAG,
 				PID_BRIEFCASE,
 				PID_KEIS,
+				PID_BAG,
 			},
 			{ //small containers:
 				PID_AMMO_BELT,
-				PID_BAG,
 				PID_BOX_OF_CIGARS,
 				PID_CIGAR_CASE,
 			},
 			{ // tiny containers
-				PID_CARDS_DECK, 
+				PID_CARDS_DECK,
 				PID_CARDS_HAND,
 			}
 		};
@@ -3553,25 +4070,27 @@ bool canPutItemInContainer( Item@ item, Item@ container )
 				{
 					item_size = i;
 				}
-				
+
 				if( size_table[i][j] == container_pid )
 				{
 					container_size = i;
 				}
 			}
 		}
-		
+
 		if( item_size <= container_size )
 		{
 			return false;
 		}
 	}
+
 	return true;
 }
 
 bool map_init( Map& map, bool isfirst )
 {
 	map.ProccessSleep = Random( 10, 30 );
+	LookDataRefresh( map );
 	return true;
 }
 
@@ -3581,13 +4100,13 @@ uint e_DelayedRemoval( uint[]@ values )
 	{
 		return 0;
 	}
-	
+
 	Item@ target = GetItem( values[0] );
 	if( valid( target ) )
 	{
 		DeleteItem( target );
 	}
-	
+
 	Critter@ cr = GetCritter( values[1] );
 	if( valid( cr ) )
 	{
@@ -3599,87 +4118,354 @@ uint e_DelayedRemoval( uint[]@ values )
 void unsafe_ItemsWeight( Critter& player, int itemId, int param1, int param2, string@ param3, int[]@ param4 )
 {
 	Item@ item = GetItem( itemId );
-	
 	if( !valid( item ) )
 	{
 		return;
 	}
-	
+
 	if( item.GetType() != ITEM_TYPE_CONTAINER )
 	{
 		return;
 	}
 
-    Item@[] list;
-	item.GetItems( 0, list );
+    uint weight = ItemsWeight( item );
 
-	for( uint i = 0; i < list.length(); i++ )
-	{
-		if( list[i].GetType() == ITEM_TYPE_CONTAINER )
-		{
-			Item@[] sublist;
-			list[i].GetItems( 0, sublist );
-
-			for( uint j = 0, jmax = sublist.length(); j < jmax; j++ )
-			{
-				list.insertLast( sublist[j] );
-			}
-		}
-	}
-	
-    uint result = 0;
-	for( uint i = 0, imax = list.length(); i < imax; i++ )
-	{
-		if( valid( list[i] ) )
-		{
-			result += list[i].GetCount() * list[i].Proto.Weight;
-			
-			if( list[i].Proto.Type == ITEM_TYPE_FLASK )
-			{
-				result += list[i].Val2;
-			}
-			
-			if( glass_bottles[2].find( list[i].GetProtoId() ) != -1 )
-			{
-                result += ( list[i].Proto.Weight - ( list[i].Proto.Partial_Item * 100 - list[i].EXTRA_WEIGHT ) );
-			}
-		}
-    }
-	
-    player.RunClientScript( "client_main@SetItemWeight", itemId, result, 0, null, null );
+    player.RunClientScript( "client_main@SetItemWeight", itemId, weight, 0, null, null );
 }
 
 uint e_UpdateContainer( uint[]@ val )
 {
 	Item@ container = GetItem( val[0] );
-	container.Update();
-	
+	if( valid( container ) )
+	{
+		container.Update();
+	}
+
+	Critter@ cr = GetCritter( val[1] );
+	if( valid( cr ) )
+	{
+		cr.ParamBase[ CR_ITEMS_WEIGHT ] = ItemsWeight( cr );
+	}
+
 	return 0;
 }
 
 bool critter_grid_transfer( Critter& cr, Scenery& scen )
 {
 	ProtoItem@ gridProto = GetProtoItem( scen.ProtoId );
-	if( !IsHuman( cr ) && !IsMutant( cr ) && !IsMonster( cr ) && gridProto.Grid_Type == GRID_LADDERTOP )
+	if( !IsHuman( cr ) && !IsMutant( cr ) && !IsMonster( cr ) && !IsRobot( cr ) && gridProto.Grid_Type == GRID_LADDERTOP )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOGS_CANT_DO_THAT );
 		return false;
 	}
-	
+
 	Map@ map = cr.GetMap();
 	if( BlockerCheck( cr, map, scen ) )
 	{
 		return false;
 	}
-	
+
 	Location@ loc = map.GetLocation();
 	Map@ toMap = loc.GetMap( scen.ToMapPid );
+	if( !valid( toMap ) )
+	{
+		return false;
+	}
+
 	int entireId = scen.ToEntire;
 	if( BlockerCheck( cr, toMap, entireId ) )
 	{
 		return false;
 	}
-	
+
 	return true;
 }
+
+void LookDataRefresh( Critter& cr )
+{
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return;
+	}
+
+	bool IsSneaking = cr.Param[ CR_SNEAKING ] > 0;
+	int skill = cr.Skill[ SK_SNEAK ];
+
+	LookData@ look = cr.Look;
+
+	if( map.GetProtoId() == MAP_UTILITY_START )
+	{
+		if( cr.IsPlayer() )
+		{
+			look.HideViewMultiplier = 0;
+			look.HideHearMultiplier = 0;
+		}
+	}
+	else
+	{
+		int perception = cr.Stat[ ST_PERCEPTION ];
+		look.MaxView = int( ( 10 + perception * 5 ) * HelmetViewEffect( cr ) );
+		if( IsRobot( cr ) )
+		{
+			look.MaxHear = 10 + perception * 5;
+		}
+		else
+		{
+			look.MaxHear = int( ( 5 + perception ) * HelmetHearEffect( cr ) );
+		}
+
+		look.Vision = cr.Param[ QST_VISION ];
+		look.Invis = cr.Param[ QST_INVIS ];
+
+		look.ViewDirMultiplier_0 = 100;
+		look.ViewDirMultiplier_1 = 85;
+		look.ViewDirMultiplier_2 = 50;
+		look.ViewDirMultiplier_3 = 5;
+
+		if( cr.Param[ CR_IS_WINDUPED ] > 0 )
+        {
+			Item@ hand = _CritGetItemHand( cr );
+			if( valid( hand ) )
+			{
+				uint16 pid = hand.GetProtoId();
+				if( FLAG( hand.Proto.Weapon_Perk, WEAPON_PERK_SCOPE_RANGE ) || pid == PID_BINOCULARS || pid == PID_optics1 || pid == PID_OPTICAL_SIGHT || pid == PID_optics3 || pid == PID_optics4 )
+                {
+					look.ViewDirMultiplier_0 = 200;
+                    look.ViewDirMultiplier_1 = 5;
+                    look.ViewDirMultiplier_2 = 0;
+                    look.ViewDirMultiplier_3 = 0;
+                }
+            }
+        }
+
+		look.HearDirMultiplier_0 = 80;
+		look.HearDirMultiplier_1 = 100;
+		look.HearDirMultiplier_2 = 100;
+		look.HearDirMultiplier_3 = 70;
+
+		look.RunningNoiseMultiplier = 150;
+		look.RunningHearMultiplier = 50;
+
+		if( !IsSneaking )
+		{
+			look.HideViewDirMultiplier_0 = 100;
+			look.HideViewDirMultiplier_1 = 100;
+			look.HideViewDirMultiplier_2 = 100;
+			look.HideViewDirMultiplier_3 = 100;
+			look.HideViewDirMultiplier_4 = 100;
+			look.HideViewDirMultiplier_5 = 100;
+		}
+		else
+		{
+			int hdvm = ( 320 - skill ) * 100 / 320;
+			look.HideViewDirMultiplier_0 = ( GET_COVER_TYPE( 3, cr.Param[ CR_IN_COVER ] ) != 0 ) ? hdvm : 100;
+			look.HideViewDirMultiplier_1 = ( GET_COVER_TYPE( 4, cr.Param[ CR_IN_COVER ] ) != 0 ) ? hdvm : 100;
+			look.HideViewDirMultiplier_2 = ( GET_COVER_TYPE( 5, cr.Param[ CR_IN_COVER ] ) != 0 ) ? hdvm : 100;
+			look.HideViewDirMultiplier_3 = ( GET_COVER_TYPE( 0, cr.Param[ CR_IN_COVER ] ) != 0 ) ? hdvm : 100;
+			look.HideViewDirMultiplier_4 = ( GET_COVER_TYPE( 1, cr.Param[ CR_IN_COVER ] ) != 0 ) ? hdvm : 100;
+			look.HideViewDirMultiplier_5 = ( GET_COVER_TYPE( 2, cr.Param[ CR_IN_COVER ] ) != 0 ) ? hdvm : 100;
+		}
+
+		look.HideHearDirMultiplier_0 = 100;
+		look.HideHearDirMultiplier_1 = 100;
+		look.HideHearDirMultiplier_2 = 100;
+		look.HideHearDirMultiplier_3 = 100;
+		look.HideHearDirMultiplier_4 = 100;
+		look.HideHearDirMultiplier_5 = 100;
+
+		look.HideViewMultiplier = IsSneaking ? int( 100 - ( skill / 20 ) ) : 100;
+		look.HideHearMultiplier = int( 100 * ArmorNoisePenalty( cr ) * ( IsSneaking ? ( 300 - skill ) / 300 : 1 ) + ( cr.Param[ CR_SPOKEN ] > 0 ? cr.Param[ ST_SPEECH_VOLUME ] * 2 : 0 ) );
+	}
+
+	cr.LookData_Update();
+}
+
+float ArmorNoisePenalty( Critter& cr )
+{
+	float modifier = 1;
+	Item@ armor = _CritGetItemArmor( cr );
+	if( valid( armor ) )
+	{
+		uint material = _GetItemMaterial( armor );
+		switch( material )
+		{
+			case( MATERIAL_FABRIC ):
+			case( MATERIAL_LEATHER ):
+				modifier = 1;
+				break;
+			case( MATERIAL_ARMORED_LEATHER ):
+				modifier = 1.1;
+				break;
+			case( MATERIAL_IRON ):
+				modifier = 1.5;
+				break;
+			case( MATERIAL_POLYMER ):
+				modifier = 1.25;
+				break;
+			case( MATERIAL_COMPOSITE ):
+				modifier = 2;
+				break;
+			default:
+				modifier = 1;
+				break;
+		}
+	}
+
+	return modifier;
+}
+
+float HelmetHearEffect( Critter& cr )
+{
+	float modifier = 1;
+	Item@ head = _CritGetItemHead( cr );
+	if( valid( head ) )
+	{
+		uint pid = head.GetProtoId();
+		switch( pid )
+		{
+			case( PID_HELMET_PA_TRIBAL ):
+				modifier = 0.5;
+				break;
+			case( PID_HELMET_CA ):
+				modifier = 0.9;
+				break;
+			case( PID_HELMET_METAL ):
+				modifier = 0.8;
+				break;
+			case( PID_HELMET_TANK ):
+			case( PID_HELMET_TANK2 ):
+				modifier = 0.2;
+				break;
+			case( PID_HELMET_PA ):
+			case( PID_HELMET_HPA ):
+			case( PID_HELMET_APA ):
+			case( PID_HELMET_HYENA ):
+				modifier = 2;
+				break;
+			case( PID_EAR_DEFENDERS ):
+				modifier = 0;
+				break;
+			case( PID_SANDBAG_EMPTY ):
+				modifier = 0.3;
+				break;
+			default:
+				modifier = 1;
+				break;
+		}
+	}
+
+	return modifier;
+}
+
+float HelmetViewEffect( Critter& cr )
+{
+	float modifier = 1;
+	Item@ head = _CritGetItemHead( cr );
+	if( valid( head ) )
+	{
+		uint pid = head.GetProtoId();
+		switch( pid )
+		{	
+			case( PID_SANDBAG_EMPTY ):
+				modifier = 0;
+				break;
+			case( PID_WELGLASSES ):
+				modifier = 0.1;
+				break;
+			case( PID_CIVIL_GAS_MASK ):
+			case( PID_GASMASK ):
+				modifier = 0.6;
+				break;
+			case( PID_HELMET_RANGER ):
+				modifier = 0.9;
+				break;
+			case( PID_SPECTACLES ):
+			case( PID_VINTAGE_SPECTACLES ):
+			case( PID_GLASSBIT ):
+			case( PID_STA_VISOR ):
+			{
+				if( cr.Stat[ ST_PERCEPTION ] <= 3 )
+				{
+					modifier = 1.4;
+				}
+				else if( cr.Stat[ ST_PERCEPTION ] == 4 )
+				{
+					modifier = 1.15;
+				}
+
+				break;
+			}
+			default:
+				modifier = 1;
+				break;
+		}
+	}
+
+	return modifier;
+}
+
+void LookDataRefresh( Map& map )
+{
+	LookData@ look = map.Look;
+
+	look.MaxView = 0;
+	look.MaxHear = 0;
+
+	look.ViewDirMultiplier_0 = 100;
+	look.ViewDirMultiplier_1 = 100;
+	look.ViewDirMultiplier_2 = 100;
+	look.ViewDirMultiplier_3 = 100;
+
+    look.HearDirMultiplier_0 = 100;
+    look.HearDirMultiplier_1 = 100;
+    look.HearDirMultiplier_2 = 100;
+    look.HearDirMultiplier_3 = 100;
+
+    look.RunningNoiseMultiplier = 100;
+    look.RunningHearMultiplier = 100;
+
+	Critter@[] critters;
+	for( uint i = 0, iend = map.GetCritters( 0, FIND_ALL, critters); i < iend; i++ )
+	{
+		critters[i].LookData_Update();
+	}
+}
+
+void LookDataRefreshAllMaps( Critter& , int, int, int )
+{
+	Log( "LookDataRefreshAllMaps" );
+	Map@[] maps;
+	for( uint i = 0, iend = GetAllMaps( 0, maps ); i < iend; i++ )
+	{
+		LookDataRefresh( maps[i] );
+	}
+}
+
+uint cte_sneaking( Critter& cr, int identifier, uint& rate )
+{
+	if( MovementState( cr ) == MOVE_STATE_RUN )
+	{
+		cr.ParamBase[ CR_SNEAKING ] = 0;
+		LookDataRefresh( cr );
+		ChangeCritterSpeed( cr );
+		return 0;
+	}
+
+	if( cr.Param[ CR_SNEAKING ] == 0 )
+	{
+		LookDataRefresh( cr );
+		ChangeCritterSpeed( cr );
+		return 0;
+	}
+
+	if( cr.Param[ CR_IN_COVER ] > 0 )
+	{
+		LookDataRefresh( cr );
+		ChangeCritterSpeed( cr );
+	}
+
+	return REAL_MS( 500 );
+}
+
 #endif //__MAIN_MODULE__

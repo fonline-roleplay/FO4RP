@@ -9,34 +9,148 @@
 #include "autodoc_h.fos"
 #include "vending_h.fos"
 #include "lockers_h.fos"
+#include "playlist_h.fos"
 
 import void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string@ param3, int[] @ param4 ) from "general_unsafe";
+import bool TryReadHolodisk(Item@ holodisk, Critter@ cr) from "item";
 
 const uint16[] TurretPids = { NPC_PID_LAS_TURRET, NPC_PID_LAS_TURRET2, NPC_PID_PLAS_TURRET, NPC_PID_MG_TURRET };
 
-Critter@[] getCritters(Map@ map, uint pid, uint find)
-{	
-	Critter@[] crs;
-	int countCr = map.GetCritters( pid, find, crs );
-	return crs;	
+int getPassword( Item@ item )
+{
+	if( getItemPID( item ) == PID_TERMINAL )
+	{
+		return item.PASSWORD;
+	}
+	
+	if( isDoorOrContainer( item ) )
+	{
+		return item.Val4; //locker.ENTERED_CODE
+	}
+	
+	return 0;
+}
+
+Critter@[] getTurrets( Map& map )
+{
+	Critter@[] result;
+	
+	for( uint j = 0; j < TurretPids.length(); j ++ ) 
+	{
+		uint16 turretPid = TurretPids[j];
+		map.GetCritters( turretPid, FIND_LIFE_AND_KO, result );
+	}
+	
+	return result;
+}
+
+Item@[] getEmitters( Map& map )
+{
+	Item@[] result;
+	
+	for( uint j = 0; j < emitterPids.length(); j ++ ) 
+	{
+		map.GetItems( emitterPids[j], result );
+	}
+	
+	return result;
+}
+
+Item@[] getFenceEmitters( Map& map )
+{
+	Item@[] misk;
+	
+	map.GetItemsByType( ITEM_TYPE_MISC, misk );
+	
+	Item@[] result;
+	for( uint i = 0; i < misk.length(); i ++ ) 
+	{
+		Item@ emitter = misk[i];
+		if( valid( emitter ) )
+		{
+			if( emitter.GetProtoId() == PID_LAZER_EMITTER_NS ||emitter.GetProtoId() == PID_LAZER_EMITTER_WE )
+			{
+				result.insertLast( emitter );
+			}
+		}
+	}
+	
+	return result;
+}
+
+Item@[] getTerminals( Map& map )
+{
+	Item@[] result;
+	for( uint j = 0; j < TerminalPids.length(); j ++ ) 
+	{
+		map.GetItems( TerminalPids[j], result );
+	}
+	
+	return result;
+}
+
+Item@[] getAutodoors( Map& map )
+{
+	Item@[] doors;
+	map.GetItemsByType( ITEM_TYPE_DOOR, doors );
+	
+	Item@[] result;
+	for( uint i = 0; i < doors.length(); i ++ ) 
+	{
+		if( doors[i].Proto.Item_Subtype == ITEM_SUBTYPE_AUTODOOR )
+		{
+			result.insertLast( doors[i] );
+		}
+	}
+	
+	return result;
+}
+
+float skillbonus( Item& item, Critter& cr )
+{
+	int skill = ( getItemPID(item) == PID_TERMINAL ? cr.Skill[SK_SCIENCE] : cr.Skill[SK_LOCKPICK] );	
+	
+	if( getSlotItemPID( cr, SLOT_HAND1 ) ==  PID_ELEC_LOCKPICK_MKII )
+	{
+		skill += 50;
+	}
+	
+	return skillbonus( item.LockerComplexity, skill );
+}
+
+float skillbonus( int admin, int hacker )
+{
+	float hardness = float ( CLAMP( hacker - admin, -SKILL_MAX_DIFFERENCE, SKILL_MAX_DIFFERENCE ) ) / SKILL_MAX_DIFFERENCE; //[-300..300] range
+
+	float maxDelta = 0;
+	
+	if( hardness >= 0 )
+	{
+		maxDelta = SKILL_EFFECIENCY_MAX - SKILL_EFFECIENCY_ZERO;
+	}
+	else //if( hardness < 0 )
+	{
+		maxDelta = SKILL_EFFECIENCY_ZERO - SKILL_EFFECIENCY_MIN;
+	}
+		
+	return SKILL_EFFECIENCY_ZERO + hardness * maxDelta;
 }
 
 bool checkLaserFence( Item& terminal, Map& map )
 {
-	bool LaserOn;
-	uint entires = map.CountEntire( terminal.FENCE_GROUP );
-	uint16 hx = 0, hy = 0;
-	uint8 dir = 0;
-	map.GetEntireCoords( terminal.FENCE_GROUP, 0, hx, hy, dir );
-	Item@ deathHex = null;
-	@deathHex = map.GetItem( hx, hy, PID_DEATH_HEX );
-	return !valid( deathHex ) ? LaserOn = false : LaserOn = true;
+	Item@ fence = GetItem( terminal.FENCE_GROUP );
+	bool isOn = false;
+	if( valid( fence ) )
+	{
+		isOn = fence.FIELD_STATE == EMITTER_DISABLED ? false : true;
+	}
+	return isOn;
 }
 
 void StartMenuTerminal( Critter& cr, Item& terminal )
 {
     Map@ map = cr.GetMap();
-    if( map is null )
+    if( !valid( map ) )
 	{
         return;
     }
@@ -45,207 +159,308 @@ void StartMenuTerminal( Critter& cr, Item& terminal )
     iDialogBox@ menu = OpenMenu( cr, "Terminal", handler );
 }
 
+void StartMenuHacking( Critter& cr, Item& terminal )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+	LogCrimeMovement( cr, terminal, "starts hacking password" ); 
+
+    iMenuHandler@ handler = MenuHacking( terminal, map );
+    iDialogBox@ menu = OpenMenu( cr, "Hacking", handler );
+}
+
+bool MenuReady( Map@ map, Item@ terminal )
+{
+	return valid( map ) && valid( terminal );
+}
+
 class MenuTerminal: CenteredMenuHandler
 {
-
-    uint terminal_id;
-    uint map_id;
+	Item@ terminal;
+	Map@ map;
+	
 	uint level;
 		
 	MenuTerminal( Item& terminal, Map& map )
 	{
-		terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 0;
 	}
 
 	bool MenuUpdate( Critter& cr, iDialogBox& menu ) 
 	{
-		Map@ map = GetMap(map_id);
-		if( !valid( map ) )
+		if( !MenuReady( map, terminal ) || MovementState( cr ) > MOVE_STATE_STILL )
 		{
 			return false;
 		}
-		
-		if( MovementState( cr ) > 0  )
-		{
-			return false;
-		}
-		
-        Item@ terminal = GetItem( terminal_id );
-        
-		if( isGM( cr ) && menu.Button( "Gm menu" ) )
+
+		if( isGM( cr ) && menu.ButtonMsg( STR_TERMINAL_MENU_GM_SUBMENU ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			MenuTerminalGM@ menu_terminalGM = MenuTerminalGM( terminal, map );
 			menu_terminalGM.level = level + 1;
-			return menu.OpenChild( "level " + menu_terminalGM.level, menu_terminalGM );
+			return menu.OpenChild( "Level " + menu_terminalGM.level, menu_terminalGM );
 		}
-		bool LaserOn = checkLaserFence( terminal, map );
 		
 		if( terminal.TERMINAL_POWERED > 0 )
 		{
-			if( terminal.CONSOLE_PASSWORD == PASSWORD_DISABLED )
+			if( terminal.TERMINAL_STATE > STATE_OFF )
 			{
-				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) )
+				if( menu.ButtonMsg( STR_WATERWORKS_MENU_SWITCH, "$switchWaterworks" + STR_INSERT_TEXT_LINE( STR_OFF ) ) )
 				{
-					if( terminal.FENCE_GROUP != 0 && map.CountEntire( terminal.FENCE_GROUP ) > 0 )
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					terminal.TERMINAL_STATE = STATE_OFF;
+					return true;
+				}
+				
+				if( terminal.CONSOLE_PASSWORD == PASSWORD_DISABLED )
+				{
+					if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) )
 					{
-						string info = LaserOn ? "Enabled" : "Disabled";						
-						if( menu.ButtonExt( "Laser fence: ", info ) )
+						if( terminal.FENCE_GROUP != 0 )
+						{
+							string lex = "$state" + STR_INSERT_TEXT_LINE( checkLaserFence( terminal, map ) ? STR_DEVICE_ENABLED : STR_DEVICE_DISABLED );
+							if( menu.ButtonMsg( STR_TERMINAL_MENU_LASER_FENCE, lex ) )
+							{
+								PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+								Item@ emitter = GetItem( terminal.FENCE_GROUP );
+								if( valid( emitter ) )
+								{
+									bool create = ( checkLaserFence( terminal, map ) ? false : true );
+									ToggleLaserFence( map, emitter, create );	
+								}
+								
+								return true;
+							}
+						}
+						
+						if( menu.ButtonMsg( STR_TERMINAL_MENU_ASSIGN_FENCE ) )
+						{
+							MenuSelectFence@ select_fence = MenuSelectFence( terminal, map );
+							select_fence.level = level + 1;
+							return menu.OpenChild( "Level " + select_fence.level, select_fence );
+						}					
+					}
+					
+					if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_DOORS ) )
+					{
+						if( menu.ButtonMsg( STR_TERMINAL_MENU_DOORS_CONTROL ) )
 						{
 							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-							ToggleLaserFence( map, terminal.FENCE_GROUP );	
-							return true;
+							MenuDoorsCtrl@ menu_doors_ctrl = MenuDoorsCtrl( terminal, map );
+							menu_doors_ctrl.level = level + 1;
+							return menu.OpenChild( "Level " + menu_doors_ctrl.level, menu_doors_ctrl );
 						}
 					}
 					
-					if( menu.Button( "Assign Fence") )
+					if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) )
 					{
-						MenuSelectFence@ select_fence = MenuSelectFence( terminal, map );
-						select_fence.level = level + 1;
-						return menu.OpenChild( "Level " + select_fence.level, select_fence );
-					}
-					
-				}
-				
-				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_DOORS ) )
-				{
-					if( menu.Button( "Doors Control" ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						MenuDoorsCtrl@ menu_doors_ctrl = MenuDoorsCtrl( terminal, map );
-						menu_doors_ctrl.level = level + 1;
-						return menu.OpenChild( "Level " + menu_doors_ctrl.level, menu_doors_ctrl );
-					}
-				}
-				
-				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) )
-				{
-					if( menu.Button( "Turret Auth" ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						MenuTurrets@ menu_turrets = MenuTurrets( terminal, map );
-						menu_turrets.level = level + 1;
-						return menu.OpenChild( "level " + menu_turrets.level, menu_turrets );
-					}
-					
-					if( menu.Button( "Turret Control" ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						MenuTurretsCtrl@ menu_turrets_ctrl = MenuTurretsCtrl( terminal, map );
-						menu_turrets_ctrl.level = level + 1;
-						return menu.OpenChild( "Level " + menu_turrets_ctrl.level, menu_turrets_ctrl );
-					}
-				}
-				
-				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) )
-				{
-					if( menu.Button( "Open Reciever" ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						ShowContainer( cr, terminal, TRANSFER_HEX_CONT_UP );
-						PlayGenericSound( map, terminal.HexX, terminal.HexY, "SCDOORSM.mp3", 10 );
-						cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_TERMINAL_OPEN );
-						return false;
-					}
-					Item@[] cardItm;
-					terminal.GetItems( uint( -1 ), cardItm );
-					if( cardItm.length() > 0 && menu.Button( "Select Card" ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						MenuSelectCard@ select_card = MenuSelectCard( terminal, map );
-						select_card.level = level + 1;
-						return menu.OpenChild( "Level " + select_card.level, select_card );
-					}
-				}
-				
-				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_FORCE_FIELD ) && menu.Button( "Fields Control") )
-				{
-					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-					MenuControlFF@ control_ff = MenuControlFF( terminal, map );
-					control_ff.level = level + 1;
-					return menu.OpenChild( "Level " + control_ff.level, control_ff );
-				}
-				
-				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_FORCE_FIELD ) && menu.Button( "Assign Fields") )
-				{
-					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-					MenuSelectFF@ select_ff = MenuSelectFF( terminal, map );
-					select_ff.level = level + 1;
-					return menu.OpenChild( "Level " + select_ff.level, select_ff );
-				}
-				
-				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_AUTODOC ) )
-				{
-					if( menu.Button( "Autodoc Control" ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						MenuAutodocCtrl@ menu_autodoc_ctrl = MenuAutodocCtrl( terminal, map );
-						menu_autodoc_ctrl.level = level + 1;
-						return menu.OpenChild( "Level " + menu_autodoc_ctrl.level, menu_autodoc_ctrl );
-					}
-
-					if( menu.Button( "Autodoc Install" ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						MenuAutodoc@ menu_autodoc = MenuAutodoc( terminal, map );
-						menu_autodoc.level = level + 1;
-						return menu.OpenChild( "Level " + menu_autodoc.level, menu_autodoc );
-					}
-				}
-
-				if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) )
-				{
-					if( menu.Button( "Password Reset" ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						terminal.PASSWORD = 0;
-						string passwordInfo = "Set new password";
-						cr.RunClientScript( "client_screen_numberpad@ShowScreen", terminal.Id, 0, 0, passwordInfo, null );
-						return false;
-					}
-					
-					if( menu.Button( "Block Terminal" ) )
-					{
-						if( terminal.PASSWORD == 0 )
+						if( menu.ButtonMsg( STR_TERMINAL_MENU_TURRET_AUTH ) )
 						{
 							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+							MenuTurrets@ menu_turrets = MenuTurrets( terminal, map );
+							menu_turrets.level = level + 1;
+							return menu.OpenChild( "level " + menu_turrets.level, menu_turrets );
+						}
+						
+						if( menu.ButtonMsg( STR_TERMINAL_MENU_TURRET_CONTROL ) )
+						{
+							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+							MenuTurretsCtrl@ menu_turrets_ctrl = MenuTurretsCtrl( terminal, map );
+							menu_turrets_ctrl.level = level + 1;
+							return menu.OpenChild( "Level " + menu_turrets_ctrl.level, menu_turrets_ctrl );
+						}
+					}
+					
+					if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) )
+					{
+						Item@[] cardItm;
+						terminal.GetItems( uint( -1 ), cardItm );
+						if( cardItm.length() > 0 && menu.ButtonMsg( STR_TERMINAL_MENU_SELECT_CARD ) )
+						{
+							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+							MenuSelectCard@ select_card = MenuSelectCard( terminal, map );
+							select_card.level = level + 1;
+							return menu.OpenChild( "Level " + select_card.level, select_card );
+						}
+					}
+					
+					if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_FORCE_FIELD ) && menu.ButtonMsg( STR_TERMINAL_MENU_FIELDS_CONTROL ) )
+					{
+						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+						MenuControlFF@ control_ff = MenuControlFF( terminal, map );
+						control_ff.level = level + 1;
+						return menu.OpenChild( "Level " + control_ff.level, control_ff );
+					}
+					
+					if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_FORCE_FIELD ) && menu.ButtonMsg( STR_TERMINAL_MENU_ASSIGN_FIELDS ) )
+					{
+						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+						MenuSelectFF@ select_ff = MenuSelectFF( terminal, map );
+						select_ff.level = level + 1;
+						return menu.OpenChild( "Level " + select_ff.level, select_ff );
+					}
+					
+					if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_AUTODOC ) )
+					{
+						if( menu.ButtonMsg( STR_TERMINAL_MENU_AUTODOC_CONTROL ) )
+						{
+							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+							MenuAutodocCtrl@ menu_autodoc_ctrl = MenuAutodocCtrl( terminal, map );
+							menu_autodoc_ctrl.level = level + 1;
+							return menu.OpenChild( "Level " + menu_autodoc_ctrl.level, menu_autodoc_ctrl );
+						}
+
+						if( menu.ButtonMsg( STR_TERMINAL_MENU_AUTODOC_INSTALL ) )
+						{
+							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+							MenuAutodoc@ menu_autodoc = MenuAutodoc( terminal, map );
+							menu_autodoc.level = level + 1;
+							return menu.OpenChild( "Level " + menu_autodoc.level, menu_autodoc );
+						}
+					}
+
+					if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) )
+					{
+						if( menu.ButtonMsg( STR_TERMINAL_MENU_PASSWORD_RESET ) )
+						{
+							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+							terminal.PASSWORD = 0;
 							string passwordInfo = "Set new password";
-							cr.RunClientScript( "client_screen_numberpad@ShowScreen", terminal.Id, 0, 0, passwordInfo, null );
+							
+							int[] data = {0};
+							cr.RunClientScript( "client_screen_numberpad@ShowScreen", terminal.Id, 0, 0, passwordInfo, data );
+							return menu.DelayRedraw();
+						}
+						
+						if( menu.ButtonMsg( STR_TERMINAL_MENU_BLOCK_TERMINAL ) )
+						{
+							if( getPassword(terminal) == 0 )
+							{
+								PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+								string passwordInfo = "Set new password";
+
+								int[] data = {0};
+								cr.RunClientScript( "client_screen_numberpad@ShowScreen", terminal.Id, 0, 0, passwordInfo, data );
+								return menu.DelayRedraw();
+							}
+							else
+							{
+								PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+								terminal.CONSOLE_PASSWORD = PASSWORD_ENABLED;
+								cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_BLOCK );
+								LogCrimeMovement( cr, terminal, "blocks terminal" ); 
+								return true;
+							}
+						}
+					}
+
+					if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_MASTER ) )
+					{
+						if( menu.ButtonMsg( STR_TERMINAL_MENU_CONNECT_TO_TERMINAL ) )
+						{
+							Item@ terminal_slave;
+							if( terminal.TERMINAL_SLAVE != 0 )
+							{
+								@terminal_slave = GetItem( terminal.TERMINAL_SLAVE );
+							}
+							
+							if( !valid( terminal_slave ) )
+							{
+								cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_CONNECTION_FAILED ); 
+								return true;
+							}
+							
+							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+							MenuTerminal@ sub_menu = MenuTerminal( terminal_slave, map );
+							sub_menu.level = level + 1;
+							return menu.OpenChild( "Level " + sub_menu.level, sub_menu );
+						}
+					}
+
+					if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_DATABASE ) )
+					{
+						if( menu.ButtonMsg( STR_TERMINAL_HAS_DATABASE ) )
+						{
+							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+							StartMenuDatabaseCtrl(cr, terminal);
 							return false;
+						}
+
+						if( isGM( cr ) && menu.ButtonMsg( STR_TERMINAL_DB_CONNECT_BTN ) )
+						{
+							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+							MenuDatabase@ menu_database = MenuDatabase( terminal, map );
+							menu_database.level = level + 1;
+							return menu.OpenChild( "Level " + menu_database.level, menu_database );
+						}
+					}
+				}
+				else if( terminal.CONSOLE_PASSWORD == PASSWORD_ENABLED )
+				{
+					if( menu.ButtonMsg( STR_TERMINAL_MENU_UNBLOCK_TERMINAL ) )
+					{
+						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+						string passwordInfo;
+						if( getPassword(terminal) != 0 )
+						{
+							passwordInfo = "Input password!";
 						}
 						else
 						{
-							PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-							terminal.CONSOLE_PASSWORD = PASSWORD_ENABLED;
-							cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_BLOCK );
-							return false;
+							passwordInfo = "Set new password";
 						}
+						
+						int[] data = {0};
+						cr.RunClientScript( "client_screen_numberpad@ShowScreen", terminal.Id, 0, 0, passwordInfo, data );
+						return menu.DelayRedraw();
+					}
+					
+					if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_HACKABLE ) && menu.ButtonMsg( STR_TERMINAL_MENU_HACK_PASSWORD ) )
+					{
+						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+						
+						if( terminal.LockerComplexity >= 500 )
+						{
+							cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_MENU_CANT_HACK_THIS );
+							return true;
+						}
+						
+						if( !HasPipBoy( cr ) )
+						{
+							LogCrimeMovement( cr, terminal, "can't hack terminal without pip-boy" );
+							cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_YOU_NEED_PIPBOY );
+							return true;
+						}
+						
+						LogCrimeMovement( cr, terminal, "starts hacking password" ); 
+						
+						MenuHacking@ menu_terminal_hacking = MenuHacking( terminal, map );
+						menu_terminal_hacking.level = level + 1;
+						return menu.OpenChild( "Level " + menu_terminal_hacking.level, menu_terminal_hacking );					
 					}
 				}
 			}
-			else if( terminal.CONSOLE_PASSWORD == PASSWORD_ENABLED )
+			else if( menu.ButtonMsg( STR_WATERWORKS_MENU_SWITCH , "$switchWaterworks" + STR_INSERT_TEXT_LINE( STR_ON ) ) )
 			{
-				if( menu.Button( "Unblock Terminal" ) )
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				if( !MapHasPower( map ) )
 				{
-					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-					string passwordInfo;
-					if( terminal.PASSWORD != 0 )
-					{
-						passwordInfo = "Input password!";
-					}
-					else
-					{
-						passwordInfo = "Set new password";
-					}
-					cr.RunClientScript( "client_screen_numberpad@ShowScreen", terminal.Id, 0, 0, passwordInfo, null );
-					return false;
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_POWER_IS_OFF );
+					return true;
 				}
+				
+				terminal.TERMINAL_STATE = STATE_ON;
+				return true;
 			}
 		}
 		
-		if( menu.Button( "End Session" ) )
+		if( menu.ButtonMsg( STR_TERMINAL_MENU_END_SESSION ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
@@ -254,33 +469,64 @@ class MenuTerminal: CenteredMenuHandler
 		return true;
 	}
 
-	string@ Description( Critter& cr ) 
-	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-		string info = "Terminal ¹ ";
-		info += "|0xFFFF00 " + terminal.Id + "\n";
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
 
-		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) && terminal.ACCESS_CARD != 0 )
+	int getDescriptionLine()
+	{
+		if( terminal.TERMINAL_POWERED == STATE_OFF ) 
 		{
-			string card = GetMsgStr( 1, TEXTMSG_ITEM, terminal.ACCESS_CARD * 100 );
-			info += "|0x3CF800 Access card set: \n[ ";
-			info += "|0xFFFF00 " + card;
-			info += "|0x3CF800  ]\n";
+			return STR_TERMINAL_MENU_NO_POWER;
 		}
 		
-		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) && ( FindTurrets( map ) ) )
+		if( terminal.TERMINAL_STATE == STATE_OFF )
+		{
+			return STR_TERMINAL_MENU_NO_POWER;
+		}
+		
+			
+		if( terminal.CONSOLE_PASSWORD == PASSWORD_ENABLED )
+		{
+			return STR_TERMINAL_MENU_ENTER_PASSWORD;
+		}
+		
+		return STR_TERMINAL_MENU_MAIN;
+	}
+	
+	string@ Description( Critter& cr ) 
+	{
+		if( !valid( terminal ) )
+		{
+			return null;
+		}
+		
+		if( terminal.TERMINAL_POWERED == 0 )
+		{
+			return null;
+		}
+		
+		if( terminal.CONSOLE_PASSWORD == PASSWORD_ENABLED )
+		{
+			return null;
+		}
+		
+		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
+					+ "$ID" + terminal.Id;
+
+		info += "$accessCard";
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) && terminal.ACCESS_CARD != 0 )
+		{
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_ACCESS_CARD_INFO )
+				 + "$card" + STR_INSERT_ITEM_LINE( terminal.ACCESS_CARD * 100 );
+		}
+		
+		info += "$turrets";
+		Critter@[] turrets = getTurrets( map );
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) && ( turrets.length() > 0 ) )
 		{ 
 			uint amount = 0;
-			info += "|0x3CF800 Turrets enabled: ";
-			Critter@[] turrets;
-			
-			for( uint j = 0; j < TurretPids.length(); j ++ ) 
-			{
-				uint16 turretPid = TurretPids[j];
-				map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
-			}
-			
 			for( uint i = 0; i < turrets.length(); i ++ )
 			{
 				Critter@ turret = turrets[i];
@@ -293,48 +539,327 @@ class MenuTerminal: CenteredMenuHandler
 					continue;
 				}
 			}
-			info += "|0x3CF800 [ ";
-			info += "|0xFFFF00 " + amount;
-			info += "|0x3CF800  ] \n";
+
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_TURRETS_INFO )
+				 + "$amount" + amount;
+		}
+		
+		info += "$fence";
+		
+		string name = terminal.FENCE_GROUP;
+		Item@ emitter;
+		if(terminal.FENCE_GROUP != 0) @emitter = GetItem( terminal.FENCE_GROUP );
+		if( valid( emitter ) )
+		{
+			string@ lexem = Item_GetLexems( emitter );
+			if( valid( lexem ) && lexem.length() > 3 )
+			{
+				int pos = findFirstNotOf( lexem, "ï¿½" );
+				name = substring( lexem, pos, lexem.length() );
+			}
 		}
 		
 		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) && terminal.FENCE_GROUP != 0 )
 		{
-			info += "|0x3CF800 Controlled laser fence ¹ [ ";
-			info += "|0xFFFF00 " + terminal.FENCE_GROUP;
-			info += "|0x3CF800  ] \nFence status: ";
-			string fenceState;
-			bool LaserOn = checkLaserFence( terminal, map );
-			fenceState = LaserOn ? "Enabled" : "Disabled";
-			info += "|0xFFFF00 " + fenceState;
-			info += "|0x3CF800 .\n";
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_FENCE_INFO )
+				 + "$fenceID" + name
+				 + "$fenceStatus" + STR_INSERT_TEXT_LINE( checkLaserFence( terminal, map ) ? STR_DEVICE_ENABLED : STR_DEVICE_DISABLED );
 		}
 		
-		if( terminal.CONSOLE_PASSWORD == PASSWORD_ENABLED )
+		info += "$noPassword";
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) && getPassword(terminal) == 0 )
 		{
-			info = "|0xFFFF00 Terminal is blocked, please input password!";
-		}
-		
-		if( terminal.TERMINAL_POWERED == 0 )
-		{
-			info = "|0xFFFF00 No power \n";
-		}
-		
-		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) && terminal.PASSWORD == 0 )
-		{
-			info += "|0xFFFF00 Attention, password not set! \n";
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_NO_PASSWORD );
 		}
 		
 		return info;
 	}
 	
-	string@ ButtonCancel()
+	bool ShouldRedraw( Critter& cr )
 	{
-        return ButtonDecorator( "", null );
+		if( !valid( terminal ) || GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
+		return true;
     }
+}
+
+class MenuHacking: CenteredMenuHandler
+{
+	Item@ terminal;
+	Map@ map;
+	
+	bool minigameMode;
+	bool isTerminal;
+	
+	uint level;
+	uint digit;
+	
+	int hinted;
+	int hintedCount;
+	int hintedStage;
+	float hintingPercentage;
+	
+	int[] datamess;
+		
+	MenuHacking( Item& terminal, Map& map )
+	{
+		@this.terminal = @terminal;
+		
+		if( valid( terminal ) )
+		{
+			isTerminal = terminal.GetProtoId() == PID_TERMINAL;
+		}
+		
+        @this.map = @map;
+		
+		level = 1;		
+		digit = 1;
+		
+		resetHints();
+		hintingPercentage = -1.0f;
+		
+		minigameMode = false;
+		
+		datamess.resize(0);
+	}
+	
+	void resetHints()
+	{
+		hinted = -1;
+		hintedStage = 0;
+		hintedCount = 0;		
+	}
+	
+	bool checkSkill( Critter& cr )
+	{
+		if( hintingPercentage < 0 )
+		{
+			hintingPercentage = skillbonus( terminal, cr );
+		}
+		
+		return hintingPercentage >= 0;
+	}
+
+	bool MenuUpdate( Critter& cr, iDialogBox& menu ) 
+	{
+		if( !MenuReady( map, terminal ) || !checkSkill( cr ) || MovementState( cr ) > MOVE_STATE_STILL )
+		{
+			return false;
+		}
+		
+		if( !minigameMode )
+		{
+			return selectionMenu( cr, menu );
+		}
+		else
+		{
+			return hackingMenu( cr, menu );
+		}
+	}
+	
+	void refreshDataMess()
+	{
+		int number = digitValue( getPassword(terminal), digit );
+		datamess = WeightedRandom( 100, number, hintingPercentage );		
+		resetHints();
+	}
+
+	bool selectionMenu( Critter& cr, iDialogBox& menu )
+	{
+		for( uint i = 1, l = intLength( getPassword(terminal) ); i <= l; i++ )
+		{
+			if( menu.ButtonMsg( STR_TERMINAL_MENU_HACK_DIGIT, "$n" + i ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				
+				digit = i;
+				refreshDataMess();
+				minigameMode = true;
+				hintedStage = 0;
+				
+				return true;
+			}
+		}
+
+		if( !isTerminal )
+		{
+			if( menu.ButtonMsg( STR_TERMINAL_MENU_HACK_PASSWORD ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				string passwordInfo = "Enter password";
+				cr.RunClientScript( "client_screen_codedoor@ShowScreen", terminal.Id, terminal.Val1, 0, passwordInfo, null );
+				return menu.DelayRedraw();
+			}
+		}
+		
+		if( menu.ButtonMsg( isTerminal ? STR_RETURN : STR_CLOSE_MENU_BUTTON ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			return false;
+		}
+
+		return true;
+	}
+
+	bool hackingMenu( Critter& cr, iDialogBox& menu )
+	{
+		if( menu.ButtonMsg( STR_TERMINAL_MENU_SELECT_DIGIT ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			minigameMode = false;
+			return true;
+		}
+
+		if( menu.ButtonMsg( STR_TERMINAL_MENU_REFRESH_DATAMESS ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			refreshDataMess();
+			return true;
+		}
+
+		for( uint i = 0; i <= 9; i++ )
+		{
+			if( menu.ButtonMsg( STR_TERMINAL_MENU_HIGHLIGHT_NUMBER, "$n" +  i ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				
+				hinted = i;
+				hintedCount = CountInArray( datamess, hinted );
+				
+				return true;
+			}			
+		}
+		
+		if( menu.ButtonMsg( STR_RETURN ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			minigameMode = false;
+			return true;
+		}
+		
+		return true;
+	}
+
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_HACK_MAIN;
+	}
+	
+	string printDataMess()
+	{
+		string result = "|0xAAAAAA ";
+		
+		int lines = 0;
+		bool colored = false;
+		for( int i = 0, l = datamess.length(); i < l ; i++ )
+		{
+			if( lines >= hintedStage )
+			{
+				if( !colored )
+				{
+					result += "|0x888888 ";
+					colored = true;
+				}
+				
+				result += "?";
+			}
+			else
+			{
+				if( datamess[i] == hinted )
+				{
+					result += "|0xFFFF00 " + datamess[i] + "|0xAAAAAA ";
+				}
+				else
+				{
+					result += datamess[i];
+				}
+			}
+			
+			if( ( i + 1 ) % 25 == 0 )
+			{
+				result += "\n";
+				
+				lines++;
+			}
+		}
+		
+		return result;
+	}
+	
+	string@ Description( Critter& cr ) 
+	{
+		if( !valid( terminal ) )
+		{
+			return null;
+		}
+		
+		string info = "$gminfo";		
+		if( isGM( cr ) )
+		{
+			float truncedPecentage = float( int( hintingPercentage * 100.0f ) / 100.0f );
+			
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_GM_INFO )
+				 + "$password" + getPassword(terminal)
+				 + "$percentage" + truncedPecentage;
+		}
+
+		info += "$state";
+		if( minigameMode )
+		{
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_MINIGAME_PROCESS )
+				 + "$digit" + digit;
+
+			info += "$hints"; 
+			if( hinted != -1 )
+			{
+				info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_MINIGAME_HINTS )
+					 + "$hintedN" + hinted;
+
+				info += "$HintingCountText"; 
+				if( isGM( cr ) )
+				{
+					info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_MINIGAME_HINTS_COUNT )
+						 + "$hintedCount" + hintedCount;
+				}
+			}
+			
+			info += "$datamess" + printDataMess();
+		}
+		else
+		{
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_MINIGAME_SELECT );
+		}
+
+		return info;
+	}
 	
 	bool ShouldRedraw( Critter& cr )
 	{
+		if( minigameMode )
+		{
+			if( hintedStage < 4 )
+			{
+				hintedStage++;
+			}
+		}
+		else
+		{
+			hintedStage = 0;
+		}
+		
+		if( !valid( terminal ) || GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
 		return true;
     }
 }
@@ -350,7 +875,7 @@ bool TransferToTerminal( Critter& cr, Item& targetItem, Item& cont )
 	uint transferAmount = cr.ItemTransferCount();
 	uint16 targetItemPid = targetItem.GetProtoId();
 	
-	if( TerminalKeyCards.find( targetItemPid ) != -1 )
+	if( TerminalKeyCards.find( targetItemPid ) != -1 || targetItemPid == PID_TAPE )
 	{
 		MoveItem( targetItem, transferAmount, cont, 0 );
 	}
@@ -358,6 +883,7 @@ bool TransferToTerminal( Critter& cr, Item& targetItem, Item& cont )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_WRONG_ITEM ); 
 	}
+	
 	ShowContainer( cr, cont, TRANSFER_HEX_CONT_UP );
 	return true;
 }
@@ -368,6 +894,7 @@ bool TransferFromTerminal( Critter& cr, Item& targetItem, Item& cont )
 	{
 		return false; 
 	}
+	
 	uint transferAmount = cr.ItemTransferCount();
 	MoveItem( targetItem, transferAmount, cr );
 	return true;
@@ -376,16 +903,18 @@ bool TransferFromTerminal( Critter& cr, Item& targetItem, Item& cont )
 //Child menu for card selection
 class MenuSelectCard: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
+	Item@ terminal;
+	Map@ map;
+
 	uint level;
 	int selectorPos;
 	uint arrayPos;
 	
     MenuSelectCard( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+        @this.terminal = terminal;
+        @this.map = map;
+		
 		level = 1;
 		selectorPos = 0;
 		arrayPos = 0;
@@ -393,20 +922,17 @@ class MenuSelectCard: CenteredMenuHandler
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( map is null || terminal is null )
+		if( !MenuReady( map, terminal ) )
 		{
-            return false;
-        }
-			
+			return false;
+		}
+
 		Item@[] cardItm;
 		terminal.GetItems( uint( -1 ), cardItm );
 		
 		if( cardItm.length() != 0 )
 		{
-			if( menu.Button( "Previous" ) )
+			if( menu.ButtonMsg( STR_PREVIOUS ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				selectorPos--;
@@ -424,7 +950,7 @@ class MenuSelectCard: CenteredMenuHandler
 				return true;
 			}
 			
-			if( menu.Button( "Next" ) )
+			if( menu.ButtonMsg( STR_NEXT ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				selectorPos++;
@@ -442,7 +968,7 @@ class MenuSelectCard: CenteredMenuHandler
 				return true;
 			}
 			
-			if( menu.Button( "Confirm" ) )
+			if( menu.ButtonMsg( STR_CONFIRM ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_TERMINAL_SELECT_CARD );
@@ -472,7 +998,7 @@ class MenuSelectCard: CenteredMenuHandler
 			}
 		}
 		
-		if( menu.Button( "Disable access cards" ) )
+		if( menu.ButtonMsg( STR_TERMINAL_MENU_DISABLE_CARDS ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_TERMINAL_DISABLE_CARD );
@@ -501,96 +1027,96 @@ class MenuSelectCard: CenteredMenuHandler
 			return false;
 		}
 		
-		if( menu.Button( "Return" ) )
+		if( menu.ButtonMsg( STR_RETURN ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
 		}
+		
 		return true;
     }
 
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_SETUP_CARD;
+	}
+
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		string info = "Terminal ¹ ";
-		info += "|0xFFFF00 " + terminal.Id + "\n";
+		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
+					+ "$ID" + terminal.Id
+					+ "$card";
+
 		Item@[] cardItm;
 		terminal.GetItems( uint( -1 ), cardItm );
 		if( cardItm.length() > 0 && terminal.ACCESS_CARD != 0 )
 		{
-			string card = GetMsgStr( 1, TEXTMSG_ITEM, terminal.ACCESS_CARD * 100 );
-			info += "|0x3CF800 Access card type: \n[ ";
-			info += "|0xFFFF00 " + card;
-			info += "|0x3CF800   ]\nChoose access card and press";
-			info += "|0xFFFF00  Confirm";
-			info += "|0x3CF800  to finish setup.";
+			info += STR_INSERT_ITEM_LINE( terminal.ACCESS_CARD * 100 );
 		}
+		else
+		{
+			info += STR_INSERT_TEXT_LINE( STR_NONE );
+		}
+		
 		return info;
 	}	
-		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Hide menu", null );
-    }
 }
 
 //Select Force Fields
 class MenuSelectFF: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuSelectFF( Item& terminal, Map& map )
+	uint level;
+		
+	MenuSelectFF( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
-    }
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
+		if( !MenuReady( map, terminal ) )
+		{
+			return false;
+		}
 		
-        if( map is null || terminal is null )
+		Item@[] emitters = getEmitters( map );
+		
+		for( uint i = 0; i < emitters.length(); i ++ )
 		{
-            return false;
-        }
-
-		if( FindEmitters( map ) )
-		{
-			Item@[] emitters;
-			for( uint j = 0; j < emitterPids.length(); j ++ ) 
+			if( valid( emitters[i] ) && ( emitters[i].ITM_PARENT_TERMINAL == 0 || emitters[i].ITM_PARENT_TERMINAL == int( terminal.Id ) ) )
 			{
-				map.GetItems( emitterPids[j], emitters );
-			}
-			
-			for( uint i = 0; i < emitters.length(); i ++ )
-			{
-				if( valid( emitters[i] ) && ( emitters[i].ITM_PARENT_TERMINAL == 0 || emitters[i].ITM_PARENT_TERMINAL == int( terminal.Id ) ) )
+				int state = emitters[i].ITM_PARENT_TERMINAL == 0 ? STR_DEVICE_DISABLED : STR_DEVICE_ASSIGNED;
+				
+				string emitterId = emitters[i].Id;
+				string@ lexem = Item_GetLexems( emitters[i] );					
+				if( valid( lexem ) )
 				{
-					string state = emitters[i].ITM_PARENT_TERMINAL == 0 ? ": Disabled" : ": Assigned";
-					string emitterId = "Emitter " + emitters[i].Id;
-					string command = emitters[i].FIELD_STATE == EMITTER_DISABLED ? ": Disabled" : ": Eabled";
-					string@ lexem = Item_GetLexems( emitters[i] );
-					
-					if( valid( lexem ) )
-					{
-						emitterId = lexem;
-					}
-					
-					if( menu.ButtonExt( emitterId, state ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						emitters[i].ITM_PARENT_TERMINAL == 0 ? emitters[i].ITM_PARENT_TERMINAL = int( terminal.Id ) : emitters[i].ITM_PARENT_TERMINAL = 0;
-						return true;
-					}
+					emitterId = lexem;
+				}
+				
+				string lex  = "$name" + emitterId
+							+ "$state" + STR_INSERT_TEXT_LINE( state );
+				
+				if( menu.ButtonMsg( STR_TERMINAL_MENU_EMITTER_BTN, lex ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					emitters[i].ITM_PARENT_TERMINAL == 0 ? emitters[i].ITM_PARENT_TERMINAL = int( terminal.Id ) : emitters[i].ITM_PARENT_TERMINAL = 0;
+					return true;
 				}
 			}
 		}
 		
-		if( menu.Button( "Return" ) )
+		if( menu.ButtonMsg( STR_RETURN ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
@@ -598,20 +1124,27 @@ class MenuSelectFF: CenteredMenuHandler
 		return true;
     }
 
-    string@ Description( Critter& cr )
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-		string info = "Terminal|0xFFFF00  " + terminal.Id + "\n|0x3CF800 ";
-		info += FindEmitters( map ) ? "Compatible emitters found." : "No emitters present on grid.";
+		return STR_TERMINAL_MENU_EMITTERS_DESC;
+	}
+
+	string@ Description( Critter& cr )
+	{
+		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
+					+ "$ID" + terminal.Id;
+					
+		Item@[] emitters = getEmitters( map );
 		
-		Item@[] emitters;
+		int emitters_state = emitters.length() > 0 ? STR_TERMINAL_MENU_GOT_EMITTERS : STR_TERMINAL_MENU_NO_EMITTERS;
+		info += "$emitters" + STR_INSERT_TEXT_LINE( emitters_state );
+		
 		uint num = 0;
-		for( uint i = 0; i < emitterPids.length(); i ++ ) 
-		{
-			map.GetItems( emitterPids[i], emitters );
-		}
-		
 		if( emitters.length() > 0 )
 		{
 			for( uint i = 0; i < emitters.length(); i ++ )
@@ -623,62 +1156,55 @@ class MenuSelectFF: CenteredMenuHandler
 				}
 			}
 		}
-		info += "\nAssigned emitters: [|0xFFFF00  " + num + "|0x3CF800  ]";
-		return info;
-	}	
 		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Hide menu", null );
-    }
+		info += "$num" + num;
+		return info;
+	}
 }
 
 //Force Fields Control
 class MenuControlFF: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuControlFF( Item& terminal, Map& map )
-	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
-		level = 1;
-    }
-
-    bool MenuUpdate( Critter& cr, iDialogBox& menu )
-	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
+	uint level;
 		
-        if( map is null || terminal is null )
-		{
-            return false;
-        }
+	MenuControlFF( Item& terminal, Map& map )
+	{
+		@this.terminal = @terminal;
+        @this.map = @map;
+		level = 1;
+	}
 
-		if( FindEmitters( map ) )
+     bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+		if( !MenuReady( map, terminal ) )
 		{
-			Item@[] emitters;
-			for( uint j = 0; j < emitterPids.length(); j ++ ) 
-			{
-				map.GetItems( emitterPids[j], emitters );
-			}
-			
+			return false;
+		}
+		
+		Item@[] emitters = getEmitters( map );
+		
+		if( emitters.length() > 0 )
+		{
 			for( uint i = 0; i < emitters.length(); i ++ )
 			{
 				if( valid( emitters[i] ) && emitters[i].ITM_PARENT_TERMINAL == int( terminal.Id ) )
 				{
-					string emitterId = "Emitter " + emitters[i].Id;
-					string command = emitters[i].FIELD_STATE == EMITTER_DISABLED ? ": Disabled" : ": Eabled";
-					string@ lexem = Item_GetLexems( emitters[i] );
+					int state = emitters[i].FIELD_STATE == EMITTER_DISABLED ? STR_DEVICE_DISABLED : STR_DEVICE_ENABLED;
 					
+					string emitterId = emitters[i].Id;
+					string@ lexem = Item_GetLexems( emitters[i] );					
 					if( valid( lexem ) )
 					{
 						emitterId = lexem;
 					}
 					
-					if( menu.ButtonExt( emitterId, command ) )
+					string lex  = "$name" + emitterId
+								+ "$state" + STR_INSERT_TEXT_LINE( state );
+					
+					if( menu.ButtonMsg( STR_TERMINAL_MENU_EMITTER_BTN, lex ) )
 					{
 						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 						ToggleForceField( map, emitters[i], emitters[i].FIELD_STATE == EMITTER_DISABLED ? true : false );
@@ -691,7 +1217,11 @@ class MenuControlFF: CenteredMenuHandler
 				}
 			}
 			
-			if( menu.Button( emitters[0].EMITTER_FIELD_TYPE == EMITTER_FIELD_HARD ? "Field Type: Hard Field" : "Field Type: Soft Field" ) )
+			int field_type = emitters[0].EMITTER_FIELD_TYPE == EMITTER_FIELD_HARD ? STR_TERMINAL_MENU_FIELD_HARD : STR_TERMINAL_MENU_FIELD_SOFT;
+			
+			string field_type_lex = "$fieldType" + STR_INSERT_TEXT_LINE( field_type );
+			
+			if( menu.ButtonMsg( STR_TERMINAL_MENU_FIELD_TYPE, field_type_lex ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				ToggleForceField( map, emitters[0], false );
@@ -708,288 +1238,386 @@ class MenuControlFF: CenteredMenuHandler
 						continue;
 					}
 				}
+				
 				return true;
 			}
 		}
 		
-		if( menu.Button( "Return" ) )
+		if( menu.ButtonMsg( STR_RETURN ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
 		}
+		
 		return true;
     }
 
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_CONTROL_MAIN;
+	}
+
     string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-		string info = "Terminal|0xFFFF00  " + terminal.Id + "\n|0x3CF800 ";
-		info += FindEmitters( map ) ? "Compatible emitters found." : "No emitters present on grid.";
+		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
+					+ "$ID" + terminal.Id;
 		
-		Item@[] emitters;
-		uint num = 0;
-		uint num2 = 0;
-		string type = "|0xFFFF00 undefined";
-		for( uint i = 0; i < emitterPids.length(); i ++ ) 
-		{
-			map.GetItems( emitterPids[i], emitters );
-		}
+		Item@[] emitters = getEmitters( map );
+
+		int emitters_state = emitters.length() > 0 ? STR_TERMINAL_MENU_GOT_EMITTERS : STR_TERMINAL_MENU_NO_EMITTERS;
+		info += "$emitters" + STR_INSERT_TEXT_LINE( emitters_state );
+		
+		uint enabled = 0;
+		uint assigned = 0;
+		int type = STR_TERMINAL_MENU_FIELD_UNDEFINED;
 		
 		if( emitters.length() > 0 )
 		{
-			type = emitters[0].EMITTER_FIELD_TYPE == EMITTER_FIELD_HARD ? "Hard Field" : "Soft Field";
+			type = emitters[0].EMITTER_FIELD_TYPE == EMITTER_FIELD_HARD ? STR_TERMINAL_MENU_FIELD_HARD : STR_TERMINAL_MENU_FIELD_SOFT;
 			for( uint i = 0; i < emitters.length(); i ++ )
 			{
 				Item@ emitter = emitters[i];
 				if( emitter.ITM_PARENT_TERMINAL == int( terminal.Id ) )
 				{
-					num ++;
+					assigned ++;
 				}
 				
 				if( emitter.FIELD_STATE == EMITTER_ENABLED )
 				{
-					num2 ++;
+					enabled ++;
 				}
 			}
 		}
 		
-		info += "\nAssigned emitters: [|0xFFFF00  " + num + "|0x3CF800  ]";
-		info += "\nEnabled emitters: [|0xFFFF00  " + num2 + "|0x3CF800  ]";
-		info += "\nField type: [|0xFFFF00  " + type + "|0x3CF800  ]";
+		info += "$assigned" + assigned
+			 +  "$enabled" + enabled
+			 +  "$type" + STR_INSERT_TEXT_LINE( type );
+			 
 		return info;
-	}	
-		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Hide menu", null );
-    }
+	}
 }
 
+//Select Terminals
+class MenuSelectTerminals: CenteredMenuHandler
+{
+	Item@ terminal;
+	Map@ map;
+	
+	uint level;
+		
+	MenuSelectTerminals( Item& terminal, Map& map )
+	{
+		@this.terminal = @terminal;
+        @this.map = @map;
+		level = 1;
+	}
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+		if( !MenuReady( map, terminal ) )
+		{
+			return false;
+		}
+		
+		Item@[] terminals = getTerminals( map );
+		
+		for( uint j = 0; j < terminals.length(); j ++ ) 
+		{
+			if( terminals[j].Id != terminal.Id )
+			{
+				int state = ( terminal.TERMINAL_SLAVE != int(terminals[j].Id) ) ? STR_DEVICE_DISABLED : STR_DEVICE_CONTROLLED;
+				
+				string name = terminals[j].Id;
+				string@ lexem = Item_GetLexems( terminals[j] );
+				if( valid( lexem ) )
+				{
+					name = lexem;
+				}
+				
+				string lex = "$name" + name
+						   + "$state" + STR_INSERT_TEXT_LINE( state );
+				
+				if( menu.ButtonMsg( STR_TERMINAL_MENU_DOOR_BTN, lex ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					terminal.TERMINAL_SLAVE = ( terminal.TERMINAL_SLAVE == int(terminals[j].Id) ) ? 0 : terminals[j].Id;
+					return true;
+				}
+			}
+		}
+		
+		if( menu.ButtonMsg( STR_RETURN	) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			return false;
+		}
+		
+		return true;
+    }
+
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_TERMINALS_MAIN;
+	}
+
+    string@ Description( Critter& cr )
+	{
+		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
+					+ "$ID" + terminal.Id;
+		
+		uint num = 0;
+		info += "$terminals";
+		
+		Item@[] terminals = getTerminals( map );
+		
+		if( terminals.length() > 0 )
+		{
+			for( uint i = 0; i < terminals.length(); i ++ )
+			{
+				if( terminals[i].Id != terminal.Id )
+				{
+					num++;
+				}
+			}
+			
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_TERMINALS_COUNT )
+				 + "$amount" + num;
+		}
+		else
+		{
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_NO_TERMINALS );
+		}
+		
+		return info;
+	}
+}
 
 //Select Doors
 class MenuSelectDoors: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuSelectDoors( Item& terminal, Map& map )
+	uint level;
+		
+	MenuSelectDoors( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
-    }
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( map is null || terminal is null )
+		if( !MenuReady( map, terminal ) )
 		{
-            return false;
-        }
-
-		if( FindAutodoors( map ) )
+			return false;
+		}
+	
+		Item@[] doors = getAutodoors( map );	
+		for( uint j = 0; j < doors.length(); j ++ ) 
 		{
-			Item@[] doors;
-			map.GetItemsByType( ITEM_TYPE_DOOR, doors );
-			for( uint j = 0; j < doors.length(); j ++ ) 
+			if( doors[j].AUTODOOR_PARENT_TERMINAL == 0 || doors[j].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
 			{
-				if( doors[j].Proto.Item_Subtype == ITEM_SUBTYPE_AUTODOOR && ( doors[j].AUTODOOR_PARENT_TERMINAL == 0 || doors[j].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) ) )
+				int state = doors[j].AUTODOOR_PARENT_TERMINAL == 0 ? STR_DEVICE_DISABLED : STR_DEVICE_CONTROLLED;
+				
+				string autodorId = doors[j].Id;
+				string@ lexem = Item_GetLexems( doors[j] );
+				if( valid( lexem ) )
 				{
-					string state = doors[j].AUTODOOR_PARENT_TERMINAL == 0 ? ": Disabled" : ": Controlled";
-					string autodorId = "Door " + doors[j].Id;
-					string@ lexem = Item_GetLexems( doors[j] );
-					
-					if( valid( lexem ) )
-					{
-						autodorId = lexem;
-					}
-					
-					if( menu.ButtonExt( autodorId, state ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						doors[j].AUTODOOR_PARENT_TERMINAL == 0 ? doors[j].AUTODOOR_PARENT_TERMINAL = int( terminal.Id ) : doors[j].AUTODOOR_PARENT_TERMINAL = 0;
-						return true;
-					}
+					autodorId = lexem;
+				}
+				
+				string lex = "$name" + autodorId
+						   + "$state" + STR_INSERT_TEXT_LINE( state );
+				
+				if( menu.ButtonMsg( STR_TERMINAL_MENU_DOOR_BTN, lex ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					doors[j].AUTODOOR_PARENT_TERMINAL == 0 ? doors[j].AUTODOOR_PARENT_TERMINAL = int( terminal.Id ) : doors[j].AUTODOOR_PARENT_TERMINAL = 0;
+					return true;
 				}
 			}
 		}
 		
-		if( menu.Button( "Return" ) )
+		if( menu.ButtonMsg( STR_RETURN	) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
 		}
+		
 		return true;
     }
 
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_DOOR_MAIN;
+	}
+
     string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-		string info = "Terminal|0xFFFF00  " + terminal.Id + "\n|0x3CF800 ";
-		string doorInfo = "No automatic doors present on grid";
+		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
+					+ "$ID" + terminal.Id;
+		
+		int doorInfo = STR_TERMINAL_MENU_DOOR_NO_DOORS;
+		
 		uint num = 0;
-		if( FindAutodoors( map ) )
-		{
-			Item@[] doors;
-			map.GetItemsByType( ITEM_TYPE_DOOR, doors );
-			Item@[] autodoors;
-			for( uint j = 0; j < doors.length(); j ++ ) 
+		info += "$doors";
+		
+		Item@[] doors = getAutodoors( map );
+		if( doors.length() > 0 )
+		{			
+			for( uint i = 0; i < doors.length(); i ++ )
 			{
-				if( doors[j].Proto.Item_Subtype == ITEM_SUBTYPE_AUTODOOR )
-				{
-					autodoors.insertLast( doors[j] );
-				}
-			}
-			
-			for( uint i = 0; i < autodoors.length(); i ++ )
-			{
-				Item@ autodoor = autodoors[i];
-				if( autodoor.AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
+				if( doors[i].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
 				{
 					num ++;
 				}
 			}
 			
-			doorInfo = "Autodoors found: [|0xFFFF00 " + autodoors.length() + "|0x3CF800  ]";
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DOOR_DOORS_COUNT )
+				 + "$amount" + doors.length();
 		}
-		info += doorInfo;
-		info += "\nEnabled doors: [|0xFFFF00  " + num + "|0x3CF800  ]";
-		return info;
-	}	
+		else
+		{
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DOOR_NO_DOORS );
+		}
 		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Hide menu", null );
-    }
+		info += "$enabled" + num;
+		
+		return info;
+	}
 }
-
 
 // Menu Doors control
 class MenuDoorsCtrl: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
+	Item@ terminal;
+	Map@ map;
+	
 	uint level;
-	Item@ autodoor;
-    MenuDoorsCtrl( Item& terminal, Map& map )
+		
+	MenuDoorsCtrl( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
 	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( map is null || terminal is null )
+		if( !MenuReady( map, terminal ) )
 		{
-            return false;
-        }
+			return false;
+		}
 
-		if( FindAutodoors( map ) )
+		Item@[] doors = getAutodoors( map );
+		
+		for( uint j = 0; j < doors.length(); j ++ ) 
 		{
-			Item@[] doors;
-			map.GetItemsByType( ITEM_TYPE_DOOR, doors );
-			for( uint j = 0; j < doors.length(); j ++ ) 
+			if( doors[j].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
 			{
-				if( doors[j].Proto.Item_Subtype == ITEM_SUBTYPE_AUTODOOR && doors[j].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
+				string autodorId = doors[j].Id;
+				string@ lexem = Item_GetLexems( doors[j] );
+				if( valid( lexem ) )
 				{
-					@ autodoor = doors[j];
-					string@ lexem = Item_GetLexems( autodoor );
-					string autodorId = "Door " + autodoor.Id;
-					
-					if( valid( lexem ) )
-					{
-						autodorId = lexem;
-					}
-					
-					if( menu.Button( autodorId ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						MenuSingleDoorCtrl@ menu_single_door_ctrl = MenuSingleDoorCtrl( terminal, map, autodoor );
-						menu_single_door_ctrl.level = level + 1;
-						return menu.OpenChild( "Level " + menu_single_door_ctrl.level, menu_single_door_ctrl );
-					}
+					autodorId = lexem;
+				}
+				
+				if( menu.ButtonMsg( STR_LEX_NAME, "$name" + autodorId ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					MenuSingleDoorCtrl@ menu_single_door_ctrl = MenuSingleDoorCtrl( terminal, map, doors[j] );
+					menu_single_door_ctrl.level = level + 1;
+					return menu.OpenChild( "Level " + menu_single_door_ctrl.level, menu_single_door_ctrl );
 				}
 			}
 		}
 		
-		if( menu.Button( "Return" ) )
+		if( menu.ButtonMsg( STR_RETURN ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
 		}
+		
 		return true;
     }
 
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_DOOR_MAIN_CTRL;
+	}
+
     string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
+		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
+					+ "$ID" + terminal.Id;
 
-		string info = "Terminal|0xFFFF00  " + terminal.Id + "\n|0x3CF800 ";
 		uint num = 0;
-		if( FindAutodoors( map ) )
+		Item@[] doors = getAutodoors( map );
+		
+		for( uint i = 0; i < doors.length(); i ++ )
 		{
-			Item@[] doors;
-			map.GetItemsByType( ITEM_TYPE_DOOR, doors );
-			
-			for( uint i = 0; i < doors.length(); i ++ )
+			if( doors[i].AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
 			{
-				Item@ autodoor = doors[i];
-				if( autodoor.AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
-				{
-					num ++;
-				}
+				num ++;
 			}
 		}
-		info += "Asigned doors: [|0xFFFF00  " + num + "|0x3CF800  ] \n|0xFFFF00 Warning!|0x3CF800  Global setting override individual doors!\n\nSelect your command:";
+		
+		info += "$assigned" + num;
+		
 		return info;
 	}
-		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Hide menu", null );
-    }
 }
 
 // Menu single Door control
 class MenuSingleDoorCtrl: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint autodoor_id;
+    Item@ terminal;
+    Item@ autodoor;
+	Map@ map;
+
 	uint level;
 	
     MenuSingleDoorCtrl( Item& terminal, Map& map, Item& autodoor )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
-		autodoor_id = autodoor.Id;
+        @this.terminal = @terminal;
+        @this.map = @map;
+		@this.autodoor = @autodoor;
 		level = 2;
     }
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		Item@ autodoor = GetItem( autodoor_id );
-        if( map is null || terminal is null )
+		if( !MenuReady( map, terminal ) )
 		{
-            return false;
-        }
+			return false;
+		}
 
 		if( valid( autodoor ) && autodoor.AUTODOOR_PARENT_TERMINAL == int( terminal.Id ) )
 		{
-			string status = FLAG( autodoor.LockerCondition, LOCKER_ISOPEN ) ? "Open" : "Closed";
-			if( menu.Button( status ) )
+			int status = FLAG( autodoor.LockerCondition, LOCKER_ISOPEN ) ? STR_FURNITURE_MENU_OPENED : STR_FURNITURE_MENU_CLOSED;
+			if( menu.ButtonMsg( status ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				if( !FLAG( autodoor.LockerCondition, LOCKER_ISOPEN ) )
@@ -1006,8 +1634,8 @@ class MenuSingleDoorCtrl: CenteredMenuHandler
 				}
 			}
 			
-			string state = FLAG( autodoor.LockerCondition, LOCKER_NOOPEN ) ? "Blocked" : "Unblocked";
-			if( menu.Button( state ) )
+			int state = FLAG( autodoor.LockerCondition, LOCKER_NOOPEN ) ? STR_TERMINAL_MENU_DOOR_BLOCKED : STR_TERMINAL_MENU_DOOR_UNBLOCKED;
+			if( menu.ButtonMsg( state ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				state = !FLAG( autodoor.LockerCondition, LOCKER_NOOPEN ) ? SETFLAG( autodoor.LockerCondition, LOCKER_NOOPEN ) : UNSETFLAG( autodoor.LockerCondition, LOCKER_NOOPEN );
@@ -1015,466 +1643,85 @@ class MenuSingleDoorCtrl: CenteredMenuHandler
 			}
 		}
 		
-		if( menu.Button( "Return" ) )
+		if( menu.ButtonMsg( STR_RETURN ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
 		}
+		
 		return true;
     }
 
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_DOOR_DESCRIPTION;
+	}
+
     string@ Description( Critter& cr )
 	{
-		Map@ map = GetMap( map_id );
-		Item@ terminal = GetItem( terminal_id );
-		Item@ autodoor = GetItem( autodoor_id );
-		string info = "Terminal|0xFFFF00  " + terminal.Id + "\n|0x3CF800 ";
+		string info = "$descID" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_DESC_ID )
+					+ "$ID" + terminal.Id;
+
 		string@ lexem = Item_GetLexems( autodoor );
 		string autodorId = autodoor.Id;
-			
 		if( valid( lexem ) )
 		{
 			autodorId = lexem;
 		}
 		
-		info += "Door: [|0xFFFF00  " + autodorId + "|0x3CF800  ]\nControl initiated!";
-		string status =  FLAG( autodoor.LockerCondition, LOCKER_ISOPEN ) ? "Open" : "Closed";
-		info += "\nDoor status: [|0xFFFF00  " + status + "|0x3CF800 ]";
-		string state =  FLAG( autodoor.LockerCondition, LOCKER_NOOPEN ) ? "Blocked" : "Unblocked";
-		info += "\nDoor state: [|0xFFFF00  " + state + "|0x3CF800  ]";
-		"\nSelect your command:";
+		info += "$name" + autodorId;
+		
+		int status =  FLAG( autodoor.LockerCondition, LOCKER_ISOPEN ) ? STR_FURNITURE_MENU_OPENED : STR_FURNITURE_MENU_CLOSED;
+		info += "$status" + STR_INSERT_TEXT_LINE( status );
+		
+		string state =  FLAG( autodoor.LockerCondition, LOCKER_NOOPEN ) ? STR_TERMINAL_MENU_DOOR_BLOCKED : STR_TERMINAL_MENU_DOOR_UNBLOCKED;
+		info += "$state" + STR_INSERT_TEXT_LINE( state );
+
 		return info;
 	}
-		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Hide menu", null );
-    }
 }
 
 //Child menu for turret control assigment
 class MenuTurrets: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Map@ map;
 	
-    MenuTurrets( Item& terminal, Map& map )
+	uint level;
+		
+	MenuTurrets( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
-    }
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( map is null || terminal is null )
+		if( !MenuReady( map, terminal ) )
 		{
-            return false;
-        }
-		
-		if( FindTurrets( map ) )
-		{
-			Critter@[] turrets;
-			for( uint j = 0; j < TurretPids.length(); j ++ ) 
-			{
-				uint16 turretPid = TurretPids[j];
-				map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
-			}
-			
-			for( uint i = 0; i < turrets.length(); i ++ )
-			{
-				Critter@ turret = turrets[i];
-				if( valid( turret ) && ( turret.PARENT_TERMINAL == 0 || turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ) )
-				{
-					string state = turret.PARENT_TERMINAL == 0 ? "Control: " : "Disable: ";
-					string turretId = turret.Id;
-					if( menu.ButtonExt( state, turretId ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						turret.PARENT_TERMINAL == 0 ? turret.PARENT_TERMINAL = int( terminal.Id ) : turret.PARENT_TERMINAL = 0;
-						return true;
-					}
-				}
-				else
-				{
-					continue;
-				}
-			}
-		}
-		
-		if( menu.Button( "Return" ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
 		}
-		return true;
-    }
 
-    string@ Description( Critter& cr )
-	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
-		cr.RunClientScript( "client_screen_test@ShowScreen", 0, 0, 0, "", null );
-		string info;
-		if( FindTurrets( map ) )
+		Critter@[] turrets = getTurrets( map );
+		for( uint i = 0; i < turrets.length(); i ++ )
 		{
-			info += "|0x3CF800 Compatable turrets found: \n";
-			Critter@[] turrets;
-			for( uint j = 0; j < TurretPids.length(); j ++ ) 
+			Critter@ turret = turrets[i];
+			if( valid( turret ) && ( turret.PARENT_TERMINAL == 0 || turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ) )
 			{
-				uint16 turretPid = TurretPids[j];
-				map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
-			}
-			
-			for( uint i = 0; i < turrets.length(); i ++ )
-			{
-				Critter@ turret = turrets[i];
-				if( valid( turret ) )
+				int state = turret.PARENT_TERMINAL == 0 ? STR_TERMINAL_MENU_TURRET_UNAUTHORISED : STR_DEVICE_CONTROLLED;
+				string lex = "$name" + turret.Id + "$state" + STR_INSERT_TEXT_LINE( state );
+				if( menu.ButtonMsg( STR_TERMINAL_MENU_STATE_BTN, lex ) )
 				{
-					info += "|0x3CF800 ¹ ";
-					info += "|0xFFFF00 " + turret.Id;
-					info += "|0x3CF800  - ";
-					string state = turret.ParamBase[ TURRET_TERMINAL_ID ] == 0 ? "not authorised" : ( turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ? "authorised" : "busy" );
-					info += "|0xFFFF00 " + state + " \n";
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					turret.PARENT_TERMINAL == 0 ? turret.PARENT_TERMINAL = int( terminal.Id ) : turret.PARENT_TERMINAL = 0;
+					return true;
 				}
-				else
-				{
-					continue;
-				}
-			}
-			turrets.resize( 0 );
-		}		
-		return info;
-	}
-		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "", null );
-    }
-	
-	bool ShouldRedraw( Critter& cr )
-	{
-		return true;
-    }
-}
-
-bool FindAutodoors( Map& map )
-{
-	Item@[] doors;
-	map.GetItemsByType( ITEM_TYPE_DOOR, doors );
-	for( uint i = 0; i < doors.length(); i ++ ) 
-	{
-		if( doors[i].Proto.Item_Subtype == ITEM_SUBTYPE_AUTODOOR )
-		{
-			return true;
-		}
-	}
-	return false;
-}
-
-bool FindEmitters( Map& map )
-{
-	Item@[] emitters;
-	for( uint j = 0; j < emitterPids.length(); j ++ ) 
-	{
-		map.GetItems( emitterPids[j], emitters );
-	}
-	
-	bool emittersPresent = emitters.length() > 0;
-	return emittersPresent;
-}
-
-bool FindTurrets( Map& map )
-{
-	Critter@[] turrets;
-	for( uint j = 0; j < TurretPids.length(); j ++ ) 
-	{
-		uint16 turretPid = TurretPids[j];
-		map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
-	}
-	
-	bool turretsPresent = turrets.length() > 0;
-	return turretsPresent;
-}
-
-//Child menu for turret control
-class MenuTurretsCtrl: CenteredMenuHandler
-{
-    uint terminal_id;
-    uint map_id;
-	uint level;
-	
-    MenuTurretsCtrl( Item& terminal, Map& map )
-	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
-		level = 2;
-    }
-
-    bool MenuUpdate( Critter& cr, iDialogBox& menu )
-	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( map is null || terminal is null )
-		{
-            return false;
-        }
-		
-		if( FindTurrets( map ) )
-		{
-			Critter@[] turrets;
-			for( uint j = 0; j < TurretPids.length(); j ++ ) 
-			{
-				uint16 turretPid = TurretPids[j];
-				map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
-			}
-			
-			for( uint i = 0; i < turrets.length(); i ++ )
-			{
-				Critter@ turret = turrets[i];
-				if( valid( turret ) && ( turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ) )
-				{
-					string state = turret.IsKnockout() ? ": OFF" : ": ON";
-					string turretId = "Turret: " + turret.Id;
-					if( menu.ButtonExt( turretId, state ) )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-						int action = turret.IsKnockout() ? 0 : 1;
-						unsafe_sleep( turret, 0, 1, action, null, null );
-						if( action == 0 )
-						{
-							turret.SetEvent( CRITTER_EVENT_ATTACKED, "mob@_Attacked" );
-						}
-						return true;
-					}
-				}
-				else
-				{
-					continue;
-				}
-			}
-		}
-		
-		if( menu.Button( "Return" ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			return false;
-		}
-		return true;
-    }
-
-    string@ Description( Critter& cr )
-	{
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
-		string info;
-		if( FindTurrets( map ) )
-		{
-			info += "|0x3CF800 Assigned turrets: \n";
-			Critter@[] turrets;
-			for( uint j = 0; j < TurretPids.length(); j ++ ) 
-			{
-				uint16 turretPid = TurretPids[j];
-				map.GetCritters( turretPid, FIND_LIFE_AND_KO, turrets );
-			}
-			
-			for( uint i = 0; i < turrets.length(); i ++ )
-			{
-				Critter@ turret = turrets[i];
-				if( valid( turret ) && ( turret.PARENT_TERMINAL == int( terminal.Id ) ) )
-				{
-					info += "|0x3CF800 ¹ ";
-					info += "|0xFFFF00 " + turret.Id;
-					int status = turret.Stat[ ST_CURRENT_HP ] * 100 / turret.Stat[ ST_MAX_LIFE ];
-					info += "|0x3CF800  status: " ;
-					info += "|0xFFFF00 " + status;
-					info += "|0x3CF800  % - " ;
-					string state = turret.IsKnockout() ? "disabled" : "active";
-					info += "|0xFFFF00 " + state + " \n";
-					if( turret.SECURITY_ACCESS_CARD != 0 )
-					{
-						string accessCard = GetMsgStr( 1, TEXTMSG_ITEM, turret.SECURITY_ACCESS_CARD * 100 );
-						info += "|0x3CF800 Access by: " ;
-						info += "|0xFFFF00 " + accessCard + "\n";
-					}
-					else
-					{
-						continue;
-					}
-				}
-				else
-				{
-					continue;
-				}
-			}
-			turrets.resize( 0 );
-		}		
-		return info;
-	}
-		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "", null );
-    }
-	
-	bool ShouldRedraw( Critter& cr )
-	{
-		return true;
-    }
-}
-
-//Child menu for GM Level commands
-class MenuTerminalGM: CenteredMenuHandler
-{
-    uint terminal_id;
-    uint map_id;
-	uint level;
-	
-    MenuTerminalGM( Item& terminal, Map& map )
-	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
-		level = 1;
-    }
-
-    bool MenuUpdate( Critter& cr, iDialogBox& menu )
-	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( map is null || terminal is null )
-		{
-            return false;
-        }
-		
-		string statusPowered = terminal.TERMINAL_POWERED == 1 ? "Yes" : "No";  
-		if( menu.ButtonExt( "Powered: ", statusPowered ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			terminal.TERMINAL_POWERED = terminal.TERMINAL_POWERED == 0 ?  1 : 0;
-		}
-		
-		string statusFence = FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) ? "Yes" : "No"; 
-		if( menu.ButtonExt( "Fence Control: ", statusFence ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			statusFence = FLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_LASER_FENCE );
-		}
-		
-		string statusFields = FLAG( terminal.TERMINAL_FLAG, TERMINAL_FORCE_FIELD ) ? "Yes" : "No"; 
-		if( menu.ButtonExt( "Force Field Control: ", statusFields ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			statusFields = FLAG( terminal.TERMINAL_FLAG, TERMINAL_FORCE_FIELD ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_FORCE_FIELD ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_FORCE_FIELD );
-		}
-		
-		string statusDoors = FLAG( terminal.TERMINAL_FLAG, TERMINAL_DOORS ) ? "Yes" : "No"; 
-		if( menu.ButtonExt( "Doors: ", statusDoors ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			statusDoors = FLAG( terminal.TERMINAL_FLAG, TERMINAL_DOORS ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_DOORS ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_DOORS );
-		}
-		
-		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_DOORS ) && menu.Button( "Assign Doors") )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			MenuSelectDoors@ select_doors = MenuSelectDoors( terminal, map );
-			select_doors.level = level + 1;
-			return menu.OpenChild( "Level " + select_doors.level, select_doors );
-		}
-		
-		string statusTurets = FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) ? "Yes" : "No"; 
-		if( menu.ButtonExt( "Turret Control: ", statusTurets ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			statusTurets = FLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_TURRETS );
-		}
-		
-		string statusCards = FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) ? "Yes" : "No"; 
-		if( menu.ButtonExt( "Access Cards: ", statusCards ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			statusCards = FLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_ACCESS_CARDS );
-		}
-		
-		string statusDoc = FLAG( terminal.TERMINAL_FLAG, TERMINAL_AUTODOC ) ? "Yes" : "No"; 
-		if( menu.ButtonExt( "Autodoc Control: ", statusDoc ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			statusDoc = FLAG( terminal.TERMINAL_FLAG, TERMINAL_AUTODOC ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_AUTODOC ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_AUTODOC );
-		}
-		
-		string statusPass = FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) ? "Yes" : "No"; 
-		if( menu.ButtonExt( "Password: ", statusPass ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			statusPass = FLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_PASSWORD_PROTECTION );
-		}
-		
-		if( menu.Button( "Return" ) )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-			return false;
-		}
-		return true;
-    }
-
-    string@ Description( Critter& cr )
-	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
-		string info = "GM menu for terminal options";
-
-		return info;
-	}
-		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Hide menu", null );
-    }
-}
-
-//Child menu for fence
-class MenuSelectFence: CenteredMenuHandler
-{
-    uint terminal_id;
-    uint map_id;
-	uint level;
-	int selectorPos;
-	uint arrayPos;
-	
-    MenuSelectFence( Item& terminal, Map& map )
-	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
-		level = 1;
-		selectorPos = 0;
-		arrayPos = 0;
-    }
-
-    bool MenuUpdate( Critter& cr, iDialogBox& menu )
-	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( map is null || terminal is null )
-		{
-            return false;
-        }
-		
-		uint[] FenceEntires;	
-		for( int i = ENTIRE_LASER_FENCE_BEGIN; i < ENTIRE_LASER_FENCE_END; i++ )
-		{
-			int entireId = i;
-			int entires = map.CountEntire( entireId );
-			if( entires != 0 )
-			{
-				FenceEntires.insertLast( entireId );
 			}
 			else
 			{
@@ -1482,30 +1729,372 @@ class MenuSelectFence: CenteredMenuHandler
 			}
 		}
 		
-		if( FenceEntires.length() != 0 )
+		if( menu.ButtonMsg( STR_RETURN ) )
 		{
-			if( menu.Button( "Previous" ) )
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			return false;
+		}
+		
+		return true;
+    }
+
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_TURRET_MAIN;
+	}
+
+    string@ Description( Critter& cr )
+	{	
+		cr.RunClientScript( "client_screen_test@ShowScreen", 0, 0, 0, "", null );
+		string info = "$turretsList";
+		
+		Critter@[] turrets = getTurrets( map );
+		for( uint i = 0; i < turrets.length(); i ++ )
+		{
+			Critter@ turret = turrets[i];
+			if( valid( turret ) )
+			{
+				info += "ï¿½ |0xFFFF00 " + turret.Id + "|0x3CF800  - ";
+				
+				int state = turret.ParamBase[ TURRET_TERMINAL_ID ] == 0 ? STR_TERMINAL_MENU_TURRET_UNAUTHORISED : ( turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ? STR_TERMINAL_MENU_TURRET_AUTHORISED : STR_TERMINAL_MENU_TURRET_BUSY );
+				
+				info += "|0xFFFF00 " + STR_INSERT_TEXT_LINE( state ) + "|0x3CF800 \n";
+			}
+			else
+			{
+				continue;
+			}
+		}
+		
+		return info;
+	}
+		
+	bool ShouldRedraw( Critter& cr )
+	{
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+}
+
+//Child menu for turret control
+class MenuTurretsCtrl: CenteredMenuHandler
+{
+	Item@ terminal;
+	Map@ map;
+	
+	uint level;
+		
+	MenuTurretsCtrl( Item& terminal, Map& map )
+	{
+		@this.terminal = @terminal;
+        @this.map = @map;
+		level = 2;
+	}
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+		if( !MenuReady( map, terminal ) )
+		{
+			return false;
+		}
+
+		Critter@[] turrets = getTurrets( map );
+		for( uint i = 0; i < turrets.length(); i ++ )
+		{
+			Critter@ turret = turrets[i];
+			if( valid( turret ) && ( turret.ParamBase[ TURRET_TERMINAL_ID ] == int( terminal.Id ) ) )
+			{
+				int state = turret.IsKnockout() ? STR_OFF : STR_ON;
+				string lex = "$name" + turret.Id
+						   + "$state" + STR_INSERT_TEXT_LINE( state );
+				if( menu.ButtonMsg( STR_TERMINAL_MENU_STATE_BTN, lex ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					int action = turret.IsKnockout() ? 0 : 1;
+					unsafe_sleep( turret, 0, 1, action, null, null );
+					if( action == 0 )
+					{
+						turret.SetEvent( CRITTER_EVENT_ATTACKED, "ai_mob@_Attacked" );
+					}
+					return true;
+				}
+			}
+			else
+			{
+				continue;
+			}
+		}
+		
+		if( menu.ButtonMsg( STR_RETURN ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			return false;
+		}
+		
+		return true;
+    }
+	
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_TURRETS_MAIN_CTRL;
+	}
+
+    string@ Description( Critter& cr )
+	{
+		string info = "$turretsList";
+		
+		Critter@[] turrets = getTurrets( map );
+		for( uint i = 0; i < turrets.length(); i ++ )
+		{
+			Critter@ turret = turrets[i];
+			if( valid( turret ) && ( turret.PARENT_TERMINAL == int( terminal.Id ) ) )
+			{
+				info += "|0x3CF800 ï¿½ |0xFFFF00 " + turret.Id + " |0x3CF800 ";
+				
+				int status = turret.Stat[ ST_CURRENT_HP ] * 100 / ( turret.Stat[ ST_MAX_LIFE ] + turret.Stat[ ST_MAX_LIFE_EXT ] );
+				info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_TURRETS_STATUS ) 
+					 + " |0xFFFF00 " + status + "|0x3CF800  % - ";
+				
+				int state = turret.IsKnockout() ? STR_DEVICE_DISABLED : STR_DEVICE_ACTIVE;
+				info += "|0xFFFF00 " + STR_INSERT_TEXT_LINE( state ) + " |0x3CF800 \n";
+				
+				if( turret.SECURITY_ACCESS_CARD != 0 )
+				{
+					info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_TURRETS_ACCESS_BY ) 
+						 + " |0xFFFF00 " + STR_INSERT_ITEM_LINE( turret.SECURITY_ACCESS_CARD * 100 ) + "|0x3CF800 \n";
+				}
+				else
+				{
+					continue;
+				}
+			}
+			else
+			{
+				continue;
+			}
+		}
+		
+		return info;
+	}
+		
+	bool ShouldRedraw( Critter& cr )
+	{
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+}
+
+//Child menu for GM Level commands
+class MenuTerminalGM: CenteredMenuHandler
+{
+	Critter@ cr;
+	iDialogBox@ menu;
+	
+	Item@ terminal;
+	Map@ map;
+	
+	uint level;
+		
+	MenuTerminalGM( Item& terminal, Map& map )
+	{
+		@this.terminal = @terminal;
+        @this.map = @map;
+		level = 1;
+	}
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+		if( !MenuReady( map, terminal ) )
+		{
+			return false;
+		}
+		
+		@this.menu = @menu;
+		@this.cr = @cr;
+
+		if( menu.ButtonMsg( STR_TERMINAL_MENU_STATE_BTN, 
+				"$name" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_GM_POWERED ) 
+				+ STR_CHECK_FLAG( "state", terminal.TERMINAL_POWERED == 1 ) ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			terminal.TERMINAL_POWERED = terminal.TERMINAL_POWERED == 0 ?  1 : 0;
+		}
+		
+		if( SwitchButton( STR_TERMINAL_MENU_GM_FENCE_CONTROL, TERMINAL_LASER_FENCE ) )
+		{
+			return true;
+		}
+		
+		if( SwitchButton( STR_TERMINAL_MENU_FORCE_FIELD_CONTROL, TERMINAL_FORCE_FIELD ) )
+		{
+			return true;
+		}
+		
+		if( SwitchButton( STR_TERMINAL_MENU_GM_DOORS, TERMINAL_DOORS ) )
+		{
+			return true;
+		}
+		
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_DOORS ) && menu.ButtonMsg( STR_TERMINAL_MENU_GM_ASSIGN_DOORS ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			MenuSelectDoors@ select_doors = MenuSelectDoors( terminal, map );
+			select_doors.level = level + 1;
+			return menu.OpenChild( "Level " + select_doors.level, select_doors );
+		}
+		
+		if( SwitchButton( STR_TERMINAL_MENU_GM_TURRET_CONTROL, TERMINAL_TURRETS ) )
+		{
+			return true;
+		}
+		
+		if( SwitchButton( STR_TERMINAL_MENU_GM_ACCESS_CARDS, TERMINAL_ACCESS_CARDS ) )
+		{
+			return true;
+		}
+		
+		if( SwitchButton( STR_TERMINAL_MENU_GM_AUTODOC_CONTROL, TERMINAL_AUTODOC ) )
+		{
+			return true;
+		}
+		
+		if( SwitchButton( STR_TERMINAL_MENU_GM_PASSWORD, TERMINAL_PASSWORD_PROTECTION ) )
+		{
+			return true;
+		}
+		
+		if( SwitchButton( STR_TERMINAL_MENU_GM_MASTER_TERMINAL, TERMINAL_MASTER ) )
+		{
+			return true;
+		}
+		
+		if( FLAG( terminal.TERMINAL_FLAG, TERMINAL_MASTER ) && menu.ButtonMsg( STR_TERMINAL_MENU_GM_ASSIGN_TERMINALS ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			MenuSelectTerminals@ select_terminals = MenuSelectTerminals( terminal, map );
+			select_terminals.level = level + 1;
+			return menu.OpenChild( "Level " + select_terminals.level, select_terminals );
+		}
+		
+		if( SwitchButton( STR_TERMINAL_MENU_GM_TERMINAL_HACKABLE, TERMINAL_HACKABLE ) )
+		{
+			return true;
+		}
+
+		if( SwitchButton( STR_TERMINAL_HAS_DATABASE, TERMINAL_DATABASE ) )
+		{
+			return true;
+		}
+		
+		if( menu.ButtonMsg( STR_RETURN ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			return false;
+		}
+		
+		return true;
+    }
+
+	bool SwitchButton( uint STR_TERMINAL_MENU_TYPE, uint TERMINAL_FLAG_VALUE )
+	{
+		if( menu.ButtonMsg( STR_TERMINAL_MENU_STATE_BTN, 
+				"$name" + STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_TYPE ) 
+				+ STR_CHECK_FLAG( "state", FLAG( terminal.TERMINAL_FLAG, TERMINAL_FLAG_VALUE ) ) ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			FLAG( terminal.TERMINAL_FLAG, TERMINAL_FLAG_VALUE ) ? UNSETFLAG( terminal.TERMINAL_FLAG, TERMINAL_FLAG_VALUE ) : SETFLAG( terminal.TERMINAL_FLAG, TERMINAL_FLAG_VALUE );
+			return true;
+		}
+		
+		return false;
+	}		
+
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_GM_MAIN;
+	}
+
+    string@ Description( Critter& cr )
+	{	
+		return null;
+	}
+}
+
+//Child menu for fence
+class MenuSelectFence: CenteredMenuHandler
+{
+    Item@ terminal;
+	Map@ map;
+
+	uint level;
+	int selectorPos;
+	uint arrayPos;
+	
+    MenuSelectFence( Item& terminal, Map& map )
+	{
+        @this.terminal = @terminal;
+        @this.map = @map;
+		selectorPos = 0;
+		arrayPos = 0;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+		if( !MenuReady( map, terminal ) )
+		{
+			return false;
+		}
+
+		Item@[] FenceEmitters = getFenceEmitters( map );
+		
+		if( FenceEmitters.length() != 0 )
+		{
+			if( menu.ButtonMsg( STR_PREVIOUS ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				selectorPos--;
 				if( arrayPos == 0 )
 				{
-					arrayPos = FenceEntires.length() - 1;
+					arrayPos = FenceEmitters.length() - 1;
 					selectorPos = arrayPos;
 				}
 				else
 				{
 					arrayPos = selectorPos;
 				}
-				terminal.FENCE_GROUP = FenceEntires[ arrayPos ];
+				
+				terminal.FENCE_GROUP = FenceEmitters[ arrayPos ].Id;
 				return true;
 			}
 			
-			if( menu.Button( "Next" ) )
+			if( menu.ButtonMsg( STR_NEXT ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				selectorPos++;
-				if( arrayPos == FenceEntires.length() -1 )
+				if( arrayPos == FenceEmitters.length() -1 )
 				{
 					arrayPos = 0;
 					selectorPos = arrayPos;
@@ -1514,11 +2103,11 @@ class MenuSelectFence: CenteredMenuHandler
 				{
 					arrayPos = selectorPos;
 				}
-				terminal.FENCE_GROUP = FenceEntires[ arrayPos ];
+				terminal.FENCE_GROUP = FenceEmitters[ arrayPos ].Id;
 				return true;
 			}
 			
-			if( menu.Button( "Disable fence" ) )
+			if( menu.ButtonMsg( STR_TERMINAL_MENU_FENCE_DISABLE ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				terminal.FENCE_GROUP = 0;
@@ -1543,84 +2132,79 @@ class MenuSelectFence: CenteredMenuHandler
 						continue;
 					}
 				}
+				
 				return true;
 			}
 			
-			if( menu.Button( "Return" ) )
+			if( menu.ButtonMsg( STR_CONFIRM ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				return false;
 			}
 		}
+		
 		return true;
     }
 
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_INFO_MAIN;
+	}
+
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
+		Item@[] FenceEntires = getFenceEmitters( map );	
 		
-		uint[] FenceEntires;	
-		for( uint i = ENTIRE_LASER_FENCE_BEGIN; i < ENTIRE_LASER_FENCE_END; i++ )
-		{
-			int entireId = i;
-			int entires = map.CountEntire( entireId );
-			if( entires != 0 )
-			{
-				FenceEntires.insertLast( entireId );
-			}
-			else
-			{
-				continue;
-			}
-		}
-		
-		string info;
+		string info = "$info";
+
 		if( FenceEntires.length() != 0 )
 		{
-			info = "|0x3CF800 Emitters found: \n";
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_FENCE_EMITTERS_LIST )
+				 + "$emitters";
+				 
 			for( uint j = 0; j < FenceEntires.length() ; j ++ )
 			{
-				string entire = FenceEntires[j];
-				info += "|0xFFFF00 " + entire;
-				info += "|0x3CF800 ; " ;
+				info += "|0xFFFF00 " + FenceEntires[j].Id + "|0x3CF800 ; ";
 			}
+			
 			info[ info.length() - 2 ] = ' ';
 			info[ info.length() - 2 ] = '.';
 			
+			info += "$group";
 			if( terminal.FENCE_GROUP != 0 )
 			{
-				info += "|0x3CF800 \nChosen group: [ ";
-				info += "|0xFFFF00 " + terminal.FENCE_GROUP;
-				info += "|0x3CF800  ]";
+				info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_FENCE_EMITTERS_GROUP )
+					 + "$IDgroup" + terminal.FENCE_GROUP;
 			}
 		}
 		else
 		{ 
-			info = "|0xFFFF00 No emitters found!";
-		}		
-		return info;
-	}	
+			info += STR_INSERT_TEXT_LINE( STR_TERMINAL_MENU_FENCE_NO_EMITTERS );
+		}	
 		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "Hide menu", null );
-    }
+		return info;
+	}
 }
 
 //Child menu for autodoc assigment
 class MenuAutodoc: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
+    Item@ terminal;
+	Map@ map;
+
 	uint level;
 	int selectorPos;
 	uint arrayPos;
 	
     MenuAutodoc( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+        @this.terminal = @terminal;
+        @this.map = @map;
 		level = 1;
 		selectorPos = 0;
 		arrayPos = 0;
@@ -1628,21 +2212,18 @@ class MenuAutodoc: CenteredMenuHandler
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( map is null || terminal is null )
+		if( !MenuReady( map, terminal ) )
 		{
-            return false;
-        }
-		
+			return false;
+		}
+
 		Item@[] Autodocs;
 		map.GetItems( PID_OBJECT_AUTODOC, Autodocs );
 		Item@ autodoc = null;
 		
 		if( Autodocs.length() != 0 )
 		{
-			if( menu.Button( "Previous" ) )
+			if( menu.ButtonMsg( STR_PREVIOUS ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				selectorPos--;
@@ -1660,7 +2241,7 @@ class MenuAutodoc: CenteredMenuHandler
 				return true;
 			}
 			
-			if( menu.Button( "Next" ) )
+			if( menu.ButtonMsg( STR_NEXT ) )
 			{
 				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 				selectorPos++;
@@ -1678,10 +2259,14 @@ class MenuAutodoc: CenteredMenuHandler
 				return true;
 			}
 			
-			@autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+			if( terminal.ACTIVE_AUTODOC != 0 )
+			{
+				@autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+			}
+
 			if( valid( autodoc ) )
 			{
-				if( menu.Button( "Connect" ) )
+				if( menu.ButtonMsg( STR_DEVICE_CONNECT ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					int len = Autodocs.length();
@@ -1699,7 +2284,7 @@ class MenuAutodoc: CenteredMenuHandler
 					autodoc.AUTODOC_TERMINAL = terminal.Id;
 				}
 				
-				if( autodoc.AUTODOC_TERMINAL != 0 && menu.Button( "Reset" ) )
+				if( autodoc.AUTODOC_TERMINAL != 0 && menu.ButtonMsg( STR_DEVICE_RESET ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					autodoc.AUTODOC_TERMINAL = 0;
@@ -1708,7 +2293,7 @@ class MenuAutodoc: CenteredMenuHandler
 			}
 		}
 		
-		if( menu.Button( "Return" ) )
+		if( menu.ButtonMsg( STR_RETURN ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
@@ -1716,37 +2301,51 @@ class MenuAutodoc: CenteredMenuHandler
 		return true;
     }
 
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_INFO_MAIN;
+	}
+
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
 		cr.RunClientScript( "client_screen_test@ShowScreen", 0, 0, 0, "", null );
-		string info = " ";
+		
+		string info = "$info";
 		if( terminal.ACTIVE_AUTODOC != 0 )
 		{
 			Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
 			if( valid( autodoc ) )
 			{ 
+				info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_GROUP )
+					 + "$Id" + autodoc.Id
+					 + "$state";
+					 
 				if( autodoc.AUTODOC_TERMINAL == int( terminal.Id ) )
 				{
-					info += "Autodoc ¹ " + "|0xFFFF00 " + autodoc.Id + " assigned.";
+					info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_ASSIGNED );
 				}
 				else
 				{
-					info += "Autodoc ¹ " + "|0xFFFF00 " + autodoc.Id + " is chosen.";
+					info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_CHOSEN );
 				}
 			}
 		}
+		
 		return info;
 	}
 		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "", null );
-    }
-	
 	bool ShouldRedraw( Critter& cr )
 	{
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
 		return true;
     }
 }
@@ -1754,31 +2353,29 @@ class MenuAutodoc: CenteredMenuHandler
 //Child menu for autodoc control
 class MenuAutodocCtrl: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Item@ autodoc;
+	Map@ map;
 	
-    MenuAutodocCtrl( Item& terminal, Map& map )
+	uint level;
+		
+	MenuAutodocCtrl( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 2;
-    }
+
+		if( terminal.ACTIVE_AUTODOC != 0 )
+		{
+			@this.autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+		}
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( map is null || terminal is null )
-		{
-            return false;
-        }
-		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
-		if( !valid( autodoc ) )
-		{
-			 return false;
+		if( !MenuReady( map, terminal ) || !valid( autodoc ) )
+		{ 
+			return false; 
 		}
 		
 		AutodocScan( map, terminal, autodoc );
@@ -1794,8 +2391,8 @@ class MenuAutodocCtrl: CenteredMenuHandler
 			
 			if( valid( patient) )
 			{
-				string statusPatient = autodoc.AUTODOC_DOOR_BLOCK == 0 ? "is free" : "locked"; 
-				if( menu.ButtonExt( "Patient: ", statusPatient ) )
+				int statusPatient = autodoc.AUTODOC_DOOR_BLOCK == 0 ? STR_AUTODOC_MENU_IS_FREE : STR_AUTODOC_MENU_LOCKED;
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_PATIENT, "$state" + STR_INSERT_TEXT_LINE( statusPatient ) ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_DOOR_BLOCK == 0 )
@@ -1812,7 +2409,7 @@ class MenuAutodocCtrl: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Heal" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_HEAL ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_HEAL_BIOGEL )
@@ -1824,7 +2421,7 @@ class MenuAutodocCtrl: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Cure Wound" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_CURE_WOUND ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_WOUND_BIOGEL )
@@ -1836,7 +2433,7 @@ class MenuAutodocCtrl: CenteredMenuHandler
 					return true;
 				}
 		
-				if( menu.Button( "Extraction" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_EXTRACTION ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_BULLET_BIOGEL )
@@ -1848,7 +2445,7 @@ class MenuAutodocCtrl: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Blood transfusion" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_BLOOD_TRANSFUSION ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_BLOOD_BIOGEL )
@@ -1860,7 +2457,7 @@ class MenuAutodocCtrl: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Reabilitation" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_REABILITATION ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_REABILITATE_BIOGEL )
@@ -1872,7 +2469,7 @@ class MenuAutodocCtrl: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Trauma" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_TRAUMA ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					MenuAutodocMend@ menu_autodoc_mend = MenuAutodocMend( terminal, map );
@@ -1880,7 +2477,7 @@ class MenuAutodocCtrl: CenteredMenuHandler
 					return menu.OpenChild( "Level " + menu_autodoc_mend.level, menu_autodoc_mend );
 				}
 				
-				if( menu.Button( "Reanimation" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_REANIMATION ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( patient.ParamBase[ CR_DEATH_STAGE ] == 100 || autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_REANIMATE_BIOGEL )
@@ -1892,7 +2489,7 @@ class MenuAutodocCtrl: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Body Modifications" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_BODY_MODIFICATIONS ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					MenuAutodocModd@ menu_autodoc_modd = MenuAutodocModd( terminal, map );
@@ -1900,7 +2497,7 @@ class MenuAutodocCtrl: CenteredMenuHandler
 					return menu.OpenChild( "Level " + menu_autodoc_modd.level, menu_autodoc_modd );
 				}
 				
-				if( menu.Button( "Euthanasia" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_EUTHANASIA ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_KILL_BIOGEL )
@@ -1914,86 +2511,91 @@ class MenuAutodocCtrl: CenteredMenuHandler
 			}
 		}
 		
-		if( menu.Button( "Return" ) )
+		if( menu.ButtonMsg( STR_RETURN ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
 		}
+		
 		return true;
     }
 
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_INFO_MAIN;
+	}
+
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
-		string info = ">";
+		string info = "$info";
 		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
 		if( valid( autodoc ) )
 		{
-			info = "|0x3CF800 Autodoc ¹" + "|0xFFFF00  " + autodoc.Id;
-			info += "|0x3CF800   Biogel:" +  "|0xFFFF00  " + autodoc.AUTODOC_BIOGEL_LEVEL + "|0x3CF800 %\n";
+			info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_MAIN )
+				 + "$ID" + autodoc.Id
+				 + "$biogel" + autodoc.AUTODOC_BIOGEL_LEVEL;
+			
+			info += "$warning";
 			if( autodoc.AUTODOC_BIOGEL_LEVEL == 0 )
 			{
-				info += "|0xFFFF00 Attention! Biogel absent! \n";
+				info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_BIOGEL_ABSENT );
 			}
-			info += AutodocScan( map, terminal, autodoc );
+			
+			info += "$autodocScan" + AutodocScan( map, terminal, autodoc );
 		}
+		
 		return info;
 	}
-		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "", null );
-    }
 	
 	bool ShouldRedraw( Critter& cr )
 	{
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
 		return true;
     }
 }
 
 class MenuAutodocMend: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Item@ autodoc;
+	Map@ map;
 	
-    MenuAutodocMend( Item& terminal, Map& map )
+	uint level;
+		
+	MenuAutodocMend( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 3;
-    }
+		
+		if( terminal.ACTIVE_AUTODOC != 0 )
+		{
+			@this.autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+		}
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( map is null || terminal is null )
-		{
-            return false;
-        }
-		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
-		if( !valid( autodoc ) )
-		{
-			 return false;
-		}
-
-		if( autodoc.AUTODOC_PATIENT == int( cr.Id ) )
+		if( !MenuReady( map, terminal ) || !valid( autodoc ) || autodoc.AUTODOC_PATIENT == int( cr.Id ) )
 		{ 
 			return false; 
 		}
 
 		if( autodoc.AUTODOC_ERROR == 0 && autodoc.AUTODOC_PATIENT != 0 && autodoc.AUTODOC_EVENT == 0 )
-		{
-			
+		{			
 			Critter@ patient = GetCritter( autodoc.AUTODOC_PATIENT );
 			if( valid( patient) )
 			{
-				if( menu.Button( "Eyes" ) )
+				if( menu.ButtonMsg( STR_HEAL_MENU_DAMAGE_EYE_WOUND ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MEND2_BIOGEL )
@@ -2005,7 +2607,7 @@ class MenuAutodocMend: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Right Leg" ) )
+				if( menu.ButtonMsg( STR_HEAL_MENU_DAMAGE_RIGHT_LEG ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MEND1_BIOGEL )
@@ -2017,7 +2619,7 @@ class MenuAutodocMend: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Left Leg"  ) )
+				if( menu.ButtonMsg( STR_HEAL_MENU_DAMAGE_LEFT_LEG  ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MEND1_BIOGEL )
@@ -2025,11 +2627,12 @@ class MenuAutodocMend: CenteredMenuHandler
 						PlayGenericSound( map, cr.HexX, cr.HexY, "LOOSER.mp3", 5 );
 						return true;
 					}
+					
 					AutodocChecks( autodoc, patient, AUTODOC_PROCEDURE_MEND_LLEG );
 					return true;
 				}
 				
-				if( menu.Button( "Right Arm" ) )
+				if( menu.ButtonMsg( STR_HEAL_MENU_DAMAGE_RIGHT_ARM ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MEND1_BIOGEL )
@@ -2037,11 +2640,12 @@ class MenuAutodocMend: CenteredMenuHandler
 						PlayGenericSound( map, cr.HexX, cr.HexY, "LOOSER.mp3", 5 );
 						return true;
 					}
+					
 					AutodocChecks( autodoc, patient, AUTODOC_PROCEDURE_MEND_RARM );
 					return true;
 				}
 				
-				if( menu.Button( "Left Arm" ) )
+				if( menu.ButtonMsg( STR_HEAL_MENU_DAMAGE_LEFT_ARM ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MEND1_BIOGEL )
@@ -2049,13 +2653,14 @@ class MenuAutodocMend: CenteredMenuHandler
 						PlayGenericSound( map, cr.HexX, cr.HexY, "LOOSER.mp3", 5 );
 						return true;
 					}
+					
 					AutodocChecks( autodoc, patient, AUTODOC_PROCEDURE_MEND_LARM );
 					return true;
 				}
 			}
 		}
 		
-		if( menu.Button( "Return" ) )
+		if( menu.ButtonMsg( STR_RETURN ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
@@ -2063,67 +2668,72 @@ class MenuAutodocMend: CenteredMenuHandler
 		return true;
     }
 
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_INFO_MAIN;
+	}
+
     string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
-		string info = ">";
+		string info = "$info";
 		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
 		if( valid( autodoc ) )
 		{
-			info = "|0x3CF800 Autodoc ¹" + "|0xFFFF00  " + autodoc.Id;
-			info += "|0x3CF800   Biogel:" +  "|0xFFFF00  " + autodoc.AUTODOC_BIOGEL_LEVEL + "|0x3CF800 %\n";
+			info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_MAIN )
+				 + "$ID" + autodoc.Id
+				 + "$biogel" + autodoc.AUTODOC_BIOGEL_LEVEL;
+			
+			info += "$warning";
 			if( autodoc.AUTODOC_BIOGEL_LEVEL == 0 )
 			{
-				info += "|0xFFFF00 Attention! Biogel absent! \n";
+				info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_BIOGEL_ABSENT );
 			}
-			info += AutodocScan( map, terminal, autodoc );
+			
+			info += "$autodocScan" + AutodocScan( map, terminal, autodoc );
 		}
+		
 		return info;
 	}
 		
-	string@ ButtonCancel()
-	{
-        return ButtonDecorator( "", null );
-    }
-	
 	bool ShouldRedraw( Critter& cr )
 	{
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
 		return true;
     }
 }
 
 class MenuAutodocModd: CenteredMenuHandler
 {
-    uint terminal_id;
-    uint map_id;
-	uint level;
+	Item@ terminal;
+	Item@ autodoc;
+	Map@ map;
 	
-    MenuAutodocModd( Item& terminal, Map& map )
+	uint level;
+		
+	MenuAutodocModd( Item& terminal, Map& map )
 	{
-        terminal_id = terminal.Id;
-        map_id = map.Id;
+		@this.terminal = @terminal;
+        @this.map = @map;
 		level = 3;
-    }
+		
+		if( terminal.ACTIVE_AUTODOC != 0 )
+		{
+			@this.autodoc = GetItem( terminal.ACTIVE_AUTODOC );
+		}
+	}
 
     bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        Map@ map = GetMap( map_id );
-        Item@ terminal = GetItem( terminal_id );
-		
-        if( map is null || terminal is null )
-		{
-            return false;
-        }
-		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
-		if( !valid( autodoc ) )
-		{
-			 return false;
-		}
-
-		if( autodoc.AUTODOC_PATIENT == int( cr.Id ) )
+		if( !MenuReady( map, terminal ) || !valid( autodoc ) || autodoc.AUTODOC_PATIENT == int( cr.Id ) )
 		{ 
 			return false; 
 		}
@@ -2135,7 +2745,7 @@ class MenuAutodocModd: CenteredMenuHandler
 			
 			if( valid( patient) )
 			{
-				if( menu.Button( "Strength +" ) ) {
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_STRENGTH_ADJ, "$adjustment" + STR_INSERT_TEXT_LINE( STR_PLUS ) ) ) {
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
 					{
@@ -2146,7 +2756,7 @@ class MenuAutodocModd: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Strength -" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_STRENGTH_ADJ, "$adjustment" + STR_INSERT_TEXT_LINE( STR_MINUS ) ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
@@ -2158,7 +2768,7 @@ class MenuAutodocModd: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Perception +"  ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_PERCEPTION_ADJ, "$adjustment" + STR_INSERT_TEXT_LINE( STR_PLUS ) ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
@@ -2170,7 +2780,7 @@ class MenuAutodocModd: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Perception -" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_PERCEPTION_ADJ, "$adjustment" + STR_INSERT_TEXT_LINE( STR_MINUS ) ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
@@ -2182,7 +2792,7 @@ class MenuAutodocModd: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Endurance +" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_ENDURANCE_ADJ, "$adjustment" + STR_INSERT_TEXT_LINE( STR_PLUS ) ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
@@ -2194,7 +2804,7 @@ class MenuAutodocModd: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Endurance -" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_ENDURANCE_ADJ, "$adjustment" + STR_INSERT_TEXT_LINE( STR_MINUS ) ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
@@ -2206,7 +2816,7 @@ class MenuAutodocModd: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Charisma +" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_CHARISMA_ADJ, "$adjustment" + STR_INSERT_TEXT_LINE( STR_PLUS ) ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
@@ -2218,7 +2828,7 @@ class MenuAutodocModd: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Charisma -" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_CHARISMA_ADJ, "$adjustment" + STR_INSERT_TEXT_LINE( STR_MINUS ) ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
@@ -2230,7 +2840,7 @@ class MenuAutodocModd: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Agility +" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_AGILITY_ADJ, "$adjustment" + STR_INSERT_TEXT_LINE( STR_PLUS ) ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
@@ -2242,7 +2852,7 @@ class MenuAutodocModd: CenteredMenuHandler
 					return true;
 				}
 				
-				if( menu.Button( "Agility -" ) )
+				if( menu.ButtonMsg( STR_AUTODOC_MENU_AGILITY_ADJ, "$adjustment" + STR_INSERT_TEXT_LINE( STR_MINUS ) ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
@@ -2254,19 +2864,7 @@ class MenuAutodocModd: CenteredMenuHandler
 					return true;
 				}
 				
-				if( patient.Stat[ ST_BODY_TYPE ] != BT_CHILDREN && menu.Button( "Labioplasty" ) )
-				{
-					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
-					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
-					{
-						PlayGenericSound( map, cr.HexX, cr.HexY, "LOOSER.mp3", 5 );
-						return true;
-					}
-					AutodocChecks( autodoc, patient, AUTODOC_PROCEDURE_MODD_ORGAN );
-					return true;
-				}
-				
-				if( patient.Stat[ ST_BODY_TYPE ] != BT_CHILDREN && menu.Button( "Gender change" ) )
+				if( patient.Stat[ ST_BODY_TYPE ] != BT_CHILDREN && menu.ButtonMsg( STR_AUTODOC_MENU_GENDER_CHANGE ) )
 				{
 					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 					if( autodoc.AUTODOC_BIOGEL_LEVEL < AUTODOC_MODD_BIOGEL )
@@ -2280,7 +2878,7 @@ class MenuAutodocModd: CenteredMenuHandler
 			}
 		}
 		
-		if( menu.Button( "Return" ) )
+		if( menu.ButtonMsg( STR_RETURN ) )
 		{
 			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
 			return false;
@@ -2288,33 +2886,416 @@ class MenuAutodocModd: CenteredMenuHandler
 		return true;
     }
 
-	string@ Description( Critter& cr )
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_INFO_MAIN;
+	}
+
+    string@ Description( Critter& cr )
 	{	
-		Item@ terminal = GetItem( terminal_id );
-		Map@ map = GetMap( map_id );
-		string info = ">";
+		string info = "$info";
 		
-		Item@ autodoc = GetItem( terminal.ACTIVE_AUTODOC );
 		if( valid( autodoc ) )
 		{
-			info = "|0x3CF800 Autodoc ¹" + "|0xFFFF00  " + autodoc.Id;
-			info += "|0x3CF800   Biogel:" +  "|0xFFFF00  " + autodoc.AUTODOC_BIOGEL_LEVEL + "|0x3CF800 %\n";
+			info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_MAIN )
+				 + "$ID" + autodoc.Id
+				 + "$biogel" + autodoc.AUTODOC_BIOGEL_LEVEL;
+			
+			info += "$warning";
 			if( autodoc.AUTODOC_BIOGEL_LEVEL == 0 )
 			{
-				info += "|0xFFFF00 Attention! Biogel absent! \n";
+				info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_BIOGEL_ABSENT );
 			}
-			info += AutodocScan( map, terminal, autodoc );
+			
+			info += "$autodocScan" + AutodocScan( map, terminal, autodoc );
 		}
+		
 		return info;
 	}
 		
-	string@ ButtonCancel()
+	bool ShouldRedraw( Critter& cr )
 	{
-        return ButtonDecorator( "", null );
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
+		return true;
     }
+}
+
+void StartMenuDatabaseCtrl( Critter& cr, Item& terminal )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+	if(!valid(terminal))
+	{
+		return;
+	}
+
+    iMenuHandler@ handler = MenuDatabaseCtrl( cr, terminal, map );
+	iDialogBox@ menu = OpenMenu( cr, "Database", handler );
+}
+
+void StartMenuHolodisk( Critter& cr, Item& terminal, Item& holodisk )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuHolodisk( terminal, map, holodisk );
+    iDialogBox@ menu = OpenMenu( cr, "Holodisk", handler );
+}
+
+class MenuHolodisk: CenteredMenuHandler
+{
+	Item@ terminal;
+	Item@ holodisk;
+	Map@ map;
+	
+	uint level;
+		
+	MenuHolodisk( Item& terminal, Map& map, Item& holodisk )
+	{
+		@this.terminal = @terminal;
+        @this.map = @map;
+		@this.holodisk = @holodisk;
+		level = 1;
+	}
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+		if( !MenuReady( map, terminal ) || !valid( holodisk ) )
+		{ 
+			return false; 
+		}
+		
+		if( menu.ButtonMsg( STR_TERMINAL_READ_DATA ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			TryReadHolodisk(holodisk, cr);
+			return false;
+		}
+
+		if( menu.ButtonMsg( STR_TERMINAL_COPY_DATA ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			Item@ copyDisk = _CritGetItemHand( cr );
+
+			if(!valid( copyDisk ) || copyDisk.GetProtoId() != PID_REAL_HOLODISK || !FLAG(copyDisk.Flags, ITEM_HOLODISK))
+			{
+				cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_CANT_COPY);
+			}
+			else if(FLAG(copyDisk.Flags, ITEM_HOLODISK))
+			{
+				copyDisk.HolodiskNumber = holodisk.HolodiskNumber;
+				copyDisk.Update();
+				cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, STR_TERMINAL_COPYING_DATA);
+			}
+
+			return false;
+		}
+		
+		if( menu.ButtonMsg( STR_CLOSE_MENU_BUTTON ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			return false;
+		}
+		
+		return true;
+    }
+
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_CHOOSE_YOUR_ACTION;
+	}
 	
 	bool ShouldRedraw( Critter& cr )
 	{
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+}
+
+class MenuDatabase: CenteredMenuHandler
+{
+    Item@ terminal;
+	Map@ map;
+
+	uint level;
+	int selectorPos;
+	uint arrayPos;
+	
+    MenuDatabase( Item& terminal, Map& map )
+	{
+        @this.terminal = @terminal;
+        @this.map = @map;
+		level = 1;
+		selectorPos = 0;
+		arrayPos = 0;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+		if( !MenuReady( map, terminal ) )
+		{
+			return false;
+		}
+
+		Item@[] Databases;
+		map.GetItems( PID_DATABASE1, Databases );
+		map.GetItems( PID_DATABASE2, Databases );
+		map.GetItems( PID_DATABASE3, Databases );
+		map.GetItems( PID_DATABASE4, Databases );
+		Item@ database = null;
+		
+		if( Databases.length() != 0 )
+		{
+			if( menu.ButtonMsg( STR_PREVIOUS ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				selectorPos--;
+				if( arrayPos == 0 )
+				{
+					arrayPos = Databases.length() - 1;
+					selectorPos = arrayPos;
+				}
+				else
+				{
+					arrayPos = selectorPos;
+				}
+				@database = Databases[arrayPos];
+				terminal.TERMINAL_DATABASE_ID = database.Id;
+				return true;
+			}
+			
+			if( menu.ButtonMsg( STR_NEXT ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				selectorPos++;
+				if( arrayPos == Databases.length() -1 )
+				{
+					arrayPos = 0;
+					selectorPos = arrayPos;
+				}
+				else
+				{
+					arrayPos = selectorPos;
+				}
+				@database = Databases[arrayPos];
+				terminal.TERMINAL_DATABASE_ID = database.Id;
+				return true;
+			}
+			
+			if( terminal.TERMINAL_DATABASE_ID != 0 )
+			{
+				@database = GetItem( terminal.TERMINAL_DATABASE_ID );
+			}
+
+			if( valid( database ) )
+			{
+				if( menu.ButtonMsg( STR_DEVICE_CONNECT ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					int len = Databases.length();
+					if( len > 1 )
+					{
+						for( int j = 0; j < len; j ++ )
+						{
+							Item@ doc = Databases[j];
+							if( doc.DATABASE_TERMINAL_ID == int( terminal.Id ) )
+							{
+								doc.DATABASE_TERMINAL_ID = 0;
+							}
+						}
+					}
+					database.DATABASE_TERMINAL_ID = terminal.Id;
+				}
+				
+				if( database.DATABASE_TERMINAL_ID != 0 && menu.ButtonMsg( STR_DEVICE_RESET ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					database.DATABASE_TERMINAL_ID = 0;
+					terminal.TERMINAL_DATABASE_ID = 0;
+				}
+			}
+		}
+		
+		if( menu.ButtonMsg( STR_RETURN ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			return false;
+		}
+		return true;
+    }
+
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_INFO_MAIN;
+	}
+
+    string@ Description( Critter& cr )
+	{	
+		string info = "$info";
+		if( terminal.TERMINAL_DATABASE_ID != 0 )
+		{
+			Item@ database = GetItem( terminal.TERMINAL_DATABASE_ID );
+			if( valid( database ) )
+			{ 
+				info += STR_INSERT_TEXT_LINE( STR_TERMINAL_DB_CONNECT_LABEL )
+					 + "$Id" + database.Id
+					 + "$state";
+					 
+				if( database.DATABASE_TERMINAL_ID == int( terminal.Id ) )
+				{
+					info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_ASSIGNED );
+				}
+				else
+				{
+					info += STR_INSERT_TEXT_LINE( STR_AUTODOC_MENU_CHOSEN );
+				}
+			}
+		}
+		
+		return info;
+	}
+		
+	bool ShouldRedraw( Critter& cr )
+	{
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+}
+
+class MenuDatabaseCtrl: CenteredMenuHandler
+{
+	Item@ terminal;
+	Item@ database;
+	Map@ map;
+	Item@[] holodisks;
+	uint holoLen;
+	
+	uint level;
+	uint page = 0;
+		
+	MenuDatabaseCtrl( Critter& cr, Item& terminal, Map& map )
+	{
+		bool noAccess = true;
+		
+		@this.terminal = @terminal;
+        @this.map = @map;
+		if( terminal.TERMINAL_DATABASE_ID != 0 )
+		{
+			@this.database = map.GetItem( terminal.TERMINAL_DATABASE_ID );
+			if( valid( database ) )
+			{
+				holoLen = this.database.GetItems( uint(-1), holodisks );
+				noAccess = false;
+			}
+		}
+		
+		if( noAccess )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_DB_TERMINAL );
+		}
+		level = 1;
+	}
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+		if( !MenuReady( map, terminal ) || !valid( database ) )
+		{ 
+			return false; 
+		}
+
+		uint currMax = CLAMP(holoLen, 4 * page, 4 * (page + 1) );
+		for(uint i = 0 + (4 * page); i < currMax; i++)
+		{
+			if(!FLAG(holodisks[i].Flags, ITEM_HOLODISK))
+			{
+				continue;
+			}
+			
+			if( menu.ButtonMsg( TEXTMSG_HOLO, holodisks[i].HolodiskNumber * 10) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				StartMenuHolodisk( cr, terminal, holodisks[i]);
+				return false;
+			}
+		}
+
+		if( page > 0 && menu.ButtonMsg( STR_PREVIOUS ) )
+		{
+			page--;
+		}
+
+		if( ( currMax % 4 == 0 && currMax != holoLen ) && menu.ButtonMsg( STR_NEXT ) )
+		{
+			page++;
+		}
+		
+		if( menu.ButtonMsg( STR_CLOSE_MENU_BUTTON ) )
+		{
+			PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+			return false;
+		}
+		
+		return true;
+    }
+
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_TERMINAL_MENU_INFO_MAIN;
+	}
+
+    string@ Description( Critter& cr )
+	{	
+		string info = "$info";
+		info += STR_INSERT_TEXT_LINE( STR_TERMINAL_DB_LABEL );
+		return info;
+	}
+	
+	bool ShouldRedraw( Critter& cr )
+	{
+		if( GetDistantion( cr.HexX, cr.HexY, terminal.HexX, terminal.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
 		return true;
     }
 }

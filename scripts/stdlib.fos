@@ -2,10 +2,302 @@
 #define STDLIB_MODULE
 
 #include "_utils.fos"
-#include "stdlib_h.fos"
 #include "effects_h.fos"
 #include "combat_h.fos"
 #include "parameters_h.fos"
+#include "speed_h.fos"
+
+void DropContainerItems( Map& map, Item& container, bool silent = false ) // exported
+{
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	if( container.Proto.Type != ITEM_TYPE_CONTAINER )
+	{
+		return;
+	}
+	
+	uint16 container_x, container_y;
+	if( container.Accessory == ACCESSORY_CONTAINER )
+	{
+		Item@ owner = GetItem( container.ContainerId );
+		if( !valid( owner ) )
+		{
+			return;
+		}
+		container_x = owner.HexX;
+		container_y = owner.HexY;
+	}
+	else if( container.Accessory == ACCESSORY_CRITTER )
+	{
+		Critter@ owner = GetCritter( container.ContainerId );
+		if( !valid( owner ) )
+		{
+			return;
+		}
+		container_x = owner.HexX;
+		container_y = owner.HexY;
+	}
+	else
+	{
+		container_x = container.HexX;
+		container_y = container.HexY;
+	}
+		
+	Item@[] dumpedItems;
+	container.GetItems( uint( -1 ), dumpedItems );
+	if( dumpedItems.length() > 0 ) 
+	{
+		if( !silent )
+		{
+			map.SetTextMsg( container.HexX, container.HexY, COLOR_LGRAY, TEXTMSG_TEXT, STR_FURNITURE_MENU_ITEMS_SCATTER );
+		}
+		
+		for( uint i = 0; i < dumpedItems.length(); i++ )
+		{
+			uint16 sHx = container_x, sHy = container_y;
+			uint16 hx = 0, hy = 0;
+			hx = sHx; hy = sHy;
+			uint count = dumpedItems[i].GetCount();
+			map.MoveHexByDir( hx, hy, Random( 0, 5 ), 1 );
+			if( map.IsHexPassed( hx, hy ) )
+			{
+				MoveItem( dumpedItems[i], count, map, hx, hy );
+			}
+			else
+			{	
+				MoveItem( dumpedItems[i], count, map, sHx, sHy );
+			}
+		}
+	}
+}
+
+void offset( Item& item, int dx, int dy ) //exported
+{
+	item.OffsetX = dx;
+	item.OffsetY = dy;
+	UNSETFLAG( item.Flags, ITEM_FLAT );
+	item.Update();
+}
+
+void SpawnBeneath( Critter& cr, uint[] pids ) //exported
+{
+	Map@ map = cr.GetMap();
+	if( !valid(map) ) return;	
+
+	Item@[] items; map.GetItems( cr.HexX, cr.HexY, items );
+	uint[] item_pids = getPIDS(items);
+	
+	for( uint i = 0, l = pids.length(); i < l; i++ )
+	{
+		int index = item_pids.find( pids[i] );
+		if( index == -1 )
+		{
+			items.insertLast( map.AddItem( cr.HexX, cr.HexY, pids[i], 1 ) );
+			item_pids.insertLast( pids[i] );
+			continue;
+		}
+		
+		_IncItem( items[index], 1 );
+	}	
+}
+
+Item@ SpawnBeneath( Critter& cr, uint pid, uint count = 1 ) //exported
+{
+	return SpawnItem( cr.GetMap(), cr.HexX, cr.HexY, pid, count );
+}
+
+Item@ SpawnItem( Map@ map, uint x, uint y, uint pid, uint count = 1 )
+{
+	if( !valid( map ) )
+	{
+		return null;
+	}
+	
+	Item@[] items; map.GetItems( x, y, items );
+	uint[] item_pids = getPIDS(items);
+	
+	int index = item_pids.find( pid );
+	if( index == -1 )
+	{
+		return map.AddItem( x, y, pid, count );
+	}
+	
+	_IncItem( items[index], count );
+	return items[index];
+}
+
+uint[] getPIDS( Item@[] items ) 
+{
+	uint[] result;
+	for( uint i = 0, count = items.length(); i < count; i++ )
+	{
+		result.insertLast( items[i].GetProtoId() );
+	}
+	return result;
+}
+
+bool PassableHex( Critter& cr ) //exported
+{
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return false;
+	}
+	if( !PassableHex( map, cr.HexX, cr.HexY ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MOVE_TO_PLACE );
+		return false;
+	}
+	return true;
+}
+
+bool PassableHex( Map@ map, uint x, uint y ) //exported
+{
+	Item@[] items;
+	uint count = map.GetItems( x, y, items );
+	for( uint i = 0; i < count; i++ )
+	{
+		if( !FLAG( items[i].Flags, ITEM_NO_BLOCK ) )
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+bool CanCatch( Critter& cr, Item& item ) //exported
+{
+	if( isGM( cr ) )
+	{
+		return true;
+	}
+	
+	uint freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] - ItemsWeight( cr );
+	if( freeWeight < ItemsWeight( item, 1 ) )
+	{
+		return false;
+	}
+	
+	int volume = cr.ItemsVolume() + item.Proto.Volume;
+	if( volume > cr.Param[ST_MAX_VOLUME] )
+	{
+		return false;
+	}
+	
+	return true;
+}
+
+//Pick up items, max weight and volume check
+bool PickItem( Critter& cr, Item& item ) //exported
+{	
+	offset( item, 0, 0 );
+	if( !FLAG( item.Flags, ITEM_CAN_PICKUP ) )
+	{
+		if( item.GetProtoId() == PID_POT_ALCO )
+		{
+			UNSETFLAG( item.Flags, ITEM_CAN_USE );
+			SETFLAG( item.Flags, ITEM_CAN_PICKUP );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ITEM_DETACHED );
+		}
+		else
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_PICK_UP );
+			return false;
+		}
+	}	
+	
+	uint freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] - ItemsWeight( cr );
+	
+	if( !isGM( cr ) && !item.IsStackable() && ItemsWeight( item ) > freeWeight )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_HEAVY );
+		LogItemMovement( cr, item, "can't pick up item (" + cr.HexX + ", " + cr.HexY + ") because it's too heavy." );
+		return false;
+	}
+	
+	uint amount1 = item.GetCount();
+	if( !isGM( cr ) && freeWeight < item.Proto.Weight * item.GetCount() )
+	{
+		amount1 = 0;
+		if( item.IsStackable() && freeWeight >= item.Proto.Weight )
+		{
+			amount1 = freeWeight / item.Proto.Weight;
+		}	
+	}
+	
+	uint freeVolume = cr.Param[ST_MAX_VOLUME] - cr.ItemsVolume();
+	uint amount2 = item.GetCount();
+	if( !isGM( cr ) && freeVolume < item.Proto.Volume * item.GetCount() )
+	{
+		amount2 = 0;
+		if( item.IsStackable() && freeVolume >= item.Proto.Volume )
+		{
+			amount2 = freeVolume / item.Proto.Volume;
+		}
+	}
+	
+	if( amount1 * amount2 != 0 )
+	{
+		MoveItem( item, MIN( amount1, amount2 ), cr );		
+		ChangeCritterSpeed( cr );
+		LogItemMovement( cr, item, "picks up item (" + cr.HexX + ", " + cr.HexY + ")" );		
+	}
+	else
+	{
+		if( amount1 == 0 )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_FREE_WEIGHT );
+			LogItemMovement( cr, item, "can't pick up item (" + cr.HexX + ", " + cr.HexY + ") because it's too heavy." );
+		}
+		else 
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_FREE_VOLUME );
+			LogItemMovement( cr, item, "can't pick up item (" + cr.HexX + ", " + cr.HexY + ") because it's too large." );
+		}
+	}
+	
+	return true;
+}
+
+bool isWorkplace( Item& item ) //exported
+{
+	return isWorkplace( item.GetProtoId() );
+}
+
+bool isWorkplace( uint pid ) //exported
+{
+	uint[] pids = { PID_FIREBARREL, PID_STOVE_01, PID_STOVE_02, PID_STOVE_03, PID_STOVE_04, PID_STOVE_05, PID_STOVE_06, PID_STOVE_07, PID_STOVE_08, PID_FIREPLACE };
+	return _Contains( pids, pid );
+}
+
+bool isDisabled( Item& item ) //exported
+{
+	return item.Val0 == 0;
+}
+
+
+void KnockoutOnce( Critter& cr, uint AP ) //exported
+{
+	KnockoutOnce( cr, Random( 0, 1 ) == 1, AP );
+}
+
+void KnockoutOnce( Critter& cr, bool front, uint AP ) //exported
+{
+	KnockoutOnce( cr, front, AP, cr.HexX, cr.HexY );
+}
+
+void KnockoutOnce( Critter& cr, bool front, uint AP, uint16 x, uint16 y ) //exported
+{
+	if( cr.IsKnockout() )
+	{
+		return;
+	}
+	
+	cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( front ), AP, x, y );
+}
 
 int RollVsSkill( Critter& cr, uint skillIndex, int bonus )
 {
@@ -52,7 +344,8 @@ void HealCritter( Critter& player )
 	{
         player.ToLife();
     }
-	player.StatBase[ ST_CURRENT_HP ] = player.Stat[ ST_MAX_LIFE ];
+	
+	player.StatBase[ ST_CURRENT_HP ] = ( player.Stat[ ST_MAX_LIFE ] + player.Stat[ ST_MAX_LIFE_EXT ] );
 }
 
 bool TransitToLoc( Critter& cr, uint16 locPid, uint mapIndex, uint entranceNum )
@@ -234,7 +527,7 @@ void DoorControl( Critter& player, uint entireNum, bool toOpen )
 
 bool DialogNpc( Critter& player, int role )
 {
-    if( not player.IsPlayer() )
+    if( !player.IsPlayer() )
 	{
         return false;
 	}
@@ -274,7 +567,7 @@ bool TransitToMap( Critter& cr, int locPid, int mapIndex, int entranceNum )
 {
     Location@ location = GetLocationByPid( locPid, 0 );
 
-    if( location is null )
+    if( !valid(location) )
     {
         Log( "Location with given PID (" + locPid + ") isn't found" );
         return false;
@@ -282,7 +575,7 @@ bool TransitToMap( Critter& cr, int locPid, int mapIndex, int entranceNum )
 
     Map@ map = location.GetMapByIndex( mapIndex );
 
-    if( map is null )
+    if( !valid(map) )
     {
         Log( "Map with given index (" + mapIndex + ") isn't found on location with PID (" + locPid + ")" );
         return false;

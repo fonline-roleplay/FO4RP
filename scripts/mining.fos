@@ -1,4 +1,3 @@
-// Author: Anuri
 #ifndef MINING
 #define MINING
 
@@ -9,6 +8,11 @@
 #include "entire_h.fos"
 #include "repair_h.fos"
 #include "combat_h.fos"
+#include "speed_h.fos"
+
+import uint8 checkCave(Map& map, uint16 tx, uint16 ty) from "qmap_cave";
+import uint8 checkSand(Map& map, uint16 tx, uint16 ty) from "qmap_sand";
+import uint8 checkDirt(Map& map, uint16 tx, uint16 ty) from "qmap_dirt";
 
 // Ores array search
 uint16 FindOre( Item@ targetItem )
@@ -72,7 +76,7 @@ bool PrepareMining( Critter& cr, Item@ tool, Item@ target )
 
 	if( _ItemIsBroken( tool ) )
 	{
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Your tool is broken" );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOOL_BROKEN );
 		return true;
 	}
 
@@ -99,9 +103,9 @@ bool PrepareMining( Critter& cr, Item@ tool, Item@ target )
 				return false;
 			}
 			
-			if( det >= 95 )
+			if( tool.Deterioration >= MAX_DETERIORATION )
 			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DRILL_DAMAGED );
+				BreakTool( cr, tool );
 				return false;
 			}
 		}
@@ -121,10 +125,14 @@ bool start_mining( Critter& cr, Item& tool, Item& target )
 	if( valid( tool ) && valid( target ) )
 	{	
 		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint object_dpa = cr.Skill[ SK_MINING ] + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
+		
 		if( tool.GetProtoId() == PID_DRILL )
 		{
-			action_pause = 700;
+			cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = 700;
+			cr.ParamBase[ ST_LTP_SEQUENCE ] = 10;
 			Map@ map = cr.GetMap();
 			PlayGenericSound( map, cr.HexX, cr.HexY, "drill_mine.ogg", 100 );
 		}
@@ -134,7 +142,8 @@ bool start_mining( Critter& cr, Item& tool, Item& target )
 			CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_MiningSound", values, false);
 			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
 		}
-		StartProcess( cr, LTP_MINING, 0, tool.Id, target.Id, action_pause );
+		
+		StartProcess( cr, LTP_MINING, 0, tool.Id, target.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		return true;
 	}
 	return false;
@@ -143,23 +152,14 @@ bool start_mining( Critter& cr, Item& tool, Item& target )
 uint process_mining( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_MINING )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
     Item@ tool = GetItem( param1 );
   	Item@ target = GetItem( param2 );
   	if( valid( tool ) && valid( target ) )
     {
       	param0++;
 		
-		uint object_dpa = cr.Skill[ SK_MINING ] + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = uint( ceil( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) );
-		
-		if ( tool.GetProtoId() == PID_DRILL )
-		{
-			sequence_length = 10;
-		}
-		
-		if( param0 > sequence_length )
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
 			Profit( cr, tool, target );
 			int skillNum = SK_MINING;
@@ -171,7 +171,6 @@ uint process_mining( Critter@ cr, int& param0, int& param1, int& param2 )
 			if( tool.GetProtoId() == PID_DRILL )
 			{
 				_CritAnimateBrust( cr );
-				action_pause = 700;
 			}
 			else
 			{
@@ -185,10 +184,10 @@ uint process_mining( Critter@ cr, int& param0, int& param1, int& param2 )
 			if( cr.IsInjured() )
 			{
 				uint damage = INJURED_HP_DAMAGE - cr.Stat[ ST_ENDURANCE ];
-				InjureCritter( cr, damage, DAMAGE_UNCALLED, cr.Dir, cr.Id, HIT_LOCATION_NONE, false );
+				hurt( cr, damage );
 			}
 			
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
     }
 	return 0;
@@ -228,35 +227,39 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 	uint toolMod = tool.GetProtoId();
 	switch( toolMod )
 	{	
+		case( PID_DRILL ):
+			amount += 2;
+			break;
 		case( PID_SUPER_SLEDGE ):
 		case( PID_PICKAXE ):
-			amount++;
+			amount += 1;
 			break;
 		case( PID_SHOVEL ):
 		case( PID_SPADE ):
 		case( PID_SM_CLUB ):
-			amount--;
+			amount -= 1;
 			break;
 		case( PID_PRIMITIVE_SLEDGE ):
-			amount-= 2;
+			amount -= 2;
 			break;
 	}
+	
 	uint OreMod = target.GetProtoId();
 	switch( OreMod )
 	{	
-		case( PID_CUPPER_ORE_S ):
+		case( PID_NF_METAL_ORE_S ):
 		case( PID_LED_ORE_S ):
 		case( PID_MINERALS_S ):
 		case( PID_IRON_ORE_S ):
-			amount--;
+			amount -= 1;
 			break;
 		case( PID_GOLD_ORE_S ):
 		case( PID_URANIUM_ORE_S ):
-			amount-= 2;
+			amount -= 2;
 			break;
 		case( PID_GOLD_ORE_M ):
 		case( PID_URANIUM_ORE_M ):
-			amount--;
+			amount -= 1;
 			break;
 	}
 			
@@ -264,12 +267,12 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 	
 	if( toolMod == PID_DRILL )
 	{
-		amount = ( ( amount + lootRoll ) * CLAMP( 3, 1, ( target.RESOURCE_CAPACITY / OBJECT_HP_BASE ) ) );
+		amount = ( amount + lootRoll ) * CLAMP( 3, 1, ( target.RESOURCE_CAPACITY / OBJECT_HP_BASE ) );
 		
 	}
 	else
 	{
-		amount+= lootRoll;
+		amount += lootRoll;
 	}
 	
 	if( amount < 1 )
@@ -298,11 +301,8 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 				}
 				break;
 			}
-			case( ORE_TYPE_COPPER ):
-				lootPid = PID_COPPER_ORE;
-				break;
-			case( ORE_TYPE_LEAD ):
-				lootPid = PID_LEAD_ORE;
+			case( ORE_TYPE_NF_METAL ):
+				lootPid = PID_NF_METAL_ORE;
 				break;
 			case( ORE_TYPE_MINERAL ):
 				lootPid = PID_MINERAL;
@@ -311,20 +311,21 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 				lootPid = PID_COAL;
 				break;
 			case( ORE_TYPE_GOLD ):
-				lootPid = PID_GOLD_ORE;
+				lootPid = PID_GOLD_NUGGET;
 				break;
-			case( ORE_TYPE_METAL ):
-				lootPid = PID_METAL_ORE;
+			case( ORE_TYPE_IRON ):
+				lootPid = PID_IRON_ORE;
 				break;
 			case( ORE_TYPE_URANIUM ):
 				lootPid = PID_URANIUM_ORE;
 				break;
+			default:
+				break;
 		}
 		
-		cr.AddItem( lootPid, amount );
-		
+		taking_sweat(cr);
+		SpawnBeneath( cr, lootPid, amount );
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_GATHERED, "$proto@msg item " + ( lootPid * 100 ) + "@$amount" + amount );
-		
 		cr.StatBase[ST_EXPERIENCE] += 25;
 		
 		if( toolMod == PID_DRILL )
@@ -342,19 +343,27 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 		{
 			Map@ map = GetMap( target.MapId );
 			uint16 hx = target.HexX, hy = target.HexY;
+			Item@ newOre = null; 
 			
 			switch( OreMod )
 			{
 				case( PID_ORE_DEPOSIT_S ):
 				case( PID_ORE_DEPOSIT_S2 ):
-					map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ OreList[target.RESOURCE_DNA].length() - 3 ], 1 );
+					@newOre = map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ OreList[target.RESOURCE_DNA].length() - 3 ], 1 );
 					break;
 				case( PID_ORE_DEPOSIT_M ):
-					map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ Random( 0, OreList[target.RESOURCE_DNA].length() - 2 ) ], 1 );
+					@newOre = map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ Random( 0, OreList[target.RESOURCE_DNA].length() - 2 ) ], 1 );
 					break;
 				case( PID_ORE_DEPOSIT_L ):
-					map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ Random( 1, OreList[target.RESOURCE_DNA].length() - 1 ) ], 1 );
+					@newOre = map.AddItem( hx, hy, OreList[target.RESOURCE_DNA][ Random( 1, OreList[target.RESOURCE_DNA].length() - 1 ) ], 1 );
 					break;
+				default:
+					break;
+			}
+			
+			if( valid( newOre ) )
+			{
+				newOre.ORE_NODE_ID = target.ORE_NODE_ID;
 			}
 			
 			DeleteItem( target );
@@ -366,73 +375,195 @@ bool Profit(  Critter& cr, Item@ tool, Item@ target )
 			DeleteItem( target );
 			return true;
 		}
+		
+		ChangeCritterSpeed( cr );
 	}
+	
 	return true;
 }
 
 //===============ORE SPAWNER MECHANIC===============//
-//Forced Spawn
-void _ForceOresInit( Critter& player, int param0, int param1, int param2 )
+void SpawnOreZone( Map& map, uint16 HexX, uint16 HexY, uint timeout, uint range, uint dna, uint capacity )
 {
-	OreInit();
+	if( !valid( map ) )
+	{
+		return;
+	}
+
+	Item@ oreMarker = map.AddItem( HexX, HexY, PID_ORE_MARKER, 1 );
+	if( !valid( oreMarker ) )
+	{
+		return;
+	}
+
+	oreMarker.MAP_ID = map.Id;
+	oreMarker.ZONE_TIMEOUT = timeout;
+	oreMarker.ZONE_RANGE = ( range < 1 ? 1 : range );
+	oreMarker.RESOURCE_DNA = dna;
+	oreMarker.RESOURCE_CAPACITY = ( capacity < 1 ? 1 : capacity );
+
+	int[] values = { oreMarker.Id };
+	oreMarker.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_processOreZone", values, true );
 }
 
-void OreInit()
-{    
-    Map@[] maps;
-    for( int i = 0, iend = GetAllMaps( 0, maps ); i < iend; i++)
-	{   
-		CheckMapEvent( maps[i] );
+//~run mining _RefreshOreSpawners 0 0 0
+void _RefreshOreSpawners( Critter& player, int param0, int param1, int param2 )
+{
+	if(!isGM(player)) return;
+
+	Item@[] spawners;
+	GetAllItems(PID_ORE_MARKER, spawners);
+
+	for(uint i = 0, len = spawners.length(); i < len; i++)
+	{
+		Item@ currSpawner = spawners[i];
+		if( !valid( currSpawner ) )
+		{
+			continue;
+		}
+
+		Map@ currMap = GetMap( currSpawner.MAP_ID );
+		if( !valid( currMap ) )
+		{
+			continue;
+		}
+
+		uint duration = 0;
+		uint[] values;
+		if( !GetTimeEvent( currSpawner.EVENT, duration, values ) )
+		{ 
+			Log("WARNING: Ore Spawner with broken TE, at map" + currMap.GetProtoId() + ", at hex " + currSpawner.HexX + " " + currSpawner.HexY + "\n");
+			continue;
+		}
+		duration = REAL_MINUTE( currSpawner.ZONE_TIMEOUT );
+		SetTimeEvent( currSpawner.EVENT, duration, values );
+
+		DespawnOre(currMap, currSpawner);
+		ProcessRespawnOre(currMap, currSpawner);
 	}
 }
 
-bool CheckMapEvent( Map& map )
+void DespawnOre(Map@ map, Item@ oreSpawner)
 {
-    for( int n = ORE_ENTIRE, nend = ORE_ENTIRE  + ORE_SPAWNER_COUNT; n < nend ; n++ )
-	{
-		if( map.CountEntire(  n ) != 0 ) 
-		{
-			int[] values = {map.Id};
-			map.SetData( MAP_ORE_SPAWN_TE, CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_SpawnOres", values, true ) );
-			return true;
-		}
-	} 
-    return false;
-}
+	Item@[] OreFound;
+	uint len0 = OreList[0].length();
+	uint len1 = OreList[ oreSpawner.RESOURCE_DNA ].length();
 
-uint e_SpawnOres( int[] @ values )
-{
-	Map @ map = GetMap( values[ 0 ] );
-	if( !valid( map ) )
-	{	
-		return 0;
+	for( uint i = 0; i < len0; i++ )
+	{
+		map.GetItems( OreList[ 0 ][i], OreFound );
 	}
 	
-	SpawnOre( map );
+	for( uint j = 0; j < len1; j++ )
+	{
+		map.GetItems( OreList[ oreSpawner.RESOURCE_DNA ][j], OreFound );
+	}
 
-	EraseTimeEvent( map.GetData( MAP_ORE_SPAWN_TE ) );
-	map.SetData( MAP_ORE_SPAWN_TE, CreateTimeEvent( AFTER( DELAY_FOR_ORE_RESPAWN  ), "e_SpawnOres", values, true ) );
-	return 0;
+	for( uint k = 0, len = OreFound.length(); k < len; k++ )
+	{
+		Item@ ore = OreFound[k];
+		if( valid( ore ) && ore.ORE_NODE_ID == int( oreSpawner.Id ) )
+		{
+			ore.ORE_NODE_ID = 0;
+			DeleteItem(ore);
+		}
+	}
+	
+	OreFound.resize(0);
 }
 
-bool SpawnOre( Map& map )
+void ProcessRespawnOre(Map@ map, Item@ oreSpawner)
 {
-	for( int i = 0; i < ORE_SPAWNER_COUNT; i++ )
+	int oreCount = 0;
+	Item@[] OreFound;
+	uint len0 = OreList[0].length();
+	uint len1 = OreList[ oreSpawner.RESOURCE_DNA ].length();
+
+	for( uint i = 0; i < len0; i++ )
 	{
-		int entireId = ORE_ENTIRE + i;
-		int entires = map.CountEntire( entireId );
-		uint16 hx=0, hy=0;
-		for( int j = 0; j < entires; j++ )
+		map.GetItems( OreList[ 0 ][i], OreFound );
+	}
+	
+	for( uint j = 0; j < len1; j++ )
+	{
+		map.GetItems( OreList[ oreSpawner.RESOURCE_DNA ][j], OreFound );
+	}
+
+	for( uint k = 0, len = OreFound.length(); k < len; k++ )
+	{
+		Item@ ore = OreFound[k];
+		if( valid( ore ) && ore.ORE_NODE_ID == int( oreSpawner.Id ) )
+		{	
+			oreCount++;
+		}
+	}
+	
+	int missing = oreSpawner.RESOURCE_CAPACITY - oreCount;
+
+	if( missing > 0 )
+	{
+		uint attempt = 0;
+		for( int i = 0; i < missing; i++ )
 		{
-			map.GetEntireCoords( entireId, j, hx, hy );
-			if( map.IsHexPassed( hx, hy ) )
-			{	
-				Item@ BaseOre = map.AddItem( hx, hy, OreList[0][ Random( 0, OreList[0].length() - 2 ) ], 1 );
-				BaseOre.RESOURCE_DNA = ( entireId - 1000 );
+			if( attempt >= MAX_RESOURCE_SPAWN_ATTEMPTS )
+			{
+				break;
+			}
+			
+			int radius = oreSpawner.ZONE_RANGE / 2;
+			uint16 hx = oreSpawner.HexX + Random( -radius, radius );
+			uint16 hy = oreSpawner.HexY + Random( -radius, radius );
+			if( checkCave( map, H2T( hx ), H2T( hy ) ) != 0 || checkSand( map, H2T( hx ), H2T( hy ) ) != 0 || checkDirt( map, H2T( hx ), H2T( hy ) ) != 0 )
+			{
+				if( map.IsHexPassed( hx, hy ) )
+				{
+					OreSpawn( map, hx, hy, oreSpawner.RESOURCE_DNA, oreSpawner.Id );
+				}
+				else
+				{
+					missing++;
+					attempt++;
+				}
 			}
 		}
 	}
-	return true;
+	
+	OreFound.resize(0);
+}
+
+uint e_processOreZone( int[] @ values )
+{
+	Item@ zoneMarker = GetItem( values[0] );
+	if( !valid( zoneMarker ) )
+	{
+		return 0;
+	}
+
+	Map@ map = GetMap( zoneMarker.MAP_ID );
+	if( !valid( map ) )
+	{
+		return 0;
+	}
+
+	ProcessRespawnOre(map, zoneMarker);
+	
+	return REAL_MINUTE( zoneMarker.ZONE_TIMEOUT );
+}
+
+Item@ OreSpawn( Map& map, uint16 hx, uint16 hy, uint dna, uint spawner_id = 0 )
+{
+	Item@ ore = null;
+	if( map.IsHexPassed( hx, hy ) )
+	{	
+		@ore = map.AddItem( hx, hy, OreList[0][ Random( 0, OreList[dna].length() - 2 ) ], 1 );
+		if( valid( ore ) )
+		{
+			ore.RESOURCE_DNA = dna;
+			ore.ORE_NODE_ID = spawner_id == 0 ? 0 : spawner_id;
+		}
+	}
+
+	return ore;
 }
 
 #endif //MINING

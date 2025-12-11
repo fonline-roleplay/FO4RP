@@ -3,33 +3,13 @@
 
 #include "_utils.fos"
 
+#define NARATIVE_MSG_RANGE		( 10 )
+
+import void LookDataRefresh( Critter& critter ) from "main";
+
 bool sinfFLAG( Critter& player, uint flag )
 {
 	return FLAG( player.Param[ CR_SINF_MODE ], flag );
-}
-
-//Follow indicator for critters (arrows on head)
-bool unbound( Critter& owner, int targetID )
-{
-	return bound( owner, targetID, false );
-}
-
-bool bound( Critter& owner, int targetID, bool set = true )
-{
-	//Empty call
-	if( targetID == 0 )
-	{
-		return true;
-	}
-	
-	Critter@ target;
-	if( !Find( target, targetID ) || !valid( target ) )
-	{
-		return testInfo( owner, "Invalid target id: " + targetID );
-	}
-	
-	target.StatBase[ ST_FOLLOW_CRIT ] = ( set ? int( owner.Id ) : 0 );
-	return true;
 }
 
 ///core module logic
@@ -49,26 +29,60 @@ void unsafe_SayRemote( Critter& cr, int sayType, int, int, string@ message, int[
 }
 
 //Enables talk through owned NPC or any critter if you are GM
-bool SetChatTarget( Critter& cr, uint id )
+bool SetChatTarget( Critter& cr, int id )
 {	
-	cr.ParamBase[ CR_TALKING_TARGET_ID ] = id;
-	
-	if( isGM( cr ) && cr.Id != id )
+	if( !isGM( cr ) || int( cr.Id ) == id || id == 0 )
 	{
-		//Disables link with cr
-		unbound( cr, cr.StatBase[ ST_FOLLOW_CRIT ] );
-
-		//Creates link with cr
-		bound( cr, cr.ParamBase[ CR_TALKING_TARGET_ID ] );
+		return false;
 	}
 
-	//Visual arrow on head
-	cr.StatBase[ ST_FOLLOW_CRIT ] = cr.ParamBase[ CR_TALKING_TARGET_ID ];
+	Critter@ target = GetCritter( id );
+	if( !valid( target ) )
+	{
+		return testInfo( cr, "Invalid target id: " + id );
+	}
+	
+	int ownerId = int( cr.Id );
+	if( target.StatBase[ ST_TALKING_PUPPET ] != ownerId || target.ParamBase[ CR_TALKING_TARGET_ID ] != ownerId )
+	{
+		target.StatBase[ ST_TALKING_PUPPET ] = ownerId;
+		target.ParamBase[ CR_TALKING_TARGET_ID ] = ownerId;
+	}
+	else
+	{
+		target.StatBase[ ST_TALKING_PUPPET ] = 0;
+		target.ParamBase[ CR_TALKING_TARGET_ID ] = 0;
+	}
 	
 	return true;
 }
 
-void unsafe_SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message, int[]@ )
+void unsafe_CrSpoken( Critter& cr, int p0, int p1, int p2, string@ p3, int[]@ p4 )
+{
+	if( cr.ParamBase[ CR_SPOKEN ] != 0 )
+	{
+		EraseTimeEvent( cr.Param[ CR_SPOKEN ] );
+	}
+	
+	uint[] values = { cr.Id };
+	cr.ParamBase[ CR_SPOKEN ] = CreateTimeEvent( AFTER( REAL_SECOND( 5 ) ), "rp_chat@e_StopSpoken", values, true );
+	LookDataRefresh( cr );
+}
+
+uint e_StopSpoken( uint[]@ values )
+{
+	Critter@ cr = GetCritter( values[0]);
+	if( !valid( cr ) )
+	{
+		return REAL_MINUTE( 10 );
+	}
+	
+	cr.ParamBase[ CR_SPOKEN ] = 0;
+	LookDataRefresh( cr );
+	return 0;
+}
+
+void unsafe_SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message, int[]@ IDs )
 {
 	if( cr.IsDead() && sayType != SAY_NARATIVE )
 	{
@@ -76,10 +90,38 @@ void unsafe_SayChatMessage( Critter& cr, int sayType, int x, int y, string@ mess
 		return;
 	}
 
-	if( !SayChatMessage( cr, sayType, x, y, message ) )
+	int[] _default = { 0 };
+	if( !valid( IDs ) )
 	{
-		testInfo( cr, "Failed to say chat message: " + cr.Id + " " + sayType + " " + x + " " + y + " '" + message + "'" );
+		@IDs = _default;
 	}
+	
+	bool even_once = false;
+	int last_target_id = cr.ParamBase[ CR_TALKING_TARGET_ID ];
+	
+	if( sayType != SAY_NARATIVE )
+	{
+		for( uint i = 0, l = IDs.length(); i < l; i++ )
+		{
+			cr.ParamBase[ CR_TALKING_TARGET_ID ] = IDs[i];
+			if( !SayChatMessage( cr, sayType, x, y, message ) )
+			{
+				testInfo( cr, "Failed to say chat message: " + cr.Id + " " + cr.ParamBase[ CR_TALKING_TARGET_ID ] + " " + sayType + " " + x + " " + y + " '" + message + "'" );
+			}
+			else
+			{
+				even_once = true;
+			}
+		}
+	}
+	
+	if( !even_once )
+	{
+		cr.ParamBase[ CR_TALKING_TARGET_ID ] = 0;
+		SayChatMessage( cr, sayType, x, y, message );
+	}
+	
+	cr.ParamBase[ CR_TALKING_TARGET_ID ] = last_target_id;
 }
 
 bool SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message )
@@ -87,33 +129,24 @@ bool SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message )
 	if( cr.IsDead() && sayType != SAY_NARATIVE )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_DEAD_CANT_TALK );
-		return false;
+		return true;
 	}
-	
-	bool isNear = GetDistantion( x, y, cr.HexX, cr.HexY ) < 6;
 
-	if( sayType != SAY_NARATIVE && ( cr.StatBase[ ST_FOLLOW_CRIT ] == 0 || cr.StatBase[ ST_FOLLOW_CRIT ] != cr.ParamBase[ CR_TALKING_TARGET_ID ] ) )
+	if( sayType != SAY_NARATIVE && ( cr.ParamBase[ CR_TALKING_TARGET_ID ] == 0 ) )
 	{	//in case of error speak normal
 		cr.Say( sayType, message );
 		SayLog( cr, sayType, message );
 		return false;
 	}
 	
-	if( sayType == SAY_NARATIVE || cr.StatBase[ ST_FOLLOW_CRIT ] == int( cr.Id ) ) //gray text
+	if( sayType == SAY_NARATIVE ) //gray text
 	{
 		if( !isGM( cr ) )
 		{
+			bool isNear = GetDistantion( x, y, cr.HexX, cr.HexY ) < NARATIVE_MSG_RANGE;
 			if( !isNear )
 			{
-				if( sayType == SAY_NARATIVE )
-				{
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SOCIAL_TEXT_TOO_FAR );
-				}
-				else
-				{
-					cr.Say( sayType, message );
-					SayLog( cr, sayType, message );
-				}				
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SOCIAL_TEXT_TOO_FAR );
 				return false;
 			}
 		}
@@ -123,32 +156,107 @@ bool SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message )
 		{
 			return false;
 		}
-		map.SetText( x, y, isGM( cr ) ? COLOR_GRAY : COLOR_LGRAY, message );
-		SayLog( map, crInfo( cr, !isGM( cr ) ) + " :" + message + ":", x, y );
+
+		int msgRange = isGM( cr ) ? 999 : NARATIVE_MSG_RANGE;
+		string finalMsg = "";
+
+		uint strLen = message.length();
+		bool volumeTag = false;
+		bool finished = false;
+		string volStr = "";
+			
+		for(uint i = 0; i < strLen; i++)
+		{
+			if( finished )
+			{
+				finalMsg += substring( message, i, strLen - i );
+				break;
+			}
+			
+			if(message[i] == '/' && message[i + 1] == '/')
+			{
+				volumeTag = true;
+				i++;
+				continue;
+			}
+
+			if(volumeTag && message[i] == ' ')
+			{
+				volumeTag = false;
+				finished = true;
+				continue;
+			}
+
+			if(!volumeTag)
+			{
+				finalMsg += substring(message, i, 1);
+			}
+			else
+			{
+				volStr += substring(message, i, 1);
+			}
+		}
+
+		if( isGM( cr ) )
+		{
+			StrToInt( volStr, msgRange );
+		}
+		
+		Critter@[] players;
+		map.GetCritters( 0, FIND_ALL|FIND_ONLY_PLAYERS, players );
+
+		for( uint i = 0, len = players.length(); i < len; i++ )
+		{
+			Critter@ currPlayer = players[i];
+			
+			if( !valid( currPlayer ) )
+			{
+				continue;
+			}
+
+			uint16 pX = currPlayer.HexX;
+			uint16 pY = currPlayer.HexY;
+			int dist = GetDistantion( x, y, pX, pY );
+			if( !isGM( currPlayer ) && dist > msgRange )
+			{
+				continue;
+			}			
+
+			currPlayer.RunClientScript( "client_main@ShowNarrativeMessage", x, y, ( isGM( cr ) ? 1 : 0 ) , finalMsg, null );
+		}
+
+		SayLog( map, crInfo( cr, !isGM( cr ) ) + " :" + finalMsg + ":", x, y );
+		players.resize(0);
 	}
 	else
 	{
 		Critter@ target;
-		if( !Find( target, cr.StatBase[ ST_FOLLOW_CRIT ] ) || target.IsDead() || target.StatBase[ ST_FOLLOW_CRIT ] != int( cr.Id ) || ( !isGM( cr ) && target.IsPlayer() ) ) 
+		if( !Find( target, cr.ParamBase[ CR_TALKING_TARGET_ID ] ) || target.IsDead() || target.ParamBase[ CR_TALKING_TARGET_ID ] != int( cr.Id ) || ( !isGM( cr ) && target.IsPlayer() ) ) 
 		{ 
-			cr.Say( sayType, message );
-			SayLog( cr, sayType, message );
+			if( !isGM( cr ) )
+			{
+				cr.Say( sayType, message );
+				SayLog( cr, sayType, message );
+			}
+			
 			return false;
 		}		
 		
+		Map@ crMap = cr.GetMap();
+		Map@ map = target.GetMap();
+		if( !valid( map ) || !valid( crMap ) || map.Id != crMap.Id )
+		{
+			return false;
+		}
+
 		if( target.Stat[ ST_CURRENT_HP ] < 0 || target.IsKnockout() )
 		{
-			Map@ map = target.GetMap();
-			if( !valid( map ) )
-			{
-				return false;
-			}
 			map.SetText( target.HexX, target.HexY, COLOR_TEXT, "|0xf9fa94 " + message );
 		}
 		else
 		{
 			// NPC cant use SHOUT for some unknown reason
-			if (sayType == SAY_SHOUT || sayType == SAY_SHOUT_ON_HEAD)
+			if( sayType == SAY_SHOUT || sayType == SAY_SHOUT_ON_HEAD )
 			{
 				if( sayType == SAY_SHOUT )
 				{
@@ -159,6 +267,7 @@ bool SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message )
 					sayType = SAY_NORM_ON_HEAD;
 				}
 			}
+			
 			target.Say( sayType, message );
 		}
 
@@ -171,6 +280,7 @@ bool SayChatMessage( Critter& cr, int sayType, int x, int y, string@ message )
 			SayLog( target, sayType, message, "[ " + crInfo( cr ) + " ] " );
 		}
 	}
+	
 	return true;
 }
 
@@ -183,6 +293,12 @@ void heard_radio_log_ch0( Critter& cr, string@ message )
 	{
 		return;
 	}
+	
+	if( cr.IsKnockout() )
+	{
+		return;
+	}
+	
 	uint len = message.length();
 	if( len == 0 || len > 100 )
 	{
@@ -190,7 +306,7 @@ void heard_radio_log_ch0( Critter& cr, string@ message )
 	}
 
 	file f;
-	if( f.open("logs\\radio_0.txt", "a") < 0 )
+	if( f.open( "logs\\radio_0.txt", "a" ) < 0 )
 	{
 		return;
 	}
@@ -202,9 +318,9 @@ void heard_radio_log_ch0( Critter& cr, string@ message )
 
 	char_replace( message, backtick, apostrophe );
 	
-	string@ text = "`Radio 0> .."+message+"..`";
+	string@ text = "`Radio 0> .." + message + "..`";
 
-	//DiscordSendMessage( "нулевой_радиоканал", text );
+	DiscordSendMessage( "нулевой_радиоканал", text );
 	DiscordSendMessage( "radio_0", text );
 }
 
@@ -223,6 +339,7 @@ void unsafe_GM_Hear_Radio( Critter& cr, int, int, int, string@ message, int[]@ )
 {
 	int[] channels;
 	bool ch0 = false;
+	bool ch1 = false;
 	Item@[] items;
 	if( cr.GetItems( -1, items ) > 0 )
 	{
@@ -233,6 +350,10 @@ void unsafe_GM_Hear_Radio( Critter& cr, int, int, int, string@ message, int[]@ )
 				if( items[i].RadioChannel == 0 )
 				{
 					ch0 = true;
+				}
+				else if( items[i].RadioChannel == 1 )
+				{
+					ch1 = true;
 				}
 				channels.insertLast( int( items[i].RadioChannel ) );
 			}
@@ -302,11 +423,21 @@ void unsafe_GM_Hear_Whisper( Critter& cr, int, int, int, string@ message, int[]@
 
 void unsafe_shout_all( Critter& cr, int, int, int, string@ message, int[]@ )
 {
-	uint dist = ( isGM( cr ) ? 250 : cr.Stat[ ST_STRENGTH ] * 10 );
+	uint dist = 250;
+
+	if( !isGM( cr ) )
+	{
+		dist = 100;
+		uint[] values = { cr.Id };
+		cr.ParamBase[ CR_SPOKEN ] = CreateTimeEvent( AFTER( REAL_SECOND( 5 ) ), "rp_chat@e_StopSpoken", values, true );
+		LookDataRefresh( cr );
+	}
 
 	Map@ map = cr.GetMap();
 	if( !valid( map ) )
+	{
 		return;
+	}
 	
 	Critter@[] crs;
 	uint count = map.GetCrittersHex(cr.HexX, cr.HexY, dist, FIND_ALL, crs);
@@ -314,28 +445,43 @@ void unsafe_shout_all( Critter& cr, int, int, int, string@ message, int[]@ )
     Critter@[] seeing;
 	uint count2 = map.GetCrittersSeeing( array<Critter@> = { cr }, true, FIND_ALL | FIND_ONLY_PLAYERS, seeing );
 
+	Critter@ currCritter = null;
+	Critter@ currSeeing = null;
 	for( uint i = 0; i < count; i++ )
 	{
+		@ currCritter = crs[i];
+		if(!valid(currCritter)) continue;
+
 		bool isSkipping = false;
 		for( uint j = 0; j < count2; j++ )
 		{
-			if( crs[i].Id == seeing[j].Id )
+			@ currSeeing = seeing[j];
+			if(!valid(currSeeing))
+			{
+				continue;
+			}
+			
+			if( currCritter.Id == currSeeing.Id )
 			{
 				isSkipping = true;
 				break;
 			}
 		}
+		
 		if( isSkipping )
 		{
 			continue;
 		}
 		
-		uint idist = GetDistantion( cr.HexX, cr.HexY, crs[i].HexX, crs[i].HexY );
-		if( int( idist ) <= crs[i].Stat[ ST_PERCEPTION ] * 10 )
+		uint idist = GetDistantion( cr.HexX, cr.HexY, currCritter.HexX, currCritter.HexY );
+		if( int( idist ) <= currCritter.Stat[ ST_PERCEPTION ] * 10 )
 		{
-			crs[i].Say( SAY_NETMSG, "???: |0x00FF0000 !!! " + strupr( message ) + " !!!" );
+			currCritter.Say( SAY_NETMSG, "???: |0x00FF0000 !!! " + strupr( message ) + " !!!" );
 		}
 	}
+
+	crs.resize(0);
+	seeing.resize(0);
 }
 
 void unsafe_SayLog( Critter& cr, int sayType, int, int, string@ message, int[]@ )
@@ -369,16 +515,17 @@ void ShowTyping( Critter& cr )
 	}
 
 	Critter@ target = @cr;
-	if( cr.StatBase[ ST_FOLLOW_CRIT ] != 0 && cr.ParamBase[ CR_TALKING_TARGET_ID ] == cr.StatBase[ ST_FOLLOW_CRIT ] )
+	if( cr.StatBase[ ST_TALKING_PUPPET ] != 0 && cr.ParamBase[ CR_TALKING_TARGET_ID ] == cr.StatBase[ ST_TALKING_PUPPET ] )
 	{
-		@target = GetCritter( cr.StatBase[ ST_FOLLOW_CRIT ] );
+		@target = GetCritter( cr.StatBase[ ST_TALKING_PUPPET ] );
 	}
 	
-	if( !valid(target) || target.StatBase[ ST_FOLLOW_CRIT ] != int( cr.Id ) )
+	if( !valid(target) || target.StatBase[ ST_TALKING_PUPPET ] != int( cr.Id ) )
 	{
 		@target = @cr;
 	}
-	target.ParamBase[CR_TYPING_TIME] = __FullSecond + __TypingDelay * __TimeMultiplier;
+	
+	target.ParamBase[ CR_TYPING_TIME ] = __FullSecond + __TypingDelay * __TimeMultiplier;
 }
 
 void StopTyping( Critter& cr )
@@ -389,12 +536,12 @@ void StopTyping( Critter& cr )
 	}
 	
 	Critter@ target = @cr;
-	if( cr.StatBase[ ST_FOLLOW_CRIT ] != 0 && cr.ParamBase[ CR_TALKING_TARGET_ID ] == cr.StatBase[ ST_FOLLOW_CRIT ] )
+	if( cr.StatBase[ ST_TALKING_PUPPET ] != 0 && cr.ParamBase[ CR_TALKING_TARGET_ID ] == cr.StatBase[ ST_TALKING_PUPPET ] )
 	{
-		@target = GetCritter( cr.StatBase[ ST_FOLLOW_CRIT ] );
+		@target = GetCritter( cr.StatBase[ ST_TALKING_PUPPET ] );
 	}
 	
-	if( !valid(target) || target.StatBase[ ST_FOLLOW_CRIT ] != int( cr.Id ) )
+	if( !valid(target) || target.StatBase[ ST_TALKING_PUPPET ] != int( cr.Id ) )
 	{
 		@target = @cr;
 	}

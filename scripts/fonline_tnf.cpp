@@ -39,8 +39,8 @@ EXPORT int getParam_DamageResistance( CritterMutual& cr, uint index );
 EXPORT int getParam_DamageThreshold( CritterMutual& cr, uint index );
 EXPORT int getParam_RadiationResist( CritterMutual & cr, uint );
 EXPORT int getParam_PoisonResist( CritterMutual & cr, uint );
-EXPORT int  getParam_Timeout( CritterMutual& cr, uint index );
-EXPORT int  getParam_Reputation( CritterMutual& cr, uint index );
+EXPORT int getParam_Timeout( CritterMutual& cr, uint index );
+EXPORT int getParam_Reputation( CritterMutual& cr, uint index );
 EXPORT void changedParam_Reputation( CritterMutual& cr, uint index, int oldValue );
 
 // Extended methods
@@ -124,16 +124,24 @@ int GetServerHour( )
 {
     tm timeinfo;
     time_t rawtime = GetTime( );
+#ifdef FO_GCC
+    localtime_r( &rawtime, &timeinfo );
+#else
     localtime_s( &timeinfo, &rawtime );
+#endif
     return timeinfo.tm_hour;
 }
 
 #ifdef __CLIENT
 
+#ifdef FO_WINDOWS
 #include <Windows.h>
+#endif
 
 bool CBPaste( ScriptString& str )
 {
+    bool result = false;
+    #ifdef FO_WINDOWS
     HGLOBAL hglb;
     LPTSTR  lptstr;
 
@@ -151,17 +159,21 @@ bool CBPaste( ScriptString& str )
         }
     }
     CloseClipboard();
-    return str.length() > 0;
+    result = str.length() > 0;
+    #endif
+    return result;
 }
 
 uint GetHardware()
 {
+    uint hardwareId = 0;
+    #ifdef FO_WINDOWS
     SYSTEM_INFO siSysInfo;
 
     // Копируем информацию о железе в структуру SYSTEM_INFO.
 
     GetSystemInfo( &siSysInfo );
-    uint hardwareId = siSysInfo.dwOemId;
+    hardwareId = siSysInfo.dwOemId;
 
     // Отображаем содержимое структуры SYSTEM_INFO.
 
@@ -177,7 +189,7 @@ uint GetHardware()
        siSysInfo.lpMaximumApplicationAddress);
        printf("  Active processor mask: %u\n",
        siSysInfo.dwActiveProcessorMask);*/
-
+    #endif
     return hardwareId;
 }
 
@@ -327,10 +339,12 @@ FONLINE_DLL_ENTRY( isCompiler )
 /* Parameters Get behaviors                                             */
 /************************************************************************/
 
+#define STAT_MAX_VAL	15
+
 EXPORT int getParam_Strength( CritterMutual& cr, uint )
 {
     int val = cr.Params[ ST_STRENGTH ] + cr.Params[ ST_STRENGTH_EXT ];
-    return CLAMP( val, 1, 10 );
+    return CLAMP( val, 1, STAT_MAX_VAL );
 }
 
 EXPORT int getParam_Perception( CritterMutual& cr, uint )
@@ -338,19 +352,19 @@ EXPORT int getParam_Perception( CritterMutual& cr, uint )
     int val = ( cr.Params[ DAMAGE_EYE ] ? 1 : cr.Params[ ST_PERCEPTION ] + cr.Params[ ST_PERCEPTION_EXT ] );
     if( cr.Params[ TRAIT_NIGHT_PERSON ] )
         val += GetNightPersonBonus();
-    return CLAMP( val, 1, 10 );
+    return CLAMP( val, 1, STAT_MAX_VAL );
 }
 
 EXPORT int getParam_Endurance( CritterMutual& cr, uint )
 {
     int val = cr.Params[ ST_ENDURANCE ] + cr.Params[ ST_ENDURANCE_EXT ];
-    return CLAMP( val, 1, 10 );
+    return CLAMP( val, 1, STAT_MAX_VAL );
 }
 
 EXPORT int getParam_Charisma( CritterMutual& cr, uint )
 {
     int val = cr.Params[ ST_CHARISMA ] + cr.Params[ ST_CHARISMA_EXT ];
-    return CLAMP( val, 1, 10 );
+    return CLAMP( val, 1, STAT_MAX_VAL );
 }
 
 EXPORT int getParam_Intellegence( CritterMutual& cr, uint )
@@ -358,19 +372,19 @@ EXPORT int getParam_Intellegence( CritterMutual& cr, uint )
     int val = cr.Params[ ST_INTELLECT ] + cr.Params[ ST_INTELLECT_EXT ];
     if( cr.Params[ TRAIT_NIGHT_PERSON ] )
         val += GetNightPersonBonus();
-    return CLAMP( val, 1, 10 );
+    return CLAMP( val, 1, STAT_MAX_VAL );
 }
 
 EXPORT int getParam_Agility( CritterMutual& cr, uint )
 {
     int val = cr.Params[ ST_AGILITY ] + cr.Params[ ST_AGILITY_EXT ];
-    return CLAMP( val, 1, 10 );
+    return CLAMP( val, 1, STAT_MAX_VAL );
 }
 
 EXPORT int getParam_Luck( CritterMutual& cr, uint )
 {
     int val = cr.Params[ ST_LUCK ] + cr.Params[ ST_LUCK_EXT ];
-    return CLAMP( val, 1, 10 );
+    return CLAMP( val, 1, STAT_MAX_VAL );
 }
 
 EXPORT int getParam_Hp( CritterMutual& cr, uint )
@@ -380,7 +394,12 @@ EXPORT int getParam_Hp( CritterMutual& cr, uint )
 
 EXPORT int getParam_MaxLife( CritterMutual& cr, uint )
 {
-    int val = cr.Params[ ST_MAX_LIFE ] + cr.Params[ ST_MAX_LIFE_EXT ] + cr.Params[ ST_STRENGTH ] * 3 + cr.Params[ ST_ENDURANCE ] * 5; 
+    int val = cr.Params[ ST_MAX_LIFE ] + cr.Params[ ST_MAX_LIFE_EXT ] + cr.Params[ ST_STRENGTH ] * 3 + cr.Params[ ST_ENDURANCE ] * 5;
+	if( cr.Params[ TRAIT_SEX_APPEAL ] )
+	{
+		val -= 50;
+	}
+	
     return CLAMP( val, 1, 9999 );
 }
 
@@ -399,14 +418,27 @@ EXPORT int getParam_Ap( CritterMutual& cr, uint )
 
 EXPORT int getParam_RegenAp( CritterMutual& cr, uint )
 {
-    if( cr.Params[CR_SLEEPING_STATE] > 0 )
+    if( cr.Params[ CR_SLEEPING_STATE ] > 0 )
     {
         return 0;
     }
+	
     int val = APREGEN_BASE + cr.Params[ ST_APREGEN ] + cr.Params[ ST_APREGEN_EXT ];
-    val += ( cr.Params[ ST_AGILITY ] + cr.Params[ ST_AGILITY_EXT ] )* APREGEN_PER_AGI;
-    val += ( cr.Params[ ST_ENDURANCE ] + cr.Params[ ST_ENDURANCE_EXT ] ) * APREGEN_PER_END;
-	val -= CLAMP( cr.Params[ ST_POISONING_LEVEL ] * 3, 0, 900 );
+    val += getParam_Agility( cr, 0 ) * APREGEN_PER_AGI;
+    val += getParam_Endurance( cr, 0 ) * APREGEN_PER_END;
+	
+	if( cr.Params[ TRAIT_KAMIKAZE ] )
+	{
+		val += cr.Params[ ST_AGILITY ] * KAMIKAZE_AP_REGEN_BONUS;
+	}
+	
+	if( cr.Params[ CR_STUNNED ] )
+	{
+		val /= STUNNED_AP_REGEN_MALUS;
+	}
+	
+	val -= CLAMP( cr.Params[ ST_POISONING_LEVEL ] / 3, 0, 900 );
+	
     return CLAMP( val, 0, APREGEN_MAX );
 }
 
@@ -475,8 +507,8 @@ EXPORT int getParam_Sequence( CritterMutual& cr, uint )
 EXPORT int getParam_MeleeDmg( CritterMutual& cr, uint )
 {
     int strength = getParam_Strength( cr, 0 );
-    int val = cr.Params[ ST_MELEE_DAMAGE ] + cr.Params[ ST_MELEE_DAMAGE_EXT ] + MELEE_DAMAGE_BASE + cr.Params[ ST_STRENGTH ] * MELEE_DAMAGE_PER_STR;
-    return CLAMP( val, 1, 9999 );
+    int val = cr.Params[ TRAIT_NERD ] == 0 ? ( cr.Params[ ST_MELEE_DAMAGE ] + cr.Params[ ST_MELEE_DAMAGE_EXT ] + MELEE_DAMAGE_BASE + cr.Params[ ST_STRENGTH ] * MELEE_DAMAGE_PER_STR ) : 0;
+    return CLAMP( val, 0, 9999 );
 }
 
 EXPORT int getParam_HealingRate( CritterMutual& cr, uint )
@@ -500,11 +532,19 @@ EXPORT int getParam_MaxCritical( CritterMutual& cr, uint )
 
 EXPORT int getParam_Ac( CritterMutual& cr, uint )
 {
-    int         val = cr.Params[ ST_ARMOR_CLASS ] + cr.Params[ ST_ARMOR_CLASS_EXT ] + ( getParam_Agility( cr, 0 ) * 5 ) + cr.Params[ ST_TURN_BASED_AC ];
+    int val = cr.Params[ TRAIT_KAMIKAZE ] ? 0 : cr.Params[ ST_ARMOR_CLASS ] + cr.Params[ ST_ARMOR_CLASS_EXT ] + getParam_Agility( cr, 0 ) * 5;
+	if( cr.Params[ CR_DAZED ] )
+	{
+		val -= DAZED_AC_MALUS;
+	}
+	
     const Item* armor = cr.ItemSlotArmor;
     if( armor->GetId() && armor->IsArmor() )
+	{
         val -= armor->Proto->Armor_AC;
-    return CLAMP( val, 0, 90 );
+    }
+
+	return val;
 }
 
 EXPORT int getParam_DamageResistance( CritterMutual& cr, uint index )
@@ -708,7 +748,7 @@ EXPORT bool Item_Weapon_IsGunAttack( Item& item, uint8 mode )
     if( !item.IsWeapon() || !item.WeapIsUseAviable( mode & 7 ) )
         return false;
     int skill = SKILL_OFFSET( item.Proto->Weapon_Skill[ mode & 7 ] );
-    return skill == SK_SMALL_GUNS || skill == SK_BIG_GUNS || skill == SK_ENERGY_WEAPONS;
+    return skill == SK_SMALL_GUNS || skill == SK_MEDIUM_GUNS || skill == SK_BIG_GUNS;
 }
 
 EXPORT bool Item_Weapon_IsRangedAttack( Item& item, uint8 mode )
@@ -716,7 +756,7 @@ EXPORT bool Item_Weapon_IsRangedAttack( Item& item, uint8 mode )
     if( !item.IsWeapon() || !item.WeapIsUseAviable( mode & 7 ) )
         return false;
     int skill = SKILL_OFFSET( item.Proto->Weapon_Skill[ mode & 7 ] );
-    return skill == SK_SMALL_GUNS || skill == SK_BIG_GUNS || skill == SK_ENERGY_WEAPONS || skill == SK_THROWING;
+    return skill == SK_SMALL_GUNS || skill == SK_MEDIUM_GUNS || skill == SK_BIG_GUNS || skill == SK_THROWING;
 }
 
 EXPORT int ItemTransferCount( CritterMutual& cr )
@@ -750,39 +790,57 @@ uint GetUseApCost( CritterMutual& cr, Item& item, uint8 mode )
     uint8 aim = mode >> 4;
 	uint apCost = 1;
 
-	if(use == USE_USE)
+	if( use == USE_USE )
 	{
-		apCost = (item.Proto->Item_UseAp == 0 ? FOnline->RtApCostUseItem : item.Proto->Item_UseAp);
+		apCost = ( item.Proto -> Item_UseAp == 0 ? FOnline -> RtApCostUseItem : item.Proto -> Item_UseAp );
 	}
-	else if(use == USE_RELOAD)
+	else if( use == USE_RELOAD )
 	{
-		apCost = (item.Proto->Weapon_ReloadAp == 0 ? FOnline->RtApCostReloadWeapon : item.Proto->Weapon_ReloadAp);
+		apCost = ( item.Proto -> Weapon_ReloadAp == 0 ? FOnline -> RtApCostReloadWeapon : item.Proto -> Weapon_ReloadAp );
 	}
-	else if(use >= USE_PRIMARY && use <= USE_THIRD && item.IsWeapon())
+	else if( use >= USE_PRIMARY && use <= USE_THIRD && item.IsWeapon() )
 	{
-		int skill = item.Proto->Weapon_Skill[use];
-		bool hthAttack = Item_Weapon_IsHtHAttack(item, mode);
-		bool rangedAttack = Item_Weapon_IsRangedAttack(item, mode);
-		bool isBurst = (item.Proto->Weapon_Round[use] > 1);
+		int skill = item.Proto -> Weapon_Skill[ use ];
+		bool hthAttack = Item_Weapon_IsHtHAttack( item, mode );
+		bool rangedAttack = Item_Weapon_IsRangedAttack( item, mode );
+		bool isBurst = ( item.Proto->Weapon_Round[ use ] > 1 );
 
-		apCost = item.Proto->Weapon_ApCost[use];
+		apCost = item.Proto -> Weapon_ApCost[ use ];
 
-		if(aim)
+		if( aim )
 		{
-			apCost += (apCost*GetAimApCost(aim))/100;
+			apCost += ( apCost * GetAimApCost( aim ) ) / 100;
 		}
 
-		if(rangedAttack)
+		if( rangedAttack )
 		{
-
-			if(cr.Params[TRAIT_FAST_SHOT] && !hthAttack) 
+			if( cr.Params[ TRAIT_FAST_SHOT ] && !hthAttack ) 
 			{
-					apCost = apCost * FAST_SHOT_AP_MUL / 100;
+				apCost = apCost * FAST_SHOT_AP_MUL / 100;
 			}
 		}
+		
+		if( cr.Params[ TRAIT_SADIST ] )
+		{
+			apCost = apCost * ONE_HANDER_AP_MUL / 100;
+		}
 	}
 
-	if(apCost < 1) apCost = 1;
+	if( cr.Params[ CR_ARMOR_BRISK_EQUIPPED ] > 0 )
+	{
+		apCost = ( apCost * ARMOR_PERK_BRISK_BONUS) / 100;
+	}
+	
+	if( cr.Params[ CR_ARMOR_SLUGGISH_EQUIPPED ] > 0 )
+	{
+		apCost = ( apCost * ARMOR_PERK_SLUGGISH_MALUS) / 100;
+	}
+    
+	if( apCost < 1 )
+	{
+		apCost = 1;
+	}
+	
 	return apCost;
 }
 
@@ -948,11 +1006,12 @@ EXPORT void Item_SetMapPic( Item& item, uint hash )
 
 #ifdef __SERVER
 
+// TODO: burn it with fire
 struct ClientEx : Client
 {
 	uint UID[5];
 	volatile int Sock; // in fact, SOCKET
-	sockaddr_in From;
+	// sockaddr_in From;
 };
 
 
@@ -974,6 +1033,16 @@ EXPORT uint Critter_GetUID(Critter& cr, uint8 num)
 
 uint GetTiles( Map& map, uint16 hexX, uint16 hexY, bool is_roof, vector< uint >& finded )
 {
+    if( &map == NULL )
+    {
+        Log("GetTiles: map is NULL");
+        return 0;
+    }
+    if( map.Proto == NULL )
+    {
+        Log("GetTiles: map.Proto is NULL");
+        return 0;
+    }
     ProtoMap::TileVec& tiles = const_cast< ProtoMap::TileVec& >( map.Proto->Tiles );
 
     for( uint i = 0, j = tiles.size(); i < j; i++ )

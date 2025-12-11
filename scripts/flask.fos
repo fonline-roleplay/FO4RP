@@ -6,6 +6,117 @@
 #include "_ltp.fos"
 #include "gathering_h.fos"
 #include "food_h.fos"
+#include "furniture_h.fos"
+
+bool isFlask( Critter& cr, Item@ waterSource )
+{
+	Item@ flask = _CritGetItemHand( cr );
+	if( !valid( flask) )
+	{
+		return false;
+	}
+
+	if( valid( waterSource ) && ( flask.DRINK_DNA == waterSource.DRINK_DNA || flask.DRINK_DNA == 0 ) )
+	{
+		return true;
+	}
+
+	if( flask.Proto.Type == ITEM_TYPE_FLASK )
+	{
+		return true;
+	}
+	
+	return false;
+}
+
+//WATER BARREL
+void StartMenuWaterBarrel( Critter& cr, Item& waterBarrel )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+	
+	iMenuHandler@ handler = MenuWaterBarrel( waterBarrel, map );
+    iDialogBox@ menu = OpenMenu( cr, "Water Barrel", handler );
+}
+
+class MenuWaterBarrel: CenteredMenuHandler
+{
+    uint waterBarrel_id;
+    uint map_id;
+	uint level;
+	
+    MenuWaterBarrel( Item& waterBarrel, Map& map )
+	{
+        waterBarrel_id = waterBarrel.Id;
+        map_id = map.Id;
+		level = 0;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+        Item@ waterBarrel = GetItem( waterBarrel_id );
+	
+        if( !valid( map ) )
+		{
+            return false;
+        }
+		
+		if( !valid( waterBarrel ) )
+		{
+			return false;
+		}
+		
+		if( waterBarrel.REMAINING_USES > 0 )
+		{
+			if( menu.ButtonMsg( STR_WATERWORKS_MENU_COLLECT_WATER ) )
+			{
+				if( !hasItem( cr, PID_BOTTLE_GLASS, SLOT_HAND1 ) && !hasItem( cr, waterBarrel.DRINK_DNA, SLOT_HAND1 ) && !isFlask( cr, waterBarrel ) )
+				{ 
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_TARE );
+					return true;
+				}
+
+				//start_gathering_water( cr, waterBarrel );
+				return false;
+				
+			}
+			
+			if( menu.ButtonMsg( STR_WATERWORKS_MENU_DRINK ) )
+			{
+				Item@ consumedDrink = cr.AddItem( waterBarrel.DRINK_DNA, 1 );
+				consumedDrink.REMAINING_USES = 2;
+				ProccessDrink( cr, cr, consumedDrink );
+				_SubItem( consumedDrink, 1 );
+				waterBarrel.REMAINING_USES --;
+				return true;
+			}
+			
+			if( waterBarrel.REMAINING_USES == 0 && menu.ButtonMsg( STR_FURNITURE_MENU_BUTTON ) )
+			{
+				_InitFurniture( waterBarrel, true );
+				waterBarrel.Update();
+				StartMenuFurniture( cr, waterBarrel );
+				return false;
+			}
+		}
+		
+		return true;
+    }
+	
+    string@ Description( Critter& cr )
+	{
+		Item@ waterBarrel = GetItem( waterBarrel_id );
+		Map@ map = GetMap( map_id );
+
+		string info = " ";
+		
+        return info;
+    }
+}
 
 bool FlaskCheck( Critter& cr, Item@ drink, Item@ flask )
 {
@@ -37,7 +148,7 @@ bool FlaskCheck( Critter& cr, Item@ drink, Item@ flask )
 	
 	uint16 drinkPid = drink.GetProtoId();
 	Item@ hand = _CritGetItemHand( cr );
-	if( ( ( drinkPid == PID_BOTTLE_GLASS || drinkPid == PID_GLASS_BOTTLE_DIRTY_FULL_PRT || drinkPid == PID_GLASS_BOTTLE_FULL_PRT ) ) && hand.Proto.Type != ITEM_TYPE_FLASK )
+	if( hand.Proto.Type != ITEM_TYPE_FLASK && ( drinkPid == uint(flask.DRINK_DNA) || drinkPid == PID_BOTTLE_GLASS ) )
 	{
 		start_pouring_out( cr, flask );
 		return true;
@@ -87,6 +198,7 @@ bool DrinkFlask( Critter& cr, Item& flask )
 		Item@ consumedDrink = cr.AddItem( flask.DRINK_DNA, 1 );
 		consumedDrink.TOXIN_LEVEL = flask.FLASK_TOXIN_LEVEL;
 		consumedDrink.POLUTION_LEVEL = flask.FLASK_POLUTION_LEVEL; 
+		consumedDrink.SPIRIT_LEVEL = flask.SPIRIT_LEVEL;
 		consumedDrink.REMAINING_USES = 2;
 		ProccessDrink( cr, cr, consumedDrink );
 		_SubItem( consumedDrink, 1 );
@@ -104,6 +216,7 @@ bool DrinkFlask( Critter& cr, Item& flask )
 		flask.FLASK_POLUTION_LEVEL = 0;
 		flask.Val8 = 0;
 		flask.Val9 = 0;
+		ChangeFlaskProto( flask );
 	}
 	
 	flask.Update();
@@ -169,15 +282,14 @@ bool start_pouring( Critter& cr, Item& drink, Item& flask )
 			return false;
 		}
 
-		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = drink.REMAINING_USES > ( flask.Proto.Partial_Item - flask.REMAINING_USES ) ? ( flask.Proto.Partial_Item - flask.REMAINING_USES ) : drink.REMAINING_USES;
+
+		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+		StartProcess( cr, LTP_POURING, 0, drink.Id, flask.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		
 		PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
-		
-		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
-		
-		StartProcess( cr, LTP_POURING, 0, drink.Id, flask.Id, action_pause );
-
 		return true;
 	}
 	return false;
@@ -187,9 +299,6 @@ uint process_pouring( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_POURING )
 	
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
-	
 	Item@ drink = GetItem( param1 );
   	Item@ flask = GetItem( param2 );
 	
@@ -198,7 +307,7 @@ uint process_pouring( Critter@ cr, int& param0, int& param1, int& param2 )
 		Map@ map = cr.GetMap();
 		PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
 		
-		if( FindFlask( flask ) && flask.REMAINING_USES == 0 )
+		if( FindFlask( flask ) )
 		{
 			ChangeFlaskProto( flask );
 		}
@@ -223,7 +332,7 @@ uint process_pouring( Critter@ cr, int& param0, int& param1, int& param2 )
 		
 		SpillOut( drink );
 		
-		if( int(flask.Proto.Partial_Item) - flask.REMAINING_USES <= 0 )
+		if( int( flask.Proto.Partial_Item ) - flask.REMAINING_USES <= 0 )
 		{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FINISHED_FILLING );
 			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
@@ -244,7 +353,7 @@ uint process_pouring( Critter@ cr, int& param0, int& param1, int& param2 )
 		
 		if( drink.REMAINING_USES == 0 )
 		{
-			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FINISHED_EMPTYING );
 			
 			drink.DRINK_DNA = 0;
@@ -254,15 +363,15 @@ uint process_pouring( Critter@ cr, int& param0, int& param1, int& param2 )
 			drink.FLASK_POLUTION_LEVEL = 0;
 			drink.Val9 = 0;
 			
-			cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+			cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 			
 			ChangeFlaskProto( drink );
 			return 0;
 		}
-		return action_pause;
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 	}
 	
-	cr.SetAnims(COND_LIFE, 0, ANIM2_IDLE);
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
 	return 0;
 }
 
@@ -275,16 +384,28 @@ void ChangeFlaskProto( Item& item )
 		switch( itemPid )
 		{
 			case( PID_FLASK_FULL ):
-				item.ChangeProto( PID_FLASKB );
+				if( item.REMAINING_USES == 0 )
+				{
+					item.ChangeProto( PID_FLASKB );
+				}
 				break;
-			case( PID_WATER_BUCKET ): 
-				item.ChangeProto( PID_EMPTY_BUCKET );
+			case( PID_WATER_BUCKET ):
+				if( item.REMAINING_USES == 0 )
+				{
+					item.ChangeProto( PID_EMPTY_BUCKET );
+				}
 				break;
 			case( PID_FLASKB ):
-				item.ChangeProto( PID_FLASK_FULL );
+				if( item.REMAINING_USES != 0 )
+				{
+					item.ChangeProto( PID_FLASK_FULL );
+				}
 				break;
 			case( PID_EMPTY_BUCKET ): 
-				item.ChangeProto( PID_WATER_BUCKET );
+				if( item.REMAINING_USES != 0 )
+				{
+					item.ChangeProto( PID_WATER_BUCKET );
+				}
 				break;
 			default:
 				break;
@@ -292,7 +413,7 @@ void ChangeFlaskProto( Item& item )
 	}
 }
 
-bool FindFlask( Item& item )
+bool FindFlask( Item@ item )
 {
 	if( valid( item ) )
 	{
@@ -327,35 +448,63 @@ bool start_pouring_out( Critter& cr, Item& target )
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT,  STR_NO_MORE_WATER );
 			return false;
 		}
-		
-		if( !hasItem( cr, PID_BOTTLE_GLASS, SLOT_HAND1 ) && !hasItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT, SLOT_HAND1 ) )
+
+		if( !hasItem( cr, PID_BOTTLE_GLASS, SLOT_HAND1 ) && !hasItem( cr, target.DRINK_DNA, SLOT_HAND1 ) )
 		{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_BOTTLE_IN_HAND );
 			return false;
 		}
 		
-		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
-		PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
+		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ ST_AGILITY ] * ACTION_PAUSE_BONUS_RATE );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = CalcSequence( cr, target );
 		
-		StartProcess( cr, LTP_POURING_OUT, 0, 0, target.Id, action_pause );
+		StartProcess( cr, LTP_POURING_OUT, 0, 0, target.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+		PlayGenericSound( map, cr.HexX, cr.HexY, "homebrew_pouring.ogg", 10 );
 		return true;
 	}
 	return false;
 }
 
+int CalcSequence( Critter& cr, Item& target )
+{
+	int sequence = 0;
+	int bottlesCount = cr.CountItem( PID_BOTTLE_GLASS );
+	ProtoItem@ bottleProto = GetProtoItem( PID_BOTTLE_GLASS );
+	sequence += bottlesCount * 5; // constant val for glass bottle partial items, used flat number since empty bottles dont have it
+
+	if( hasItem( cr, target.DRINK_DNA ) )
+	{
+		Item@[] inventory;
+		cr.GetItems( -1, inventory );
+		for( uint j = 0; j < inventory.length(); j++ )
+		{
+			if( valid( inventory[j] ) && int( inventory[j].GetProtoId() ) == target.DRINK_DNA )
+			{
+				sequence += inventory[j].Proto.Partial_Item - inventory[j].REMAINING_USES;
+			}
+		}
+	}
+	
+	if( sequence > target.REMAINING_USES )
+	{
+		sequence = target.REMAINING_USES;
+	}
+	//Log( "sequence " + sequence );//DEBUG
+	return sequence;
+}
+
 uint process_pouring_out( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_POURING_OUT )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
   	Item@ target = GetItem( param2 );
 	
   	if( valid( target ) )
 	{
-      	if( ( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) && !hasItem( cr, PID_GLASS_BOTTLE_FULL_PRT ) ) || target.REMAINING_USES < 1 )
+      	if( ( !hasItem( cr, PID_BOTTLE_GLASS ) && !hasItem( cr, target.DRINK_DNA ) ) || target.REMAINING_USES < 1 )
 		{
-			uint msgStr = ( !hasItem( cr, PID_BOTTLE_GLASS ) || !hasItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) || !hasItem( cr, PID_GLASS_BOTTLE_FULL_PRT ) ) ? STR_NO_MORE_BOTTLES : STR_POURED_ALL_WATER;
+			uint msgStr = ( !hasItem( cr, PID_BOTTLE_GLASS ) || !hasItem( cr, target.DRINK_DNA ) ) ? STR_NO_MORE_BOTTLES : STR_POURED_ALL_WATER;
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, msgStr );
 			if( target.REMAINING_USES < 1 )
 			{
@@ -374,17 +523,10 @@ uint process_pouring_out( Critter@ cr, int& param0, int& param1, int& param2 )
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FILLED_BOTTLE );
 		}
 
-		if( hasItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) || hasItem( cr, PID_GLASS_BOTTLE_FULL_PRT ) )
+		if( hasItem( cr, target.DRINK_DNA ) )
 		{
-			Item@ waterBottlePrt = null;
-			if( hasItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) )
-			{
-				@waterBottlePrt = getItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT );
-			}
-			else
-			{
-				@waterBottlePrt = getItem( cr, PID_GLASS_BOTTLE_FULL_PRT );
-			}
+			Item@ waterBottlePrt = getItem( cr, target.DRINK_DNA );
+			testInfo( cr, "2) You pour " + YELLOW + itemName( target.DRINK_DNA ) + GREEN + " PID " + WHITE + target.DRINK_DNA );//DEBUG
 			
 			if( waterBottlePrt.REMAINING_USES < int( waterBottlePrt.Proto.Partial_Item ) )
 			{
@@ -401,16 +543,9 @@ uint process_pouring_out( Critter@ cr, int& param0, int& param1, int& param2 )
 				
 				if( waterBottlePrt.REMAINING_USES == int( waterBottlePrt.Proto.Partial_Item ) )
 				{
-					Item@ waterBottle = null;
-					if( hasItem( cr, PID_GLASS_BOTTLE_DIRTY_FULL_PRT ) )
-					{
-						@waterBottle = cr.AddItem( PID_GLASS_BOTTLE_DIRTY_FULL, 1 );
-					}
-					else
-					{
-						@waterBottle = cr.AddItem( PID_GLASS_BOTTLE_FULL, 1 );
-					}
-							
+					testInfo( cr, "3) You pour " + YELLOW + itemName( waterBottlePrt.DRINK_DNA ) + GREEN + " PID " + WHITE + waterBottlePrt.DRINK_DNA );//DEBUG
+					Item@ waterBottle = cr.AddItem( waterBottlePrt.DRINK_DNA, 1 );
+					
 					_SubItem( waterBottlePrt , 1 );
 					
 					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FILLED_BOTTLE );
@@ -418,7 +553,7 @@ uint process_pouring_out( Critter@ cr, int& param0, int& param1, int& param2 )
 					waterBottle.Update();
 				}
 			}
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
 		else
 		{
@@ -426,14 +561,8 @@ uint process_pouring_out( Critter@ cr, int& param0, int& param1, int& param2 )
 			_SubItem( bottle , 1 );
 		
 			Item@ waterBottlePrt = null;
-			if( target.DRINK_DNA == PID_GLASS_BOTTLE_DIRTY_FULL_PRT )
-			{
-				@waterBottlePrt = cr.AddItem( PID_GLASS_BOTTLE_DIRTY_FULL_PRT, 1 );
-			}
-			else
-			{
-				@waterBottlePrt = cr.AddItem( PID_GLASS_BOTTLE_FULL_PRT, 1 );
-			}
+			testInfo( cr, "1) You pour " + YELLOW + itemName( target.DRINK_DNA ) + GREEN + " PID " + WHITE + target.DRINK_DNA );//DEBUG
+			@waterBottlePrt = cr.AddItem( target.DRINK_DNA, 1 );
 			
 			Item@ hands = cr.GetItem( 0, SLOT_HAND1 );
 			if( valid( hands ) )
@@ -445,6 +574,7 @@ uint process_pouring_out( Critter@ cr, int& param0, int& param1, int& param2 )
 		
 			target.REMAINING_USES --;
 			target.EXTRA_WEIGHT = target.REMAINING_USES * 100;
+			waterBottlePrt.SPIRIT_LEVEL = target.SPIRIT_LEVEL;
 			waterBottlePrt.REMAINING_USES ++;
 			waterBottlePrt.EXTRA_WEIGHT = waterBottlePrt.REMAINING_USES * 100;
 
@@ -454,7 +584,7 @@ uint process_pouring_out( Critter@ cr, int& param0, int& param1, int& param2 )
 			target.Update();
 			waterBottlePrt.Update();
 		}
-		return action_pause;
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
     }
 	return 0;
 }

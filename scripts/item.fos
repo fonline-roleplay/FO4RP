@@ -10,8 +10,380 @@
 #include "scenery_h.fos"
 #include "handcuffs_h.fos"
 #include "furniture_h.fos"
+#include "time_h.fos"
+#include "repair_h.fos"
 
 import void ShowInputBoxScreen( Critter& cr, string funcName, uint16 textLength, uint8 flags ) from "main";
+import void OpenBenchCraft( Critter& crafter, Item& bench ) from "craft";
+
+// Desc on hex item
+void _DescInit( Item& marker, bool firstTime )
+{
+    marker.SetEvent( ITEM_EVENT_WALK, "_DescWalk" );
+}
+
+void _DescWalk( Item& marker, Critter& cr, bool entered, uint8 dir )
+{
+	if( !valid( cr ) )
+	{
+		return;
+	}
+	
+	if( cr.IsPlayer() && entered )
+	{
+		string str = checkNull( Item_GetLexems( marker ), "" );
+		if( valid( str ) )
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NOTICE_DESC, "@$desc" + str );
+			Map@ map = cr.GetMap();
+			if( valid( map ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "ICSXXXX1.mp3", 0 );
+			}
+		}
+	}
+}
+
+// Motion Sensor
+bool TryUseSensor( Critter& cr, Item@ sensor )
+{
+	if( !valid( cr ) )
+	{
+		return false;
+	}
+	
+	if( !valid( sensor ) )
+	{
+		return false;
+	}
+
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return false;
+	}
+
+	PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN2.mp3", 4 );
+
+	if( sensor.ITEM_STATE == 0 && sensor.ITEM_CHARGE > 0 )
+    {
+        Item@ hand_ext = _CritGetItemHandExt( cr );
+
+        if( valid( hand_ext ) && hand_ext.Id != sensor.Id )
+		{
+			cr.MoveItem( hand_ext.Id, hand_ext.GetCount(), SLOT_INV );
+		}
+		
+		cr.MoveItem( sensor.Id, sensor.GetCount(), SLOT_HAND2 );
+		
+		sensor.ITEM_STATE = 1;
+		uint[] values = { sensor.Id, map.Id, cr.Id };
+		sensor.ITEM_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "item@e_DepleteSensorCharge", values, true );
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_SENSOR_ENABLE );
+		
+		sensor.PicInv = GetStrHash( "art\\inven\\motionon.frm" );
+		
+		sensor.SetEvent( ITEM_EVENT_MOVE, "e_SensorMove" );
+		sensor.SetEvent( ITEM_EVENT_DROP, "e_SensorDrop" );
+		
+	}
+	else if( sensor.ITEM_STATE == 0 && sensor.ITEM_CHARGE == 0 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SENSOR_NO_CHARGE );
+		return false;
+	}
+	else
+	{
+		Sensor_off( sensor );
+		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_SENSOR_DISABLE );
+	}
+	
+	return true;
+}
+
+// Sensor charge depletion
+uint e_DepleteSensorCharge( uint[]@ values )
+{
+	Item@ sensor = GetItem( values[0] );
+	if( valid( sensor ) )
+	{
+		if( sensor.ITEM_CHARGE > 0 )
+		{
+			sensor.ITEM_CHARGE--;
+			sensor.Update();
+			
+			Map@ map = GetMap( values[1] );
+			if( valid( map ) )
+			{
+				uint crId = values[ 2 ];
+				Critter@ cr = GetCritter( crId );
+				if( valid( cr ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "motion.mp3", 4 );
+					Critter@[] critters;
+					uint len = map.GetCrittersHex( cr.HexX, cr.HexY, SENSOR_RADIUS, FIND_LIFE_AND_KO, critters );
+					Critter@ blip = null;
+					for( uint i = 0; i < len; i++ )
+					{
+						uint contact = 0;
+						@ blip = critters[ i ];
+						if( valid( blip ) )
+						{
+							if( isGM( blip ) || blip.Id == cr.Id || blip.Stat[ ST_BODY_TYPE ] == BT_ROBOT )
+							{
+								continue;
+							}
+							
+							contact++;
+							if( contact == 1 && Random( 0, 1 ) == 1 )
+							{
+								PlayGenericSound( map, cr.HexX, cr.HexY, "motion_ping.mp3", 6 );
+							}
+							
+							cr.RunClientScript( "client_main@ShowSensorBlip", blip.HexX, blip.HexY, 0, null, null );
+						}
+					}
+					
+					critters.resize(0);
+				}
+			}
+			
+			return REAL_MS( 500 );
+		}
+		
+		Sensor_off( sensor );
+	}
+
+	return 0;
+}
+
+//Motion Sensor charging
+bool ChargeSensor( Critter& cr, Item& battery, Item& sensor )
+{
+	Map@ map = cr.GetMap();
+	if( valid( map ) )
+	{
+		PlayGenericSound( map, cr.HexX, cr.HexY, "WRJ1XXX1.mp3", 6 );
+	}
+	
+	sensor.ITEM_CHARGE = 200;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_RELOAD_FLASHLIGHT );
+	_SubItem( battery, 1 );
+	sensor.Update();
+	return true;
+}
+
+void e_SensorMove( Item& sensor, Critter& cr, uint8 fromSlot )
+{
+    Sensor_off( sensor );
+}
+
+void e_SensorDrop( Item& sensor, Critter& cr )
+{
+    Sensor_off( sensor );
+}
+
+void Sensor_off( Item& sensor )
+{
+	sensor.ITEM_STATE = 0;
+	EraseTimeEvent( sensor.ITEM_EVENT );
+	sensor.ITEM_EVENT = 0;
+	sensor.PicInv = GetStrHash( "art\\inven\\motion.frm" );
+	sensor.SetEvent( ITEM_EVENT_MOVE, "" );
+	sensor.SetEvent( ITEM_EVENT_DROP, "" );
+	
+	sensor.Update();
+}
+
+
+// Stealth Boy
+bool TryUseStealthboy( Critter@ cr, Item@ stealthboy )
+{
+	if( !valid( cr ) )
+	{
+		return false;
+	}
+	
+	if( !valid( stealthboy ) )
+	{
+		return false;
+	}
+
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return false;
+	}
+	
+	PlayGenericSound( map, cr.HexX, cr.HexY, "TOGGLE.mp3", 3 );
+
+	if( stealthboy.ITEM_STATE == 0 )
+    {
+		if( _ItemIsBroken( stealthboy ) )
+		{
+			return false;
+		}
+		
+		stealthboy.ITEM_STATE = 1;
+		stealthboy.Deterioration = 0;
+		stealthboy.BrokenCount ++;
+		if( stealthboy.BrokenCount >= MAX_BROKENS )
+		{
+			SETFLAG( stealthboy.BrokenFlags, BI_NOTRESC );
+		}
+		
+        Item@ hand = _CritGetItemHandExt( cr );
+		if( valid( hand ) )
+		{
+			if( hand.Id != stealthboy.Id )
+			{
+				cr.MoveItem( hand.Id, hand.GetCount(), SLOT_INV );
+			}
+		}
+		
+		cr.MoveItem( stealthboy.Id, stealthboy.GetCount(), SLOT_HAND2 );
+
+		uint[] values = { cr.Id, stealthboy.Id };
+		stealthboy.ITEM_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "item@e_DepleteStealthboyCharge", values, true );
+		
+		stealthboy.PicInv = GetStrHash( "art\\inven\\stlthon.frm" );
+		
+		stealthboy.SetEvent( ITEM_EVENT_MOVE, "e_StealthboyMove" );
+		stealthboy.SetEvent( ITEM_EVENT_DROP, "e_StealthboyDrop" );
+		
+		stealthboy.Update();
+		
+		if( cr.Stat[ ST_SCALE_FACTOR ] > 1 )
+		{
+			cr.ParamBase[ CR_SCALE_FACTOR_EXT ] = cr.Stat[ ST_SCALE_FACTOR ];
+		}
+		
+		cr.StatBase[ ST_SCALE_FACTOR ] = 1;
+		
+		if( ABS( cr.Param[ QST_MEDIUM ] ) != 2 )
+		{
+			cr.ParamBase[ QST_MEDIUM ] = 2;
+			Critter@[] crs;
+			GetAllPlayers( crs );
+			for( uint i = 0, l = crs.length(); i < l; i++ )
+			{
+				crs[ i ].RunClientScript( "client_main@_sinf", crs[ i ].Param[ CR_SINF_MODE ], 0, 0, null, null );
+			}
+		}
+		
+		Critter@[] critters;
+		map.GetCritters( 0, FIND_ALL|FIND_ONLY_NPC, critters );
+		for( uint i = 0, len = critters.length(); i < len; i++ )
+		{
+			Critter@ currCrit = critters[i];
+			if( !valid( currCrit ) )
+			{
+				continue;
+			}
+
+			currCrit.DropPlanes();
+			currCrit.ClearEnemyStack();
+		}
+		
+		critters.resize( 0 );
+		
+		PlayGenericSound( map, cr.HexX, cr.HexY, "stealth_on.mp3", 3 );
+	}
+	else
+	{
+		Stealthboy_off( cr, stealthboy );
+	}
+	
+	return true;
+}
+
+void e_StealthboyMove( Item& stealthboy, Critter& cr, uint8 fromSlot )
+{
+    Stealthboy_off( cr, stealthboy );
+}
+
+void e_StealthboyDrop( Item& stealthboy, Critter& cr )
+{
+    Stealthboy_off( cr, stealthboy );
+}
+
+// Stealthboy item charge depletion
+uint e_DepleteStealthboyCharge( uint[]@ values )
+{
+	uint crId = values[ 0 ];
+	Critter@ cr = GetCritter( crId );
+	if( valid( cr ) )
+	{
+		uint itemId = values[ 1 ];
+		Item@ stealthboy = GetItem( itemId );
+		if( valid( stealthboy ) )
+		{
+			if( GetDeteriorationProcent( stealthboy ) < 100 )
+			{
+				uint drain = 100;
+				if( MovementState( cr ) != MOVE_STATE_STILL )
+				{			
+					drain = 500;
+				}
+				
+				DeteriorateItem( cr, stealthboy, drain );
+				stealthboy.Update();
+				
+				if( GetDeteriorationProcent( stealthboy ) >= 75 )
+				{
+					Map@ map = cr.GetMap();
+					if( valid( map ) )
+					{
+						PlayGenericSound( map, cr.HexX, cr.HexY, "da-2_beep1.ogg", 1 );
+					}
+				}
+				
+				return REAL_SECOND( 1 );
+			}
+			
+			Stealthboy_off( cr, stealthboy );
+		}
+	}
+	
+	return 0;
+}
+
+void Stealthboy_off( Critter& cr, Item& stealthboy )
+{
+	stealthboy.ITEM_STATE = 0;
+	stealthboy.ITEM_CHARGE = 0;
+	EraseTimeEvent( stealthboy.ITEM_EVENT );
+	stealthboy.ITEM_EVENT = 0;
+	stealthboy.PicInv = GetStrHash( "art\\inven\\stlthboy.frm" );
+	stealthboy.SetEvent( ITEM_EVENT_MOVE, "" );
+	stealthboy.SetEvent( ITEM_EVENT_DROP, "" );
+	
+	stealthboy.Update();
+		
+	if( valid( cr ) )
+	{
+		if( cr.Stat[ ST_SCALE_FACTOR ] == 1 )
+		{
+			Map@ map = cr.GetMap();
+			if( valid( map ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "stealth_off.mp3", 3 );
+			}
+		}
+		
+		cr.StatBase[ ST_SCALE_FACTOR ] = cr.Param[ CR_SCALE_FACTOR_EXT ];
+		if( ABS( cr.Param[ QST_MEDIUM ] ) == 2 )
+		{
+			cr.ParamBase[ QST_MEDIUM ] = 0;
+			Critter@[] crs;
+			GetAllPlayers( crs );
+			for( uint i = 0, l = crs.length(); i < l; i++ )
+			{
+				crs[ i ].RunClientScript( "client_main@_sinf", crs[ i ].Param[ CR_SINF_MODE ], 0, 0, null, null );
+			}
+		}
+	}
+}
 
 // door that will close by itself
 bool ScriptDoor( Item& door )
@@ -26,14 +398,14 @@ void _DoorAutoCloseInit( Item& door, bool firstTime )
 
 bool e_UseAutoCloseDoor( Item& door, Critter& cr, int skill )
 {
-	CreateTimeEvent( __FullSecond + REAL_SECOND( door.Val3 == 0 ? 10 : door.Val3 ), "e_AutoCloseDoor", door.Id, true );
+	CreateTimeEvent( __FullSecond + REAL_SECOND( door.Val3 == 0 ? 10 : door.Val3 ), "item@e_AutoCloseDoor", door.Id, true );
 	return false;
 }
 
 uint e_AutoCloseDoor( uint[] @ val )
 {
 	Item@ door = GetItem( val[ 0 ] );
-	if( not valid( door ) )
+	if( !valid( door ) )
 	{
 		return 0;
 	}
@@ -46,7 +418,7 @@ uint e_AutoCloseDoor( uint[] @ val )
 	uint16 x = 0;
 	uint16 y = 0;
 	Map@ map = door.GetMapPosition( x, y );
-	if( not valid( map ) )
+	if( !valid( map ) )
 	{
 		return 0;
 	}
@@ -97,94 +469,6 @@ bool _UseDialogDoor( Item& door, Critter& cr, int skill )
     return true;
 }
 
-// Locks and lockers
-void _LockerInit( Item& item, bool firstTime )
-{
-    item.SetEvent( ITEM_EVENT_USE, "e_LockerKeyUse" );
-}
-
-bool e_LockerKeyUse( Item& item, Critter& cr, Critter@ onCritter, Item@ onItem, Scenery@ onScenery )
-{
-    if( valid( onItem ) )
-    {
-        if( onItem.GetProtoId() == PID_TERMINAL )
-		{ 
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_LOCK_TERMINAL );
-			return false; 
-		}
-		
-		if( ( ( onItem.GetType() == ITEM_TYPE_DOOR || ( onItem.GetType() == ITEM_TYPE_CONTAINER && onItem.Proto.Container_Changeble ) ) && onItem.Val1 == 0 ) 
-				|| ( InteractContainer.find( onItem.GetProtoId() ) != -1 || onItem.Proto.Item_Subtype == ITEM_SUBTYPE_BRIEFCASE ) && onItem.Val0 == 0 )
-        {
-            if( _LockerIsClose( onItem ) || InteractContainer.find( onItem.GetProtoId() ) != -1 )
-            {
-				if( cr.CountItem( PID_CRAFT_M_BARS ) < 1 )
-				{
-					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_METAL_PART );
-					return true;
-				}
-				
-                if( onItem.LockerCondition != LOCKER_LOCKED && onItem.LockerComplexity == 0 )
-				{
-                    uint key_pid = PID_BLANK_KEY;
-					switch( item.GetProtoId() )
-                    {
-						case( PID_LOCKER_LOW ):
-							onItem.Val0 = 1;
-							key_pid = PID_TEMPLE_KEY;
-							break;
-						case( PID_LOCKER_MED ):
-							onItem.Val0 = 2;
-							key_pid = PID_JAIL_KEY;
-							break;
-						case( PID_LOCKER_HARD ):
-							onItem.Val0 = 3;
-							key_pid = PID_VAULT_13_SHACK_KEY;
-							break;
-                    }
-
-					cr.DeleteItem( PID_CRAFT_M_BARS, 1 );
-					
-                    Item@ key = cr.AddItem( key_pid, 1 );
-                    uint keyNumber = Random( 0, 65534 );
-                    key.LockerId = keyNumber;
-
-                    onItem.LockerId = keyNumber;
-                    onItem.LockerCondition = LOCKER_LOCKED;
-                    onItem.LockerComplexity = cr.Skill[SK_LOCKPICK];
-
-                    Log( "An item ¹" + onItem.Id + " is locked. Lock complexity is: " + onItem.LockerComplexity + "." );
-                    DeleteItem( item );
-
-                    key.SetLexems( null );
-                    key.Update();
-
-					cr.StatBase[ ST_LAST_DOOR_ID ] = key.Id;
-					cr.StatBase[ ST_LAST_CONT_ID ] = key.Accessory;
-					ShowInputBoxScreen( cr, "general_unsafe@unsafe_MakeDescLex#Description:", 0, INPUTBOX_CLOSE_ON_ENTER );
-                    return true;
-                }
-				else
-				{
-                    cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOOR_LOCKED );
-                    return true;
-                }
-            }
-			else 
-			{
-                cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOOR_NOT_CLOSED );
-                return true;
-            }
-        }
-        else
-        {
-            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOOR_CANT_LOCK );
-            return true;
-        }
-    }
-    return false;
-}
-
 bool FluteUse( Critter& cr )
 {
     if( !hasItem( cr, PID_FLUTE, SLOT_HAND1 ) )
@@ -194,8 +478,22 @@ bool FluteUse( Critter& cr )
 	}
 	
 	Map@ map = cr.GetMap();
-	PlayGenericSound( map, cr.HexX, cr.HexY, _GetOneRandom( Sounds ), cr.Stat[ ST_ENDURANCE ] * 5 );
+	PlayGenericSound( map, cr.HexX, cr.HexY, _GetOneRandom( FluteSounds ), cr.Stat[ ST_ENDURANCE ] * 5 );
 	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_FLUTE );
+    return true;
+}
+
+bool HarmonicaUse( Critter& cr )
+{
+    if( !hasItem( cr, PID_HARMONICA, SLOT_HAND1 ) )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TAKE_MUSICAL_INSTRUMENT );
+		return false;
+	}
+	
+	Map@ map = cr.GetMap();
+	PlayGenericSound( map, cr.HexX, cr.HexY, _GetOneRandom( HarmonicaSounds ), cr.Stat[ ST_ENDURANCE ] * 5 );
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_HARMONICA );
     return true;
 }
 
@@ -210,8 +508,7 @@ bool ShivUse( Critter& cr, Item@ shiv, Item@ targetItem )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ITEM_DESC );
 		cr.StatBase[ ST_LAST_DOOR_ID ] = targetItem.Id;
-		cr.StatBase[ ST_LAST_CONT_ID ] = targetItem.Accessory;
-		ShowInputBoxScreen( cr, "general_unsafe@unsafe_MakeDescLex#Description:", 0, INPUTBOX_CLOSE_ON_ENTER );
+		ShowInputBoxScreen( cr, "general_unsafe@unsafe_addLexem#Description:", 0, INPUTBOX_CLOSE_ON_ENTER );
 		return true;
 	}
 	
@@ -242,7 +539,7 @@ void e_AutoDoorWalk( Item& item, Critter& cr, bool entered, uint8 dir )
         if( valid( cr ) && cr.IsPlayer() && cr.StatBase[ ST_BODY_TYPE ] < BT_BRAHMIN 
 			&& !FLAG( door.LockerCondition, LOCKER_ISOPEN )
 			&& !FLAG( door.LockerCondition, LOCKER_LOCKED ) 
-			&& !( door.LockerCondition == LOCKER_ELECTRO ) && map.GetData( 24 ) > 0 )
+			&& !( door.LockerCondition == LOCKER_ELECTRO ) )
 		{
             door.LockerOpen();
 			ToggleDoorBlocker( map, door, false );
@@ -250,7 +547,7 @@ void e_AutoDoorWalk( Item& item, Critter& cr, bool entered, uint8 dir )
     }
 	else
 	{
-        if( valid( cr ) && cr.IsPlayer() && cr.StatBase[ ST_BODY_TYPE ] < BT_BRAHMIN && map.GetData( 24 ) > 0 )
+        if( valid( cr ) && cr.IsPlayer() && cr.StatBase[ ST_BODY_TYPE ] < BT_BRAHMIN )
 		{
             uint16 x = 0;
             uint16 y = 0;
@@ -334,13 +631,13 @@ bool e_WorkBenchCloneKey( Item& item, Critter& cr, Item@ usedItem )
 	uint pid = usedItem.GetProtoId();
 	if( pid == PID_HANDCUFFS || pid == PID_HANDCUFFS_KEY || pid == PID_SHACKLES || pid == PID_SHACKLES_KEY )
 	{
-		if( !hasItem( cr, PID_CRAFT_M_BARS ) )
+		if( !hasItem( cr, PID_IRON_PARTS ) )
 		{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_METAL_PART );
 			return true;
 		}
 		
-		cr.DeleteItem( PID_CRAFT_M_BARS, 1 );
+		cr.DeleteItem( PID_IRON_PARTS, 1 );
 		
 		switch( pid )
 		{
@@ -377,12 +674,12 @@ bool e_WorkBenchCloneKey( Item& item, Critter& cr, Item@ usedItem )
 	
 	if( usedItem.GetType() == ITEM_TYPE_KEY )
     {
-		if( !hasItem( cr, PID_CRAFT_M_BARS ) )
+		if( !hasItem( cr, PID_IRON_PARTS ) )
 		{
 			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_METAL_PART );
 			return true;
 		}
-		cr.DeleteItem( PID_CRAFT_M_BARS, 1 );
+		cr.DeleteItem( PID_IRON_PARTS, 1 );
 
 		if( pid == PID_BLANK_KEY )
 		{
@@ -397,7 +694,7 @@ bool e_WorkBenchCloneKey( Item& item, Critter& cr, Item@ usedItem )
 
 		cr.StatBase[ ST_LAST_DOOR_ID ] = key.Id;
 		cr.StatBase[ ST_LAST_CONT_ID ] = key.Accessory;
-		ShowInputBoxScreen( cr, "general_unsafe@unsafe_MakeDescLex#Description:", 0, INPUTBOX_CLOSE_ON_ENTER );
+		ShowInputBoxScreen( cr, "general_unsafe@unsafe_addLexem#Description:", 0, INPUTBOX_CLOSE_ON_ENTER );
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MADE_KEY_DUPLICATE );
 		PlayGenericSound( map, cr.HexX, cr.HexY, "keys.ogg", 6 );
 		return true;	
@@ -407,14 +704,24 @@ bool e_WorkBenchCloneKey( Item& item, Critter& cr, Item@ usedItem )
 
 bool e_WorkBenchPick( Item& item, Critter& cr, int skill )
 {
-	if( item.GetProtoId() == PID_PORTABLE_WORKBENCH && skill == SK_REPAIR && item.Accessory == ACCESSORY_HEX )
+	if( item.Accessory != ACCESSORY_HEX ) return false;
+	
+	uint16 pid = item.GetProtoId();
+	if( skill == SK_REPAIR && pid != PID_WORKBENCH )
 	{
 		_InitFurniture( item, true );
 		item.Update();
-		StartMenuFuriture( cr, item );
-		return false;
+		StartMenuFurniture( cr, item );
+		return true;
 	}
-    else if( skill == SKILL_PICK_ON_GROUND && item.Accessory == ACCESSORY_HEX )
+	
+	if( skill == SK_STEAL )
+	{
+		UseSkillOnLocker( cr, item, SKILL_PICK_ON_GROUND );
+		return true;
+	}
+    
+	if( skill == SKILL_PICK_ON_GROUND )
     {
         Item@ Workplace;
         @Workplace = cr.GetMap().GetItem( cr.HexX, cr.HexY, PID_GRAPPLE_HOOK );
@@ -424,12 +731,10 @@ bool e_WorkBenchPick( Item& item, Critter& cr, int skill )
 		}
 		
 		Workplace.SetScript( "_WorkplaceInit" );
-		if( cr.CountItem( PID_WORKBENCH_TOKEN ) == 0 )
-		{
-			cr.AddItem( PID_WORKBENCH_TOKEN, 1 );
-		}
-		cr.ShowScreen( SCREEN_FIXBOY, 0, "" );
+		
+		OpenBenchCraft( cr, item );
     }
+	
     return true;
 }
 
@@ -443,20 +748,14 @@ void _WorkplaceInit( Item& item, bool firstTime )
 
 void e_WorkplaceWalk( Item& item, Critter& cr, bool entered, uint8 dir )
 {
-	if( !entered )
+    if( entered ) 
     {
-	    Item@Token = cr.GetItem( PID_WORKBENCH_TOKEN, -1 );
-        if( valid( Token ) )
-		{
-			DeleteItem( Token );
-	    }
-		
-		Item@Token2 = cr.GetItem( PID_FIREPLACE_TOKEN, -1 );
-        if( valid( Token2 ) )
-		{
-			DeleteItem( Token2 ); 
-		}
-	}
+        return;
+    }
+    
+    DeleteItem( cr, PID_WORKBENCH_TOKEN, -1 );
+    DeleteItem( cr, PID_FIREPLACE_TOKEN, -1 );
+    DeleteItem( cr, PID_AMMOBENCH_TOKEN, -1 );
 }
 
 bool OilLampUse( Critter& cr, Item@ item )
@@ -485,7 +784,7 @@ bool OilLampUse( Critter& cr, Item@ item )
 			item.Update();
 			
 			uint[] values = { item.Id };
-			item.ITEM_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "e_DepleteCharge", values, true );
+			item.ITEM_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "item@e_DepleteCharge", values, true );
 			
 			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_LAMP_ON );
 			
@@ -518,6 +817,21 @@ bool OilLampUse( Critter& cr, Item@ item )
 	return true;
 }
 
+bool ChargeLamp( Critter& cr, Item& oil, Item& lamp )
+{
+	Map@ map = cr.GetMap();
+	if( valid( map ) )
+	{
+		PlayGenericSound( map, cr.HexX, cr.HexY, "ROBE.mp3", 6 );
+	}
+	
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_RELOAD_LAMP );
+	lamp.ITEM_CHARGE = 120;
+	_SubItem( oil, 1 );
+	cr.AddItem( PID_PHIAL, 1 );
+	return true;
+}
+
 //Flshlight
 bool FlashlightUse( Critter& cr, Item@ item )
 {
@@ -525,28 +839,41 @@ bool FlashlightUse( Critter& cr, Item@ item )
 	{
 		return false;
 	}
-	
+
 	Map@ map = cr.GetMap();
 	if( !valid( map ) )
 	{
 		return false;
 	}
-	
+
 	PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN2.mp3", 4 );
-	
+
 	if( item.ITEM_STATE == 0 && item.ITEM_CHARGE > 0 )
-	{
-		cr.MoveItem( item.Id, item.GetCount(), SLOT_HAND1 );
+    {
+        Item@ head = _CritGetItemHead( cr );
+        Item@ hand = _CritGetItemHand( cr );
+        if( FLAG( item.Proto.HeadItem_Perk, HEAD_PERK_FLASHLIGHT ) )
+        {
+            if( !valid( head ) )
+            {
+                cr.MoveItem( item.Id, item.GetCount(), SLOT_HEAD );
+            }
+        }
+        else if( !valid( hand ) )
+		{
+			cr.MoveItem( item.Id, item.GetCount(), SLOT_HAND1 );
+		}
+
 		SETFLAG( item.Flags, ITEM_LIGHT );
 		SETFLAG( item.Flags, ITEM_COLORIZE );
 		SETFLAG( item.Flags, ITEM_COLORIZE_INV );
 		item.Update();
 		item.ITEM_STATE = 1;
 		uint[] values = { item.Id };
-		item.ITEM_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "e_DepleteCharge", values, true );
+		item.ITEM_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 0 ) ), "item@e_DepleteCharge", values, true );
 		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_FLASHLIGHT_ON );
 	}
-	else if( item.ITEM_CHARGE == 0 )
+	else if( item.ITEM_STATE == 0 && item.ITEM_CHARGE == 0 )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FLASHLIGHT_NO_CHARGE );
 		return false;
@@ -560,7 +887,7 @@ bool FlashlightUse( Critter& cr, Item@ item )
 		item.ITEM_STATE = 0;
 		EraseTimeEvent( item.ITEM_EVENT );
 		item.ITEM_EVENT = 0;
-		
+
 		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_FLASHLIGHT_OFF );
 	}
 	return true;
@@ -573,7 +900,7 @@ uint e_DepleteCharge( uint[]@ values )
 	Item@ item = GetItem( itemId );
 	if( valid( item ) )
 	{
-		if( item.ITEM_CHARGE > 0)
+		if( item.ITEM_CHARGE > 0 )
 		{
 			item.ITEM_CHARGE--;
 			return REAL_MINUTE( 1 );
@@ -587,7 +914,24 @@ uint e_DepleteCharge( uint[]@ values )
 		item.ITEM_EVENT = 0;
 		item.Update();
 	}
+	
 	return 0;
+}
+
+//Flashlight charging
+bool ChargeFlashlight( Critter& cr, Item& battery, Item& flashlight )
+{
+	Map@ map = cr.GetMap();
+	if( valid( map ) )
+	{
+		PlayGenericSound( map, cr.HexX, cr.HexY, "WRJ1XXX1.mp3", 6 );
+	}
+	
+	flashlight.ITEM_CHARGE = battery.GetProtoId() == PID_SMALL_ENERGY_CELL ? 480 : 240;
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_RELOAD_FLASHLIGHT );
+	_SubItem( battery, 1 );
+	flashlight.Update();
+	return true;
 }
 
 bool FlareUse( Critter& cr, Item@ item )
@@ -605,14 +949,16 @@ bool FlareUse( Critter& cr, Item@ item )
 	{
 		cr.MoveItem( flare.Id, flare.GetCount(), SLOT_HAND1 );
 	}
+	
 	Map@ map = cr.GetMap();
 	if( valid( map ) )
 	{
 		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_FLARE_ON );
 		PlayGenericSound( map, cr.HexX, cr.HexY, "flare.ogg", 6 );
 	}
+	
 	uint[] values = { flare.Id };
-	CreateTimeEvent( __FullSecond + REAL_MINUTE( 60 ), "e_FlareBurn", values, true );	
+	CreateTimeEvent( __FullSecond + REAL_MINUTE( 60 ), "item@e_FlareBurn", values, true );	
 	RefreshClientsMap( map );
 	return true;
 }
@@ -638,13 +984,12 @@ bool TowelUse( Critter& cr, Item@ item )
 	if( item.GetProtoId() == PID_TOWEL )
 	{
 		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_USE_TOWEL );
-		_SubItem( item, 1 );
-		cr.AddItem( PID_OLD_TOWEL, 1  );
+		item.ChangeProto( PID_OLD_TOWEL );
 	}
 	else if( item.GetProtoId() == PID_OLD_TOWEL )
 	{
 		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_USE_DIRTY_TOWEL );
-		cr.ParamBase[ CR_DIRTINESS ] = int( cr.Param[ CR_DIRTINESS ] * 0.8 ) + 5;
+		cr.ParamBase[ CR_DIRTINESS ] += 15;
 	}
 	
 	Map@ map = cr.GetMap();
@@ -675,9 +1020,176 @@ bool TowelWash( Critter& cr, Item@ item, Scenery@ targetScen )
 		cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_WASH_TOWEL );
 		Map@ map = cr.GetMap();
 		PlayGenericSound( map, cr.HexX, cr.HexY, "water_running.ogg", 5 );
-		_SubItem( item, 1 );
-		cr.AddItem(  PID_TOWEL, 1  );
+		item.ChangeProto( PID_TOWEL );
 	}
+	return true;
+}
+
+bool TransferToBowl( Critter& cr, Item& targetItem, Item& cont )
+{
+	if( !valid( cont ) )
+	{
+		return false; 
+	}
+	
+	ShowContainer( cr, cont, TRANSFER_HEX_CONT_UP );
+	return true;
+}
+
+bool TransferFromBowl( Critter& cr, Item& targetItem, Item& cont )
+{
+	if( !valid( cont ) )
+	{
+		return false; 
+	}
+	
+	uint transferAmount = cr.ItemTransferCount();
+	MoveItem( targetItem, transferAmount, cr );
+	return true;
+}
+
+// Clocks Script, by APAMk2
+
+void _ClocksInit( Item& clocks, bool firstTime )
+{
+	uint[] values = { clocks.Id };
+	clocks.ITEM_EVENT = CreateTimeEvent( __FullSecond + 1, "item@e_UpdateClocks", values, true );
+}
+
+uint e_UpdateClocks(uint[]@ values)
+{
+	Item@ clocks = GetItem( values[0] );
+	
+	if( !valid( clocks ) )
+	{
+		return 0;
+	}
+	
+	uint8 frame = ( GetRealHour() <= 12 ? GetRealHour() : ( GetRealHour() - 12) ) * 8 + int( GetRealMinute() / 7.5 );
+	ChangeFrame( clocks, frame );
+	clocks.Animate( frame, frame);
+	
+	return REAL_SECOND( 450 );
+}
+
+bool TryUseCompass(Critter& cr, Item& compass)
+{
+	if( !valid( compass ) )
+	{
+		return false;
+	}
+	
+	if( !valid( cr ) )
+	{
+		return false;
+	}
+	
+	cr.SayMsg(SAY_NETMSG, TEXTMSG_GAME, STR_COMPAS_MAIN);
+	cr.SayMsg(SAY_NETMSG, TEXTMSG_GAME, STR_DIR_TXT(cr.Dir));
+	return true;
+}
+
+class MenuGuitar: CenteredMenuHandler {
+    uint level;
+	string@[] names2Display;
+
+    MenuGuitar(string@[] names) 
+	{
+		names2Display = names;
+	}
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu ) 
+	{	
+		uint len = names2Display.length();
+        for(uint i=0; i < len; i++) 
+		{
+            if( menu.Button(names2Display[i]) ) 
+			{
+                cr.RunClientScript( "client_guitar@StartPlay", i+1, 0, 0, null, null );
+                return false;
+            }
+        }
+        return true;
+    }
+	
+	string@ Description( Critter& cr ) 
+	{
+        return "Choose song to play:";
+    }
+}
+
+void unsafe_StartMenuGuitar(Critter& player, int param0, int param1, int param2, string@ namesRaw, int[]@ param4)
+{
+	string@[] names = splitEx(namesRaw, "|");
+	iMenuHandler@ handler = MenuGuitar(names);
+    iDialogBox@ menu = OpenMenu(player, "", handler);
+}
+
+bool TryPlayGuitar(Item@ guitar, Critter@ cr)
+{
+	if(!valid(guitar))
+	{
+		return false;
+	}
+
+	if(guitar.CritSlot != SLOT_HAND1)
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TAKE_MUSICAL_INSTRUMENT );
+		return false;
+	}
+	
+	uint pid = guitar.GetProtoId();
+	if(guitars.find(pid) != -1)
+	{
+		cr.RunClientScript( "client_guitar@SendTabsNames", 0, 0, 0, null, null );
+	}
+	
+	return true;
+}
+
+bool TryReadHolodisk( Item@ holodisk, Critter@ cr )
+{
+	if( !valid( holodisk ) || !valid( cr ) )
+	{
+		return false;
+	}
+	
+	cr.RunClientScript( "client_screen_info@ShowHoloScreen", holodisk.HolodiskNumber, 0, 0, null, null );
+	return true;
+}
+
+bool TryUsePerfume( Critter@ cr, Item@ perfume )
+{
+	if( !valid( cr ) || !valid( perfume ) )
+	{
+		return false;
+	}
+	
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_USE_PARFUME );
+	
+	uint[] indexes, durations, rates;
+	int eventCount = cr.GetTimeEvents( CTE_SOAP_CHARISMA, indexes, durations, rates );
+	if( eventCount < 1 )
+	{
+		cr.PerkBase[ PE_SOAP_CHARISMA ] += 1;
+		cr.AddTimeEvent( "waterworks@cte_soap_charisma", REAL_MINUTE( Random( 120, 180 ) ), CTE_SOAP_CHARISMA, 0 );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_USE_PARFUME_EFFECT );
+	}
+	else
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_USE_PARFUME_NO_EFFECT );
+	}
+
+	perfume.REMAINING_USES--;
+	perfume.Update();
+	
+	if( perfume.REMAINING_USES < 1 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_USE_PARFUME_EMPTY );
+		_SubItem( perfume, 1 );
+		cr.AddItem( PID_PHIAL, 1 );
+	}
+	
 	return true;
 }
 

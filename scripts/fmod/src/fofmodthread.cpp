@@ -130,7 +130,7 @@ namespace FOFMOD
 					   NULL, 
 					   ExecutionThread::thread_entry_point, 
 					   &(this->tdata)
-				)
+				);
 				
 			#endif
 			

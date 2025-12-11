@@ -3,65 +3,124 @@
 
 #include "_utils.fos"
 #include "cooking_h.fos"
+#include "cooking.fosh"
+#include "_ltp.fos"
+#include "firestarter_h.fos"
 #include "critter_skills_h.fos"
 
-bool UseCookingStuff( Scenery& fire, Critter& cr )
+import void OpenBenchCraft(Critter& crafter, Item& bench) from "craft";
+
+bool recipes_inited=false;
+
+bool ltp_cooking_inited=false;
+void ltp_cooking_init()
 {
-    if( !CanCook( fire ) )
-    {
-        return false;
+	LTPREG( LTP_COOKING, process_cooking )
+    ltp_cooking_inited = true;
+}
+
+void start_cooking( Critter& cr, Item& fire, uint index, uint16 pid, bool standing )
+{
+	if( !ltp_cooking_inited )
+	{
+		ltp_cooking_init();
+	}
+	
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = 10000;
+   	cr.ParamBase[ ST_LTP_SEQUENCE ] = 0;
+
+ 	if( !standing )
+ 	{
+ 		cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+	}
+ 	else
+ 	{
+ 		cr.SetAnims( COND_LIFE, 0, ANIM2_COOKING );
+	}
+	
+	if( pid != 0 )
+	{
+		index = pid;
+	}
+	
+	cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_FRYING_BEGIN );
+	Map@ map = cr.GetMap();
+	if( valid( map ) )
+	{
+		PlayGenericSound( map, cr.HexX, cr.HexY, "frying.mp3", 10 );
+	}
+	
+ 	StartProcess( cr, LTP_COOKING, 0, fire.Id, index, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+ }
+
+uint process_cooking( Critter@ cr, int& param0, int& fireId, int& index )
+{
+	LTPROCESSD( LTP_COOKING )
+	param0++;
+    Item@ result = null;
+	if( param0 > cr.Param[ ST_LTP_SEQUENCE ] )
+	{
+		if( index < 100 ) //shitcode for checking frying because all cooking meals have pid higher than 100
+		{
+			uint16 pid = fryDataProtoIds[index][0];
+			cr.DeleteItem( pid, 1 );
+			@ result = cr.AddItem( fryDataProtoIds[index][1], fryDataProtoIds[index][2] );
+			if( valid(result) )
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FRY_SUCCESS, "$name" + STR_INSERT_ITEM_LINE( result.GetProtoId() * 100 ) );
+				if( Random( 1, 100 ) <= fryCookingSkillChanceUp )
+				{
+					raiseSkill( cr, SK_COOKING );
+				}
+			}
+		}
+		else
+		{
+			Recipe@ recipe = GetRecipeByPid( index );
+			if( valid( recipe ) )
+			{
+				ProcessRecipe( cr, recipe, SK_COOKING );
+			}
+		}
+
+		Item@ fire = GetItem( fireId );
+		bool standing = true;
+		if( valid( fire ) )
+		{
+			uint16 pid = fire.GetProtoId();
+			if( pid == PID_FIREPLACE2 || pid == PID_CHOPPED_FIREWOOD )
+			{
+				standing = false;
+			}
+			
+			AskCooking( cr, fire, standing );
+		}
+
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+		return 0;
+	}
+    
+	return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+}
+
+void AskCooking( Critter& cr, Item& fire, bool standing )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
     }
-    else
-    {
-		SayLog( cr, crInfo( cr ) + " uses " + itemDesc( fire ) + "." );
-        AskCooking(cr);
-    }
-
-    return true;
-}
-
-bool CanCook( Scenery@ fire )
-{
-    if( !valid( fire ) )
+	
+	if( !valid( fire ) )
 	{
-        return false;
+		return;
 	}
-    uint16 pid = fire.ProtoId;
-    return pid == 2612 || pid == 2682 || pid == 2683 || pid == 2684 ||
-           pid == 2685 || pid == 3822 || pid == 3823 || pid == 3824 || pid == 3825;
+
+    iMenuHandler@ handler = CookingMenuMain( map, fire, standing );
+    iDialogBox@ menu = OpenMenu( cr, "Cooking", handler );
 }
 
-void AskCooking( Critter& cr )
-{
-	cr.ShowScreen( SCREEN_DIALOGBOX, 3, "cooking@answer_COOKING" );
-	cr.Say( SAY_DIALOGBOX_TEXT, "Choose your action:" );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Craft" );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 1 ), "Cook" );
-	cr.Say( SAY_DIALOGBOX_BUTTON( 2 ), "Fry" );
-}
-
-void answer_COOKING( Critter& cr, uint answerI, string& answerS )
-{
-	if( !CookingActions( cr, answerI ) )
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_THIS_DID_NOTHING );
-	}
-}
-
-bool CookingActions( Critter& cr, uint answer )
-{
-	switch( answer )
-	{
-		case( 0 ): return GetCraftToken( cr );
-		case( 1 ): return CookingMenu( cr );
-		case( 2 ): return FastFrying( cr );
-		default: return false;
-	}
-	return false;
-}
-
-
-bool GetCraftToken( Critter& cr )
+bool GetCraftToken( Critter& cr, Item& fire )
 {
 	cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_WARM_HANDS );
 	SayLog( cr, crInfo( cr ) + " used fire token." );
@@ -87,443 +146,256 @@ bool GetCraftToken( Critter& cr )
 	
 	Workplace.SetScript( "item@_WorkplaceInit" );
 	
-	if( cr.CountItem( PID_FIREPLACE_TOKEN ) == 0 )
-	{
-		cr.AddItem( PID_FIREPLACE_TOKEN, 1 );
-	}
-	cr.ShowScreen( SCREEN_FIXBOY, 0, "" );
+	cr.RunClientScript( "client_screen_fixboy@ShowScreen", 0, 0, 0, null, null );
 	return true;
 }
 
-bool FastFrying( Critter& cr )
+void PrepareFrying( Critter& cr, Item& fire, bool standing )
 {
     Item@ item = _CritGetItemHand( cr );
     if( !valid( item ) )
     {
         cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_HOLD_MEAT );
-        return true;
+        return;
     }
 
-	string name = "food";
-	switch( item.GetProtoId() )
+    for( uint i = 0, len = fryDataProtoIds.length(); i < len; i++ )
+    {
+        if( item.GetProtoId() == fryDataProtoIds[i][0] )
+        {			
+			start_cooking( cr, fire, i, 0, standing );
+			return;
+        }
+    }
+
+    cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, STR_WRONG_ITEM_TO_FRY);
+}
+
+bool BurnMeal(int skill, int value)
+{
+    int delta = skill - value;
+	
+	if( delta < 30 )
 	{
-		case( PID_MEAT ):
-			_CritAddItem( cr, PID_COOKED_MEAT, 1 );
-			name = "some meat";
-			break;
-		case( PID_RAT_MEAT ):
-			_CritAddItem( cr, PID_COOKED_RAT_MEAT, 1 );
-			name = "a rat";
-			break;
-		case( PID_GECKO_MEAT ):
-			_CritAddItem( cr, PID_COOKED_GECKO_MEAT, 1 );
-			name = "some gecko meat";
-			break;
-		case( PID_MANTIS_MEAT ):
-			_CritAddItem( cr, PID_MANTIS_FOOD, 1 );
-			name = "a mantis leg";
-			break;
-		case( PID_FISH_SMALLEST ):
-			_CritAddItem( cr, PID_COOKED_FISH, 1 );
-			name = "a fishy";
-			break;
-		case( PID_FISH_SMALL ):
-			_CritAddItem( cr, PID_COOKED_FISH, 2 );
-			name = "a small fish";
-			break;
-		case( PID_FISH ):
-			_CritAddItem( cr, PID_COOKED_FISH, 4 );
-			name = "a fish";
-			break;
-		case( PID_FISH_BIG ):
-			_CritAddItem( cr, PID_COOKED_FISH, 8 );
-			name = "a large fish";
-			break;
-		case( PID_FISH_BIGGEST ):
-			_CritAddItem( cr, PID_COOKED_FISH, 16 );
-			name = "a giant fish";
-			break;
-		default:
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WRONG_ITEM_TO_FRY );
+		int roll = Random( 1, 100 );
+		if( roll <= 5 )
+		{
 			return true;
+		}
 	}
 	
-	SayLog( cr, crInfo( cr ) + " fries " + name + "." );
-	
-	if( Random( 1, 5 ) == 5 )
-	{
-		int skillNum = SK_COOKING;
-		raiseSkill( cr, skillNum );
-	}
-	
-    cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_FRY_SUCCESS, "$name" + name );
-
-    _SubItem( item, 1 );
-	return true;
+    return false;
 }
 
-bool CookingMenu( Critter& cr )
+bool CheckIngredients(Critter& cr, Recipe& recipe)
 {
-	uint16 count = 0;
-	if( cr.Skill[ SK_COOKING ] < 100 ) 
-	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_RECIPES );
-	}
-	
-	int skill = ( cr.Skill[ SK_COOKING ] - 100 ) / 10;
-	int skill_max = foodNames.length();
-	skill = CLAMP( skill, 0, skill_max );
-	for( int i = 0; i < skill; i++ )
-	{
-		count++;
-	}
-
-	cr.ShowScreen( SCREEN_DIALOGBOX, count, "answer_PATTERN" );
-	cr.Say( SAY_DIALOGBOX_TEXT, "Select Recipe:" );
-	
-	for( uint8 i = 0; i < count; i++ )
-	{
-		cr.Say( SAY_DIALOGBOX_BUTTON( i ), foodNames[ i ] );
-	}
-	return true;
+	uint need = 1;
+    for( uint b = 0; b < recipe.ingredients.length(); b++ )
+    {
+		need = recipe.ingredientsAmount[b];
+		if( cr.CountItem( recipe.ingredients[b] ) < need )
+        {
+            cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, recipe.missingMessage);
+            return false;
+        }
+    }
+    return true;
 }
 
-void answer_PATTERN( Critter& cr, uint answerI, string& answerS )
+void ProcessRecipe(Critter& cr, Recipe& recipe, int skill)
 {
-	SayLog( cr, crInfo( cr ) + " is preparing a meal." );
+    bool isFailed = BurnMeal( skill, recipe.skillRequirement );
+
+	if( valid( recipe ) )
+	{
+		for (uint c = 0; c < recipe.ingredients.length(); c++)
+		{
+			cr.DeleteItem(recipe.ingredients[c], recipe.ingredientsAmount[c]);
+		}
+
+		for (uint d = 0; d < recipe.wasteItems.length(); d++)
+		{
+			cr.AddItem(recipe.wasteItems[d], recipe.wasteItemsAmount[d]);
+		}
+	}
+
+    if( isFailed )
+    {
+		cr.AddItem( PID_SHIT_SMALL, 1 );
+		if( recipe.ingredients.find( PID_BOWL ) != -1 )
+		{
+			cr.AddItem( PID_DIRTY_BOWL, 1 );
+		}
+		
+        cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, recipe.failMessage);
+    }
+    else
+    {
+        cr.AddItem(recipe.resultFood, 1);
+        cr.SayMsg(SAY_NETMSG, TEXTMSG_TEXT, recipe.successMessage);        
+        int skillNum = SK_COOKING;
+        raiseSkill(cr, skillNum);
+    }
+}
+
+class CookingMenuMain: CenteredMenuHandler
+{
+    uint map_id;
+	uint level;
+	uint fire_id;
+	bool stand;
 	
+    CookingMenuMain( Map& map, Item& fire, bool standing )
+	{
+        map_id = map.Id;
+		level = 0;
+		fire_id = fire.Id;
+		stand = standing;
+	}
+
+	bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+		Item@ fire = GetItem( fire_id );
+
+		if( menu.ButtonMsg( STR_RECIPE_MENU ) )
+		{
+			CookingMenu@ menu_cooking = CookingMenu( map, fire );
+			menu_cooking.level = level + 1;
+			return menu.OpenChild( "Level " + menu_cooking.level, menu_cooking );
+		}
+		
+		if( menu.ButtonMsg( STR_FIRE_MENU_FRY ) )
+		{
+			PrepareFrying( cr, fire, stand );	
+			return false;
+		}
+
+		if( menu.ButtonMsg( STR_FURNITURE_MENU_CRAFT ) )
+		{
+			OpenBenchCraft( cr, fire );
+			return false;
+		}
+		
+		return true;
+	}
+	
+	int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_COOKING_MENU;
+	}
+
+    string@ Description( Critter& cr )
+	{
+		return null;
+    }	
+}
+
+class CookingMenu: CenteredMenuHandler
+{
+    uint map_id;
+	uint level;
 	bool isFailed = false;
-	if( Random( 0, 100 ) + cr.Skill[ SK_COOKING ] < int( 120 + answerI * 10 ) )
+	int skill;
+	Item@ fireitm = null;
+	
+    CookingMenu( Map& map, Item& fire )
 	{
-		isFailed = true;
+        map_id = map.Id;
+		level = 1;
+		skill = 0;
+		@fireitm = fire;
 	}
 
-    if( answerI == RECIPE_SALAD )
+	bool MenuUpdate( Critter& cr, iDialogBox& menu )
 	{
-        if( _CritCountItem( cr, PID_ALGAE ) > 1 && _CritCountItem( cr, PID_MUTATED_FRUIT ) > 0 )
+		Map@ map = GetMap(map_id);
+		skill = cr.Skill[ SK_COOKING ];
+		
+		if ( !recipes_inited )
 		{
-			_CritDeleteItem( cr, PID_MUTATED_FRUIT, 1 );
-            _CritDeleteItem( cr, PID_ALGAE, 2 );
-            if( isFailed )
+			InitializeRecipes();
+			recipes_inited = true;
+		}
+		
+		uint16 fpid = fireitm.GetProtoId();
+		bool open_fire = ( FireSource.find( fpid ) != -1 && fireitm.STATE == STATE_BURNING );
+		bool stove = ( fpid == PID_STOVE_02 || fpid == PID_STOVE_04 || fpid == PID_STOVE_05 || fpid == PID_STOVE_06 || fpid == PID_STOVE_07 || fpid == PID_STOVE_08 );		
+		if( open_fire || ( stove && fireitm.STOVE_STATE == STATE_ON ) )
+		{
+			if( stove && menu.ButtonMsg( STR_WATERWORKS_MENU_SWITCH, "$switchWaterworks" + STR_INSERT_TEXT_LINE( STR_OFF ) ) )
 			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SALAD_FAIL );
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				fireitm.STOVE_STATE = STATE_OFF;
+				return true;
+			}
 			
-			}
-			else
-			{	
-				_CritAddItem( cr, PID_SALAD, 1 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SALAD_SUCCESS );
+			for( uint i = 0, len = recipes.length(); i < len; i++ )
+			{
+				Recipe recipe = recipes[ i ];
+				if( recipe.skillRequirement > skill )
+				{
+					continue;
+				}
 				
-				int skillNum = SK_COOKING;
-				raiseSkill( cr, skillNum );
+				if( menu.ButtonMsg( recipe.foodName ) )
+				{
+					if( CheckIngredients( cr, recipe ) )
+					{
+						bool standing = true;
+						if( valid( fireitm ) )
+						{
+							uint16 pid = fireitm.GetProtoId();
+							if( pid == PID_FIREPLACE2 || pid == PID_CHOPPED_FIREWOOD )
+							{
+								standing = false;
+							}
+							
+							start_cooking( cr, fireitm, 0, recipe.resultFood, standing );
+							return false;
+						}
+					}
+				}
 			}
-        }
-		else if( _CritCountItem( cr, PID_ALGAE ) < 2 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SALAD_INGRIDIENT_1 );
 		}
-		else if( _CritCountItem( cr, PID_MUTATED_FRUIT ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SALAD_INGRIDIENT_2 );
+		else if( stove && fireitm.STOVE_STATE == STATE_OFF )
+		{	
+			if( menu.ButtonMsg( STR_WATERWORKS_MENU_SWITCH , "$switchWaterworks" + STR_INSERT_TEXT_LINE( STR_ON ) ) )
+			{
+				PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+				if( !MapHasPower( map ) )
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_POWER_IS_OFF );
+					return true;
+				}
+				
+				fireitm.STOVE_STATE = STATE_ON;
+				return true;
+			}
 		}
+			
+		return true;
+	}
+	
+	int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
     }
 
-	if( answerI == RECIPE_SOUP )
-    {
-        if( _CritCountItem( cr, PID_CABBAGE ) > 0 && _CritCountItem( cr, PID_XANDER_ROOT ) > 0 && _CritCountItem( cr, PID_GLASS_BOTTLE_FULL ) > 0 )
-        {
-            _CritDeleteItem( cr, PID_CABBAGE, 1 );
-            _CritDeleteItem( cr, PID_XANDER_ROOT, 1 );
-			_CritDeleteItem( cr, PID_GLASS_BOTTLE_FULL, 1);
-            if( isFailed )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOUP_FAIL );
-			}
-			else
-			{	
-				_CritAddItem( cr, PID_HERBAL_SOUP, 1 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOUP_SUCCESS );
-				
-				int skillNum = SK_COOKING;
-				raiseSkill( cr, skillNum );
-			}
-        }
-		else if( _CritCountItem( cr, PID_GLASS_BOTTLE_FULL ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOUP_INGRIDIENT_1 );
-		}
-		else if( _CritCountItem( cr, PID_CABBAGE ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOUP_INGRIDIENT_2 );
-		}
-		else if( _CritCountItem( cr, PID_XANDER_ROOT ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOUP_INGRIDIENT_3 );
-		}
-    }
-
-    if( answerI == RECIPE_KEBAB )
-    {
-        if( _CritCountItem( cr, PID_MEAT ) > 0 && _CritCountItem( cr, PID_XANDER_ROOT ) > 0 )
-        {
-            _CritDeleteItem( cr, PID_MEAT, 1 );
-            _CritDeleteItem( cr, PID_XANDER_ROOT, 1 );
-            if( isFailed )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEBAB_FAIL );
-			}
-			else
-			{	
-				_CritAddItem( cr, PID_MEAT_ON_A_STICK, 1 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEBAB_SUCCESS );
-				
-				int skillNum = SK_COOKING;
-				raiseSkill( cr, skillNum );
-			}
-        }
-        else if( _CritCountItem( cr, PID_MEAT ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEBAB_INGRIDIENT_1 );
-		}
-        else if(_CritCountItem( cr, PID_XANDER_ROOT ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEBAB_INGRIDIENT_2 );
-		} 
-    }
-
-    if( answerI == RECIPE_TORTILLA )
-    {
-        if( _CritCountItem( cr, PID_CORN_FLOUR) > 0 && _CritCountItem( cr, PID_XANDER_ROOT ) > 0 )
-        {
-            _CritDeleteItem( cr, PID_CORN_FLOUR, 1 );
-            _CritDeleteItem( cr, PID_XANDER_ROOT, 1 );
-            if( isFailed )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TORTILLA_FAIL );
-			}
-			else
-			{	
-				_CritAddItem( cr, PID_FLAPJACK, 1 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TORTILLA_SUCCESS );
-				
-				int skillNum = SK_COOKING;
-				raiseSkill( cr, skillNum );
-			}
-        }
-		else if( _CritCountItem( cr, PID_CORN_FLOUR ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TORTILLA_INGRIDIENT_1 );
-		}
-		else if( _CritCountItem( cr, PID_XANDER_ROOT ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TORTILLA_INGRIDIENT_2 );
-		}
-    }
-
-    if( answerI == RECIPE_STOMACH )
-    {
-        if( _CritCountItem( cr, PID_MEAT ) > 0 && _CritCountItem( cr, PID_MOLERAT_STOMATCH ) > 0 && _CritCountItem( cr, PID_BROC_FLOWER ) > 1 )
-        {
-            _CritDeleteItem( cr, PID_BROC_FLOWER, 2 );
-            _CritDeleteItem( cr, PID_MEAT, 1 );
-            _CritDeleteItem( cr, PID_MOLERAT_STOMATCH, 1 );
-            if( isFailed )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STOMACH_FAIL );
-			}
-			else
-			{	
-				_CritAddItem( cr, PID_COOKED_MOLERAT_STOMATCH, 1 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STOMACH_SUCCESS );
-				
-				int skillNum = SK_COOKING;
-				raiseSkill( cr, skillNum );
-			}
-        }
-		else if( _CritCountItem( cr, PID_MOLERAT_STOMATCH ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STOMACH_INGRIDIENT_1 );
-		}
-            
-		else if( _CritCountItem( cr, PID_MEAT ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STOMACH_INGRIDIENT_2 );
-		}
-		else if( _CritCountItem( cr, PID_BROC_FLOWER ) < 2 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STOMACH_INGRIDIENT_3 );
-		}
+	int getDescriptionLine()
+	{
+		return STR_SELECT_RECIPE;
 	}
 
-    if( answerI == RECIPE_STEW )
-    {
-        if( _CritCountItem( cr, PID_MEAT ) > 1 && _CritCountItem( cr, PID_XANDER_ROOT ) > 0 && _CritCountItem( cr, PID_BROC_FLOWER ) > 0)
-        {
-            _CritDeleteItem( cr, PID_MEAT, 2 );
-            _CritDeleteItem( cr, PID_XANDER_ROOT, 1 );
-            _CritDeleteItem( cr, PID_BROC_FLOWER, 1 );
-            if( isFailed )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STEW_FAIL );
-			}
-			else
-			{	
-				_CritAddItem( cr, PID_RAGOUT, 1 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STEW_SUCCESS );
-				
-				int skillNum = SK_COOKING;
-				raiseSkill( cr, skillNum );
-			}
-        }
-		else if( _CritCountItem( cr, PID_MEAT ) < 2 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STEW_INGRIDIENT_1 );
-		}
-		else if( _CritCountItem( cr, PID_XANDER_ROOT ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STEW_INGRIDIENT_2 );
-		}
-		else if( _CritCountItem( cr, PID_BROC_FLOWER ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STEW_INGRIDIENT_3 );
-		}
-    }
-
-    if( answerI == RECIPE_BURGER )
-    {
-        if( _CritCountItem( cr, PID_GECKO_MEAT  ) > 0 && _CritCountItem( cr, PID_FLAPJACK ) > 0 && _CritCountItem( cr, PID_CABBAGE ) > 0)
-        {
-            _CritDeleteItem( cr, PID_GECKO_MEAT, 1 );
-            _CritDeleteItem( cr, PID_FLAPJACK, 1 );
-            _CritDeleteItem( cr, PID_CABBAGE, 1 );
-            if( isFailed )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BURGER_FAIL );
-			}
-			else
-			{	
-				_CritAddItem( cr, PID_BURGER, 1 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BURGER_SUCCESS );
-				
-				int skillNum = SK_COOKING;
-				raiseSkill( cr, skillNum );				
-			}
-        }
-		else if( _CritCountItem( cr, PID_GECKO_MEAT ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BURGER_INGRIDIENT_1 );
-		}
-		else if( _CritCountItem( cr, PID_FLAPJACK ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BURGER_INGRIDIENT_2 );
-		}
-		else if( _CritCountItem( cr, PID_CABBAGE) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_BURGER_INGRIDIENT_3 );
-		}
-    }
-
-	if( answerI == RECIPE_PIZZA )
-    {
-        if( _CritCountItem( cr, PID_FLAPJACK  ) > 0 && _CritCountItem( cr, PID_MEAT ) > 0 && _CritCountItem( cr, PID_BLACK_MUSHROOMS ) > 0)
-        {
-            _CritDeleteItem( cr, PID_FLAPJACK , 1 );
-            _CritDeleteItem( cr, PID_MEAT, 1 );
-            _CritDeleteItem( cr, PID_BLACK_MUSHROOMS, 1 );
-            if( isFailed )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIZZA_FAIL );
-			}
-			else
-			{	
-				_CritAddItem( cr, PID_PIZZA, 1 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIZZA_SUCCESS );
-				
-				int skillNum = SK_COOKING;
-				raiseSkill( cr, skillNum );
-			}
-        }
-		else if( _CritCountItem( cr, PID_FLAPJACK ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIZZA_INGRIDIENT_1 );
-		}
-		else if( _CritCountItem( cr, PID_MEAT ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIZZA_INGRIDIENT_2 );
-		}
-		else if( _CritCountItem( cr, PID_BLACK_MUSHROOMS ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIZZA_INGRIDIENT_3 );
-		}
-    }
-
-	if( answerI == RECIPE_FISH_PIE )
-    {
-        if( _CritCountItem( cr, PID_FLAPJACK  ) > 0 && _CritCountItem( cr, PID_COOKED_FISH ) > 0 && _CritCountItem( cr, PID_XANDER_ROOT ) > 0)
-        {
-            _CritDeleteItem( cr, PID_FLAPJACK , 1 );
-            _CritDeleteItem( cr, PID_COOKED_FISH, 2 );
-            _CritDeleteItem( cr, PID_XANDER_ROOT, 2 );
-            if( isFailed )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIE_FAIL );
-			}
-			else
-			{	
-				_CritAddItem( cr, PID_PIROG , 1 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIE_SUCCESS );
-				
-				int skillNum = SK_COOKING;
-				raiseSkill( cr, skillNum );
-			}
-        }
-		else if( _CritCountItem( cr, PID_FLAPJACK ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIE_INGRIDIENT_1 );
-		}
-		else if( _CritCountItem( cr, PID_COOKED_FISH ) < 2 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIE_INGRIDIENT_2 );
-		}
-		else if( _CritCountItem( cr, PID_XANDER_ROOT ) < 2 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PIE_INGRIDIENT_3 );
-		}
-
-    }
-	if( answerI == RECIPE_TACO )
-    {
-        if( _CritCountItem( cr, PID_RAT_MEAT  ) > 2 && _CritCountItem( cr, PID_FLAPJACK ) > 0 && _CritCountItem( cr, PID_BROC_FLOWER ) > 1)
-        {
-            _CritDeleteItem( cr, PID_RAT_MEAT , 3 );
-            _CritDeleteItem( cr, PID_FLAPJACK, 1 );
-            _CritDeleteItem( cr, PID_BROC_FLOWER, 2 );
-            if( isFailed )
-			{
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TACO_FAIL );
-			}
-			else
-			{	
-				_CritAddItem( cr, PID_BURRITO, 1 );
-				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TACO_SUCCESS );
-				
-				int skillNum = SK_COOKING;
-				raiseSkill( cr, skillNum );
-			}
-        }
-		else if( _CritCountItem( cr, PID_RAT_MEAT  ) < 3 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TACO_INGRIDIENT_1 );
-		}
-		else if( _CritCountItem( cr, PID_FLAPJACK ) == 0 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TACO_INGRIDIENT_2 );
-		}
-		else if( _CritCountItem( cr, PID_BROC_FLOWER ) < 2 )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TACO_INGRIDIENT_3 );
-		}
-    }
+    string@ Description( Critter& cr )
+	{
+		return null;
+    }	
 }
 
 #endif // COOKING

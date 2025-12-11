@@ -6,8 +6,6 @@
 #include "speed_h.fos"
 #include "handcuffs_h.fos"
 
-START( "speed", "InitSpeedArray" );
-
 int[] SpeedArray( 2000, 0 );
 
 void InitSpeedArray() // Export
@@ -58,6 +56,7 @@ void reset( Critter& cr, int p0, int p1, int )
     reset();
 }
 
+//~run speed testISA 0 0 0
 void testISA( Critter& cr, int p0, int p1, int )
 {
     InitSpeedArray();
@@ -66,16 +65,13 @@ void testISA( Critter& cr, int p0, int p1, int )
 
 void ChangeCritterSpeed( Critter& cr )
 {
-	if( cr.ParamBase[ CR_FIXED_SPEED ] != 0 )
-	{
-		return;
-	}
-	
+	ChangeRunningAP( cr );
+
 	uint16 run = 0, walk = 0;
     float curHp = cr.Stat[ ST_CURRENT_HP ];
-	float maxHp = cr.Stat[ ST_MAX_LIFE ];
+	float maxHp = ( cr.Stat[ ST_MAX_LIFE ] + cr.Stat[ ST_MAX_LIFE_EXT ] );
     float carry = cr.Stat[ ST_CARRY_WEIGHT ];
-	float weight = ItemsWeight( cr );
+	float weight = cr.Param[ CR_ITEMS_WEIGHT ];
 
     if( carry == 0 )
 	{
@@ -85,15 +81,20 @@ void ChangeCritterSpeed( Critter& cr )
 	float weight_cantRun = carry * 0.71f;
     float weight_cantWalk = carry * 1.50f;
 
-    bool CanRun = ( SpeedArray[ cr.CrType * 2 + 1 ] != 0 ) && ( weight < weight_cantRun );
+    bool canRun = ( SpeedArray[ cr.CrType * 2 + 1 ] != 0 ) && ( weight < weight_cantRun );
 
 	Item@ shackles = cr.GetItem( 0, SLOT_MISC );
-	if( valid( shackles ) && shackles.GetProtoId() == PID_SHACKLES && shackles.BONDAGE_STATE == BONDAGE_STATE_ON || cr.Param[ CR_IS_RELOADING ] > 0 )
+	bool inShackles = valid( shackles ) && shackles.GetProtoId() == PID_SHACKLES && shackles.BONDAGE_STATE == BONDAGE_STATE_ON;
+	bool isHoldingPosition = cr.ParamBase[ CR_HOLD_POSITION ] > 0;
+	if( inShackles || isHoldingPosition )
 	{
-		CanRun = false;
+		canRun = false;
 	}
 	
-    cr.ModeBase[ MODE_NO_RUN ] = ( CanRun ? 0 : 1 );
+    if( cr.ModeBase[ MODE_NO_RUN ] != 2 )
+	{
+		cr.ModeBase[ MODE_NO_RUN ] = ( canRun ? 0 : 1 );
+	}
 	
     if( curHp <= 0 )
 	{
@@ -115,12 +116,22 @@ void ChangeCritterSpeed( Critter& cr )
 	
 	_testInfo( cr, CR_TEST_MODE_SPEED, SAY_NETMSG, "w " + walk + " r " + run + " h " + healthMod + " d " + dragging );
 	
-	cr.ModeBase[ MODE_NO_WALK ] = weight > weight_cantWalk ? 1 : 0;
+	bool isOverWeight = weight > weight_cantWalk;
+	bool noWalk = isOverWeight || isHoldingPosition;
+	cr.ModeBase[ MODE_NO_WALK ] = ( noWalk ? 1 : 0 );
 	
-	walk = CLAMP( uint16( walk * healthMod * dragging ), 10, 2000 );
-    run = CLAMP( uint16( run * healthMod * dragging ), 10, walk );
+	if( cr.ParamBase[ CR_FIXED_SPEED ] != 0 )
+	{
+		return;
+	}
 
-	if( cr.ParamBase[ CR_YOU_DRAG ] != 0 )
+	if( cr.Trait[ TRAIT_SURE_FOOTED ] == 0 )
+	{
+		walk = CLAMP( uint16( walk * healthMod * dragging ), 0, 2000 );
+		run = CLAMP( uint16( run * healthMod * dragging ), 0, walk );
+	}
+	
+	if( cr.ParamBase[ CR_YOU_DRAG ] != 0 && cr.Trait[ TRAIT_SURE_FOOTED ] == 0 )
 	{
 		Critter@ target = GetCritter( cr.ParamBase[ CR_YOU_DRAG ] );
 		if( valid( target ) )
@@ -185,21 +196,32 @@ void ChangeCritterSpeed( Critter& cr )
 					speedMod = 1200;
 					break;
 			}
+			
 			int newSpeed = speedMod - ( cr.Stat[ ST_STRENGTH ] * 100 ); 
 			walk += CLAMP( newSpeed, 0, 1500 );
 			run = walk;
 		}
 	}
 
+	if( cr.Param[ CR_SNEAKING ] > 0 && cr.Trait[ TRAIT_SURE_FOOTED ] == 0 )
+	{
+		walk = walk * 120 / 100;
+	}
+	
     cr.StatBase[ ST_WALK_TIME ] = walk;
-    cr.StatBase[ ST_RUN_TIME ] = run;
+    cr.StatBase[ ST_RUN_TIME ] = int( run * ( 100 - cr.StatBase[ ST_RUN_TIME_EXT ] ) / 100 );
 
 	_testInfo( cr, CR_TEST_MODE_SPEED, SAY_NETMSG, "w " + cr.StatBase[ ST_WALK_TIME ] + " r " + cr.StatBase[ ST_RUN_TIME ] );
 }
 
 float FurnitureDraggingSpeedMod( Critter& cr )
 {
-	if( cr.GetTimeEvents( CTE_FURNITURE_DRAGGING, null, null, null ) == 0 )
+	if( cr.Trait[ TRAIT_SURE_FOOTED ] > 0 )
+	{
+		return 1;
+	}
+	
+	if( cr.StatBase[ ST_LAST_CONT_ID ] != cr.ParamBase[ CR_YOU_DRAG ] || cr.StatBase[ ST_LAST_CONT_ID ] == 0 )
 	{
 		return 1;
 	}
@@ -233,6 +255,32 @@ float FurnitureDraggingSpeedMod( Critter& cr )
 	_testInfo( cr, CR_TEST_MODE_SPEED, SAY_NETMSG, "weight_capacity " + weight_capacity + " weight_used " + weight_used );
 	
 	return result;
+}
+
+void ChangeRunningAP( Critter& cr )
+{
+	cr.ParamBase[ CR_ITEMS_WEIGHT ] = ItemsWeight( cr );
+	cr.ParamBase[ QST_AP_COST_RUN ] = RunningAP_cost(cr);
+}
+
+int RunningAP_cost( Critter& cr ) // returns how much AP is needed to run for 100 hexes
+{
+	if( ExoCheck(cr) ) return 1;
+	return RunningAP_cost( cr.Param[ CR_ITEMS_WEIGHT ], cr.Stat[ ST_CARRY_WEIGHT ] );
+}
+
+int RunningAP_cost( float weight_current, float weight_max )
+{
+	float load = weight_current / weight_max;
+	float k = 5.0f / 0.7f; // == 7,1428571428571428571428571428571
+	float cost = k * load;
+	return int( 100 * ( 1 + cost ) );
+}
+
+bool ExoCheck( Critter& cr )
+{
+	Item@ armor = _CritGetItemArmor( cr );
+	return( valid( armor ) && FLAG( armor.Proto.Armor_Perk, ARMOR_PERK_POWERED ) );
 }
 
 #endif //SPEED

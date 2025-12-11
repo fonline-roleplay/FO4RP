@@ -3,10 +3,14 @@
 
 #include "_utils.fos"
 #include "_ltp.fos"
+#include "chopping_h.fos"
 #include "gathering_h.fos"
 #include "critter_skills_h.fos"
 #include "combat_h.fos"
 #include "repair_h.fos"
+#include "firestarter_h.fos"
+#include "speed_h.fos"
+#include "furniture_h.fos"
 
 bool ltp_chopping_inited = false;
 void ltp_chopping_init()
@@ -45,24 +49,23 @@ bool PrepareChopping( Critter& cr, Item@ tool, Item@ tree )
 		return false;
 	}
 	
-	if( tree.Proto.Item_Subtype != ITEM_SUBTYPE_TREE_SLUMP )
+	bool isSlump = tree.Proto.Item_Subtype == ITEM_SUBTYPE_TREE_SLUMP;
+	bool isSlumpTool = toolPid == PID_SHOVEL || toolPid == PID_SPADE || toolPid == PID_PRIMITIVE_SHOVEL;
+	if( isSlump != isSlumpTool )
 	{
-		if( toolPid == PID_SHOVEL || toolPid == PID_SPADE )
-		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WRONG_INSTRUMENT );
-			return true;
-		}
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, isSlump ? STR_USE_SHOWEL : STR_WRONG_INSTRUMENT );
+		return true;
 	}
 	
 	if( _ItemIsBroken( tool ) )
 	{
-		cr.Say( SAY_NETMSG, "|0xFFFF00 Your tool is broken" );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOOL_BROKEN );
 		return true;
 	}
 	
 	if( IsTired( cr ) )
 	{
-		return false;
+		return true;
 	}
 	
 	if( cr.IsDmgTwoArm() || cr.IsDmgTwoLeg() )
@@ -75,6 +78,12 @@ bool PrepareChopping( Critter& cr, Item@ tool, Item@ tree )
 	{
 		uint det = GetDeteriorationProcent( tool );
 		SetDeterioration( tool, det + 1 );
+	}
+	
+	if( tool.Deterioration >= MAX_DETERIORATION )
+	{
+		BreakTool( cr, tool );
+		return false;
 	}
 	
 	start_chopping( cr, tool, tree );
@@ -91,9 +100,11 @@ bool start_chopping( Critter& cr, Item& tool, Item& tree )
 	if( valid( tool ) && valid( tree ) )
 	{	
 		uint hit_pause = ACTION_PAUSE_BASE - (cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
-		StartProcess( cr, LTP_CHOPPING, 0, tool.Id, tree.Id, action_pause );
-		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ChoppingSound", cr.Id, false);
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint object_dpa = ( cr.Skill[SK_CHOPPING] ) + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		StartProcess( cr, LTP_CHOPPING, 0, tool.Id, tree.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "chopping@e_ChoppingSound", cr.Id, false);
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);
 		return true;
 	}
@@ -104,16 +115,12 @@ uint process_chopping( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_CHOPPING )
 
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ST_AGILITY] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
     Item@ tool = GetItem( param1 );
   	Item@ tree = GetItem( param2 );
   	if( valid( tool ) && valid( tree ) )
     {
       	param0++;
-  		uint object_dpa = ( cr.Skill[SK_CHOPPING] ) + ( cr.Stat[ST_STRENGTH] * 10 ) + OBJECT_DPA_BASE; 
-		int sequence_length = int( ceil( float( OBJECT_HP_BASE / ( CLAMP( object_dpa, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
-		if( param0 > sequence_length )
+		if( param0 > cr.Param[ ST_LTP_SEQUENCE ] )
 		{
 			if( tree.Proto.Item_Subtype == ITEM_SUBTYPE_TREE )
 			{
@@ -140,7 +147,7 @@ uint process_chopping( Critter@ cr, int& param0, int& param1, int& param2 )
 			}
 			else if( tree.Proto.Item_Subtype == ITEM_SUBTYPE_TREE_SLUMP )
 			{
-				if( tool.GetProtoId() != PID_SHOVEL && tool.GetProtoId() != PID_SPADE )
+				if( tool.GetProtoId() != PID_SHOVEL && tool.GetProtoId() != PID_SPADE && tool.GetProtoId() != PID_PRIMITIVE_SHOVEL )
 				{
 					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_USE_SHOWEL );
 					return 0;
@@ -166,16 +173,16 @@ uint process_chopping( Critter@ cr, int& param0, int& param1, int& param2 )
 		else
 		{
 			_CritAnimateSwing( cr );
-			
-			CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ChoppingSound", cr.Id, false );
+
+			CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "chopping@e_ChoppingSound", cr.Id, false );
 			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true );
 			
 			if( cr.IsInjured() )
 			{
 				uint damage = INJURED_HP_DAMAGE - cr.Stat[ ST_ENDURANCE ];
-				InjureCritter( cr, damage, DAMAGE_UNCALLED, cr.Dir, cr.Id, HIT_LOCATION_NONE, false );
+				hurt( cr, damage );
 			}
-			return action_pause;
+			return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 		}
     }
 	return 0;
@@ -185,7 +192,11 @@ uint e_ChoppingSound(uint[]@ values)
 {
 	Critter@cr = GetCritter(values[0]); 
 	Map@ map = cr.GetMap();
-	PlayGenericSound( map, cr.HexX, cr.HexY, _GetOneRandom( ChoppingSounds ), 30 );
+	if( valid( map ) )
+	{
+		PlayGenericSound( map, cr.HexX, cr.HexY, _GetOneRandom( ChoppingSounds ), 30 );
+	}
+	
 	return 0;
 }
 
@@ -234,28 +245,37 @@ void _ForceTreeRegrow( Critter& player, int param0, int param1, int param2 )
 {
 	Map@[] maps;
     for( int i = 0, iend = GetAllMaps( 0, maps ); i < iend; i++)
-	{   
+	{
 		Map@ map = maps[i];
 		Item@[] chopped;
 		
 		map.GetItemsByType( ITEM_TYPE_PLANT, chopped );
 		
-		for( uint j = 0; j < chopped.length(); j++ )
+		Item@ tree = null;
+		for( uint j = 0, len = chopped.length(); j < len; j++ )
 		{
-			if( chopped[j].Proto.Item_Subtype == ITEM_SUBTYPE_TREE_SLUMP )
+			@ tree = chopped[j];
+			if( valid( tree ) )
 			{
-				chopped[j].TREE_REGROW_TIME = 0;
-				
-				if( chopped[j].ORIGINAL_TREE_PID <= 1 ) //error fixing
+				if( tree.Proto.Item_Subtype == ITEM_SUBTYPE_TREE_SLUMP )
 				{
-					chopped[j].ORIGINAL_TREE_PID = PID_TREE_BS1;
-				}					
-				
-				uint[] values = { chopped[j].Id };
-				chopped[j].EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_TreeRegrow", values, true );
+					tree.TREE_REGROW_TIME = 0;
+					
+					if( tree.ORIGINAL_TREE_PID <= 1 ) //error fixing
+					{
+						tree.ORIGINAL_TREE_PID = PID_TREE_BS1;
+					}					
+					
+					uint[] values = { tree.Id };
+					tree.EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_TreeRegrow", values, true );
+				}
 			}
 		}
+		
+		chopped.resize(0);
 	}
+	
+	maps.resize(0);
 }
 
 // Regrowth time event
@@ -307,19 +327,18 @@ bool Profit( Critter& cr, Item& tool, Item@ tree )
 	}
 	else
 	{
-		int skillNum = SK_CHOPPING;
-		raiseSkill( cr, skillNum );
+		raiseSkill( cr, SK_CHOPPING );
 		
-		cr.AddItem( PID_FIREWOOD, amount );
-		
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_GATHERED, "$proto@msg item " + ( PID_FIREWOOD * 100 ) + "@$amount" + amount );
-		
+		taking_sweat(cr);
+		SpawnBeneath( cr, PID_LOGS, amount );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_GATHERED, "$proto@msg item " + ( PID_LOGS * 100 ) + "@$amount" + amount );
 		cr.StatBase[ ST_EXPERIENCE ] += 25;
 		
 		if( valid( tree ) )
 		{
 			tree.RESOURCE_CAPACITY = tree.RESOURCE_CAPACITY - OBJECT_HP_BASE;
 		}
+		ChangeCritterSpeed( cr );
 	}
 	
 	return true;
@@ -345,9 +364,13 @@ void CheckCutTrees( Map& map )
 		
 		for( uint i = 0; i < mapPlants.length(); i++ )
 		{
-			if( mapPlants[i].Proto.Item_Subtype == ITEM_SUBTYPE_TREE_SLUMP )
+			Item@ mapPlant = mapPlants[i];
+			if( valid( mapPlant ) )
 			{
-				cutTrees.insertLast( mapPlants[i] );
+				if( mapPlant.Proto.Item_Subtype == ITEM_SUBTYPE_TREE_SLUMP )
+				{
+					cutTrees.insertLast( mapPlant );
+				}
 			}
 		}
 		
@@ -396,12 +419,17 @@ bool TryChopItem( Critter& cr, Item@ tool, Item@ target )
 		return false;
 	}
 	
+	if( target.Proto.Item_Subtype == ITEM_SUBTYPE_TREE || target.Proto.Item_Subtype == ITEM_SUBTYPE_TREE_SLUMP )
+	{
+		return false;
+	}
+
    	uint toolPid = tool.GetProtoId();
 	if( ChoppingTools.find( toolPid ) == -1 )
 	{
 		return false;
 	}
-	
+		
 	if( tool.CritSlot != SLOT_HAND1 )
 	{
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_EQUIP_TOOL );
@@ -440,14 +468,17 @@ bool start_chop_item( Critter& cr, Item& tool, Item& target )
 	if( valid( tool ) && valid( target ) )
 	{	
 		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
-		uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint chopping_rate = ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( 3000.0f / ( CLAMP( chopping_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		
 		uint[] values = { cr.Id };
 		
 		_CritAnimateSwing( cr );
-		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ChoppingSound", values, false);
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "chopping@e_ChoppingSound", values, false);
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
 
-		StartProcess( cr, LTP_CHOP_ITEM, 0, target.Id, 0, action_pause );
+		StartProcess( cr, LTP_CHOP_ITEM, 0, target.Id, 0, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
 		return true;
 	}
 	return false;
@@ -456,44 +487,730 @@ bool start_chop_item( Critter& cr, Item& tool, Item& target )
 uint process_chop_item( Critter@ cr, int& param0, int& param1, int& param2 )
 {
     LTPROCESS( cr, param0, LTP_CHOP_ITEM )
-	uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
-	uint action_pause = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+
     Item@ target = GetItem( param1 );
   	if( valid( target ) )
     {
 		param0++;
 		
-		uint smithing_rate = ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE ) + OBJECT_DPA_BASE; 
-		int sequence_length = int( ceil( float( 3000.0f / ( CLAMP( smithing_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
-		
-		if( param0 > sequence_length )
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
 		{
 			ChopItem( target );
 			return 0;
 		}
 		
 		uint[] values = { cr.Id };
-		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "e_ChoppingSound", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "chopping@e_ChoppingSound", values, true);
 		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
 
 		_CritAnimateSwing( cr );
 		
-		return action_pause;
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
 	}
 	return 0;
 }
 
 void ChopItem( Item& target )
 {
-	Map@ map = GetMap( target.MapId );
-	if( target.Proto.Type == ITEM_TYPE_CONTAINER )
+	if( valid( target ) )
 	{
-		DropContainerItems( map, target );
+		Map@ map = GetMap( target.MapId );
+		if( target.Proto.Type == ITEM_TYPE_CONTAINER )
+		{
+			DropContainerItems( map, target );
+		}
+		
+		map.AddItem( target.HexX, target.HexY, PID_CHOPPED_FIREWOOD, 1 );
+		_SubItem( target, 1 );
+	}
+}
+
+// Sawhorse
+class MenuSawhorse: CenteredMenuHandler
+{
+    uint sawhorse_id;
+    uint map_id;
+	
+    MenuSawhorse( Item& sawhorse, Map& map )
+	{
+        sawhorse_id = sawhorse.Id;
+        map_id = map.Id;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+        if( !valid( map ) )
+		{
+            return false;
+        }
+		
+        Item@ sawhorse = GetItem( sawhorse_id );
+        if( !valid( sawhorse ) )
+		{
+            return false;
+        }
+		
+		if( locked_in_place( sawhorse ) )
+		{
+			if( hasItems( cr, SawTools, SLOT_HAND1 ) && menu.ButtonMsg( STR_SAWHORSE_MENU_SAW ) )
+			{
+				Item@ tool = _CritGetItemHand( cr );
+				PrepareSawing( cr, tool, sawhorse );
+				return false;
+			}
+
+			if( menu.ButtonMsg( STR_FURNITURE_MENU_EXAMINE ) )
+			{
+				ShowContainer( cr, sawhorse, TRANSFER_HEX_CONT_UP );
+				return false;
+			}
+			
+			if( menu.ButtonMsg( STR_FURNITURE_MENU_BUTTON ) )
+			{
+				_InitFurniture( sawhorse, true );
+				sawhorse.Update();
+				StartMenuFurniture( cr, sawhorse );
+				return false;
+			}
+		}
+		return true;
+    }
+	
+	int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_SAWHORSE_MENU_MAIN;
 	}
 	
-	map.AddItem( target.HexX, target.HexY, PID_CHOPPED_FIREWOOD, 1 );
-	_SubItem( target, 1 );
+    string@ Description( Critter& cr )
+	{
+	
+		string info;
+		Item@ sawhorse = GetItem( sawhorse_id );
+		
+		Item@[] MaterialsCheck;
+		uint count = sawhorse.GetItems( uint( -1 ), MaterialsCheck );
+		Item@ material = null;
+		info += "$contains";
+		uint16 materialPid = 0;
+		if( count == 0 )
+		{ 
+			info += STR_INSERT_TEXT_LINE( STR_EMPTY );
+		}
+		else
+		{
+			for( uint i = 0; i < MaterialsCheck.length(); i ++ )
+			{
+				materialPid = MaterialsCheck[i].GetProtoId();
+				if( SawMaterialList.find( materialPid ) != -1 )
+				{
+					@material = MaterialsCheck[i];
+					break;
+				}
+			}
+			
+			if( !valid( material ) )
+			{
+				info += STR_INSERT_TEXT_LINE( STR_SAWHORSE_MENU_NO_WOOD );
+			}
+			else
+			{
+				info += STR_INSERT_TEXT_LINE( STR_SAWHORSE_MENU_CONTAINS )
+					 + "$item" + STR_INSERT_ITEM_LINE( materialPid * 100 )
+					 + "$amount" + material.GetCount();
+			}
+		}		
+
+		return info;
+    }
 }
+
+void StartMenuSawhorse( Critter& cr, Item@ sawhorse )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuSawhorse( sawhorse, map );
+    iDialogBox@ menu = OpenMenu( cr, "sawhorse", handler );
+}
+
+bool ltp_sawing_inited = false;
+void ltp_sawing_init()
+{
+	LTPREG( LTP_SAWING, process_Sawing )
+	ltp_sawing_inited = true;
+}
+
+bool PrepareSawing( Critter& cr, Item@ tool, Item@ sawhorse ) 
+{
+	Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+		return false;
+	}
+	
+	if( !valid( tool ) )
+	{
+		return false;
+	}
+	
+	if( !valid( sawhorse ) )
+	{
+		return false;
+	}	
+	
+	if( sawhorse.GetProtoId() != PID_SAWHORSE )
+	{
+		return false;
+	}
+	
+	if( !hasItems( cr, SawTools, SLOT_HAND1 ) )
+	{
+		return false;
+	}
+
+	if( IsTired( cr ) )
+	{
+		return false;
+	}
+	
+	if( cr.IsDmgTwoArm() || cr.IsDmgTwoLeg() )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_INJURED_CANT_WORK );
+		return false; 
+	}
+	
+	Item@[] MaterialsCheck;
+	sawhorse.GetItems( uint( -1 ), MaterialsCheck );
+	Item@ material = null;
+	uint16 materialPid;
+	if( MaterialsCheck.length() == 0 )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SAWHORSE_EMPTY ); 
+		return false; 
+	}
+	else
+	{
+		for( uint i = 0; i < MaterialsCheck.length(); i ++ )
+		{
+			materialPid = MaterialsCheck[i].GetProtoId();
+			if( SawMaterialList.find( materialPid ) != -1 )
+			{
+				@material = MaterialsCheck[i];
+				break;
+			}
+		}
+		
+		if( !valid( material ) )
+		{ 
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SAWHORSE_MENU_NO_WOOD ); 
+			return false; 
+		}
+	}
+	
+	start_sawing( cr, tool, sawhorse, material );
+	return true;
+}
+
+bool start_sawing( Critter& cr, Item& tool, Item& sawhorse, Item@ material )
+{
+	if(!ltp_sawing_inited)
+	{
+		ltp_sawing_init();
+	}
+	
+	if( valid( tool ) && valid( sawhorse ) )
+	{	
+		uint hit_pause = ACTION_PAUSE_BASE - ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE );
+		cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CLAMP( hit_pause, ACTION_PAUSE_MIN, ACTION_PAUSE_MAX );
+		uint sawing_rate = ( cr.Stat[ ST_STRENGTH ] * ACTION_PAUSE_BONUS_RATE ) + OBJECT_DPA_BASE; 
+		cr.ParamBase[ ST_LTP_SEQUENCE ] = int( ceil( float( 3000 / ( CLAMP( sawing_rate, OBJECT_DPA_MIN, OBJECT_DPA_MAX ) ) ) ) );
+		
+		uint[] values = { cr.Id };
+		
+		_CritAnimateSwing( cr );
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "chopping@e_SawingSound", values, false);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", cr.Id, true);	
+
+		StartProcess( cr, LTP_SAWING, 0, sawhorse.Id, material.Id, cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] );
+		return true;
+	}
+	return false;
+}
+
+uint process_Sawing( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESS( cr, param0, LTP_SAWING )
+	
+    Item@ sawhorse = GetItem( param1 );
+  	Item@ material = GetItem( param2 );
+  	if( valid( sawhorse ) && valid( material ) )
+    {
+		param0++;
+		
+		if( param0 > cr.ParamBase[ ST_LTP_SEQUENCE ] )
+		{
+			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_FINISH_SAWING );
+			Result( cr, sawhorse, material );
+			int skillNum = SK_REPAIR;
+			Accident( cr, skillNum );
+			
+			return 0;
+		}
+		
+		uint[] values = { cr.Id };
+		CreateTimeEvent( AFTER( REAL_MS( 700 ) ), "chopping@e_SawingSound", values, true);
+		CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "gathering@e_TiredenessTimeout", values, true);
+
+		_CritAnimateSwing( cr );
+		
+		if( cr.IsInjured() )
+		{
+			uint damage = INJURED_HP_DAMAGE - cr.Stat[ ST_ENDURANCE ];
+			hurt( cr, damage );
+		}
+		
+		return cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ];
+	}
+	return 0;
+}
+
+uint e_SawingSound( uint[]@ values )
+{
+	Critter@ cr = GetCritter(values[0]);
+	Map@ map = cr.GetMap();
+	PlayGenericSound( map, cr.HexX, cr.HexY, _GetOneRandom( ChoppingSounds ), 10 );
+	return 0;
+}
+
+void Result( Critter& cr, Item& sawhorse, Item& material )
+{
+	if( !valid( sawhorse) && !valid( material ) )
+	{
+		return;
+	}
+	
+	uint16 materialPid = material.GetProtoId();
+	uint8 index = SawMaterialList.find( materialPid );
+	uint16 resultPid = SawResultList[ index ];
+	uint8 amount = SawAmount[index];
+	cr.AddItem( resultPid, amount );
+	_SubItem( material, 1 );
+	
+	uint[] values = { sawhorse.Id };
+	CreateTimeEvent( AFTER( REAL_MS( 250 ) ), "chopping@e_SawUpdate", values, false );
+
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_CRAFTED_PID, "$proto@msg item " +  ( resultPid * 100 ) + "@$amount" + amount + "\n" );
+
+	cr.StatBase[ ST_EXPERIENCE ] += 25;
+}
+
+uint e_SawUpdate( uint[]@ values )
+{
+	Item@ sawhorse = GetItem( values[0]);
+	Item@[] contItems;
+	uint stuff = sawhorse.GetItems( uint( -1 ), contItems);
+
+	if( stuff == 0 )
+	{
+		ChangeFrame( sawhorse, 0 );
+		sawhorse.Update();
+	}
+	
+	return 0;
+}
+
+void BlockSawhorse( Item& sawhorse )
+{
+	uint16 hx = 0, hy = 0;
+	Map@ map = sawhorse.GetMapPosition( hx, hy );
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	UNSETFLAG( sawhorse.Flags, ITEM_NO_BLOCK );
+	UNSETFLAG( sawhorse.Flags, ITEM_CAN_PICKUP );
+	
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker0 = map.AddItem( hx, hy, PID_WOOD_BLOCKER, 1 );
+	if( valid( blocker0 ) )
+	{
+		blocker0.PARENT_ITM_ID = sawhorse.Id;
+	}	
+	
+	sawhorse.SetEvent( ITEM_EVENT_FINISH, "furniture@_DeleteBlockers" );
+}
+
+
+//WOOD CUTTER
+void StartMenuWoodCutter( Critter& cr, Item& woodCutter )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuWoodCutter( woodCutter, map );
+    iDialogBox@ menu = OpenMenu( cr, "SawMachine", handler );
+}
+
+class MenuWoodCutter: CenteredMenuHandler
+{
+    uint woodCutter_id;
+    uint map_id;
+	
+    MenuWoodCutter( Item& woodCutter, Map& map )
+	{
+		woodCutter_id = woodCutter.Id;
+        map_id = map.Id;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+        if( !valid( map ) )
+		{
+            return false;
+        }
+
+        Item@ woodCutter = GetItem( woodCutter_id );
+        if( !valid( woodCutter ) )
+		{
+            return false;
+        }
+
+		if( locked_in_place( woodCutter ) )
+		{
+			if( woodCutter.CUTTING_STATE == STATE_OFF )
+			{
+				if( menu.ButtonMsg( STR_FURNITURE_MENU_EXAMINE ) )
+				{
+					PlayGenericSound( map, woodCutter.HexX, woodCutter.HexY, "CLANK1.mp3", 15 );
+					ShowContainer( cr, woodCutter, TRANSFER_HEX_CONT_UP );
+					return false;
+				}
+				
+				if( menu.ButtonMsg( STR_DEVICE_ACTIVATE ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					if( MapHasPower( map ) )
+					{
+						woodCutter.CUTTING_STATE = STATE_ON;
+						woodCutter.PicMap = PIC_SAW_MACHINE_ANIM_ON;
+						UNSETFLAG( woodCutter.Flags, ITEM_SHOW_ANIM_EXT );
+						woodCutter.Update();
+						
+						uint[] vals = { woodCutter.Id, map.Id };
+						woodCutter.CUTTING_EVENT = CreateTimeEvent( AFTER( REAL_MS( 1500 ) ),"e_woodCutterWork", vals, true );
+					}
+					
+					return true;
+				}
+			}
+			else
+			{
+				if( menu.ButtonMsg( STR_DEVICE_DEACTIVATE ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					SawDeactivate( woodCutter, map );
+					return true;
+				}
+			}
+		}
+		
+		if( woodCutter.CUTTING_STATE == STATE_OFF && menu.ButtonMsg( STR_FURNITURE_MENU_BUTTON ) )
+		{
+			{
+				_InitFurniture( woodCutter, true );
+				woodCutter.Update();
+				StartMenuFurniture( cr, woodCutter );
+				return false;
+			}		
+		}
+		
+		if( menu.ButtonMsg( STR_CLOSE_MENU_BUTTON ) )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+	
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_CRUSHER_MENU_MAIN;
+	}
+	
+    string@ Description( Critter& cr )
+	{
+		Map@ map = GetMap( map_id );
+		Item@ woodCutter = GetItem( woodCutter_id );
+		
+		Item@[] MaterialsCheck;
+		uint count = woodCutter.GetItems( uint( -1 ), MaterialsCheck );
+		Item@ material = null;
+		
+		string info;
+		if( MapHasPower( map ) )
+		{
+			info += STR_CHECK_DEVICE_FLAG( "powerStatus", true );
+		}
+		else
+		{
+			info += STR_CHECK_DEVICE_FLAG( "powerStatus", false );
+		}
+		
+		info += "$contains";
+		uint16 materialPid;
+		
+		if( count == 0 )
+		{ 
+			info += STR_INSERT_TEXT_LINE( STR_CRUSHER_MENU_EMPTY ); 
+		}
+		else
+		{
+			for( uint i = 0; i < MaterialsCheck.length(); i ++ )
+			{
+				materialPid = MaterialsCheck[i].GetProtoId();
+				if( SawMaterialList.find( materialPid ) != -1 )
+				{
+					@material = MaterialsCheck[i];
+					break;
+				}
+			}
+			
+			if( !valid( material ) )
+			{ 
+				info += STR_INSERT_TEXT_LINE( STR_CRUSHER_MENU_CONTAINS_JUNK );
+			}
+			else
+			{
+				info += STR_INSERT_TEXT_LINE( STR_CRUSHER_MENU_CONTAINS )
+					 + "$item" + STR_INSERT_ITEM_LINE( materialPid * 100 )
+					 + "$amount" + material.GetCount();
+			}
+		}		
+	
+		return info;
+    }
+	
+	bool ShouldRedraw( Critter& cr )
+	{
+		Item@ woodCutter = GetItem( woodCutter_id );
+
+		if( !valid( woodCutter ) || GetDistantion( cr.HexX, cr.HexY, woodCutter.HexX, woodCutter.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+}
+
+void SawDeactivate( Item& woodCutter, Map& map )
+{
+	if( !valid( woodCutter ) || !valid( map ) )
+	{
+		return;
+	}
+	
+	woodCutter.CUTTING_STATE = STATE_OFF;
+	EraseTimeEvent( woodCutter.CUTTING_EVENT );
+	woodCutter.CUTTING_EVENT = 0;
+	woodCutter.PicMap = woodCutter.Proto.PicMap;
+	SETFLAG( woodCutter.Flags, ITEM_SHOW_ANIM_EXT );
+	woodCutter.Update();
+	PlayGenericSound( map, woodCutter.HexX, woodCutter.HexY, "STEAM.mp3", 30 );
+}
+
+uint e_woodCutterWork( uint[]@ values )
+{
+	Map@ map = GetMap( values[1] );
+	if( !valid( map ) )
+	{
+		return 0;
+	}
+
+	Item@ woodCutter = GetItem( values[0] );
+	if( valid( woodCutter ) )    
+	{
+		if( woodCutter.CUTTING_STATE == STATE_OFF )
+		{
+			return 0;
+		}
+		
+		PlayGenericSound( map, woodCutter.HexX, woodCutter.HexY, "wood_saw_work.mp3", 30 );
+		
+		Item@[] stuff;
+		woodCutter.GetItems( uint( -1 ), stuff );
+		if( stuff.length() > 0 )
+		{
+			SawIt( woodCutter, stuff[0], map );
+		}
+		
+		return SAW_MACHINE_CYCLE_TIME;
+	}
+	return 0;
+}
+
+void SawIt( Item& woodCutter, Item& sawed, Map& map )
+{
+	if( !valid( woodCutter) && !valid( sawed ) )
+	{
+		return;
+	}
+	
+	uint16 materialPid = sawed.GetProtoId();
+	
+	if( SawMaterialList.find( materialPid ) == -1 )
+	{
+		SawJam( woodCutter, map );
+		return;
+	}
+	
+	uint8 index = SawMaterialList.find( materialPid );
+
+	uint16 resultPid = SawResultList[ index ];
+	uint8 amount = SawAmount[index];
+
+	if( resultPid > 0 && amount > 0 )
+	{
+		uint16 hx = woodCutter.HexX, hy = woodCutter.HexY;
+		map.MoveHexByDir( hx, hy, 2, 3 );
+		map.MoveHexByDir( hx, hy, 1, 1 );
+
+		Item@ container;
+		@ container = map.GetItem( hx, hy, PID_IBOX_O );
+		if( !valid( container ) )
+		{
+			@ container = map.GetItem( hx, hy, PID_IBOX_N );
+		}
+		
+		Item@ product = map.AddItem( hx, hy, resultPid, amount );
+		if( valid( product ) )
+		{
+			if( valid( container ) )
+			{
+				MoveItem( product, amount, container, 0 );
+				PlayGenericSound( map, woodCutter.HexX, woodCutter.HexY, "CLANK1.mp3", 15 );
+			}
+			else if( product.IsStackable() )
+			{
+				uint[] values = { product.Id };
+				CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "critter_item_movement@e_stack_items", values, true );
+			}
+		}
+	}
+	
+	PlayGenericSound( map, woodCutter.HexX, woodCutter.HexY, "wood_saw_cut.mp3", 30 );
+	_SubItem( sawed, 1 );
+}
+
+void SawJam( Item& woodCutter, Map& map )
+{
+	SawDeactivate( woodCutter, map );
+}
+
+void BlockWoodCutter( Item& woodCutter )
+{
+	uint16 hx = 0, hy = 0;
+	Map@ map = woodCutter.GetMapPosition( hx, hy );
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	UNSETFLAG( woodCutter.Flags, ITEM_NO_BLOCK );
+	UNSETFLAG( woodCutter.Flags, ITEM_CAN_PICKUP );
+	
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker0 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker0 ) )
+	{
+		blocker0.PARENT_ITM_ID = woodCutter.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker1 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker1 ) )
+	{
+		blocker1.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 1, 1 );
+	Item@ blocker2 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker2 ) )
+	{
+		blocker2.PARENT_ITM_ID = woodCutter.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 5, 1 );
+	Item@ blocker3 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker3 ) )
+	{
+		blocker3.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 5, 1 );
+	Item@ blocker4 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker4 ) )
+	{
+		blocker4.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 5, 1 );
+	Item@ blocker5 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker5 ) )
+	{
+		blocker5.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 3, 1 );
+	Item@ blocker6 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker6 ) )
+	{
+		blocker6.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 4, 1 );
+	Item@ blocker7 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker7 ) )
+	{
+		blocker7.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker8 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker8 ) )
+	{
+		blocker8.PARENT_ITM_ID = woodCutter.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 1, 1 );
+	Item@ blocker9 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker9 ) )
+	{
+		blocker9.PARENT_ITM_ID = woodCutter.Id;
+	}
+	
+	woodCutter.SetEvent( ITEM_EVENT_FINISH, "furniture@_DeleteBlockers" );
+}
+
 /*
 //ONE-TIME LIVE SERVER TREE UPGRADE
 void _TreeUpgrade( Critter& player, int param0, int param1, int param2 )
@@ -510,5 +1227,7 @@ void _TreeUpgrade( Critter& player, int param0, int param1, int param2 )
 			tree.TREE_REGROW_TIME = Random( 4, 24 );
 		}
 	}
+	worldTrees.resize(0);
 }*/
+
 #endif //CHOPPING

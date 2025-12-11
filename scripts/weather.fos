@@ -4,7 +4,10 @@
 #include "_utils.fos"
 #include "globalmap_group_h.fos"
 #include "weather_h.fos"
+#include "wildplant_h.fos"
+#include "repair_h.fos"
 #include "plants_h.fos"
+#include "gasses_h.fos"
 
 void applyWetness( Critter& cr )
 {
@@ -31,8 +34,50 @@ void applyWetness( Critter& cr )
     {
         amount = CLAMP( amount - 20, 0, 250 );
     }
+	
+	if(__AcidRain == 1)
+	{
+		if( !IsHuman( cr ) ) return;
 
-    cr.StatBase[ ST_WETNESS ] += ( amount / 25 ); 
+		if( !CheckGasMask( cr ) )
+		{
+			if( cr.Stat[ ST_BODY_TYPE ] == BT_GHOUL )
+			{
+				cr.StatBase[ ST_POISONING_LEVEL ] += ( amount / 60 );
+			}
+			else
+			{
+				cr.StatBase[ ST_POISONING_LEVEL ] += ( amount / 30 );
+			}
+		}
+		
+		Item@ back = _CritGetItemBack( cr );
+		if( valid(back) && back.GetType() != ITEM_TYPE_ARMOR ) @back = null;
+		if( !valid(back) || ( _ItemIsBroken(back) || !FLAG( back.Proto.Armor_Perk, ARMOR_PERK_HAS_HOOD ) ) )
+		{
+			if(valid(armor))
+			{
+				DeteriorateItem(cr, armor, amount / 5);
+			}
+			if(valid(helmet))
+			{
+				DeteriorateItem(cr, helmet, amount / 5);
+			}
+		}
+		else if( valid(back) )
+		{
+			DeteriorateItem(cr, back, amount / 5);
+
+			if(valid(helmet) && !FLAG( back.Proto.Armor_Perk, ARMOR_PERK_HAS_HOOD ))
+			{
+				DeteriorateItem(cr, helmet, amount / 5);
+			}
+		}
+	}
+/*	else
+	{
+		cr.StatBase[ ST_WETNESS ] += ( amount / 25 ); 
+	}*/
 }
 
 uint e_GlobalRainSimulation( uint[]@ values )
@@ -102,23 +147,33 @@ void applyWatering( Map& map )
 	Item@[] plants;
 	map.GetItemsByType( ITEM_TYPE_PLANT, plants );
 	map.GetItems( PID_MUSHBED_EMPTY, plants );
-	if( plants.length() > 0 )
+	map.GetItems( PID_PLANTBARREL_EMPTY, plants );
+	map.GetItems( PID_HYDRO_NS_EMPTY, plants );
+	map.GetItems( PID_HYDRO_EW_EMPTY, plants );
+	for( uint i = 0, len = plants.length(); i < len; i ++ )
 	{
-		for( uint i = 0; i < plants.length(); i ++ )
+		Item@ plant = plants[i];
+		if( valid( plant ) )
 		{
-			Item@ plant = plants[i];
-			if( valid( plant ) )
+			if( !map.HasRoof( plant.HexX, plant.HexY ) )
 			{
-				if( !map.HasRoof( plant.HexX, plant.HexY ) )
-				{
-					if( plant.Proto.Item_Subtype != ITEM_SUBTYPE_TREE && plant.Proto.Item_Subtype != ITEM_SUBTYPE_TREE_SLUMP ) //tree use val4 for original tree DNA
-					{						
+				if( plant.Proto.Item_Subtype != ITEM_SUBTYPE_TREE && plant.Proto.Item_Subtype != ITEM_SUBTYPE_TREE_SLUMP ) //tree use val4 for original tree DNA
+				{						
+					if(__AcidRain == 1)
+					{
+						if(Wildplants.find( plant.GetProtoId() ) == -1) KillPlant( plant );
+						else KillWildPlant( plant );
+					}
+					else
+					{
 						plant.PLANT_WATERING = 1;
 					}
 				}
 			}
 		}
 	}
+	
+	plants.resize( 0 );
 }
 
 //~run weather _TerminateRainEvent 0 0 0
@@ -130,7 +185,7 @@ void _TerminateRainEvent( Critter& gm, int param0, int param1, int param2 )
 //Rain sound selections
 void RainSound( Map& map, int strength )
 {
-	string rainSound = "None.ogg";
+	string rainSound = "";
 	if( strength > 0 && strength < 100 )
 	{
 		rainSound = "rain_1.ogg";
@@ -144,21 +199,29 @@ void RainSound( Map& map, int strength )
 		rainSound = "Groza_1.ogg";
 	}
 	
+	bool isRain = rainSound.length() > 0;
+	
 	Critter@[] players;
 	map.GetCritters( 0, FIND_ALL | FIND_ONLY_PLAYERS, players );
-	if( players.length() > 0 )
+	for( uint i = 0, len =  players.length(); i < len; i++ )
 	{
-		for( uint i = 0; i < players.length(); i++ )
+		Critter@ player = players[i];
+		if( valid( player ) )
 		{
-			Critter@ player = players[i];
-			if( valid( player ) )
+			if( isRain )
 			{
 				int timeStamp = GetTick();
 				int soundId = map.Id + 1000 + strength + player.Id;
-				player.RunClientScript( "fofmod@__PlayMapMusic", soundId, timeStamp, 0, rainSound, null );
+				player.RunClientScript( "fofmod@__PlayMapMusic", soundId, timeStamp, 0, "sound/sfx/" + rainSound, null );
 			}
+			else
+			{
+				player.RunClientScript( "fofmod@__StopAll", 0, 0, 0, null, null );
+			}	
 		}
 	}
+	
+	players.resize(0);
 }
 
 #endif // WEATHER_MODULE

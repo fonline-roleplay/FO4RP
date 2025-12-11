@@ -1,0 +1,727 @@
+#ifndef CONSUMABLES_PARAMCHANGE
+#define CONSUMABLES_PARAMCHANGE
+
+#include "heal_h.fos"
+#include "critter_status_h.fos"
+#include "paralysis_h.fos"
+#include "poison_h.fos"
+#include "radiation_h.fos"
+#include "_npc_pids.fos"
+#include "speed_h.fos"
+
+class ParamChange
+{
+	int value;
+	uint param;
+	ParamChange( uint param, int value ) 
+	{
+		this.param = param;
+		this.value = value;		
+	}
+	
+	void set( Critter& cr )
+	{
+		addBase( cr, param, value );
+	}
+	
+	void apply( Critter& cr ) 
+	{
+		ParamData before = ParamData( cr, param );
+		set(cr);
+		ParamData after = ParamData( cr, param );		
+		log( cr, "APPLIED from " + before.toString() + " to " + after.toString() );
+		ChangeCritterSpeed(cr);
+	}	
+	
+	void unset( Critter& cr )
+	{
+		addBase( cr, param, -value );
+	}
+	
+	void undo( Critter& cr ) 
+	{
+		ParamData before = ParamData( cr, param );
+		unset( cr );
+		ParamData after = ParamData( cr, param );		
+		log( cr, "REVERSED from " + before.toString() + " to " + after.toString() );
+		ChangeCritterSpeed(cr);
+	}
+	
+	void log( Critter& cr, string info )
+	{
+		SayLog( cr, crInfo( cr ) + " " + this.toString() + " " + info );
+	}
+	
+	string toString() 
+	{//Format: Param#PARAM(+value)
+		return PARAM_NAME(param) + "(" + SIGN(value) + ")";
+	}
+}
+
+class ParamSet : ParamChange
+{
+	ParamSet( uint param, int value ) { super( param, value ); }
+	
+	void set( Critter& cr ) override
+	{
+		setBase( cr, param, value );
+	}	
+	
+	void unset( Critter& cr ) override
+	{
+		setBase( cr, param, 0 );
+	}
+	
+	string toString() override
+	{
+		return PARAM_NAME(param) + "(" + value + ")" + "[SET]";
+	}
+}
+
+class PermanentParamChange : ParamChange
+{
+	PermanentParamChange( uint param, int value ) { super( param, value ); }
+	
+	void unset( Critter& cr ) override { }
+	
+	string toString() override
+	{
+		return PARAM_NAME(param) + "(" + SIGN(value) + ")" + "[PERMANENT]";
+	}
+}
+
+class RandomParamChange : PermanentParamChange
+{
+	int min, max;
+	RandomParamChange( uint param, int value_1, int value_2 )
+	{
+		super( param, 0 );
+		min = MIN( value_1, value_2 );
+		max = MAX( value_1, value_2 );
+	}
+	
+	void set( Critter& cr ) override
+	{
+		addBase( cr, param, Random( min, max ) );
+	}	
+
+	string toString() override
+	{
+		return PARAM_NAME(param) + " RNG(" + SIGN(min) + "," + SIGN(max) + ")";
+	}
+}
+
+class Event : PermanentParamChange
+{
+	Event( uint param, int value ) { super( param, value ); }
+	
+	string toString() override
+	{
+		return PARAM_NAME(param) + "(" + SIGN(value) + ")" + "[EVENT]";
+	}
+}
+
+class Event_Knockout : Event
+{
+	Event_Knockout( int value ) { super( ST_CURRENT_AP, value ); }
+	
+	void apply( Critter& cr ) override 
+	{
+		cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( Random( 0, 1 ) == 0 ), value, cr.HexX, cr.HexY );
+		
+		log( cr, "for " + value + " Action Points" );
+	}
+	
+	string toString() override
+	{
+		return PARAM_NAME(param) + "(" + (-value) + ")" + "[Knockout]";
+	}
+}
+
+class Event_Heart_Attack : Event
+{
+	Event_Heart_Attack( int value ) { super( ST_KILLER_PERSON, value ); }
+	
+	void apply( Critter& cr ) override 
+	{
+		bool infarct = Roll( 1, 100 ).failed( value );
+		
+		if( infarct )
+		{
+            cr.Say( SAY_EMOTE, "foaming at the mouth" ); //TODO: more random phrases + localisation
+			cr.ToDead( Random( ANIM2_DEAD_FRONT, ANIM2_DEAD_BACK ), null );
+			cr.ParamBase[ CR_DEATH_STAGE ] = 100;
+		}
+		
+		log( cr, boolValue( infarct, "rolled ", "true", "false" ) );
+	}
+	
+	string toString() override
+	{
+		return PARAM_NAME(param) + "(" + value + "%)" + "[Infarct]";
+	}
+}
+
+class Event_Pills : Event
+{
+	Event_Pills() {}
+	
+	void apply( Critter& cr ) override 
+	{
+		if( cr.GetTimeEvents( PID_PILLS, null, null, null ) == 0 )
+		{
+			cr.AddTimeEvent( "consumables@cte_restore_hp_pills", REAL_HOUR( 24 ), PID_PILLS );
+			cr.TimeoutBase[ TO_PILLS ] = __FullSecond + REAL_HOUR( 24 );
+			
+			if( cr.Stat[ ST_MAX_LIFE_EXT ] == -1 )
+			{
+				cr.StatBase[ ST_MAX_LIFE_EXT ]++;
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_RESTORED_MAX_HP, "$regen" + 1 );
+				
+				log( cr, "max life up to " + cr.StatBase[ ST_MAX_LIFE_EXT ] );
+			}
+			else if( cr.Stat[ ST_MAX_LIFE_EXT ] < -1 )
+			{
+				cr.StatBase[ ST_MAX_LIFE_EXT ] += 2;
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_RESTORED_MAX_HP, "$regen" + 2 );
+				
+				log( cr, "max life up to " + cr.StatBase[ ST_MAX_LIFE_EXT ] );
+			}
+			else
+			{
+				log( cr, "useless" );
+			}
+		}
+		else
+		{
+			log( cr, "useless" );
+		}
+	}
+	
+	string toString() override
+	{
+		return "[Pills]";
+	}
+}
+
+uint cte_restore_hp_pills( Critter& cr, int pid, uint& rate )
+{
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_PILLS_WEAR_OFF );
+	SayLog( cr, crInfo( cr ) + " " + "antibiotics has worn off." );
+	return 0;
+}
+
+class SetAddictionTimer : Event
+{
+	SetAddictionTimer( uint param, int value ) 
+	{ 
+		super( CLAMP( param, ITEM_SUBTYPE_DRUG_BEGIN, ITEM_SUBTYPE_DRUG_END ), CLAMP( value, -100, 100 ) );
+	}
+	
+	void apply( Critter& cr ) override 
+	{
+		testInfo( cr, YELLOW + "SetAddictionTimer( " + param + ", " + value + " )" );//DEBUG
+		
+		uint[] uid, duration, phase;
+		uint count = cr.GetTimeEvents( param, uid, duration, phase );
+		for( uint i = 0; i < count; i++ )
+		{
+			ActiveDrug@ drug = ActiveDrug( param, uid[i], phase[i], duration[i] );
+			testInfo( cr, "You had addiction[" + i + "]: " + STR_INFO( drug ) );//DEBUG
+
+			DrugGroup@ group = getDrugGroup( param );
+			if( !valid( group ) )
+			{
+				return;
+			}
+
+			int addictIndex = ST_LAST_ADDICT_TIME_DOPE + (group.addiction.param - ADDICTION_DOPE);
+			int lastTime = cr.Param[addictIndex];
+			int currTime = drug.time_left() / __TimeMultiplier;
+			float percent = float(value / 100.0f);
+			int time_new = int(REAL_MINUTE(group.addiction.effect.time) * percent) / __TimeMultiplier;
+
+			if(lastTime > time_new)
+				time_new = lastTime;
+			
+			cr.ParamBase[addictIndex] = currTime - (REAL_MINUTE(group.phases[0]) / __TimeMultiplier);
+
+			cr.ChangeTimeEvent( drug.event_id(), time_new * __TimeMultiplier, drug.phase() );
+			
+			testInfo( cr, WHITE + "Output:"	//DEBUG
+								+ "\n" + YELLOW + "value " 				+ GREEN + value
+								+ "\n" + YELLOW + "time_new " 			+ GREEN + DeltaTime_HMS( time_new )
+								+ "\n" + YELLOW + "lastTime " 			+ GREEN + DeltaTime_HMS( lastTime )
+								+ "\n" + YELLOW + "currTime " 			+ GREEN + DeltaTime_HMS( currTime ) 
+				);
+				
+		}
+	}
+	
+	uint getNewPercent( uint time_current_percent ) 
+	{
+		return value;
+	}
+	
+	string toString() override
+	{
+		return "SetAddictionTimer#" + param + " to: " + value + "%";
+	}
+}
+
+class AddAddictionTimer : SetAddictionTimer
+{
+	AddAddictionTimer( uint param, int value ) 
+	{ 
+		super( param, CLAMP( value, 0, 100 ) );
+	}
+	
+	uint getNewPercent( uint time_current_percent ) override
+	{
+		return CLAMP( time_current_percent + value, 0, 100 );
+	}
+	
+	string toString() override
+	{
+		return "AddAddictionTimer#" + param + " delta: " + SIGN(value) + "%";
+	}
+}
+
+class RelieverAddictionTimer : SetAddictionTimer
+{
+	RelieverAddictionTimer( uint param, int value = 0 ) 
+	{ 
+		super( param, CLAMP( value, RELIEVER_MINIMAL_PERCENT, 100 ) );
+	}
+	
+	uint getNewPercent( uint time_current_percent ) override
+	{
+		return MAX( uint(value), time_current_percent );
+	}
+	
+	string toString() override
+	{
+		return "RelieverAddictionTimer#" + param + " to: " + SIGN(value) + "%";
+	}
+}
+
+class Event_ParalysisPoison : Event
+{
+	Event_ParalysisPoison() {}
+	
+	void apply( Critter& cr ) override 
+	{
+        cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_NEUROTOX_YOU );
+		
+        if( cr.StatBase[ ST_BODY_TYPE ] != BT_ROBOT )
+		{
+			AffectParalysis( cr, 50 );
+		}
+		
+		log( cr, "" );
+    }
+	
+	string toString() override
+	{
+		return "[Paralysis Poison]";
+	}
+}
+	
+class Event_ParalysisAntidote : Event
+{
+	Event_ParalysisAntidote() {}
+	
+	void apply( Critter& cr ) override 
+	{
+		DropPoison( cr );
+		DropParalysis( cr, 50 );
+    }
+	
+	string toString() override
+	{
+		return "[Paralysis Antidote]";
+	}
+}
+	
+class Event_Antidote : Event
+{
+	Event_Antidote() {}
+	
+	void apply( Critter& cr ) override 
+	{
+		cr.AddTimeEvent( "consumables@cte_antidote", REAL_SECOND( 0 ), PID_JET_ANTIDOTE );
+		
+		log( cr, "" );
+	}
+	
+	string toString() override
+	{
+		return "[Antidote]";
+	}
+}
+uint cte_antidote( Critter& cr, int pid, uint& phase )
+{
+	uint min_phase = DRUG_ADDICTION_PHASE + 1;
+	ActiveDrug@[] drugs = enlistAllActiveDrugs( cr );
+	for( uint i = 0, len = drugs.length(); i < len; i++ )
+	{
+		drugs[i].cte.time_left /= __TimeMultiplier;
+		
+		if( drugs[i].pid() != PID_JET_ANTIDOTE && drugs[i].phase() > 0 && drugs[i].phase() < min_phase )
+		{
+			min_phase = drugs[i].phase();
+		}
+	}
+	
+	for( uint i = 0, len = drugs.length(); i < len; i++ )
+	{
+		if( drugs[i].pid() == PID_JET_ANTIDOTE )
+		{
+			continue;
+		}
+		
+		if( drugs[i].phase() == min_phase )
+		{
+			SayLog( cr, crInfo( cr ) + " Antidote progression of " + min_phase + " phase for: " + drugs[i].toString() );
+			
+			skipStage( cr, drugs[i] );
+			
+			return REAL_MS( 500 );
+		}
+	}
+	
+	return 0;
+}
+
+class Event_Revive : Event
+{
+	Event_Revive( int penalty ) { super( ST_MAX_LIFE_EXT, penalty ); }
+	
+	void apply( Critter& cr ) override 
+	{
+		if( !cr.IsDead() ) return;
+		
+		if( cr.GetProtoId() != NPC_PID_PET_DOG && ( cr.ParamBase[ CR_DEATH_STAGE ] >= 50 || cr.Stat[ ST_MAX_LIFE ] <= 100 ) )
+		{
+			log( cr, "is unavailable to revive." );
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WASTED_ITEM );
+			return;
+		}
+		
+		cr.ToLife();
+		cr.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( true ), 1000, cr.HexX, cr.HexY );
+		
+		if( cr.GetProtoId() == NPC_PID_PET_DOG ) 
+		{
+			log( cr, "pet's revival" );
+		}
+		else
+		{
+			addBase( cr, ST_MAX_LIFE_EXT, -value );
+			log( cr, "was revived" );
+		}			
+
+		if( cr.IsNpc() )
+		{
+			cr.ClearEnemyStack();
+		}
+		else
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_RESURECTION_SUCCESS );
+		}
+	}
+	
+	string toString() override
+	{
+		return "[Revival]";
+	}
+}
+
+class Event_Cure_Injuries : Event
+{
+	Event_Cure_Injuries() {}
+	
+	void apply( Critter& cr ) override 
+	{
+		UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG );
+		UNSETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_BULLET_OVER );
+		
+		log( cr, "" );
+	}
+	
+	string toString() override
+	{
+		return "[Cure Injuries]";
+	}
+}
+
+class Event_Inflict_Injury : Event
+{
+	Event_Inflict_Injury() {}
+	
+	void apply( Critter& cr ) override 
+	{
+		SETFLAG( cr.StatBase[ ST_CRSTATUS ], CR_STATUS_HEAVY_DMG );
+		
+		log( cr, "" );
+	}
+	
+	string toString() override
+	{
+		return "[Inflict Injury]";
+	}
+}
+
+class Event_Fix_Limbs : Event
+{
+	uint[] damages = { DAMAGE_EYE, DAMAGE_RIGHT_ARM, DAMAGE_LEFT_ARM, DAMAGE_RIGHT_LEG, DAMAGE_LEFT_LEG };
+
+	Event_Fix_Limbs() {}
+	
+	void apply( Critter& cr ) override 
+	{
+		for( uint i = 0, l = damages.length(); i < l; i++ )
+		{
+			cr.DamageBase[damages[i]] = 0;
+		}
+		
+		log( cr, "" );
+	}
+	
+	string toString() override
+	{
+		return "[Fix Limbs]";
+	}
+}
+
+class HealOverTime : Event
+{
+	HealOverTime( int value ) { super( ST_CURRENT_HP, value ); }
+	
+	void apply( Critter& cr ) override 
+	{
+		cr.AddTimeEvent( "consumables@cte_quickheal", 0, CTE_QUICKHEAL, value );
+		
+		log( cr, "" );
+	}
+	
+	string toString() override
+	{
+		return "[Started healing over time] " + SIGN(value);
+	}
+}
+uint cte_quickheal( Critter& cr, int identifier, uint& rate ) 
+{
+	int heal = 5;
+	if( heal > int( rate ) )
+	{
+		heal = rate;
+	}
+	bool isHealed = true;
+
+	cr.StatBase[ ST_CURRENT_HP ] += heal;
+	int16 aidTime = 5;
+	
+	rate -= heal;
+
+	ChangeCritterSpeed(cr);
+	
+	bool repeat = true;
+	if( rate <= 0 )
+	{
+		repeat = false;
+	}
+	return repeat ? aidTime : 0;
+}
+
+class Event_Bleed : Event
+{
+	Event_Bleed( int value ) { super( ST_BLEED, value ); }
+	
+	void apply( Critter& cr ) override 
+	{
+		BleedCritter( cr, value );
+		
+		log( cr, "" );
+	}
+	
+	string toString() override
+	{
+		return "[Bleed] " + SIGN(value);
+	}
+}
+
+class Change_Damage_Threshold : ParamChange
+{
+	Change_Damage_Threshold( int value ) { super( ST_NORMAL_ABSORB_EXT, value ); }
+	
+	void set( Critter& cr ) override
+	{
+		for( uint i = ST_NORMAL_ABSORB_EXT; i <= ST_EXPLODE_ABSORB_EXT; i++ )
+		{
+			addBase( cr, i, value );
+		}
+	}	
+	
+	void unset( Critter& cr ) override
+	{
+		for( uint i = ST_NORMAL_ABSORB_EXT; i <= ST_EXPLODE_ABSORB_EXT; i++ )
+		{
+			addBase( cr, i, -value );
+		}
+	}
+	
+	string toString() override
+	{
+		return "[Damage Thresholds] " + SIGN(value);
+	}
+}
+
+class Change_Damage_Resistance : ParamChange
+{
+	Change_Damage_Resistance( int value ) { super( ST_NORMAL_RESIST_EXT, value ); }
+	
+	void set( Critter& cr ) override
+	{
+		for( uint i = ST_NORMAL_RESIST_EXT; i <= ST_EXPLODE_RESIST_EXT; i++ )
+		{
+			addBase( cr, i, value );
+		}
+	}	
+	
+	void unset( Critter& cr ) override
+	{
+		for( uint i = ST_NORMAL_RESIST_EXT; i <= ST_EXPLODE_RESIST_EXT; i++ )
+		{
+			addBase( cr, i, -value );
+		}
+	}
+	
+	string toString() override
+	{
+		return "[Damage Resistances] " + SIGN(value);
+	}
+}
+
+class AffectPoisonTemp : ParamChange
+{
+	AffectPoisonTemp( int value ) { super( ST_POISONING_LEVEL, value ); }
+	
+	void set( Critter& cr ) override
+	{
+		AffectPoison( cr, value );
+	}	
+	
+	void unset( Critter& cr ) override
+	{
+		AffectPoison( cr, -value );
+	}
+	
+	string toString() override
+	{
+		return "[Affect Poison] " + SIGN(value);
+	}	
+}
+
+class AffectPoisonOnce : AffectPoisonTemp
+{
+	AffectPoisonOnce( int value ) { super( value ); }
+	
+	void unset( Critter& cr ) override {}
+	
+	string toString() override
+	{
+		return "[Affect Poison] [PERMANENT]" + SIGN(value);
+	}	
+}
+
+class AffectRadiationTemp : ParamChange
+{
+	AffectRadiationTemp( int value ) { super( ST_RADIATION_LEVEL, value ); }
+	
+	void set( Critter& cr ) override
+	{
+		AffectRadiation( cr, value );
+	}	
+	
+	void unset( Critter& cr ) override
+	{
+		AffectRadiation( cr, -value );
+	}
+	
+	string toString() override
+	{
+		return "[Affect Radiation] " + SIGN(value);
+	}	
+}
+
+class AffectRadiationOnce : AffectRadiationTemp
+{
+	AffectRadiationOnce( int value ) { super( value ); }
+	
+	void unset( Critter& cr ) override {}
+	
+	string toString() override
+	{
+		return "[Affect Radiation] [PERMANENT]" + SIGN(value);
+	}	
+}
+
+class Event_MSG : Event
+{
+	uint SAY_TYPE;
+	uint FILE_NAME;
+	uint STR_LINE_MSG_DEFINE;
+	Event_MSG( uint SAY_TYPE, uint FILE_NAME, uint STR_LINE_MSG_DEFINE ) 
+	{
+		this.SAY_TYPE = SAY_TYPE;
+		this.FILE_NAME = FILE_NAME;
+		this.STR_LINE_MSG_DEFINE = STR_LINE_MSG_DEFINE;
+	}
+	
+	void apply( Critter& cr ) override 
+	{
+		cr.SayMsg( SAY_TYPE, FILE_NAME, STR_LINE_MSG_DEFINE );
+    }
+	
+	string toString() override
+	{
+		return "[MSG:" + SAY_TYPE + "] <" + GetMsgStr( 0, FILE_NAME, STR_LINE_MSG_DEFINE ) + ">";
+	}
+}
+
+
+class AffectOverdose : PermanentParamChange
+{
+	AffectOverdose( int value ) { super( ST_GLOBAL_OVERDOSE, value ); }
+	
+	void set( Critter& cr ) override 
+	{
+		float bonus = 1.0f;
+		
+		if( cr.Trait[ TRAIT_FAST_METABOLISM ] != 0 )
+		{
+			bonus += 0.3f;
+		}
+		
+		if( cr.Trait[ TRAIT_CHEM_RELIANT ] != 0 )
+		{
+			bonus += 0.3f;
+		}
+		
+		if( cr.Trait[ TRAIT_CHEM_RESISTANT ] != 0 )
+		{
+			bonus -= 0.3f;	
+		}
+		
+		float result = float(value) * bonus;		
+		addBase( cr, param, int(result) );
+    }
+	
+	string toString() override
+	{
+		return "[Affect Overdose]";
+	}
+}
+
+#endif // CONSUMABLES_PARAMCHANGE

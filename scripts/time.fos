@@ -1,5 +1,5 @@
-#ifndef TIME
-#define TIME
+#ifndef TIME_MODULE
+#define TIME_MODULE
 // Some stuff for work with time.
 
 // import uint GetNearFullSecond(uint16 year, uint16 month, uint16 day, uint16 hour, uint16 minute, uint16 second) from "time";
@@ -23,6 +23,9 @@
 #include "time_h.fos"
 
 #ifdef __SERVER
+
+#include "globalmap_group_h.fos"
+
 uint GetNearFullSecond( uint16 year, uint16 month, uint16 day, uint16 hour, uint16 minute, uint16 second )
 {
     int jump = 0;   // 1 - years, 2 - months, 3 - days
@@ -108,6 +111,7 @@ uint GetDaysInMonth( uint16 year, uint16 month )
     return 0;
 }
 #endif //__SERVER
+
 #ifdef __CLIENT
 string@ GetTimeString( const string& format, uint fullSecond )
 {
@@ -121,33 +125,137 @@ string@ GetTimeString( const string& format, int year, int month, int day, int d
     string result = format;
 
     if( year != -1 )
+	{
         result = ReplaceText( result, "%YEAR%", year );
-    if( month != -1 )
+    }
+	
+	if( month != -1 )
     {
         result = ReplaceText( result, "%MONTH%", month );
         result = ReplaceText( result, "%MONTH-STR%", GetMsgStr( TEXTMSG_GAME, STR_MONTH( month ) ) );
     }
+	
     if( day != -1 )
+	{
         result = ReplaceText( result, "%DAY%", day );
-    if( dayOfWeek != -1 )
+    }
+	
+	if( dayOfWeek != -1 )
     {
         result = ReplaceText( result, "%DOW%", dayOfWeek );
         result = ReplaceText( result, "%DOW-STR%", GetMsgStr( TEXTMSG_GAME, STR_MONTH( dayOfWeek ) ) );
     }
+	
     if( hour != -1 )
+	{
         result = ReplaceText( result, "%HOUR%", hour );
-    if( minute != -1 )
+	}
+	
+	if( minute != -1 )
+	{
         result = ReplaceText( result, "%MINUTE%", minute );
+	}
+	
     if( second != -1 )
+	{
         result = ReplaceText( result, "%SECOND%", second );
-
+	}
+	
     return result;
 }
-#endif
+#endif //__CLIENT
+
 #ifdef __SERVER
 void unsafe_getIngameTime( Critter& cr, int param0, int param1, int param2, string@ param3, int[]@ param4 )
 {
 	getIngameTime( cr );
+}
+
+void unsafe_getIngameClocksTime( Critter& cr, int param0, int param1, int param2, string@ param3, int[]@ param4 )
+{
+	getIngameClocksTime( cr );
+}
+
+//~run time setMap year time mode
+void setMap( Critter& cr, int year, int time , int mode )
+{
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	mode = CLAMP( mode, MAP_CURRENT_MODE_ADDITIVE, MAP_CURRENT_MODE_STATIC );
+	bool additive = ( mode == MAP_CURRENT_MODE_ADDITIVE );
+	
+	setMapData( map, MAP_CURRENT_YEAR, year );
+	setTime   ( map, time, additive );
+}
+
+void setMapData( Map& map, int index, int value, bool additive = false )
+{
+	int old = map.GetData( index );
+	if( additive )
+	{
+		value += old;
+	}
+	
+	map.SetData( index, value );
+}
+
+void setTime( Map& map, int value, bool additive )
+{
+	setMapData( map, MAP_CURRENT_TIME, value );
+	setMapData( map, MAP_CURRENT_MODE, additive ? MAP_CURRENT_MODE_ADDITIVE : MAP_CURRENT_MODE_STATIC );
+
+	if( additive )
+	{
+		value += GetRealHour() * 60 + GetRealMinute();
+	}
+
+	value = ( value + FULL_DAY_PERIOD_MINUTES ) % FULL_DAY_PERIOD_MINUTES;
+	
+	map.SetTime( value );
+}
+
+void mapUpdateLights( Map& map )
+{
+	if( map.GetData( MAP_CURRENT_MODE ) != MAP_CURRENT_MODE_ADDITIVE )
+	{
+		return;
+	}
+	
+	setTime( map, map.GetData( MAP_CURRENT_TIME ), true );
+}
+
+//~run time MapHourTimeLoop 0 0 0
+void MapHourTimeLoop( Critter& cr, int, int, int )
+{
+	Map@ map = cr.GetMap();
+	if( !valid( map ) ) 
+	{
+		return;
+	}
+	
+	MapHourTimeLoop( map );
+}
+
+void MapHourTimeLoop( Map& map )
+{
+	if( __AllowRealDayTime != 0 )
+	{
+		if( GetMapLevelByPid( map.GetProtoId() ) >= 0 )
+		{
+			mapUpdateLights( map );
+		}
+	}
+	else if( __AllowRealDayTime == 0 && map.GetTime() != -1 ) //TODO: investigate feature
+	{
+		if( GetMapLevelByPid( map.GetProtoId() ) >= 0 )
+		{
+			map.SetTime( -1 );
+		}
+	}
 }
 
 void getIngameTime( Critter& cr )
@@ -161,18 +269,69 @@ void getIngameTime( Critter& cr )
 	uint16[] timeItems = { PID_GOLD_WATCH, PID_CLOCK, PID_PIPBOY3K, PID_PIPBOY2K_ON };
 	uint16 year = 0, month = 0, day = 0, hour = 0, minute = 0, var = 0;
 	GetTime( year, month, day, var, hour, minute, var, var );
-	year += __YearShift + GetLocationTimeDeltaYears( map );
+	year += GetGvar(GVAR_YearShift) + GetLocationTimeDeltaYears( map );
 	
-	string dayStr = int( day - 10 ) < 0 ? "0" + day : "" + day;
-	cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_LOCAL_DATE, "$year" + year + "$month@msg game " + ( month + 20 ) + "@$day" + dayStr );
+	getMapFullMinute( map, day, hour, minute );
+
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_LOCAL_DATE, "$year" + year + "$month@msg game " + ( month + 20 ) + "@$day" + _D2( day ) );
 	
 	if( isGM( cr ) || hasItems( cr, timeItems ) )
 	{
-		string hourStr = int( hour - 10 ) < 0 ? "0" + hour : "" + hour;
-		string minuteStr = int( minute - 10 ) < 0 ? "0" + minute : "" + minute;
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_LOCAL_TIME, "$hour" + hourStr + "$minute" + minuteStr );
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_LOCAL_TIME, "$hour" + _D2( hour ) + "$minute" + _D2( minute ) );
 	}
 }
+
+void getIngameClocksTime( Critter& cr )
+{
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	uint16 year = 0, month = 0, day = 0, hour = 0, minute = 0, var = 0;
+	GetTime( year, month, day, var, hour, minute, var, var );
+	
+	getMapFullMinute( map, day, hour, minute );
+	
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_LOCAL_CLOCKS_TIME, "$hour" + _D2( hour ) + "$minute" + _D2( minute ) );
+}
+
+int getMapFullMinute( Map& map, uint16& day, uint16& hour, uint16& minute )
+{
+	int mapTime     = map.GetData( MAP_CURRENT_TIME );
+	int mapTimeMode = map.GetData( MAP_CURRENT_MODE );
+	
+	int fullMinute = hour * 60 + minute;
+	switch( mapTimeMode )
+	{
+		case( MAP_CURRENT_MODE_STATIC ): {
+				fullMinute = mapTime;
+			break;
+		}
+		case( MAP_CURRENT_MODE_ADDITIVE ): {
+				fullMinute += mapTime;
+			break;
+		}		
+	}
+
+	if( fullMinute >= FULL_DAY_PERIOD_MINUTES ) 
+	{
+		fullMinute -= FULL_DAY_PERIOD_MINUTES;
+		day++;
+	}
+	else if( fullMinute < 0 ) 
+	{
+		fullMinute += FULL_DAY_PERIOD_MINUTES;
+		day--;
+	}
+	
+	hour = int ( fullMinute / 60 );
+	minute = fullMinute % 60;
+	
+	return fullMinute;
+}
+#endif // __SERVER
 
 int GetRealYear()
 {
@@ -214,11 +373,13 @@ int GetRealMinute()
 	return minute;
 }
 
+#ifdef __SERVER
+
 int GetGlobalYear()
 {
 	uint16 year = 0, month = 0, day = 0, hour = 0, minute = 0, var = 0;
 	GetTime( year, month, day, var, hour, minute, var, var );
-	year += __YearShift;
+	year += GetGvar(GVAR_YearShift);
 	
 	return year;
 }
@@ -229,7 +390,7 @@ int GetLocalYear( Map& map )
 	GetTime( year, month, day, var, hour, minute, var, var );
 	GameVar@ DELTA_YEARS = GetLocalVar( LMVAR_DELTA_YEARS, map.Id );
 	int localDelta = DELTA_YEARS.GetValue();
-	year += __YearShift + localDelta;
+	year += GetGvar(GVAR_YearShift) + localDelta;
 	
 	return year;
 }
@@ -244,4 +405,5 @@ int GetLocationTimeDeltaYears( Map@ map )
 	return DELTA_YEARS.GetValue();
 }
 #endif // __SERVER
-#endif // TIME
+
+#endif // TIME_MODULE

@@ -1,6 +1,6 @@
 @echo off
 
-@:1
+:1
 
 @: Environment
 @set PATH=C:\Program Files (x86)\Microsoft Visual Studio 10.0\Common7\IDE;%PATH%
@@ -25,36 +25,24 @@ link.exe /nologo /dll /incremental:no /machine:I386 .\\fonline_tnf.obj qmap_tool
 @del ".\\fonline_tnf.idb"
 
 @del ".\\qmap_tools.obj"
-@del ".\\qmap_tools.exp"
-@del ".\\qmap_tools.lib"
-
-@del ".\\q_sprites.obj"
-@del ".\\q_sprites.exp"
-@del ".\\q_sprites.lib"
 
 @: Client
-@del ".\\fonline_tnf_client.dll"
+
 cl.exe /nologo /MT /W3 /O2 /Gd /D "__CLIENT" /Fd".\\fonline_tnf.obj" /FD /c .\\fonline_tnf.cpp qmap_tools.cpp q_sprites.cpp
 link.exe /nologo /dll /incremental:no /machine:I386 .\\fonline_tnf.obj qmap_tools.obj q_sprites.obj /out:".\\fonline_tnf_client.dll"
 
 @: Delete leftovers stuff
 @del ".\\fonline_tnf.obj"
-@del ".\\fonline_tnf.exp"
-@del ".\\fonline_tnf.lib
+
 @del ".\\fonline_tnf.idb"
 
-@del ".\\fonline_tnf_client.obj"
+
 @del ".\\fonline_tnf_client.exp"
 @del ".\\fonline_tnf_client.lib"
 
 @del ".\\qmap_tools.obj"
-@del ".\\qmap_tools.exp"
-@del ".\\qmap_tools.lib"
 
 @del ".\\q_sprites.obj"
-@del ".\\q_sprites.exp"
-@del ".\\q_sprites.lib"
-@del ".\\vc90.idb"
 
 @pause
 

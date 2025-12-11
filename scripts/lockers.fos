@@ -3,7 +3,13 @@
 
 #include "_utils.fos"
 #include "lockers_h.fos"
+#include "_ltp.fos"
 #include "gateway_h.fos"
+#include "terminal_h.fos"
+
+import bool canPutItemInContainer( Critter& cr, Item@ item, Item@ container ) from "main";
+
+import void ShowInputBoxScreen( Critter& cr, string funcName, uint16 textLength, uint8 flags ) from "main";
 
 bool UseItemOnLocker( Critter& cr, Item& locker, Item& item )
 {
@@ -46,15 +52,35 @@ bool UseItemOnLocker( Critter& cr, Item& locker, Item& item )
             return true;
         }
     }
+	
+	if( valid( locker ) && locker.GetProtoId() == PID_MAILBOX )
+	{
+		if( ( FLAG( locker.LockerCondition, LOCKER_ISOPEN ) || canPutItemInContainer( cr, item, locker ) ) )
+		{
+			MoveItem( item, 1, locker, 0 );
+			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_SEND_MAIL );
+			return true;
+		}		
+		
+		return false;
+	}	
+	
     return true;
 }
 
 bool hasKeyAround( Critter& cr, Item& locker )
 {
 	Item@[] list = getItemsAround( cr );
+	Item@ found = null;
 	for( uint i = 0, len = list.length(); i < len; i++ )
 	{
-		if( list[i].GetType() == ITEM_TYPE_KEY && list[i].LockerId == locker.LockerId )
+		@ found = list[i];
+		if( !valid( found ) )
+		{
+			continue;
+		}
+		// We need to Check for ITEM_HIDDEN flag because falled key 'll still being count as key in lock - APAMk2
+		if( found.GetType() == ITEM_TYPE_KEY && found.LockerId == locker.LockerId && FLAG(found.Flags, ITEM_HIDDEN))
 		{
 			return true;
 		}
@@ -65,10 +91,11 @@ bool hasKeyAround( Critter& cr, Item& locker )
 bool hasKey( Item& locker, int dir = NO_DIR )
 {
 	Item@[] list = getItemsAround( locker );
-	
+	Item@ found = null;
 	for( uint i = 0, len = list.length(); i < len; i++ )
 	{
-		if( list[i].GetType() == ITEM_TYPE_KEY && list[i].LockerId == locker.LockerId )
+		@ found = list[i];
+		if( found.GetType() == ITEM_TYPE_KEY && found.LockerId == locker.LockerId && FLAG(found.Flags, ITEM_HIDDEN) )
 		{
 			return true;
 		}
@@ -79,47 +106,55 @@ bool hasKey( Item& locker, int dir = NO_DIR )
 bool hasKey( Critter& cr, Item& locker )
 {
 	Item@[] keys;
+	Item@ found = null;
 	cr.GetItemsByType( ITEM_TYPE_KEY, keys );
-	uint len = keys.length();
-	if( len > 0 )
+	for( uint i = 0, len = keys.length(); i < len; i ++ )
 	{
-		for( uint i = 0; i < len; i ++ )
+		@ found = keys[i];
+		if( !valid( found ) )
 		{
-			if( keys[i].LockerId != locker.LockerId )
-			{
-				continue;
-			}
-			else
-			{
-				return true;
-			}
+			continue;
+		}
+		
+		if( found.LockerId != locker.LockerId )
+		{
+			continue;
+		}
+		else
+		{
+			return true;
 		}
 	}
 	return false;
 }
 
-bool LockpickMenu( Critter& cr, Item& locker )
+bool LockpickMenu( Critter& cr, Item& locker ) // REFACTOR THIS SHIT TO SUCKLESS!!!
 {
 	cr.StatBase[ ST_VAR0 ] = locker.Id;
 	
-	string[] data = { "lockers@answer_LOCKPICK", "Choose action:", "knock", "bang", "begin lockpick" };
+	string[] data = { 
+		"lockers@answer_LOCKPICK", 
+		BTN( STR_CHOOSE_YOUR_ACTION ),
+		BTN( STR_KNOCK ),
+		BTN( STR_SMASH ),
+		BTN( STR_LOCKPICK )
+	};
 	
 	if( locker.Proto.Item_Subtype != ITEM_SUBTYPE_BRIEFCASE )
 	{
-		string action = " key";
-		if( hasKey( locker ) && hasKeyAround( cr, locker ) )
+		if( hasKeyAround( cr, locker ) )
 		{
-			data.insertLast( "extract" + action );
-			data.insertLast( ( FLAG( locker.LockerCondition, LOCKER_LOCKED ) ? "Unlock" : "lock" ) + " the lock" );
+			data.insertLast( BTN( STR_EXTRACT_KEY ) );
+			data.insertLast( ( FLAG( locker.LockerCondition, LOCKER_LOCKED ) ? BTN( STR_UNLOCK ) : BTN( STR_LOCK ) ) );
 		}
-		else if( hasKey( cr, locker ) ) 
+		else if( IsKeyAviable( cr, locker.LockerId ) ) 
 		{
-			data.insertLast( "insert" + action );
-			data.insertLast( ( FLAG( locker.LockerCondition, LOCKER_LOCKED ) ? "Unlock" : "lock" ) + " the lock" );
+			data.insertLast( BTN( STR_INSERT_KEY ) );
+			data.insertLast( ( FLAG( locker.LockerCondition, LOCKER_LOCKED ) ? BTN( STR_UNLOCK ) : BTN( STR_LOCK ) ) );
 		}
 	}
 	
-	DIALOG_MENU( cr, data );
+	DIALOG_MENU_NEW( cr, data );
 	
 	return true;
 }
@@ -144,8 +179,8 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
     {
 		if( FLAG( locker.LockerCondition, LOCKER_ELECTRO ) && !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) && ( locker.GetType() == ITEM_TYPE_DOOR || locker.GetType() == ITEM_TYPE_CONTAINER ) )
         {
-            cr.RunClientScript( "client_screen_codedoor@ShowScreen", locker.Id, locker.CODEDOOR_CODE, 0, "Enter password", null );
-			LogCrimeMovement( cr, locker, "enters password" ); 
+            ForgetMenu(cr);
+			cr.RunClientScript( "client_screen_codedoor@ShowScreen", locker.Id, locker.CODEDOOR_CODE, 0, "Enter password", null );
             return true;
         }
 		
@@ -158,13 +193,12 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
                 return true;
             }
             // Check key
-            if( !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) && locker.LockerId != 0 &&
-                !FLAG( locker.LockerCondition, LOCKER_BROKEN ) && FLAG( locker.LockerCondition, LOCKER_LOCKED ) )
+            if( !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) && locker.LockerId != 0 && !FLAG( locker.LockerCondition, LOCKER_BROKEN ) && FLAG( locker.LockerCondition, LOCKER_LOCKED ) )
             {
                 cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_ITEM_LOCKER_NEED_KEY );
 				LockerBudge( locker );
 				
-                if( !isGM(cr) )
+                if( !isGM( cr ) )
 				{
 					LogCrimeMovement( cr, locker, "can't open locked because has no key" ); 
 					PlayDoorSound( map, locker.HexX, locker.HexY, locker.GetProtoId(), locker.LockerCondition, 15 );
@@ -215,18 +249,20 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
                 int freeWeight = cr.Stat[ ST_CARRY_WEIGHT ] - ItemsWeight( cr );
                 int contWeight = 0;
                 Item@[] items;
+				Item@ contItm = null;
                 uint len = locker.GetItems( uint( -1 ), items );
 				
                 for( uint i = 0; i < len; i++ )
                 {
-                    if( items[ i ] is null )
+					@ contItm = items[ i ];
+                    if( !valid( contItm ) )
 					{
                         continue;
 					}
-                    contWeight += int( items[ i ].Proto.Weight * items[ i ].GetCount() );
+                    contWeight += int( contItm.Proto.Weight * contItm.GetCount() );
                 }
 
-                if( freeWeight >= ( contWeight + int(locker.Proto.Weight) ) )
+                if( freeWeight >= ( contWeight + int( locker.Proto.Weight ) ) )
                 {
 					LogItemMovement( cr, locker, "picks up" ); 
                     MoveItem( locker, 0, cr );
@@ -234,8 +270,7 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
                 }
             }
             // Check key
-            if( !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) && locker.LockerId != 0 &&
-                !FLAG( locker.LockerCondition, LOCKER_BROKEN ) && FLAG( locker.LockerCondition, LOCKER_LOCKED ) )
+            if( !FLAG( locker.LockerCondition, LOCKER_ISOPEN ) && locker.LockerId != 0 && !FLAG( locker.LockerCondition, LOCKER_BROKEN ) && FLAG( locker.LockerCondition, LOCKER_LOCKED ) )
             {
                 cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_ITEM_LOCKER_NEED_KEY );
 				LockerBudge( locker );
@@ -272,8 +307,8 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
             }
             else
             {
-				locker.Accessory == ACCESSORY_CRITTER ? ShowContainer( cr, locker, TRANSFER_SELF_CONT )
-									  : ShowContainer( cr, locker, locker.Proto.GroundLevel ? TRANSFER_HEX_CONT_DOWN : TRANSFER_HEX_CONT_UP );
+				locker.Accessory == ACCESSORY_CRITTER ? ShowContainer( cr, locker, TRANSFER_SELF_CONT ) 
+													  : ShowContainer( cr, locker, locker.Proto.GroundLevel ? TRANSFER_HEX_CONT_DOWN : TRANSFER_HEX_CONT_UP );
                 
 				LogItemMovement( cr, locker, "looks into" );
 				return true;
@@ -284,7 +319,11 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
     {
         if( locker.GetType() == ITEM_TYPE_CONTAINER )
         {
-			if( ( !locker.Proto.Container_Changeble || FLAG( locker.LockerCondition, LOCKER_ISOPEN ) ) && !FLAG( locker.LockerCondition, LOCKER_LOCKED ) )
+			if( locker.GetProtoId() == PID_STASH_BOX)
+			{
+				return false;
+			}
+			if( !locker.Proto.Container_Changeble || FLAG( locker.LockerCondition, LOCKER_ISOPEN ) )
 			{
 				ShowContainer( cr, locker, locker.Proto.GroundLevel ? TRANSFER_HEX_CONT_DOWN : TRANSFER_HEX_CONT_UP );
 				LogItemMovement( cr, locker, "looks using SK_STEAL into" );
@@ -292,11 +331,11 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
 			}
 			else if( FLAG( locker.LockerCondition, LOCKER_LOCKED ) )
 			{
-				cr.Say( SAY_NETMSG, "|0xFFFF00 The container is locked" );
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_IS_LOCKED );
 			}
 			else
 			{
-				cr.Say( SAY_NETMSG, "|0xFFFF00 The door is closed" );
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_IS_CLOSED );
 			}
         }		
 		return false;
@@ -309,55 +348,24 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
 			LogItemMovement( cr, locker, "can't lockpick because of tiredness" );
             return true;
         }
-
-        int base = cr.Skill[ SK_LOCKPICK ] - locker.LockerComplexity;
-        Item@lockpick = cr.GetItem( 0, SLOT_HAND1 );
-        if( locker.LOCK_TYPE == 4 && valid( lockpick ) && lockpick.GetProtoId() != PID_ELECTRONIC_LOCKPICKS )
-        {
-			LogItemMovement( cr, locker, "can't lockpick without electronic lockpick" );
-            cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_E_LOCKPICK );
-            return true;
-        }
-
-        // Todo: PID_ELECTRONIC_LOCKPICKS +, PID_ELEC_LOCKPICK_MKII
-
-        if( cr.GetAccess() != ACCESS_ADMIN )
-		{
-            base = CLAMP( base, 0, 95 );
-		}
 		
-        if( locker.LockerComplexity == 500 && !isGM( cr ) )
+		if( locker.LockerComplexity == 500 && !isGM( cr ) )
 		{
             cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_SKILL_LOCKPICK_FAIL );
 			LogItemMovement( cr, locker, "can't lockpick GM lock" );
 			return true;
 		}
-        else if( locker.LockerCondition == LOCKER_ELECTRO )
+
+        if( locker.LockerCondition == LOCKER_ELECTRO )
         {
-            uint16 complex = locker.LockerComplexity;
-            uint16 exp = complex * 2;
-
-            string tempCode = locker.Val4;
-            uint8  codeLength = tempCode.length();
-            uint16 skillLock = cr.Skill[ SK_LOCKPICK ];
-            uint8  count = complex / codeLength;
-
-            bool changeCode = false;
-
-            for( uint8 i = 0; i < codeLength; i++ )
-            {
-                skillLock = ( skillLock >= count ? ( skillLock - count ) : 0 );
-                if( complex >= skillLock )
-                {
-                    tempCode[ i ] = '*';
-                    exp = ( exp >= count * 4 ? exp - ( count * 4 ) : 0 );
-
-                    changeCode = false;
-                }
-            }
-			cr.Say( SAY_NETMSG, "Code: |0xFFFF00 " + tempCode );
-			LogItemMovement( cr, locker, "discovers code: " + tempCode );
-			PlayGenericSound( map, cr.HexX, cr.HexY, "door_vault1_lock.mp3", 6 );
+			if( !HasElectronicLockpicks( cr ) )
+			{
+				LogItemMovement( cr, locker, "can't lockpick without electronic lockpick" );
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_E_LOCKPICK );
+				return true;
+			}
+			
+			StartMenuHacking( cr, locker );
 			return true;
         }
         else
@@ -370,21 +378,40 @@ bool UseSkillOnLocker( Critter& cr, Item& locker, int skill )
     {
         return false;
     }
+	else if( skill == SK_SCIENCE )
+	{
+		if( ( locker.GetType() == ITEM_TYPE_DOOR || ( locker.GetType() == ITEM_TYPE_CONTAINER && locker.Proto.Container_Changeble ) ) && FLAG( locker.LockerCondition, LOCKER_ELECTRO ) && _LockerIsOpen( locker ) )
+		{
+			if( cr.Skill[ SK_SCIENCE ] >= int( locker.LockerComplexity ) )
+			{
+				string passwordInfo = "Set new password";
+				int[] data = { 0 };
+				cr.RunClientScript( "client_screen_numberpad@ShowScreen", locker.Id, 0, 0, passwordInfo, data );
+			}
+			else
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MSG_SKILL_TOO_LOW_PASSWORD );
+			}
+			
+			return true;
+		}
+	}
 
     return false;
 }
 
 void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
-{ 
-    Item@ lock = GetItem( player.Stat[ ST_VAR0 ] );
-    if( lock is null )
+{
+    Item@ lockItm = GetItem( player.Stat[ ST_VAR0 ] );
+    if( !valid( lockItm ) )
 	{
         return;
     }
+	
 	Item@lockpick = player.GetItem( 0, SLOT_HAND1 );
 	Map@ map = player.GetMap();
 	
-	if( GetDistantion( lock.HexX, lock.HexY, player.HexX, player.HexY ) > 2 )
+	if( GetDistantion( lockItm.HexX, lockItm.HexY, player.HexX, player.HexY ) > 2 )
 	{
 		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_FAR_FROM_DOOR );
 		return;
@@ -392,72 +419,76 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
 
     if( answerI == 0 )
     {
-        map.SetTextMsg( lock.HexX, lock.HexY, COLOR_GRAY, TEXTMSG_TEXT, STR_MAPMSG_KNOCK );
+        map.SetTextMsg( lockItm.HexX, lockItm.HexY, COLOR_GRAY, TEXTMSG_TEXT, STR_MAPMSG_KNOCK );
         player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_STR_YOU_KNOCK );
-		LogItemMovement( player, lock, "knocks on the" ); 
+		LogItemMovement( player, lockItm, "knocks on the" ); 
     }
+	
     if( answerI == 1 )
     {
-		map.SetTextMsg( lock.HexX, lock.HexY, COLOR_RED, TEXTMSG_TEXT, STR_MAPMSG_LOUD_BANG );
-		LogItemMovement( player, lock, "bangs on the" ); 
+		map.SetTextMsg( lockItm.HexX, lockItm.HexY, COLOR_RED, TEXTMSG_TEXT, STR_MAPMSG_LOUD_BANG );
+		LogItemMovement( player, lockItm, "bangs on the" ); 
 	
 		return;
 	}
+	
     if( answerI == 2 )
     {
-		if( hasKey( lock ) ) 
+		if( hasKey( lockItm ) ) 
         {
-			bool thisSide = hasKeyAround( player, lock );
+			bool thisSide = hasKeyAround( player, lockItm );
 			uint keySide = thisSide ? STR_KEY_THIS_SIDE : STR_KEY_OTHER_SIDE;
 			player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, keySide );
-			LogCrimeMovement( player, lock, "can't lockpick because there is a key in the door" ); 
+			LogCrimeMovement( player, lockItm, "can't lockpick because there is a key in the door" ); 
             return;
         }
 
-		if( FLAG( lock.LockerCondition, LOCKER_ISOPEN ) && InteractContainer.find( lock.GetProtoId() ) == -1 )
+		if( FLAG( lockItm.LockerCondition, LOCKER_ISOPEN ) && InteractContainer.find( lockItm.GetProtoId() ) == -1 )
         {
             player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOOR_OPEN );
-			LogCrimeMovement( player, lock, "can't lockpick - the door is open" ); 
+			LogCrimeMovement( player, lockItm, "can't lockpick - the door is open" ); 
             return;
         }
 		
-        if( lock.LOCK_TYPE == 0 )
+        if( lockItm.LOCK_TYPE == LOCK_NONE )
         {
             player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_LOCK );
-			LogCrimeMovement( player, lock, "cant lockpick - no lock" ); 
+			LogCrimeMovement( player, lockItm, "cant lockpick - no lock" ); 
             return;
         }
 
-		if( !valid( lockpick ) || ( lockpick.GetProtoId() != PID_FLocks && lockpick.GetProtoId() != PID_EXP_LOCKPICK_SET && lockpick.GetProtoId() != PID_LOCKPICKS ) )
+		if( !valid( lockpick ) || ( lockpick.GetProtoId() != PID_HAIRPIN && lockpick.GetProtoId() != PID_EXP_LOCKPICK_SET && lockpick.GetProtoId() != PID_LOCKPICKS ) )
         {
             player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_LOCKPICKING_TOOL );
-			LogCrimeMovement( player, lock, "can't lockpick - no lockpicks" ); 
+			LogCrimeMovement( player, lockItm, "can't lockpick - no lockpicks" ); 
             return;
         }
 
-		if( lock.LOCK_TYPE == 1 )
+		if( lockItm.LOCK_TYPE == LOCK_LOW )
 		{
-            lock.STORED_CODE = Random( 1, 9 ) * 10 + Random( 1, 9 );
-            lock.ENTERED_CODE = 11;
+            lockItm.STORED_CODE = Random( 1, 9 ) * 10 + Random( 1, 9 );
+            lockItm.ENTERED_CODE = 11;
         }
-        if( lock.LOCK_TYPE == 2 )
+        
+        if( lockItm.LOCK_TYPE == LOCK_MED )
         {
-            lock.STORED_CODE = Random( 1, 9 ) * 100 + Random( 1, 9 ) * 10 + Random( 1, 9 );
-            lock.ENTERED_CODE = 111;
+            lockItm.STORED_CODE = Random( 1, 9 ) * 100 + Random( 1, 9 ) * 10 + Random( 1, 9 );
+            lockItm.ENTERED_CODE = 111;
         }
-        if( lock.LOCK_TYPE == 3 )
+        
+        if( lockItm.LOCK_TYPE == LOCK_HARD )
         {
-            lock.STORED_CODE = Random( 1, 9 ) * 1000 + Random( 1, 9 ) * 100 + Random( 1, 9 ) * 10 + Random( 1, 9 );
-            lock.ENTERED_CODE = 1111;
+            lockItm.STORED_CODE = Random( 1, 9 ) * 1000 + Random( 1, 9 ) * 100 + Random( 1, 9 ) * 10 + Random( 1, 9 );
+            lockItm.ENTERED_CODE = 1111;
         }
 
-        if( valid( lockpick ) && lockpick.LOCK_TYPE != 0 && ( lockpick.GetProtoId() == PID_FLocks || lockpick.GetProtoId() == PID_EXP_LOCKPICK_SET || lockpick.GetProtoId() == PID_LOCKPICKS) )
+        if( valid( lockpick ) && lockpick.LOCK_TYPE != 0 && ( lockpick.GetProtoId() == PID_HAIRPIN || lockpick.GetProtoId() == PID_EXP_LOCKPICK_SET || lockpick.GetProtoId() == PID_LOCKPICKS) )
         {
 			lockpick.LOCK_TYPE = 0;
             _SubItem( lockpick, 1 );
             player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOCKPICKING_BROKEN );
 			map.PlaySound( LockpickBreak[ Random( 0, LockpickBreak.length() -1 ) ], player.HexX, player.HexY, 2 );
-			LogCrimeMovement( player, lock, "breaks the lockpick" ); 
+			LogCrimeMovement( player, lockItm, "breaks the lockpick" ); 
             return;
         }
 		else if( valid( lockpick ) && Random( 0, 1 ) == 0 )
@@ -469,168 +500,174 @@ void answer_LOCKPICK( Critter& player, uint answerI, string& answerS )
         player.StatBase[ ST_VAR2 ] = 0;     // remaining attempts
 
         player.ShowScreen( SCREEN_DIALOGBOX, 8, "answer_LOCKPICK_lock" );
-        player.Say( SAY_DIALOGBOX_TEXT, "State of lock is unknown" );
-        player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Examine the lock" );
-        player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "Lockpick further" );
-        player.Say( SAY_DIALOGBOX_BUTTON( 2 ), "Lockpick backward" );
-        player.Say( SAY_DIALOGBOX_BUTTON( 3 ), "Lockpick up" );
-        player.Say( SAY_DIALOGBOX_BUTTON( 4 ), "Lockpick down" );
-        player.Say( SAY_DIALOGBOX_BUTTON( 5 ), "Turn" );
-        player.Say( SAY_DIALOGBOX_BUTTON( 6 ), "Remove lockpick" );
-		player.Say( SAY_DIALOGBOX_BUTTON( 7 ), "Lock the lock" );
+        player.SayMsg( SAY_DIALOGBOX_TEXT, TEXTMSG_TEXT, STR_STATE_OF_LOCK_IS_UNKNOWN );
+        player.SayMsg( SAY_DIALOGBOX_BUTTON( 0 ), TEXTMSG_TEXT, STR_EXAMINE_THE_LOCK );
+        player.SayMsg( SAY_DIALOGBOX_BUTTON( 1 ), TEXTMSG_TEXT, STR_MOVE_FURTHER );
+        player.SayMsg( SAY_DIALOGBOX_BUTTON( 2 ), TEXTMSG_TEXT, STR_MOVE_BACKWARD );
+        player.SayMsg( SAY_DIALOGBOX_BUTTON( 3 ), TEXTMSG_TEXT, STR_MOVE_UP );
+        player.SayMsg( SAY_DIALOGBOX_BUTTON( 4 ), TEXTMSG_TEXT, STR_MOVE_DOWN );
+        player.SayMsg( SAY_DIALOGBOX_BUTTON( 5 ), TEXTMSG_TEXT, STR_TURN );
+        player.SayMsg( SAY_DIALOGBOX_BUTTON( 6 ), TEXTMSG_TEXT, STR_REMOVE_LOCKPICK );
+		player.SayMsg( SAY_DIALOGBOX_BUTTON( 7 ), TEXTMSG_TEXT, STR_LOCK_THE_LOCK );
 		
         player.TimeoutBase[ TO_SK_LOCKPICK ] = LOCKPICK_TIMEOUT( player );
 		
 		map.PlaySound( "ui_lockpicking_enter.wav", player.HexX, player.HexY, 2 );
-		LogCrimeMovement( player, lock, "begins to break the lock, code is: " + lock.STORED_CODE ); 
+		LogCrimeMovement( player, lockItm, "begins to break the lock, code is: " + lockItm.STORED_CODE ); 
     }
 
 	if( answerI == 3 )
 	{
-		if( hasKey( lock ) )
+		if( hasKey( lockItm ) )
 		{
-			if( hasKeyAround( player, lock ) )
+			if( hasKeyAround( player, lockItm ) )
 			{
-				LogItemMovement( player, lock, "takes out key from the lock" ); 
-				takeKey( player, lock );
+				LogItemMovement( player, lockItm, "takes out key from the lock" ); 
+				takeKey( player, lockItm );
 			}
 			else
 			{
-				LogItemMovement( player, lock, "can't put in the key, there is one already from the other side" ); 
+				LogItemMovement( player, lockItm, "can't put in the key, there is one already from the other side" ); 
 				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEY_OTHER_SIDE );
 			}
 		}
-		else if( hasKey( player, lock ) ) 
+		else if( hasKey( player, lockItm ) ) 
 		{
-			LogItemMovement( player, lock, "inserts key in the lock" ); 
-			putKey( player, lock );
+			LogItemMovement( player, lockItm, "inserts key in the lock" ); 
+			putKey( player, lockItm );
+		}
+		else
+		{
+			player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_NEED_KEY );
 		}
 	}
+
 	if( answerI == 4 )
 	{
-		if( !hasKey( lock ) )
+		bool thisSide = false;
+		if( hasKey( lockItm ) ) 
 		{
-			if( FLAG( lock.LockerCondition, LOCKER_LOCKED ) )
+			thisSide = hasKeyAround( player, lockItm );
+		}
+		else if( IsKeyAviable( player, lockItm.LockerId ) )
+		{
+			thisSide = true;
+		}
+		
+		if( thisSide )
+		{
+			if( FLAG( lockItm.LockerCondition, LOCKER_LOCKED ) )
 			{
-				UNSETFLAG( lock.LockerCondition, LOCKER_LOCKED );
+				UNSETFLAG( lockItm.LockerCondition, LOCKER_LOCKED );
 				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_UNLOCK_DOOR );
-				LogItemMovement( player, lock, "unlocks" ); 
+				LogItemMovement( player, lockItm, "unlocks" ); 
 				player.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_UNLOCKS );
 				PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
 			}
 			else
 			{
-				SETFLAG( lock.LockerCondition, LOCKER_LOCKED );
+				SETFLAG( lockItm.LockerCondition, LOCKER_LOCKED );
 				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOCK_DOOR );
-				LogItemMovement( player, lock, "locks" ); 
+				LogItemMovement( player, lockItm, "locks" ); 
 				player.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_LOCKS );
 				PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
 			}
 		}
-		else
+		else 
 		{
-			bool thisSide = hasKeyAround( player, lock );
-			if( thisSide )
-			{
-				if( FLAG( lock.LockerCondition, LOCKER_LOCKED ) )
-				{
-					UNSETFLAG( lock.LockerCondition, LOCKER_LOCKED );
-					player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_UNLOCK_DOOR );
-					player.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_UNLOCKS );
-					LogItemMovement( player, lock, "unlocks" );
-					PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
-				}
-				else
-				{
-					SETFLAG( lock.LockerCondition, LOCKER_LOCKED );
-					player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_LOCK_DOOR );
-					player.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_LOCKS );
-					LogItemMovement( player, lock, "locks" );
-					PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
-				}
-			}
-			else 
-			{ 
-				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEY_OTHER_SIDE ); 
-				LogCrimeMovement( player, lock, "can't lockpick - key on the other side" ); 
-			}
+			player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KEY_OTHER_SIDE ); 
+			LogCrimeMovement( player, lockItm, "can't lockpick - key on the other side" ); 
 		}
 
-		LockpickMenu( player, lock );
+		LockpickMenu( player, lockItm );
 	}
 }
 
-bool takeKey( Critter& cr, Item& locker )
+void takeKey( Critter& cr, Item& locker )
 {
 	Map@ map = cr.GetMap();
 	if( !valid( map ) )
 	{
-		return false;
+		return;
 	}
 	
 	Item@[] list = getItemsAround( locker );
+	Item@ key = null;
 	for( uint i = 0, len = list.length(); i < len; i++ )
 	{
-		if( list[i].GetType() == ITEM_TYPE_KEY && list[i].LockerId == locker.LockerId )
+		@key = list[i];
+		if( valid( key ) )
 		{
-			if( list[i].KEY_EVENT != 0 )
+			if( key.GetType() == ITEM_TYPE_KEY && key.LockerId == locker.LockerId )
 			{
-				EraseTimeEvent( list[i].KEY_EVENT );
-				list[i].KEY_EVENT = 0;
+				if( key.KEY_EVENT != 0 )
+				{
+					EraseTimeEvent( key.KEY_EVENT );
+					key.KEY_EVENT = 0;
+				}
+				
+				MoveItem( key, 1, cr );
+				UNSETFLAG( key.Flags, ITEM_HIDDEN );
+				key.KEY_CYCLE = 0;
+				key.Update();
+				PlayGenericSound( map, cr.HexX, cr.HexY, "ui_lockpicking_enter.wav", 6 );
+				cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_EJECT_KEY );
 			}
-			
-			MoveItem( list[i], 1, cr );
-			UNSETFLAG( list[i].Flags, ITEM_HIDDEN );
-			list[i].Update();
-			PlayGenericSound( map, cr.HexX, cr.HexY, "ui_lockpicking_enter.wav", 6 );
-			cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_EJECT_KEY );
-			return true;
 		}
 	}
-	return false;
+	
+	list.resize(0);
 }
 
-bool putKey( Critter& cr, Item& locker )
+void putKey( Critter& cr, Item& locker )
 {
 	Map@ map = cr.GetMap();
 	if( !valid( map ) )
 	{
-		return false;
+		return;
 	}
 	
 	Item@[] keys;
 	Item@ key = null;
 	cr.GetItemsByType( ITEM_TYPE_KEY, keys );
-	uint len = keys.length();
-	if( len > 0 )
+	for( uint i = 0, len = keys.length(); i < len; i ++ )
 	{
-		for( uint i = 0; i < len; i ++ )
+		@key = keys[i];
+		if( valid( key ) )
 		{
-			if( keys[i].LockerId != locker.LockerId )
+			if( key.LockerId != locker.LockerId )
 			{
+				@key = null;
 				continue;
-			}
-			else
-			{
-				@key = keys[i];
 			}
 		}
 	}
+
+	keys.resize(0);
 	
 	if( !valid( key ) )
 	{
-		return false;
+		return;
 	}
 	
 	MoveItem( key, 1, map, cr.HexX, cr.HexY );
 	SETFLAG( key.Flags, ITEM_HIDDEN );
+	key.KEY_CYCLE = 0;
+	
 	uint[] vals = { key.Id, locker.Id };
-	key.KEY_EVENT = CreateTimeEvent( AFTER( REAL_DAY( 10 ) ), "e_KeyRust", vals, true );
+	key.KEY_EVENT = CreateTimeEvent( AFTER( REAL_SECOND( 1 ) ), "e_KeyRust", vals, true );
 
 	key.Update();
 	PlayGenericSound( map, cr.HexX, cr.HexY, "ui_lockpicking_enter.wav", 6 );
 	cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_INJECTS_KEY );
-	return true;
+	
+#ifdef KEY_IS_CRIME
+	int crime_TO = GetGvar(GVAR_crime_TO);
+	if( crime_TO > 0 && cr.Timeout[ TO_REMOVE_FROM_GAME ] < REAL_HOUR( crime_TO ) )
+	{
+		cr.TimeoutBase[ TO_REMOVE_FROM_GAME ] = __FullSecond + REAL_HOUR( crime_TO );
+	}
+#endif // KEY_IS_CRIME
 }
 
 uint e_KeyRust( uint[]@ values )
@@ -648,20 +685,28 @@ uint e_KeyRust( uint[]@ values )
 	}
 	
 	Map@ map = GetMap( key.MapId );
-	
 	if( !valid( map ) || !FLAG( key.Flags, ITEM_HIDDEN ) )
 	{
 		return 0;
 	}
 	
-	UNSETFLAG( key.Flags, ITEM_HIDDEN );
+	if( key.KEY_CYCLE == RUST_CYCLE_LIMIT )
+	{
+		UNSETFLAG( key.Flags, ITEM_HIDDEN );
 	
-	uint16 x = key.HexX, y = key.HexY;
-	map.MoveHexByDir( x, y, GetDirection( door.HexX, door.HexY, key.HexX, key.HexY ), 1 );
+		uint16 x = key.HexX, y = key.HexY;
+		map.MoveHexByDir( x, y, GetDirection( door.HexX, door.HexY, key.HexX, key.HexY ), 1 );
+		
+		MoveItem( key, 1, map, x, y ); 
+		key.KEY_EVENT = 0;
+		key.KEY_CYCLE = 0;
+		key.Update();
+		
+		return 0;
+	}
 	
-	MoveItem( key, 1, map, x, y ); 
-	
-	return 0;
+	key.KEY_CYCLE ++;
+	return REAL_HOUR( 1 );
 }
 
 void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
@@ -689,10 +734,10 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
 		switch( lockpickPid )
 		{
 			case( PID_LOCKPICKS ):
-				base += 25;
+				base += LOCKPICKS_BONUS;
 				break;
 			case( PID_EXP_LOCKPICK_SET ):
-				base += 50;
+				base += LARGE_LOCKPICKS_BONUS;
 				break;
 			default:
 				break;
@@ -707,72 +752,65 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
 		return;
 	}
 
-    string state = "";
+    string state = "$state";
     int curComb = 0;
 	
 	int curPos = int( ( lock.ENTERED_CODE % pow( 10, player.StatBase[ ST_VAR1 ] ) ) / pow( 10, player.StatBase[ ST_VAR1 ] - 1 ) );
 
     if( answerI == 0 )
     {
-        if( lock.LOCK_TYPE < 2 )
+        if( lock.LOCK_TYPE == LOCK_LOW )
 		{
-            state = "Padlock, ";
+            state += STR_INSERT_TEXT_LINE( STR_LOCK_PADLOCK );
         }
-		else if( lock.LOCK_TYPE == 2 )
+		else if( lock.LOCK_TYPE == LOCK_MED )
 		{
-            state = "Door lock, ";
+            state += STR_INSERT_TEXT_LINE( STR_LOCK_DOOR_LOCK );
         }
-		else if( lock.LOCK_TYPE == 3 )
+		else if( lock.LOCK_TYPE == LOCK_HARD )
 		{
-            state = "Safe lock, ";
+            state += STR_INSERT_TEXT_LINE( STR_LOCK_SAFE_LOCK );
 		}
 	}
 	
     if( answerI == 1 )
     {
-        if( player.Timeout[ TO_SK_LOCKPICK ] > int( REAL_MINUTE( 2 ) ) )
+        if( player.Timeout[ TO_SK_LOCKPICK ] > int( REAL_SECOND( 1 ) ) )
 		{
-            state = "The lockpick is stuck, you need to release it a bit and try again."; //"Щуп застрял, нужно чуть ослабить зажим и попробовать еще раз."
+            state += STR_INSERT_TEXT_LINE( STR_LOCKPICK_STUCK );
         }
 		else if( player.StatBase[ ST_VAR1 ] < lock.LOCK_TYPE + 1 )
 		{
             player.StatBase[ ST_VAR1 ]++;
 			curPos = int( ( lock.ENTERED_CODE % pow( 10, player.StatBase[ ST_VAR1 ] ) ) / pow( 10, player.StatBase[ ST_VAR1 ] - 1 ) );
 			
-            state = "You have moved the lockpick further.";
-			
-            if( Random( 0, 2 ) == 0 )
-			{
-                player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 2 );
-			}
+			state += STR_INSERT_TEXT_LINE( STR_LOCKPICK_FURTHER );           
+			player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 2 );
         }
 		else
 		{
-            state = "The lockpick reached the end.";
+            state += STR_INSERT_TEXT_LINE( STR_LOCKPICK_END );           
 		}
 		PlayGenericSound( map, player.HexX, player.HexY, _GetOneRandom( LockpickMove ), 4 );
     }
 	
     if( answerI == 2 )
     {
-        if( player.Timeout[ TO_SK_LOCKPICK ] > int( REAL_MINUTE( 2 ) ) )
+        if( player.Timeout[ TO_SK_LOCKPICK ] > int( REAL_SECOND( 1 ) ) )
 		{
-            state = "The lockpick is stuck, you need to release it a bit and try again.";
+            state += STR_INSERT_TEXT_LINE( STR_LOCKPICK_STUCK );
 		}
 		else if( player.StatBase[ ST_VAR1 ] > 1 )
 		{
             player.StatBase[ ST_VAR1 ]--;
 			curPos = int( ( lock.ENTERED_CODE % pow( 10, player.StatBase[ ST_VAR1 ] ) ) / pow( 10, player.StatBase[ ST_VAR1 ] - 1 ) );
 			
-            state = "You moved the lockpick backwards.";
-            if( Random( 0, 2 ) == 0 )
-			{
-                player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 2 );
-			}
+            state += STR_INSERT_TEXT_LINE( STR_LOCKPICK_BACKWARDS );
+		    player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 2 );
 		}
 		else 
 		{
-            state = "The lockpick is in the closest position, you only have to remove it now."; //"Щуп уже в крайнем положении, остается только вытащить его."
+            state += STR_INSERT_TEXT_LINE( STR_LOCKPICK_CLOSEST );
 		}
 		PlayGenericSound( map, player.HexX, player.HexY, _GetOneRandom( LockpickMove ), 4 );
 	}
@@ -785,11 +823,11 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
             curComb = int( ( lock.STORED_CODE % pow( 10, player.StatBase[ ST_VAR1 ] ) ) / pow( 10, player.StatBase[ ST_VAR1 ] - 1 ) );
             lock.ENTERED_CODE += int( pow( 10, player.StatBase[ ST_VAR1 ] - 1 ) );
             curPos++;
-            state = "You have moved the lock toung up with a lockpick."; //"Вы подвинули щупом язычек замка вверх."
-            if( player.Timeout[ TO_SK_LOCKPICK ] > 0 && Random( 0, 2 ) == 0 )
+			state += STR_INSERT_TEXT_LINE( STR_LOCKPICK_MOVED_UP );
+            if( player.Timeout[ TO_SK_LOCKPICK ] > 0 )
 			{
 				PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_forcefail.wav", 10 );
-                state += "\nYou were not carefull and made a bad move."; //"\nВы поторопились и неловко дернули щупом."
+                state += STR_INSERT_TEXT_LINE( STR_BAD_MOVE );
                 if( Random( 0, 1 ) == 0 )
 				{
                     int bar = Random( 1, lock.LOCK_TYPE + 1 );
@@ -803,7 +841,7 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
 				{
                     PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_forcefail.wav", 10 );
                 }
-				state += "\nYou hear a click.";
+				state += STR_INSERT_TEXT_LINE( STR_HEAR_CLICK );
             }
 			else if( ( curComb == ( curPos - 1 ) || curComb == ( curPos + 1 ) ) && base > Random( 0, 100 ) && Random( 0, 1 ) == 0 )
 			{
@@ -811,7 +849,7 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
 				{
                    PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_forcefail.wav", 10 );
                 }
-				state += "\nYou hear a click.";
+				state += STR_INSERT_TEXT_LINE( STR_HEAR_CLICK );
             }
 			else if( ( curComb == ( curPos - 2 ) || curComb == ( curPos + 2 ) ) && base > Random( 0, 100 ) && Random( 0, 3 ) == 0 )
 			{
@@ -819,7 +857,7 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
 				{
                     PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_forcefail.wav", 10 );
 				}
-                state += "\nYou hear a click.";
+                state += STR_INSERT_TEXT_LINE( STR_HEAR_CLICK );
             }
 			else if( base < Random( 0, 100 ) && Random( 0, 9 ) == 0 )
 			{
@@ -827,13 +865,13 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
 				{
                    PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_forcefail.wav", 10 );
 				}
-                state += "\nYou hear a click, ";
+                state += STR_INSERT_TEXT_LINE( STR_HEAR_CLICK );
             }
-            player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 10 - player.Skill[ SK_LOCKPICK ] * 30 / 100 );
+            player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 10 - player.Skill[ SK_LOCKPICK ] * 10 / 300 );
         }
         else
 		{
-            state = "The lockpick has pushed the spring to it's maximim"; // "Щуп уперся, пружина язычка уже максимально зажата."
+			state += STR_INSERT_TEXT_LINE( STR_LOCKPICK_TOP );
 		}
 		map.PlaySound( LockpickMove[ Random( 0, LockpickMove.length() -1 ) ], player.HexX, player.HexY, 2 );
     }
@@ -846,11 +884,11 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
             curComb = int( ( lock.STORED_CODE % pow( 10, player.StatBase[ ST_VAR1 ] ) ) / pow( 10, player.StatBase[ ST_VAR1 ] - 1 ) );
             lock.ENTERED_CODE -= int( pow( 10, player.StatBase[ ST_VAR1 ] - 1 ) );
             curPos--;
-            state = "You have moved the lock toung down with a lockpick.";
-            if( player.Timeout[ TO_SK_LOCKPICK ] > int( REAL_MINUTE( 2 ) ) )
+            state += STR_INSERT_TEXT_LINE( STR_LOCKPICK_MOVED_DOWN );
+            if( player.Timeout[ TO_SK_LOCKPICK ] > int( REAL_SECOND( 1 ) ) )
 			{
                 PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_forcefail.wav", 10 );
-                state += "\nYou were not carefull and made a bad move.";
+                state += STR_INSERT_TEXT_LINE( STR_BAD_MOVE );
                 if( Random( 0, 1 ) == 0 )
 				{
                     int bar = Random( 1, lock.LOCK_TYPE + 1 );
@@ -864,7 +902,7 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
 				{
                     PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_forcefail.wav", 10 );
 				}
-                state += "\nYou hear a click.";
+                state += STR_INSERT_TEXT_LINE( STR_HEAR_CLICK );
             }
 			else if( ( curComb == ( curPos - 1 ) || curComb == ( curPos + 1 ) ) && base > Random( 0, 100 ) && Random( 0, 1 ) == 0 )
 			{
@@ -872,7 +910,7 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
 				{
                     PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_forcefail.wav", 10 );
 				}
-                state += "\nYou hear a click.";
+                state += STR_INSERT_TEXT_LINE( STR_HEAR_CLICK );
             }
 			else if( ( curComb == ( curPos - 2 ) || curComb == ( curPos + 2 ) ) && base > Random( 0, 100 ) && Random( 0, 3 ) == 0 )
 			{
@@ -880,7 +918,7 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
 				{
                     PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_forcefail.wav", 10 );
                 }
-				state += "\nYou hear a click.";
+                state += STR_INSERT_TEXT_LINE( STR_HEAR_CLICK );
             }
 			else if( base < Random( 0, 100 ) && Random( 0, 9 ) == 0 )
 			{
@@ -888,13 +926,13 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
 				{
                     PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_forcefail.wav", 10 );
 				}
-                state += "\nYou hear a click.";
+                state += STR_INSERT_TEXT_LINE( STR_HEAR_CLICK );
             }
-            player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 10 - player.Skill[ SK_LOCKPICK ] * 30 / 100 );
+            player.TimeoutBase[ TO_SK_LOCKPICK ] = __FullSecond + REAL_SECOND( 10 - player.Skill[ SK_LOCKPICK ] * 10 / 300 );
         }
 		else
 		{
-            state = "The lockpick has pushed the spring to it's maximim.";
+			state += STR_INSERT_TEXT_LINE( STR_LOCKPICK_TOP );
 		}
 		map.PlaySound( LockpickMove[ Random( 0, LockpickMove.length() -1 ) ], player.HexX, player.HexY, 2 );
 	}
@@ -921,12 +959,17 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
             }
 			PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_unlock.wav", 6 );
 			
+			int crime_TO = GetGvar(GVAR_crime_TO);
+			if( crime_TO > 0 && player.Timeout[ TO_REMOVE_FROM_GAME ] < REAL_HOUR( crime_TO ) )
+			{
+				player.TimeoutBase[ TO_REMOVE_FROM_GAME ] = __FullSecond + REAL_HOUR( crime_TO );
+			}
 			LogCrimeMovement( player, lock, "successfully lockpicks" ); 
             return;
         }
 		else if( player.StatBase[ ST_VAR2 ] < Random( 0, player.Skill[ SK_LOCKPICK ] / 2 ) )
 		{
-            state = "The lock won't budge."; //Замок не поворачивается.
+			state += STR_INSERT_TEXT_LINE( STR_WONT_BUDGE );
             player.StatBase[ ST_VAR2 ]++;
 			PlayGenericSound( map, player.HexX, player.HexY, "ui_lockpicking_picktension_01_lpm.wav", 6 );
         }
@@ -945,7 +988,7 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
     {
         if( player.StatBase[ ST_VAR1 ] > 1 )
 		{
-            state = "You have to move the lockpick to the first position.";
+            state += STR_INSERT_TEXT_LINE( STR_LOCKPICK_BOTTOM );
         }
 		else
 		{
@@ -1000,30 +1043,37 @@ void answer_LOCKPICK_lock( Critter& player, uint answerI, string& answerS )
 		}
     }
 	_CritAnimateUse( player );
-    state += "\n\nToung position - " + curPos + "\nLockpick position - " + player.StatBase[ ST_VAR1 ];
+    state += "$toung" + STR_INSERT_TEXT_LINE( STR_LOCK_TOUNG_DESC )
+		  + "$posToung" + curPos 
+		  + "$posLockpick" + player.StatBase[ ST_VAR1 ]
+		;
 
+	state += "$secret";
 	if( player.Param[ QST_GAMEMODE ] == GAME_TEST )
 	{
-		state += "\n Door code: " + lock.ENTERED_CODE + ", inputed code: " + lock.STORED_CODE;
+		state += STR_INSERT_TEXT_LINE( STR_LOCK_SECRET_INFO )
+			  + "$code" + lock.STORED_CODE
+			  + "$attempt" + lock.ENTERED_CODE
+			;
 	}
 	
     player.ShowScreen( SCREEN_DIALOGBOX, 8, "answer_LOCKPICK_lock" );
-    player.Say( SAY_DIALOGBOX_TEXT, state );
-    player.Say( SAY_DIALOGBOX_BUTTON( 0 ), "Examine lock" );
-    player.Say( SAY_DIALOGBOX_BUTTON( 1 ), "Lockpick further" );
-    player.Say( SAY_DIALOGBOX_BUTTON( 2 ), "Lockpick backwards" );
-    player.Say( SAY_DIALOGBOX_BUTTON( 3 ), "Lockpick up" );
-    player.Say( SAY_DIALOGBOX_BUTTON( 4 ), "Lockpick down" );
-    player.Say( SAY_DIALOGBOX_BUTTON( 5 ), "Turn" );
-    player.Say( SAY_DIALOGBOX_BUTTON( 6 ), "Extract the lockpick" );
-	player.Say( SAY_DIALOGBOX_BUTTON( 7 ), "Lock the lock" );
+    player.SayMsg( SAY_DIALOGBOX_TEXT, TEXTMSG_TEXT, STR_LOCK_STATE_DESC, state );
+    player.SayMsg( SAY_DIALOGBOX_BUTTON( 0 ), TEXTMSG_TEXT, STR_EXAMINE_THE_LOCK );
+    player.SayMsg( SAY_DIALOGBOX_BUTTON( 1 ), TEXTMSG_TEXT, STR_MOVE_FURTHER );
+    player.SayMsg( SAY_DIALOGBOX_BUTTON( 2 ), TEXTMSG_TEXT, STR_MOVE_BACKWARD );
+    player.SayMsg( SAY_DIALOGBOX_BUTTON( 3 ), TEXTMSG_TEXT, STR_MOVE_UP	);	
+    player.SayMsg( SAY_DIALOGBOX_BUTTON( 4 ), TEXTMSG_TEXT, STR_MOVE_DOWN );
+    player.SayMsg( SAY_DIALOGBOX_BUTTON( 5 ), TEXTMSG_TEXT, STR_TURN );
+    player.SayMsg( SAY_DIALOGBOX_BUTTON( 6 ), TEXTMSG_TEXT, STR_REMOVE_LOCKPICK	);
+	player.SayMsg( SAY_DIALOGBOX_BUTTON( 7 ), TEXTMSG_TEXT, STR_LOCK_THE_LOCK );	
 }
 
 bool IsKeyAviable( Critter& cr, uint lockerId )
 {
     if( lockerId == 0 )
 	{
-        return true;
+        return false;
 	}
 	
 	Map@ map = cr.GetMap();
@@ -1033,29 +1083,42 @@ bool IsKeyAviable( Critter& cr, uint lockerId )
 	}
 
     Item@[] keys;
-    for( uint i = 0; i < cr.GetItems( -1, keys ); i++ )
-	{
-        if( keys[ i ].LockerId == lockerId )
+    Item@ key = null;
+    uint len = cr.GetItems( -1, keys );
+    for( uint i = 0; i < len; i++ )
+    {
+        @key = keys[i];
+        if( !valid( key ) )
 		{
-            return true;
+            continue;
 		}
 		
-		if( keys[ i ].GetProtoId() == PID_KEY_BUNCH || keys[ i ].GetProtoId() == PID_FNKEYBT )
-		{
-			PlayGenericSound( map, cr.HexX, cr.HexY, "keys.ogg", 6 );
-			
-			Item@[] sub_keys;
-			uint count = keys[ i ].GetItems( 0, sub_keys );
-
-			for( uint j = 0; j < count; j++ )
-			{
-				if( sub_keys[j].LockerId == lockerId )
+        if( key.GetType() == ITEM_TYPE_KEY && key.LockerId == lockerId )
+        {
+            return true;
+        }
+        
+        if( key.GetProtoId() == PID_KEY_BUNCH || key.GetProtoId() == PID_FNKEYBT )
+        {
+            PlayGenericSound( map, cr.HexX, cr.HexY, "keys.ogg", 6 );
+            
+            Item@[] sub_keys;
+            uint count = key.GetItems( 0, sub_keys );
+            for( uint j = 0; j < count; j++ )
+            {
+                @key = sub_keys[j];
+				if( !valid( key ) )
 				{
-					return true;
+					continue;
 				}
-			}
-		}
-	}
+                    
+                if( key.LockerId == lockerId )
+                {
+                    return true;
+                }
+            }
+        }
+    }
     return false;
 }
 
@@ -1105,59 +1168,125 @@ void LockerBudge( Item& item )
     map.PlaySound( sound, item.HexX, item.HexY, 8 );
 }
 
-bool LockerRemoval( Critter& cr, Item@ item, Item@ targetItem )
+bool ltp_lock_remove_inited = false;
+void ltp_lock_remove_init()
+{
+	LTPREG( LTP_LOCK_REMOVE, process_lock_remove )
+	ltp_lock_remove_inited = true;
+}
+
+bool TryRemoveLock( Critter& cr, Item& item, Item& targetItem )
+{
+	if( !valid( item ) )
+	{
+		return false;
+	}
+	
+	if( !valid( targetItem ) )
+	{
+		return false;
+	}
+	
+	if( !ltp_lock_remove_inited )
+	{
+		ltp_lock_remove_init();
+	}
+	
+	cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CRITTER_LOOT_DELAY * 2;
+	cr.ParamBase[ ST_LTP_SEQUENCE ] = 0;
+	cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+	StartProcess( cr, LTP_LOCK_REMOVE, 0, item.Id, targetItem.Id, cr.Param[ ST_LTP_SEQUENCE_WAIT ] );
+	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_REMOVE_LOCK );
+	return true;
+}
+
+uint process_lock_remove( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESSD( LTP_LOCK_REMOVE )
+	Item@ tool = GetItem( param1 );
+
+    if( !valid( tool ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+        return 0;
+	}
+	
+	Item@ targetItem = GetItem( param2 );
+	if( !valid( targetItem ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+        return 0;
+	}
+	
+	LockRemoval( cr, tool, targetItem );
+
+	return 0;
+}
+
+bool LockRemoval( Critter& cr, Item& item, Item& targetItem )
 {
 	uint8 itemType = targetItem.GetType();
+	uint16 pid = item.GetProtoId();
 	if( ( ( itemType == ITEM_TYPE_DOOR || itemType == ITEM_TYPE_CONTAINER ) && targetItem.LOCK_TYPE != 0 && _LockerIsOpen( targetItem ) && !FLAG( targetItem.LockerCondition, LOCKER_LOCKED ) ) 
 		|| ( itemType == ITEM_TYPE_CONTAINER && InteractContainer.find( targetItem.GetProtoId() ) != -1 && targetItem.LOCK_TYPE != 0 && !FLAG( targetItem.LockerCondition, LOCKER_LOCKED  ) ) )
 	{
 		uint16 pid_locker = 0;
 		switch( targetItem.LOCK_TYPE )
 		{
-			case( 1 ):
-				pid_locker = PID_LOCKER_LOW;
+			case( LOCK_LOW ):
+				pid_locker = PID_LOCK_LOW;
 				break;
-			case( 2 ):
-				pid_locker = PID_LOCKER_MED;
+			case( LOCK_MED ):
+				pid_locker = PID_LOCK_MED;
 				break;
-			case( 3 ):
-				pid_locker = PID_LOCKER_HARD;
+			case( LOCK_HARD ):
+				pid_locker = PID_LOCK_HARD;
 				break;
+			case( LOCK_CODE ):
+				pid_locker = PID_LOCK_CODE;
+				break;	
 			default:
 				break;
 		}
 		
 		if( pid_locker != 0 )
 		{
-			if( item.GetProtoId() == PID_MULTI_TOOL )
+			if( pid == PID_MULTI_TOOL || pid == PID_SUPER_TOOL_KIT )
 			{
 				Item@ locker = cr.AddItem( pid_locker, 1 );
-				locker.LOCK_TYPE = ( targetItem.LockerComplexity > 50 ? ( targetItem.LockerComplexity - 50 ) : 0 );
 				locker.Update();
 			}
 
 			if( item.GetProtoId() == PID_CROWBAR )
 			{
+				uint16 amount = 1;
 				switch( pid_locker )
 				{
-					case( PID_LOCKER_LOW ):
-						pid_locker = 3;
+					case( PID_LOCK_LOW ):
+						amount = 3;
 						break;
-					case( PID_LOCKER_MED ):
-						pid_locker = 6;
+					case( PID_LOCK_MED ):
+						amount = 6;
 						break;
-					case( PID_LOCKER_HARD ):
-						pid_locker = 10;
+					case( PID_LOCK_HARD ):
+						amount = 10;
+						break;
+					case( PID_LOCK_CODE ):
+						amount = 6;
 						break;
 					default:
-						pid_locker = 1;
+						amount = 1;
 						break;
 				}
-				cr.AddItem( PID_CRAFT_M_BARS, Random( 1, pid_locker ) );
+				
+				cr.AddItem( PID_IRON_PARTS, Random( 1, amount ) );
 			}
 		}
+		
 		targetItem.LOCK_TYPE = 0;
 		targetItem.CODEDOOR_CODE = 0;
+		targetItem.ENTERED_CODE = 0;
+		targetItem.STORED_CODE = 0;
 		targetItem.LockerComplexity = 0;
 		targetItem.LockerId = 0;
 		targetItem.LockerCondition = LOCKER_ISOPEN;
@@ -1166,13 +1295,18 @@ bool LockerRemoval( Critter& cr, Item@ item, Item@ targetItem )
 		Map@ map = cr.GetMap();
 		PlayGenericSound( map, cr.HexX, cr.HexY, "ILCNTNRC.mp3", 20 );
 		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REMOVED_LOCK );
+		LogCrimeMovement( cr, targetItem, " had its lock removed" );
 	}
+	
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	
 	return true;
 }
 
 bool KeyBunchUse( Critter& cr, Item@ item, Item@ targetItem )
 {
 	Item@[] keys;
+	Item@ key = null;
 	uint count = item.GetItems( uint( -1 ), keys );
 	Map@ map = cr.GetMap();
 	if( valid( map ) )
@@ -1182,12 +1316,231 @@ bool KeyBunchUse( Critter& cr, Item@ item, Item@ targetItem )
 
 	for( uint i = 0; i < count; i++ )
 	{
-		if( keys[i].LockerId == targetItem.LockerId )
+		@ key = keys[i];
+		if( !valid( key ) )
 		{
-			UseItemOnLocker( cr, targetItem,  keys[i] );
+			continue;
+		}
+		
+		if( key.LockerId == targetItem.LockerId )
+		{
+			UseItemOnLocker( cr, targetItem, key );
 			return true;
 		}
 	}
+	
+	return false;
+}
+
+bool TryInstallLock( Critter& cr, Item& item, Item& onItem )
+{
+	if( !valid( item ) )
+	{
+		return false;
+	}
+	
+	if( !valid( onItem ) )
+	{
+		return false;
+	}
+	
+	uint16 pid = item.GetProtoId();
+	uint16 tpid = onItem.GetProtoId();
+	uint8 type = onItem.GetType();
+	
+	if( tpid == PID_TERMINAL )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_LOCK_TERMINAL );
+		return false; 
+	}
+	
+	if( tpid == PID_TENT_DOOR_EW || tpid == PID_TENT_DOOR_NS )
+	{ 
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_LOCK );
+		return false; 
+	}
+	
+	if( ( ( type == ITEM_TYPE_DOOR || ( type == ITEM_TYPE_CONTAINER && onItem.Proto.Container_Changeble ) ) && onItem.CODEDOOR_CODE == 0 ) 
+			|| ( InteractContainer.find( tpid ) != -1 || onItem.Proto.Item_Subtype == ITEM_SUBTYPE_BRIEFCASE ) && onItem.LOCK_TYPE == LOCK_NONE )
+	{
+		if( _LockerIsClose( onItem ) || InteractContainer.find( tpid ) != -1 )
+		{
+			Item@ used = null;
+			if( pid == PID_LOCK_CODE )
+			{
+				if( !hasItem( cr, PID_WIRE ) )
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_REQUIRES_WIRE );
+					return true;
+				}
+				
+				@used = cr.GetItem( PID_WIRE, -1 ); 
+			}
+			else
+			{
+				if( !hasItem( cr, PID_IRON_PARTS ) )
+				{
+					cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_METAL_PART );
+					return true;
+				}
+				
+				@used = cr.GetItem( PID_IRON_PARTS, -1 ); 
+			}
+			
+			if( onItem.LockerCondition != LOCKER_LOCKED && onItem.LockerComplexity == 0 && !FLAG( onItem.LockerCondition, LOCKER_ELECTRO ) && onItem.ENTERED_CODE == 0 )
+			{
+				if( !ltp_lock_install_inited )
+				{
+					ltp_lock_install_init();
+				}
+	
+				cr.ParamBase[ ST_LTP_SEQUENCE_WAIT ] = CRITTER_LOOT_DELAY * 2;
+				cr.ParamBase[ ST_LTP_SEQUENCE ] = 0;
+				cr.SetAnims( COND_LIFE, 0, ANIM2_CROUCH );
+				StartProcess( cr, LTP_LOCK_INSTALL, used.Id, item.Id, onItem.Id, cr.Param[ ST_LTP_SEQUENCE_WAIT ] );
+				cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_TEXT, STR_EMOTE_INSTALL_LOCK );
+				return true;
+			}
+			else
+			{
+				cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOOR_LOCKED );
+				return true;
+			}
+		}
+		else 
+		{
+			cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOOR_NOT_CLOSED );
+			return true;
+        }
+	}
+	else
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DOOR_CANT_LOCK );
+		return true;
+	}
+}
+
+bool ltp_lock_install_inited = false;
+void ltp_lock_install_init()
+{
+	LTPREG( LTP_LOCK_INSTALL, process_lock_set )
+	ltp_lock_install_inited = true;
+}
+
+uint process_lock_set( Critter@ cr, int& param0, int& param1, int& param2 )
+{
+    LTPROCESSD( LTP_LOCK_INSTALL )
+	
+	Item@ used = GetItem( param0 );
+	if( !valid( used ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+        return 0;
+	}
+	
+	Item@ tool = GetItem( param1 );
+    if( !valid( tool ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+        return 0;
+	}
+	
+	Item@ targetItem = GetItem( param2 );
+	if( !valid( targetItem ) )
+	{
+		cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+        return 0;
+	}
+	
+	if( tool.GetProtoId() == PID_LOCK_CODE )
+	{
+		UseCodeLock( cr, tool, targetItem, used );
+	}
+	else
+	{
+		InstallLock( cr, tool, targetItem, used );
+	}
+	
+	return 0;
+}
+
+bool InstallLock( Critter& cr, Item& item, Item& targetItem, Item& used )
+{
+	uint key_pid = PID_BLANK_KEY;
+	switch( item.GetProtoId() )
+	{
+		case( PID_LOCK_LOW ):
+			targetItem.LOCK_TYPE = LOCK_LOW;
+			key_pid = PID_TEMPLE_KEY;
+			break;
+		case( PID_LOCK_MED ):
+			targetItem.LOCK_TYPE = LOCK_MED;
+			key_pid = PID_JAIL_KEY;
+			break;
+		case( PID_LOCK_HARD ):
+			targetItem.LOCK_TYPE = LOCK_HARD;
+			key_pid = PID_VAULT_13_SHACK_KEY;
+			break;
+		default:
+			return false;
+	}
+
+	_SubItem( used, 1 );
+	
+	Item@ key = cr.AddItem( key_pid, 1 );
+	key.LockerId = Random( 0, 65534 );
+
+	targetItem.LockerId = key.LockerId;
+	targetItem.LockerCondition = LOCKER_LOCKED;
+	targetItem.LockerComplexity = cr.Skill[ SK_LOCKPICK ];
+
+	//Log( "An item #" + targetItem.Id + " is locked. Lock complexity is: " + targetItem.LockerComplexity + "." );
+	LogCrimeMovement( cr, targetItem, "is locked. Lock complexity is: " + targetItem.LockerComplexity + "." );
+	_SubItem( item, 1 );
+
+	key.SetLexems( null );
+	key.Update();
+
+	cr.StatBase[ ST_LAST_DOOR_ID ] = key.Id;
+	cr.StatBase[ ST_LAST_CONT_ID ] = key.Accessory;
+	ShowInputBoxScreen( cr, "general_unsafe@unsafe_addLexem#Description:", 0, INPUTBOX_CLOSE_ON_ENTER );
+	cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+	return true;
+}
+
+bool UseCodeLock( Critter& cr, Item& codeLock, Item& locker, Item& used )
+{
+	if( !valid( codeLock ) )
+	{
+		return false;
+	}
+
+	if( !valid( used ) )
+	{
+		return false;
+	}
+
+	if( valid( locker ) )
+	{
+		uint16 pid = locker.GetProtoId();
+		uint8 type = locker.GetType();
+		
+		if( ( type == ITEM_TYPE_DOOR || ( type == ITEM_TYPE_CONTAINER && locker.Proto.Container_Changeble ) ) && locker.ENTERED_CODE == 0 ) 
+        {
+            if( InteractContainer.find( pid ) == -1 )
+            {
+				locker.LOCK_TYPE = LOCK_CODE;
+				string passwordInfo = "Set new password";
+				int[] lockId = { codeLock.Id };
+				cr.RunClientScript( "client_screen_numberpad@ShowScreen", locker.Id, 0, 0, passwordInfo, lockId );
+				_SubItem( used, 1 );
+				cr.SetAnims( COND_LIFE, 0, ANIM2_IDLE );
+			}
+		}
+		
+		return true;
+	}
+
 	return false;
 }
 

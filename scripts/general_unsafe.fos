@@ -19,18 +19,22 @@
 #include "handcuffs_h.fos"
 #include "plants_h.fos"
 #include "gathering_h.fos"
-
-import void critter_reload_weapon( Critter& cr, Item& weapon, Item@ ammo ) from "main";
-import bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen, uint param ) from "main";
-import void ShowInputBoxScreen( Critter& cr, string funcName, uint16 textLength, uint8 flags ) from "main";
+#include "skins_h.fos"
+#include "trap_h.fos"
+#include "speed_h.fos"
+#include "serializator.fos"
+#include "waterworks_h.fos"
+#include "stdlib_h.fos"
+#include "module/utils/param_names.fos"
 
 import void Actions( Critter& cr, uint8 actionType, uint16 pickType ) from "context_callback";
 
-import void DragAndDrop( Critter& cr, Critter@ target ) from "gameplay";
+import bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen ) from "main";
+import void critter_attack( Critter& cr, Critter& target, ProtoItem& weapon, uint8 weaponMode, ProtoItem@ ammo ) from "main";
+import void LookDataRefresh( Critter& cr ) from "main";
+import bool player_allowcommand( Critter@ player, string@ adminPanel, uint8 command ) from "main";
 
-import bool e_UseAutoCloseDoor( Item& door, Critter& cr, int skill ) from "item";
-
-const string[] glass_break_sounds = { "glass_break1.ogg", "glass_break2.ogg", "glass_break3.ogg", "glass_break4.ogg" };
+import uint8 checkWater( Map& map, uint16 tx, uint16 ty ) from "qmap_water";
 
 bool Action( Critter& player, Critter@ targetCr, Item@ targetItem, Scenery@ targetScen )
 {
@@ -61,6 +65,7 @@ bool Action( Critter& player, Critter@ targetCr, Item@ targetItem, Scenery@ targ
 		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_FAR ); 
 		return false; 
 	}
+	
 	uint8 dir = GetDirection( moverHexX, moverHexY, aimHexX, aimHexY );
 	player.SetDir( dir );
 	player.Action( ACTION_PICK_CRITTER, 3, null );
@@ -69,7 +74,7 @@ bool Action( Critter& player, Critter@ targetCr, Item@ targetItem, Scenery@ targ
 
 void unsafe_OpenDoor( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
 {
-	if( player.IsDead() || player.IsKnockout() || player.IsBusy() || player.Timeout[ TO_SK_STEAL ] > 0 )
+	if( player.IsDead() || player.IsKnockout() || player.IsBusy() || IsAnimal( player ) || IsInsect( player ) || player.Timeout[ TO_SK_STEAL ] > 0 )
 	{
 		return;
 	}
@@ -81,21 +86,45 @@ void unsafe_OpenDoor( Critter& player, int param0, int param1, int param2, strin
 	{
 		hexX = player.HexX;
 		hexY = player.HexY;
-		dir = ( player.Dir + i + 2 ) % 6;
+		dir = ( player.Dir + i ) % 6;
 		map.MoveHexByDir( hexX, hexY, dir, 1 );
-		Item@ door = map.GetDoor( hexX, hexY );
-		if( valid( door ) )
+		Item@ item = map.GetDoor( hexX, hexY );
+		if( !valid( item ) )
 		{
-			if( !Action( player, null, door, null ) )
+			Item@[] items;
+			uint count = map.GetItems( hexX, hexY, items );
+			if( count > 0 )
 			{
-				break;
+				@item = @items[ Random( 0, count - 1 ) ];
+			}
+		}
+		
+		if( !valid( item ) )
+		{
+			continue;
+		}
+		
+		if( FLAG( item.Flags, ITEM_CAN_USE ) || FLAG( item.Flags, ITEM_CAN_PICKUP ) )
+		{
+			if( !Action( player, null, item, null ) )
+			{
+				continue;
+			}
+			
+			if( !item.EventSkill( player, SKILL_PICK_ON_GROUND ) )
+			{
+				critter_use_skill( player, SKILL_PICK_ON_GROUND, null, item, null );
 			}
 			
 			player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
-			UseSkillOnLocker( player, door, SKILL_PICK_ON_GROUND );
-			e_UseAutoCloseDoor( door, player, -1 );
+			player.StatBase[ ST_CURRENT_AP ] -= __RtApCostPickItem * 100;
 			break;
 		}
+		// else
+		// {
+			// player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NO_HINGE );
+			// break;
+		// }
 	}
 }
 
@@ -129,13 +158,19 @@ void unsafe_radioHead( Critter& cr, int, int, int, string@ message, int[]@ )
 	}
 	
 	Item@[] items;
+	Item@ radio = null;
 	if( cr.GetItems( -1, items ) > 0 )
 	{
-		for( uint i = 0, l = items.length; i < l; i++ )
+		for( uint i = 0, l = items.length(); i < l; i++ )
 		{
-			if( FLAG( items[i].Flags, ITEM_RADIO ) )
+			@ radio = items[i];
+			if( valid( radio ) )
 			{
-				cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_USE_RADIO );
+				if( FLAG( radio.Flags, ITEM_RADIO ) )
+				{
+					cr.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_USE_RADIO );
+					break;
+				}
 			}
 		}
 	}		
@@ -180,7 +215,7 @@ void unsafe_contmenu_callback( Critter& player, int id, int screenId, int action
 }
 
 //Log commands # $ ~
-void unsafe_log(Critter& cr, int locX, int locY, int type, string@ message, int[] @ p4 )
+void unsafe_log( Critter& cr, int locX, int locY, int type, string@ message, int[] @ p4 )
 {
     file f;
     if( f.open( "logs\\commandslog.txt", "a" ) >= 0 )
@@ -188,7 +223,8 @@ void unsafe_log(Critter& cr, int locX, int locY, int type, string@ message, int[
         f.writeString( __Day + "." + __Month + "." + __Year + " " + MakeTime( __FullSecond ) + message + "\n" );
         f.close();
     }
-	DiscordSendMessage( "gm_commands", "```" + message + "```" );
+	
+	DiscordSendMessage( "gm_commandslog", "```" + message + "```" );
 }
 
 //Log GM panel actions
@@ -200,6 +236,7 @@ void unsafe_log_2( Critter& cr, int locX, int locY, int type, string@ message, i
         f.writeString( __Day + "." + __Month + "." + __Year + " " + MakeTime( __FullSecond ) + message + "\n" );
         f.close();
     }
+	
 	DiscordSendMessage( "gm_panel", "```" + message + "```" );
 }
 
@@ -207,60 +244,104 @@ void unsafe_log_2( Critter& cr, int locX, int locY, int type, string@ message, i
 void unsafe_inputDigits( Critter& player, int itemId, int digits, int type, string@ param3, int[] @ param4 )
 {
     Item@ item = GetItem( itemId );
-	if( valid( item ) )
+	if( !valid( item ) )
 	{
-		uint16 Pid = item.GetProtoId();
-		if( vending_machines.find( Pid ) != -1 )
+		return;
+	}
+
+	player.RunClientScript( "client_screen_numberpad@HideScreen", 0, 0, 0, "", null );
+
+	uint16 Pid = item.GetProtoId();
+	if( vending_machines.find( Pid ) != -1 )
+	{
+		if( type == 0 )
 		{
-			if( type == 0 )
-			{
-				item.Val6 = digits;
-			}
-			else
-			{
-				item.Val3 = digits;
-			}
-			
-			StartMenuVendingMachine( player, item );
+			item.SELLING_PRICE = digits;
 		}
-		else if( Pid == PID_TERMINAL )
+		else
 		{
-			if( item.Val6 == 0 )
+			item.BUYING_PRICE = digits;
+		}
+		
+		StartMenuVendingMachine( player, item );
+	}
+	else if( Pid == PID_TERMINAL )
+	{
+		if( type == 0 )
+		{
+			if( item.PASSWORD == 0 )
 			{
-				item.Val6 = digits;
+				item.PASSWORD = digits;
 				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEW_PASSWORD, "$digits" + digits );
+				LogCrimeMovement( player, item, "sets new password" );//  [" + item.PASSWORD + "]" ); 
 			}
-			else if( item.Val6 == digits )
+			else if( item.PASSWORD == digits )
 			{
-				item.Val8 = 0;
+				item.CONSOLE_PASSWORD = 0;
 				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CORRECT_PASSWORD );
+				LogCrimeMovement( player, item, "inputs correct password" );// [" + item.PASSWORD + "]" ); 
 			}
 			else
 			{
 				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WRONG_PASSWORD );
+				LogCrimeMovement( player, item, "inputs wrong password" ); //[" + digits + "] instead of [" + item.PASSWORD + "]"
 			}
-			StartMenuTerminal( player, item );
 		}
-		else if( Pid == PID_TNT_PACK_ACTIVE || Pid == PID_REMOTE_DETONATOR )
-		{
-			item.Val4 = digits;
-			item.SetLexems( "$frequency" + digits );
-			item.Val2 = player.Id;
-			player.Say( SAY_NETMSG, "You have set radio frequency to: |0xFFFF00 " + digits );
-		}
-		else if( Pid == PID_JUKEBOX1 || Pid == PID_JUKEBOX2 || Pid == PID_JUKEBOX3 || Pid == PID_JUKEBOX4 )
-		{
-			item.Val6 = digits;
-			StartMenuJukebox( player, item );
-		}
-		player.RunClientScript( "client_screen_numberpad@HideScreen", 0, 0, 0, "", null );
+		
+		RestoreMenu( player, item );
 	}
-	return;
+	else if( Pid == PID_TNT_PACK_ACTIVE || Pid == PID_REMOTE_DETONATOR || Pid == PID_GM_REMOTE_DETONATOR )
+	{
+		item.Val4 = digits;
+		item.Val2 = player.Id;
+		item.Update();
+		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MSG_NEW_FREQUENCY, "$digits" + digits );
+	}
+	else if( Pid == PID_SLAVE_COLLAR || Pid == PID_SLAVE_COLLAR_SWITCH )
+	{
+		item.Val5 = digits;
+		item.Update();
+		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MSG_NEW_FREQUENCY, "$digits" + digits );
+	}
+	else if( Pid == PID_JUKEBOX1 || Pid == PID_JUKEBOX2 || Pid == PID_JUKEBOX3 || Pid == PID_JUKEBOX4 )
+	{
+		item.Val6 = digits;
+		StartMenuJukebox( player, item );
+	}
+	else if( item.GetType() == ITEM_TYPE_DOOR || ( item.GetType() == ITEM_TYPE_CONTAINER && item.Proto.Container_Changeble ) ) 
+	{
+		SETFLAG( item.LockerCondition, LOCKER_ELECTRO );
+		
+		string pass = digits;
+		uint len = pass.length() - 1;
+		if( len <= 0 )
+		{
+			len = 4;
+			digits = 1111;
+			pass = digits;
+		}
+		
+		item.Val1 = len;
+		item.Val4 = digits;
+		item.LockerComplexity = player.Skill[ SK_SCIENCE ];
+		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEW_CODE, "$code" + digits );
+		
+		if( param4[0] > 0 )
+		{
+			Item@ codelock = GetItem( param4[0] );
+			if( valid( codelock ) )
+			{
+				//Log( "An item #" + item.Id + " is locked on a code lock. Lock complexity is: " + item.LockerComplexity + "." );
+				LogCrimeMovement( player, item, "is locked on a code lock. Lock complexity is: " + item.LockerComplexity + "." );
+				_SubItem( codelock, 1 );
+			}
+		}
+	}
 }
 
 void unsafe_openCodeDoor( Critter& player, int itemId, int code, int param2, string@ param3, int[] @ param4 )
 {
-    Item @ item = GetItem( itemId );
+    Item@ item = GetItem( itemId );
     if( !valid( item ) )
 	{
 		return;
@@ -289,22 +370,31 @@ void unsafe_openCodeDoor( Critter& player, int itemId, int code, int param2, str
 			{
                 item.LockerOpen();
                 player.RunClientScript( "client_screen_codedoor@HideScreen", 0, 0, 0, "", null );
-				
+				Map@ map = player.GetMap();
 				if( item.GetType() == ITEM_TYPE_DOOR )
 				{
-					Map@ map = player.GetMap();
+					PlayDoorSound( map, item.HexX, item.HexY, item.GetProtoId(), item.LockerCondition, 15 );
 					ToggleDoorBlocker( map, item, false );
 				}
 				
 				if( item.GetType() == ITEM_TYPE_CONTAINER )
 				{
+					if( item.Proto.Container_Changeble )
+					{
+						PlayDoorSound( map, item.HexX, item.HexY, item.GetProtoId(), item.LockerCondition, 15 );
+					}
+					
 					ShowContainer( player, item, item.Proto.GroundLevel ? TRANSFER_HEX_CONT_DOWN : TRANSFER_HEX_CONT_UP );
 				}
+				
+				LogCrimeMovement( player, item, "Enters correct password" ); 		
             }
 		}
 		else
 		{
 			player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_WRONG_CODE );
+			RestoreMenu( player, item );
+			LogCrimeMovement( player, item, "Enters wrong password" ); 			
 		}
     }
 	else
@@ -313,138 +403,137 @@ void unsafe_openCodeDoor( Critter& player, int itemId, int code, int param2, str
 	}
 }
 
-void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ command, int[] @ param4 )
+void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, string@ param3, int[] @ param4 )
 {
-	if( cr.IsBusy() )
+	if( !attacker.IsLife() )
 	{
 		return;
 	}
 	
-	if( !cr.IsLife() )
+	if( attacker.Param[CR_IS_SHOOTING] != 0 )
 	{
 		return;
 	}
-	
-	if( cr.Param[ CR_IS_RELAXING ] != 5 )
-	{
-		cr.ParamBase[ CR_IS_RELAXING ] = 0;
-	}
-	
-	cr.ParamBase[ CR_IS_RELOADING ] = 0;
-	
-    Map@ map = cr.GetMap();
 
-    if( !valid( map ) )
+	Map@ map = attacker.GetMap();
+	if( !valid( map ) )
 	{
         return;
 	}
+
+	if( attacker.Param[ CR_IS_RELAXING ] != 5 )
+	{
+		attacker.ParamBase[ CR_IS_RELAXING ] = 0;
+	}
 	
-	Item@ hand = _CritGetItemHand(cr);
-    uint8 mode = 0;
+	attacker.ParamBase[ CR_IS_RELOADING ] = 0;
 	
-	ProtoItem@ weapon, ammo;
+	Item@ hand = _CritGetItemHand( attacker );
+    
+	ProtoItem@ weapon = GetProtoItem( weaponProto );
+	uint8 mode = attacker.Stat[ ST_HANDS_ITEM_AND_MODE ];
+	
 	if( valid( hand ) )
 	{
 		mode = hand.Mode;
 		@weapon = GetProtoItem( hand.GetProtoId() );
 	}
-	else
-	{
-		@weapon = cr.GetSlotProto( SLOT_HAND1, mode );//unarmed
-	}
-
+	
 	if( !valid( weapon ) )
 	{
-		cr.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_FIGHT );
+		attacker.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_FIGHT );
 		return;
 	}
-
-	if( cr.GetTimeEvents( CTE_SLOWRELOAD, null, null, null ) > 0 )
+	
+	//Log( "attacker " + attacker.Id + " hexX " + hexX + " hexY " + hexY + " weaponProto " + weaponProto );
+	
+	int weaponPerk = weapon.Weapon_Perk;
+	int sneak_timeout = SNEAK_TIMEOUT( attacker );
+	if( FLAG( weaponPerk, WEAPON_PERK_SILENT ) )
 	{
-		cr.EraseTimeEvents( CTE_SLOWRELOAD );
+		sneak_timeout /= 2;
+	}
+	
+	attacker.ParamBase[ CR_SNEAKING ] = 0;
+	attacker.TimeoutBase[ TO_SNEAK ] = sneak_timeout;
+
+	if( attacker.GetTimeEvents( CTE_SLOWRELOAD, null, null, null ) > 0 )
+	{
+		attacker.EraseTimeEvents( CTE_SLOWRELOAD );
 		hand.SetEvent( ITEM_EVENT_MOVE, null );
 	}
 
     uint16 toHx = hexX, toHy = hexY;
-    int dist = GetDistantion( cr.HexX,  cr.HexY, hexX, hexY );
-	
-    map.GetHexCoord( cr.HexX,  cr.HexY, toHx, toHy,  0.0f, dist );
-    if( ( uint(hexX) != toHx ) || ( uint(hexY) != toHy ) )
+    int dist = GetDistantion( attacker.HexX, attacker.HexY, hexX, hexY );
+	RustyGetHexCoord( map, attacker.HexX, attacker.HexY, toHx, toHy, 0.0f, dist );
+	if( hexX != int( toHx ) || hexY != int( toHy ) )
     {
-        cr.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, 104 );
+        attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_NEED_AIM_BLOCKED );
         return;
     }
-    
-    int wpnMaxDist = _WeaponMaxDist( weapon, mode );
-    if( _WeaponSkill( weapon, mode ) == SK_THROWING )
-	{
-		wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int(10), cr.Stat[ ST_STRENGTH ] ) );
-	}
 	
-    if( dist > wpnMaxDist )
-	{
-        cr.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, 102 );
-        return;
-    }
-
 	if( valid( hand ) )
 	{
-		bool isFlareGun = ( hand.AmmoPid == PID_FLARE_GUN_AMMO ) && ( mode == 1 );
-		uint[] rocket_pids = { PID_EXPLOSIVE_ROCKET, PID_ROCKET_AP, PID_ROBO_ROCKET_AMMO, PID_GRENADELAUNCHER_AMMO };
-		bool isRocket = rocket_pids.find( hand.AmmoPid ) != -1;
-	
-		bool brokenArm = cr.Damage[ DAMAGE_LEFT_ARM ] + cr.Damage[ DAMAGE_RIGHT_ARM ] > 0;
-		bool brokenTwoArms = cr.Damage[ DAMAGE_LEFT_ARM ] * cr.Damage[ DAMAGE_RIGHT_ARM ] > 0;
+		bool brokenArm = attacker.Damage[ DAMAGE_LEFT_ARM ] + attacker.Damage[ DAMAGE_RIGHT_ARM ] > 0;
+		bool brokenTwoArms = attacker.Damage[ DAMAGE_LEFT_ARM ] * attacker.Damage[ DAMAGE_RIGHT_ARM ] > 0;
 		
 		if( brokenTwoArms )
 		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_NEED_DMG_TWO_ARMS );
+			attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_NEED_DMG_TWO_ARMS );
 			return;
 		}
 
 		if( FLAG( hand.Flags, ITEM_TWO_HANDS ) && brokenArm )
 		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_NEED_DMG_ARM );
+			attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_NEED_DMG_ARM );
 			return;
 		}
 	}
 	
-	uint windupTime = GetProtoWindupTime( weapon, mode, cr );
+	uint windupTime = GetProtoWindupTime( weapon, mode, attacker );
+	if( attacker.Param[ CR_AUTO_AIM ] == HIT_LOCATION_NONE )
+	{
+		windupTime /= 2;
+	}
+	
 	if( windupTime == 0 )
 	{
 		windupTime == 300;
 	}
 	
-	uint8 weaponMode = mode;
-	mode = weaponMode;
 	int skillNum = ( valid( weapon ) ? _WeaponSkill( weapon, 0 ) : ( valid( hand ) ? SK_MELEE_WEAPONS : SK_UNARMED ) );
-	uint8 weaponSubtype = ( skillNum == SK_SMALL_GUNS || skillNum == SK_BIG_GUNS || skillNum == SK_ENERGY_WEAPONS ) ? WS_GUN : 
+	uint8 weaponType = ( skillNum == SK_SMALL_GUNS || skillNum == SK_MEDIUM_GUNS || skillNum == SK_BIG_GUNS ) ? WS_GUN : 
 					( ( skillNum == SK_THROWING ) ? WS_THROWING : ( skillNum == SK_MELEE_WEAPONS ) ? WS_MELEE : WS_UNARMED );
+	
+	int wpnMaxDist = _WeaponMaxDist( weapon, mode );
+	
+	ProtoItem@ ammo = null;
 	
 	if( weapon.Weapon_MaxAmmoCount > 0 )
 	{
 		if( hand.AmmoCount == 0 || hand.Deterioration == 10000 )
 		{
-			uint8 dir = GetDirection( cr.HexX, cr.HexY, toHx, toHy );
-			cr.SetDir( dir );
+			uint8 dir = GetDirection( attacker.HexX, attacker.HexY, toHx, toHy );
+			attacker.SetDir( dir );
 
-			if( weaponSubtype == WS_GUN )
+			if( weaponType == WS_GUN )
 			{
-				cr.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid( hand ) ? hand : null );
-				cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
+				attacker.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid( hand ) ? hand : null );
+				attacker.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
 			}
 			else
 			{
-				cr.Action( ACTION_USE_WEAPON, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid( hand ) ? hand : null );
+				attacker.Action( ACTION_USE_WEAPON, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid( hand ) ? hand : null );
 			}
 
-			uint[] values = { cr.Id, weapon.ProtoId };
+			uint[] values = { attacker.Id, weapon.ProtoId };
 			CreateTimeEvent( AFTER( REAL_MS( windupTime ) ), "e_emptySFX", values, false );
-			cr.ParamBase[ CR_IS_WINDUPED ] = 1;
-			if( cr.GetTimeEvents( CTE_WINDUP, null, null, null ) == 0 )
+			attacker.ParamBase[ CR_IS_WINDUPED ] = 1;
+			if( attacker.GetTimeEvents( CTE_WINDUP, null, null, null ) == 0 )
 			{
-				cr.AddTimeEvent( "windup@cte_windup", 0, CTE_WINDUP, 0 );
+				attacker.AddTimeEvent( "windup@cte_windup", 0, CTE_WINDUP, 0 );
 			}
+			
 			return;
 		}
 		else
@@ -452,63 +541,214 @@ void unsafe_hex_attack( Critter& cr, int hexX, int hexY, int wpn_pid, string@ co
 			@ammo = GetProtoItem( hand.AmmoPid );
 		}
 	}
-
-	int needAP = 0;
 	
-	if( _WeaponModeAim( mode ) == HIT_LOCATION_NONE && _WeaponAim( weapon, mode & 0x0F ) )
+	if( weaponType == WS_GUN )
 	{
-		mode = ( weaponMode & 0x0F ) + ( cr.ParamBase[CR_AUTO_AIM] << 4 );
-		
-		if( cr.ParamBase[CR_AUTO_AIM] != HIT_LOCATION_NONE )
+		if( weapon.Item_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER )
 		{
-			float delta = _WeaponApCost( weapon, weaponMode ) * 0.2;
-			needAP += int(delta); // + 20% AP for aim attacks
+			if( dist > wpnMaxDist )
+			{
+				attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_OUT_OF_RANGE );
+				return;
+			}
 		}
-	}
-	
-	needAP += int( _WeaponApCost( weapon, weaponMode ) );
-	
-	if( cr.Stat[ ST_CURRENT_AP ] < needAP )
-	{
-        return;
-	}
-	
-    cr.StatBase[ ST_CURRENT_AP ] -= needAP * 100;
-
-    Critter@ target = map.GetCritter( uint16( hexX ), uint16( hexY ) );
-
-	uint targetId = valid( target ) ? target.Id : 0;
-	uint ammoPID = valid( ammo ) ? ammo.ProtoId : 0;
-	uint[] vals = { cr.Id, targetId, weapon.ProtoId, mode, ammoPID, hexX, hexY };
-	
-	cr.SetDir( GetDirection( cr.HexX, cr.HexY, hexX, hexY ) );
-	if( cr.ParamBase[ CR_IS_WINDUPED ] == 0 )
-	{
-		uint8 weapon_Subtype = valid( weapon ) ? weapon.Item_Subtype : 0;
-		if( weapon_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_MINIGUN )
+		else if( valid( ammo ) && FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT ) )
 		{
-			cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_COMBAT_SPIN_BARRELS );
+			if( dist > wpnMaxDist * 2 )
+			{
+				attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_OUT_OF_RANGE );
+				return;
+			}
+		}
+	}	
+	else if( weaponType == WS_THROWING )
+	{
+		wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int( 10 ), attacker.Stat[ ST_STRENGTH ] ) );
+		if( dist > wpnMaxDist )
+		{
+			attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_THROW_TOO_FAR );
 			return;
 		}
-		cr.Wait( windupTime );
 	}
-	else
+	
+	int needAp = attack_ap( attacker, weapon, mode, ammo );
+	bool HasAllAP = attacker.Stat[ ST_ACTION_POINTS ] == attacker.Stat[ ST_CURRENT_AP ];
+
+	if( ( !HasAllAP && attacker.Stat[ ST_ACTION_POINTS ] < needAp ) || 
+		( attacker.Stat[ ST_ACTION_POINTS ] >= needAp && attacker.Stat[ ST_CURRENT_AP ] < needAp ) &&
+		  attacker.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
 	{
-		cr.Wait( 10 );
-		windupTime = 0;
+		return;
+	}
+
+    Critter@ target = map.GetCritter( uint16( hexX ), uint16( hexY ) );
+	bool validTarget = valid( target );
+	if( validTarget && target.Id == attacker.Id )
+	{
+		validTarget = false;
+	}
+	
+	uint targetId = validTarget ? target.Id : 0;
+	uint ammoPID = valid( ammo ) ? ammo.ProtoId : 0;
+	
+	attacker.SetDir( GetDirection( attacker.HexX, attacker.HexY, hexX, hexY ) );
+	if( targetId == 0 )
+	{
+		@target = null;
+	}		
+	
+	if( ( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS ) && dist > wpnMaxDist )
+	{
+		attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_OUT_OF_RANGE );
+		return;
+	}
+
+	uint waitTime = _GetProtoWaitTime( weapon, mode );
+	
+	if( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS )
+	{
+		attacker.Wait( waitTime );
+	}
+    else if( attacker.Param[ CR_IS_WINDUPED ] == 0 && _WeaponAnim2( weapon, mode ) != ANIM2_AUTO )
+    {
+        if( _WeaponAnim2( weapon, mode ) == ANIM2_BURST )
+		{
+			attacker.Wait( windupTime + waitTime );
+		}
+		else
+		{
+			attacker.Wait( windupTime );
+		}
+    }
+	else if( _WeaponAnim2( weapon, mode ) == ANIM2_AUTO )
+	{
+		if( attacker.Param[ CR_AUTO_ROUNDS_FIRED ] > 0 )
+		{
+			attacker.Wait( _GetProtoWaitTime( weapon, mode ) );
+		}
+		else
+		{
+			attacker.Wait( windupTime );
+		}
+	}
+    else
+    {
+        attacker.Wait( 10 );
+        windupTime = 0;
+    }
+
+	if( attacker.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 || skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS )
+	{
+		attacker.StatBase[ ST_CURRENT_AP ] -= needAp * 100;
+	}
+	
+	if( _WeaponAnim2( weapon, mode ) == ANIM2_AUTO )
+	{
+		attacker.ParamBase[ CR_AUTO_ROUNDS_FIRED ] ++;
 	}
 	
 	if( weapon.Windup_Time != 0 && !_ItemIsBroken( hand ) && GetDeteriorationProcent( hand ) < 100 )
 	{
-		cr.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, hand );
-		cr.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
-		CreateTimeEvent( AFTER( REAL_MS( windupTime ) ), "combat@e_DelayedAttack", vals, false );
+		attacker.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, hand );
+		attacker.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
+		uint[] values = { attacker.Id, targetId, weapon.ProtoId, mode, ammoPID, hexX, hexY, 1, 0 };
+		CreateTimeEvent( AFTER( REAL_MS( windupTime ) ), "combat@e_DelayedAttack", values, false );
+		attacker.ParamBase[CR_IS_SHOOTING] = 1;
 	}
 	else
 	{
-		CombatAttack( cr, target, weapon, mode, ammo, hexX, hexY );
-		cr.Wait( GetProtoTime( weapon, mode, cr ) );
+		attacker.ParamBase[CR_IS_SHOOTING] = 0;
+		CombatAttack( attacker, target, weapon, mode, ammo, hexX, hexY, false, false, false );
 	}
+}
+
+void unsafe_critter_attack( Critter& attacker, int target_Id, int param1, int weaponProto, string@ param3, int[] @ param4 )
+{
+	if( !attacker.IsLife() )
+	{
+		return;
+	}
+
+	Critter@ target = GetCritter( target_Id );
+	if( !valid( target ) )
+	{
+		return;
+	}
+	
+	if( target_Id == int( attacker.Id ) )
+	{
+		return;
+	}
+	
+	Item@ hand = _CritGetItemHand( attacker );
+    
+	ProtoItem@ weapon = GetProtoItem( weaponProto );
+	uint8 mode = attacker.Stat[ ST_HANDS_ITEM_AND_MODE ];
+	
+	if( valid( hand ) )
+	{
+		mode = hand.Mode;
+		@weapon = GetProtoItem( hand.GetProtoId() );
+	}
+	
+	if( !valid( weapon ) )
+	{
+		return;
+	}
+	
+	int skillNum = ( valid( weapon ) ? _WeaponSkill( weapon, 0 ) : ( valid( hand ) ? SK_MELEE_WEAPONS : SK_UNARMED ) );
+	uint8 weaponType = ( skillNum == SK_SMALL_GUNS || skillNum == SK_MEDIUM_GUNS || skillNum == SK_BIG_GUNS ) ? WS_GUN : 
+					( ( skillNum == SK_THROWING ) ? WS_THROWING : ( skillNum == SK_MELEE_WEAPONS ) ? WS_MELEE : WS_UNARMED );
+	
+	ProtoItem@ ammo;
+	if( weapon.Weapon_MaxAmmoCount > 0 )
+	{
+		@ammo = GetProtoItem( hand.AmmoPid );
+	}
+
+	int needAp = attack_ap( attacker, weapon, mode, ammo );
+	bool HasAllAP = attacker.Stat[ ST_ACTION_POINTS ] == attacker.Stat[ ST_CURRENT_AP ];
+
+	if( ( !HasAllAP && attacker.Stat[ ST_ACTION_POINTS ] < needAp ) || 
+		( attacker.Stat[ ST_ACTION_POINTS ] >= needAp && attacker.Stat[ ST_CURRENT_AP ] < needAp ) &&
+		  attacker.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
+	{
+		return;
+	}
+
+    int dist = GetDistantion( attacker.HexX, attacker.HexY, target.HexX, target.HexY );
+	int wpnMaxDist = _WeaponMaxDist( weapon, mode );
+	
+	if( weaponType == WS_THROWING )
+	{
+		wpnMaxDist = MIN( wpnMaxDist, 3 * MIN( int( 10 ), attacker.Stat[ ST_STRENGTH ] ) );
+	}
+	
+	//Log( "dist " + dist + " wpnMaxDist " + wpnMaxDist );
+	if( ( valid( ammo ) && FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT ) ) )
+	{
+		if( dist > wpnMaxDist * 2 )
+		{			
+			attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_OUT_OF_RANGE );
+			return;
+		}
+	}
+
+	if( ( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS || skillNum == SK_THROWING || weapon.Item_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER ) && dist > wpnMaxDist )
+	{
+		int run = attacker.Mode[ MODE_NO_RUN ] > 0 ? 0 : 1;
+		int attack_dist = wpnMaxDist >= 2 ? wpnMaxDist - 1 : wpnMaxDist;
+		attacker.RunClientScript( "client_main@__ChosenMoveToCritAction", target_Id, run, attack_dist, null, null );
+		return;
+	}
+	
+	if( ( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS ) && dist > wpnMaxDist )
+	{
+		attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_OUT_OF_RANGE );
+		return;
+	}
+	
+	critter_attack( attacker, target, weapon, mode, ammo );
 }
 
 uint e_emptySFX( uint[]@ values )
@@ -519,7 +759,7 @@ uint e_emptySFX( uint[]@ values )
 	int hx = cr.HexX, hy = cr.HexY;
 	cr.GetMap().GetCrittersHex( hx, hy, radius, FIND_ALL | FIND_ONLY_PLAYERS, players );
 	int[] vals = { values[1], 4, radius };
-	for( uint i = 0; i < players.length(); i++ )
+	for( uint i = 0, len = players.length(); i < len; i++ )
 	{
 		Critter@ player = players[i];
 		if( valid( player ) )
@@ -527,164 +767,110 @@ uint e_emptySFX( uint[]@ values )
 			player.RunClientScript( "fofmod@__PlayWeaponSound", cr.Id, hx, hy, "LAUGHTE1.mp3", vals );
 		}
 	}
+	
+	players.resize(0);
 	return 0;
 }
 
 void unsafe_hex_useItem( Critter& cr, int hexX, int hexY, int itm_pid, string@ command, int[] @ param4 )
 {
-	Item@ usedItem = _CritGetItemHand( cr );
-	uint16 usedItemPid = usedItem.GetProtoId();
-	
-	if( usedItemPid == PID_ROD_STRING_HOOK )
+	if( !cr.IsLife() )
 	{
-		uint8 throwDir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
-		cr.SetDir( throwDir );
-		PrepareFishing( cr, usedItem, hexX, hexY );
+		return;
+	}
+
+	Map@ map = cr.GetMap();
+	if( !valid( map ) )
+	{
+		return;
 	}
 	
-	if( usedItemPid == PID_SHOVEL || usedItemPid == PID_SPADE )
+	Item@ usedItem = _CritGetItemHand( cr );	
+	if( valid( usedItem ) )
 	{
-		uint8 digDir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
-		cr.SetDir( digDir );
+		uint16 usedItemPid = usedItem.GetProtoId();
+		uint8 dir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
+		cr.SetDir( dir );
+		
+		if( usedItemPid == PID_ROD_STRING_HOOK )
+		{
+			PrepareFishing( cr, usedItem, hexX, hexY );
+		}
+		
+		if( GetDistantion( cr.HexX, cr.HexY, hexX, hexY ) > 1 )
+		{
+			MoveToHex( cr, map, usedItem, hexX, hexY );
+			return;
+		}
+		
+		if( usedItemPid == PID_SHOVEL || usedItemPid == PID_SPADE || usedItemPid == PID_PRIMITIVE_SHOVEL )
+		{
+			TryGetSand( cr, usedItem, hexX, hexY );
+		}
+		
+		if( usedItemPid != PID_ROD_STRING_HOOK && checkWater( map, H2T( hexX ), H2T( hexY ) ) > 0 )
+		{
+			start_gathering_water( cr, 23541 );
+		}
+		
+		if( farm_seeds.find( usedItemPid ) != -1 )
+		{
+			TryPlantSeed( cr, usedItem, hexX, hexY, null );
+		}
+		
+		if( usedItem.GetType() == ITEM_TYPE_TRAP && usedItem.Proto.Item_Subtype == ITEM_SUBTYPE_MINE )
+		{
+			TryPlantMine( cr, usedItem, hexX, hexY );
+		}
+	}
+}
+
+void MoveToHex( Critter& cr, Map& map, Item& usedItem, uint16 hexX, uint16 hexY )
+{
+	uint16 hx = hexX, hy = hexY;
+	uint8 revDir = GetDirection( hx, hy, cr.HexX, cr.HexY );
+	map.MoveHexByDir( hx, hy, revDir, 1 );
+	cr.RunClientScript( "client_main@__ChosenMoveAction", hx, hy, 2, null, null );
+	uint[] values = { cr.Id, usedItem.Id, hexX, hexY };
+	CreateTimeEvent( AFTER( REAL_MS( 500 ) ), "general_unsafe@e_WaitForIt", values, true );
+}
+
+uint e_WaitForIt( uint[] @ values ) 
+{
+	Critter@ cr = GetCritter( values[0] );
+	if( MovementState( cr ) > 0 )
+	{
+		return REAL_MS( 300 );
+	}
+	
+	Item@ usedItem = GetItem( values[1] );
+	if( !valid( usedItem ) )
+	{
+		return 0;
+	}
+	
+	uint16 hexX = values[2];
+	uint16 hexY = values[3];
+	
+	uint8 dir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
+	cr.SetDir( dir );
+	uint16 usedItemPid = usedItem.GetProtoId();
+	if( usedItemPid == PID_SHOVEL || usedItemPid == PID_SPADE  || usedItemPid == PID_PRIMITIVE_SHOVEL)
+	{
 		TryGetSand( cr, usedItem, hexX, hexY );
 	}
 	
 	if( farm_seeds.find( usedItemPid ) != -1 )
 	{
-		uint8 digDir = GetDirection( cr.HexX, cr.HexY, hexX, hexY );
-		cr.SetDir( digDir );
 		TryPlantSeed( cr, usedItem, hexX, hexY, null );
 	}
-}
-
-void unsafe_stopMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
-{
-    for( uint i = param0 * 10, ii = uint( 10 + param0 * 10 ); i < ii; i++ )
-    {
-        Critter@ controlled = GetCritter( vals[ i ] );
-        if( valid( controlled ) && controlled.ParamBase[ MERC_MASTER_ID ] != int( player.Id ) )
-        {
-            player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_GM_ACCESS );
-            return;
-        }
-		
-        if( valid( player ) && valid( controlled ) && controlled.IsNpc() )
-        {
-            controlled.ErasePlane( -1, true );
-            controlled.ClearEnemyStack();
-            controlled.EraseTimeEvents( 9 );
-            controlled.SetDir( GetDirection( controlled.HexX, controlled.HexY, param1, param2 ) );
-        }
-    }
-}
-
-void unsafe_moveMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
-{
-    for( uint i = param0 * 10, ii = uint( 10 + param0 * 10 ); i < ii; i++ )
-    {
-        Critter@ controlled = GetCritter( vals[ i ] );
-        if( valid( controlled ) && controlled.ParamBase[ MERC_MASTER_ID ] != int( player.Id ) )
-        {
-            player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_GM_ACCESS );
-            return;
-        }
-		
-        if( valid( player ) && valid( controlled ) && controlled.IsNpc() )
-        {
-            controlled.ErasePlane( -1, true );
-            AddWalkPlane( controlled, 1, param1 + Random( -i, i ), param2 + Random( -i, i ), GetDirection( controlled.HexX, controlled.HexY, param1, param2 ), valid( param3 ), 0 );
-            if( param0 == 0 )
-			{
-                controlled.ClearEnemyStack();
-			}
-		}
-    }
-}
-
-void unsafe_attackMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
-{
-    Critter@ target = GetCritter( param0 );
-    for( uint i = param2 * 10, ii = 10 + param2 * 10; i < ii; i++ )
-    {
-        Critter@ controlled = GetCritter( vals[ i ] );
-        if( valid( controlled ) && controlled.ParamBase[ MERC_MASTER_ID ] != int( player.Id ) )
-        {
-            player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_GM_ACCESS );
-            return;
-        }
-		
-        if( valid( player ) && valid( controlled ) && valid( target ) && controlled.IsNpc() )
-        {
-            controlled.ErasePlane( -1, true );
-            AddAttackPlane( controlled, 0, target, __RunOnCombat );
-            controlled.AddEnemyInStack( target.Id );
-        }
-    }
-}
-
-void unsafe_chaseMob( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ vals )
-{
-    Critter@ target = GetCritter( param0 );
-    for( uint i = param2 * 10, ii = 10 + param2 * 10; i < ii; i++ )
-    {
-        Critter@ controlled = GetCritter( vals[ i ] );
-        if( valid( controlled ) && controlled.ParamBase[ MERC_MASTER_ID ] != int( player.Id ) )
-        {
-            player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_GM_ACCESS );
-            return;
-        }
-		
-        if( valid( player ) && valid( controlled ) && valid( target ) && controlled.IsNpc() )
-        {
-            controlled.ErasePlane( -1, true );
-            controlled.ModeBase[ MODE_NO_HOME ] = 1;
-            controlled.StatBase[ ST_KILLER_PERSON ] = target.Id;
-            controlled.AddTimeEvent( "follow", 30, 9 );
-        }
-    }
-}
-
-uint follow( Critter& cr, int master, uint& rate )
-{
-    int8 y = 0;
-    cr.ClearEnemyStack();
-    Critter@ daddy = GetCritter( cr.Stat[ ST_KILLER_PERSON ] );
-    Map@ daddymap = null;
-    Map@ crmap = cr.GetMap();
 	
-    if( valid( daddy ) )
+	if( usedItem.GetType() == ITEM_TYPE_TRAP && usedItem.Proto.Item_Subtype == ITEM_SUBTYPE_MINE )
 	{
-        @daddymap = daddy.GetMap();
-	}
-	else
-	{
-        return 0;
+		TryPlantMine( cr, usedItem, hexX, hexY );
 	}
 	
-	cr.ErasePlane( -1, true );
-
-    if( ( !valid( daddymap ) ) && ( valid( crmap ) ) )
-    {
-        cr.TransitToGlobalGroup( daddy.Id );
-    }
-    else if( ( valid( daddymap ) ) && ( valid( crmap ) ) && ( daddymap.Id == crmap.Id ) )
-    {
-        AddWalkPlane( cr, 0, daddy.HexX, daddy.HexY, GetDirection( cr.HexX, cr.HexY, daddy.HexX, daddy.HexY ), false, 1 );
-    }
-    else if( ( valid( daddymap ) ) && ( valid( crmap ) ) && ( crmap.Id != daddymap.Id ) )
-    {
-        uint8 findPos = 1;
-        while( findPos <= 10 )
-        {
-            if( daddymap.IsHexPassed( daddy.HexX + findPos, daddy.HexY + findPos ) )
-            {
-                cr.TransitToMap( daddymap.Id, daddy.HexX + findPos, daddy.HexY + findPos, Random( 0, 5 ) );
-                findPos = 10;
-            }
-            findPos++;
-        }
-    }
-    return 30;
+    return 0;
 }
 
 void unsafe_say( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
@@ -695,12 +881,14 @@ void unsafe_say( Critter& player, int param0, int param1, int param2, string@ pa
         player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_GM_ACCESS );
         return;
     }
+	
     if( valid( controlled ) && controlled.ParamBase[ MERC_MASTER_ID ] != int( player.Id ) )
     {
         player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NEED_GM_ACCESS );
         return;
     }
-    say( player, param0, param1, 0 );
+	
+    Say( player, param0, param1, 0 );
 }
 
 void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string@ param3, int[] @ param4 )
@@ -717,12 +905,13 @@ void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string
 			return;
 		}
 		player.ParamBase[ CR_SLEEPING_STATE ] = 0;
+		player.ParamBase[ ST_CURRENT_AP ] = 0;
         player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_GET_UP );
 		SayLog( player, crInfo( player ) + " gets up." );
     }
 	else if( !player.IsKnockout() )
     {
-        player.ToKnockout( KNOCKOUT_ANIM2_DEFAULT( ( isBack == 0 ) ), 101, player.HexX, player.HexY );
+        KnockoutOnce( player, isBack == 0, player.Stat[ ST_CURRENT_AP ] + 100 ); 
         player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_YOU_LIE_DOWN );
 		SayLog( player, crInfo( player ) + " lies down." );
 		player.ParamBase[ CR_SLEEPING_STATE ] = 1 + isBack;
@@ -730,87 +919,154 @@ void unsafe_sleep( Critter& player, int isBack, int isRemote, int param2, string
 		{
 			player.ParamBase[ CR_SLEEPING_STATE ] = 3;
 		}
+		
+		Map@ map = player.GetMap();
+		Item@[] mines;
+		map.GetItems( player.HexX, player.HexY, mines );
+		Item@ mine = null;
+		for( uint i = 0, len = mines.length(); i < len; i++ )
+		{
+			@mine = mines[i];
+			if( valid( mine ) )
+			{
+				uint16 pid = mine.GetProtoId();
+				if( mine.GetType() == ITEM_TYPE_TRAP && ( pid == PID_ACTIVE_MINE || pid == PID_ACTIVE_MINE_PLASMA || pid == PID_ACTIVE_MINE_PULSE ) )
+				{
+					DetonateTrap( mine );
+					break;
+				}
+			}
+		}
+		
+		mines.resize(0);
     }
 }
 
-void unsafe_relax( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+void unsafe_relax( Critter& player, int param0, int param1, int param2, string@ param3, int[]@ param4 )
 {
 	if( !player.IsLife() )
 	{
 		return;
 	}
 	
-	Map@ map = player.GetMap();
+	hotkey_critter_anim( player, param0 );
+}
+
+//import void hotkey_critter_anim( Critter& cr, int param0 ) from "general_unsafe";
+void hotkey_critter_anim( Critter& cr, int param0 )
+{
+	Map@ map = cr.GetMap();
 	uint[] index;
-	//player.Wait( 500 );
+
 	string sound = "ROBE.mp3";
 	uint time = 1000;
 	if( param0 > 0 )
 	{
-		player.ParamBase[ CR_IS_RELAXING ] = param0;
-		SayLog( player, crInfo( player ) + " lies down to relax." );
-		player.ParamBase[ CR_IS_WINDUPED ] = 0;
+		string action_info = "" + param0;
+		cr.ParamBase[ CR_IS_RELAXING ] = param0;
+		cr.ParamBase[ CR_IS_WINDUPED ] = 0;
 		
-		switch( player.Param[ CR_IS_RELAXING ] )
+		switch( param0 )
 		{
 			case( 1 ):
 			case( 2 ):
-				sound = player.Stat[ ST_GENDER ] == GENDER_MALE ?  "GenericM_KnockFront.wav" : ( player.Stat[ ST_GENDER ] == GENDER_FEMALE ? "GenericF_KnockBack.wav" : "ROBE.mp3" );
-				player.Animate( 0, ANIM2_LIE_DOWN, null, false, true );
+				sound = cr.Stat[ ST_GENDER ] == GENDER_MALE ?  "GenericM_KnockFront.wav" : ( cr.Stat[ ST_GENDER ] == GENDER_FEMALE ? "GenericF_KnockBack.wav" : "ROBE.mp3" );
+				cr.Animate( 0, ANIM2_LIE_DOWN, null, false, true );
+				action_info = "lies down to relax";
 				break;
 			case( 3 ):
 			case( 4 ):
-				player.Animate( 0, ANIM2_LEAN_BEGIN, null, false, true );
+				cr.Animate( 0, ANIM2_LEAN_BEGIN, null, false, true );
+				action_info = "leans forward";
 				time = 300;
 				break;
 			case( 5 ):
-				player.StatBase[ ST_CURRENT_AP ] -= 2000;
-				CheckCover( player );
+			{
+				cr.StatBase[ ST_CURRENT_AP ] -= 2000;
+				if( !CheckCover( cr ) )
+				{
+					cr.ParamBase[ CR_IS_RELAXING ] = 8;
+					action_info = "sits down";
+				}
+				else
+				{
+					action_info = "ducks in cover";
+				}
+				break;
+			}
 			case( 6 ):
-			case( 7 ):
-				//player.Animate( 0, ANIM2_KNEEL_BEGIN, null, false, true );
+				action_info = "fiddles hand on ground";
 				time = 250;
-				break;	
+				break;
+			case( 7 ):
+				action_info = "kneels";
+				time = 250;
+				break;
+			case( 10 ):
+				action_info = "doing squats";
+				time = 250;
+				break;
+			case( 11 ):
+				action_info = "flexing";
+				time = 250;
+				break;
+			case( 9 ):
+				action_info = "doing pushups";
+				cr.Animate( 0, ANIM2_KNOCK_BACK, null, false, true );
+				time = 750;
+				break;
+			case( 12 ):
+				action_info = "doing abs";
+				cr.Animate( 0, ANIM2_KNOCK_FRONT, null, false, true );
+				time = 750;
+				break;
 			default:
 				break;
 		}
 
-		if( player.GetTimeEvents( CTE_RELAX, index, null, null ) == 0 )
+		if( cr.GetTimeEvents( CTE_RELAX, index, null, null ) == 0 )
 		{
-			player.AddTimeEvent( "cte_unsafe_relax", REAL_MS( time ), CTE_RELAX, param0 );
+			cr.AddTimeEvent( "cte_unsafe_relax", REAL_MS( time ), CTE_RELAX, param0 );
 		}
 
-		PlayGenericSound( map, player.HexX, player.HexY, sound, 6 );
+		SayLog( cr, crInfo( cr ) + " " + action_info + "." );
+		PlayGenericSound( map, cr.HexX, cr.HexY, sound, 6 );
 	}
 	else
 	{
-		SayLog( player, crInfo( player ) + " stops relaxing." );
-		switch( player.Param[ CR_IS_RELAXING ] )
+		SayLog( cr, crInfo( cr ) + " stands up straight." );
+		switch( cr.Param[ CR_IS_RELAXING ] )
 		{
 			case( 1 ):
 			case( 2 ):
-				sound = player.Stat[ ST_GENDER ] == GENDER_MALE ?  "GenericM_Standup.wav" : ( player.Stat[ ST_GENDER ] == GENDER_FEMALE ? "GenericF_Standup.wav" : "ROBE.mp3" );
-				player.Animate( 0, ANIM2_LIE_UP, null, false, false );
+				sound = cr.Stat[ ST_GENDER ] == GENDER_MALE ?  "GenericM_Standup.wav" : ( cr.Stat[ ST_GENDER ] == GENDER_FEMALE ? "GenericF_Standup.wav" : "ROBE.mp3" );
+				cr.Animate( 0, ANIM2_LIE_UP, null, false, false );
 				break;
 			case( 3 ):
 			case( 4 ):
-				player.Animate( 0, ANIM2_LEAN_END, null, false, true );
+				cr.Animate( 0, ANIM2_LEAN_END, null, false, true );
 				break;
 			case( 5 ):
 			case( 6 ):
 			case( 7 ):
-				player.Animate( 0, ANIM2_KNEEL_END, null, false, true );
+			case( 8 ):
+			case( 9 ):
+			case( 10 ):
+			case( 11 ):
+			case( 12 ):
+				cr.Animate( 0, ANIM2_KNEEL_END, null, false, true );
 				break;							
 			default:
 				break;
 		}
 		
-		if( player.GetTimeEvents( CTE_RELAX, index, null, null ) > 0 )
+		if( cr.GetTimeEvents( CTE_RELAX, index, null, null ) > 0 )
 		{
-			player.ChangeTimeEvent( index[0], REAL_MS( 1000 ), 0 );
+			cr.EraseTimeEvents( CTE_RELAX );
+			cr.AddTimeEvent( "cte_unsafe_relax", REAL_MS( 1000 ), CTE_RELAX, 0 );
 		}
 		
-		PlayGenericSound( map, player.HexX, player.HexY, sound, 6 );
+		PlayGenericSound( map, cr.HexX, cr.HexY, sound, 6 );
 	}
 }
 
@@ -831,19 +1087,45 @@ uint cte_unsafe_relax( Critter& player, int identifier, uint& rate )
 			player.SetAnims( COND_LIFE, 0, ANIM2_LEANING1 );
 			break;
 		case( 5 ):
-			player.SetAnims( COND_LIFE, 0, ANIM2_KNEEL );
+		case( 8 ):
+		{
+			if( player.Param[ ST_BODY_TYPE ] > BT_GHOUL )
+			{
+				player.SetAnims( COND_LIFE, 0, ANIM2_DUCK );
+			}
+			else
+			{
+				player.SetAnims( COND_LIFE, 0, ANIM2_KNEEL );
+			}
 			break;
+		}
 		case( 6 ):
 			player.SetAnims( COND_LIFE, 0, ANIM2_KNEEL1 );
 			break;
 		case( 7 ):
 			player.SetAnims( COND_LIFE, 0, ANIM2_KNEEL2 );
 			break;
+		case( 9 ):
+			player.SetAnims( COND_LIFE, 0, ANIM2_PRONE_SEX );
+			break;
+		case( 10 ):
+			player.SetAnims( COND_LIFE, 0, ANIM2_ORAL );
+			break;
+		case( 11 ):
+			player.SetAnims( COND_LIFE, 0, ANIM2_ORAL_RECIEVE );
+			break;
+		case( 12 ):
+			player.SetAnims( COND_LIFE, 0, ANIM2_SEX_RECIEVE );
+			break;
 		default:
 			break;
 	}
 
-	if( MovementState( player ) > 0 || rate == 0 || player.Param[ CR_IS_WINDUPED ] != 0 )
+	if( ( player.Param[ CR_IS_RELAXING ] == 5 && ( MovementState( player ) == MOVE_STATE_RUN || !CheckCover( player ) ) ) 
+		|| ( player.Param[ CR_IS_RELAXING ] != 5 && MovementState( player ) > MOVE_STATE_STILL ) 
+		|| rate == 0 
+		|| player.Param[ CR_IS_WINDUPED ] != 0
+	  )
 	{
 		player.ParamBase[ CR_IS_RELAXING ] = 0;
 		player.ParamBase[ CR_IN_COVER ] = 0;
@@ -857,84 +1139,104 @@ uint cte_unsafe_relax( Critter& player, int identifier, uint& rate )
 	return REAL_MS( 500 );
 }
 
-void CheckCover( Critter& player )
+bool CheckCover( Critter& player )
 {
 	Map@ map = player.GetMap();
 	if( !valid( map ) )
 	{
-		return;
+		return false;
 	}
 	
+	uint count = 0;	
 	for( uint16 i = 0; i < 6; i++ )
 	{
 		uint16 hx = player.HexX, hy = player.HexY;
 		map.MoveHexByDir( hx, hy, i, 1 );
+		uint coverType = 0;
+		if( !map.IsHexPassed( hx, hy ) )
 		{
-			uint coverType = 0;
-			if( !map.IsHexPassed( hx, hy ) )
+			bool noCover = false;
+			
+			FindData@[] allData;
+			GetHexProtos( map, hx, hy, allData );
+			for( uint j = 0, len = allData.length(); j < len; j++ )
 			{
-                FindData@[] allData;
-                GetHexProtos( map, hx, hy, allData );
-				
-				if( allData.length() > 0 )
-				{
-					for( uint j = 0; j < allData.length(); j++ )
-					{
-						ProtoItem@ protoItem = allData[0].Proto;
+				ProtoItem@ protoItem = allData[j].Proto;
 
-						if( FLAG( protoItem.Flags, ITEM_NO_BLOCK ) )
+				if( FLAG( protoItem.Flags, ITEM_NO_BLOCK ) )
+				{
+					continue;
+				}
+				
+				switch( protoItem.Material )
+				{
+					case( MATERIAL_WOOD ):
+					{
+						if( coverType < 2 )
 						{
-							continue;
+							coverType = 2;
 						}
-						
-						switch( protoItem.Material )
-						{
-							case( MATERIAL_WOOD ):
-							{
-								if( coverType < 2 )
-								{
-									coverType = 2;
-								}
-								break;
-							}
-							case( MATERIAL_METAL ):
-							{
-								if( coverType < 3 )
-								{
-									coverType = 3;
-								}
-								break;
-							}
-							case( MATERIAL_STONE ):
-							case( MATERIAL_CEMENT ):
-							{
-								if( coverType < 4 )
-								{
-									coverType = 4;
-								}
-								break;
-							}
-							default:
-							{
-								if( coverType < 1 )
-								{
-									coverType = 1;
-								}
-								break;
-							}
-								break;
-						}
-						
-						if( coverType == 4 )
-						{
-							break;
-						}
+						break;
 					}
+					case( MATERIAL_IRON ):
+					{
+						if( coverType < 3 )
+						{
+							coverType = 3;
+						}
+						break;
+					}
+					case( MATERIAL_STONE ):
+					case( MATERIAL_CEMENT ):
+					{
+						if( coverType < 4 )
+						{
+							coverType = 4;
+						}
+						break;
+					}
+					case( MATERIAL_DIRT ):
+					{
+						break;
+					}
+					case( MATERIAL_VOID ):
+					{
+						noCover = true;
+						coverType = 0;
+						break;
+					}
+					default:
+					{
+						if( coverType < 1 )
+						{
+							coverType = 1;
+						}
+						break;
+					}
+						break;
+				}
+				
+				if( noCover || coverType == 4 )
+				{
+					break;
 				}
 			}
-			player.ParamBase[ CR_IN_COVER ] = SET_COVER_TYPE( coverType, i, player.ParamBase[ CR_IN_COVER ] );
+			
+			allData.resize(0);
+		}
+		player.ParamBase[ CR_IN_COVER ] = SET_COVER_TYPE( coverType, i, player.ParamBase[ CR_IN_COVER ] );
+		if( coverType != 0 )
+		{
+			count++;
 		}
 	}
+	
+	if( count == 0 )
+	{
+		return false;
+	}
+	
+	return true;
 }
 
 //Proto array collector
@@ -944,6 +1246,7 @@ class FindData
 	{
 		@Proto = GetProtoItem( protoid );
 	}
+
 	ProtoItem@ Proto;
 }
 
@@ -974,6 +1277,7 @@ void GetHexProtos( Map@ map, uint16 hexX, uint16 hexY, FindData@[]& array )
 	{
 		array.insertLast( FindDataSceneryClient( sceneries[i] ) );
 	}
+	
 	Item@[] items;
 	iend = map.GetItems( hexX, hexY, items );
 
@@ -984,178 +1288,89 @@ void GetHexProtos( Map@ map, uint16 hexX, uint16 hexY, FindData@[]& array )
 
 }
 
-void unsafe_itemhit2( Critter& player, int itemId, int x, int y, string@ param3, int[] @ param4 )
+#define hex_width ( 16 )
+#define hex_height ( 12 )
+void offsetItem( Item& item, int[] data )
 {
-    if( player.IsDead() || player.IsKnockout() )
-	{
-		return;
-	}
+	float zoom = data[0] / 1000.0f;
+	int dx = int( data[1] * zoom );
+	int dy = int( data[2] * zoom );
 	
-	if ( player.Timeout[ TO_SK_STEAL ] > 0 )
+	int hx = data[3];
+	if( int( item.HexX ) != hx )
 	{
-		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KNOCK_TOO_MUCH );
-		return;
-	}
-	if( ABS( int(x - player.HexX) ) <= 1 && ABS( int(y - player.HexY) ) <= 1 )
-	{
-		player.SetDir( GetDirection( player.HexX, player.HexY, x, y ) );
-		Map@ map = player.GetMap();
-		if( !valid( map ) )
+		int dHx = item.HexX - hx;
+		
+		int sign = ( dHx > 0 ? +1 : -1 );
+		int min = MIN( hx, int( item.HexX ) );
+		int max = MAX( hx, int( item.HexX ) );
+		
+		int delta = ( max - min );
+		int pairs = int( delta / 2 );
+		dx += pairs * hex_width * 3 * sign;
+		dy -= pairs * hex_height * sign;
+		
+		if( delta % 2 != 0 )
 		{
-			return;
-		}
-		map.SetTextMsg( x, y, COLOR_GRAY, TEXTMSG_TEXT, STR_MAPMSG_BANG );
-		
-        Item@[] items;
-		
-		uint16 hexX = player.HexX, hexY = player.HexY;
-		map.MoveHexByDir( hexX, hexY, player.Dir, 1 );
-		map.GetItems( hexX, hexY, items );
-		
-		for( uint i = 0, len = items.length(); i < len; i++ )
-		{
-			if( items[i].GetType() == ITEM_TYPE_DOOR )
+			if( max % 2 == 0 )
 			{
-				UseSkillOnLocker( player, items[i], SKILL_PICK_ON_GROUND );
+				dx += hex_width * sign;
+				dy -= hex_height * sign;
+			}
+			else
+			{
+				dx += hex_width * 2 * sign;					
 			}
 		}
+	}
 		
-		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KNOCKED );
-		SayLog( player, crInfo( player ) + " knocks on (" + x + ":" + y + ")." );
-		player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
-		return;
-	}
-	else
+	int hy = data[4];
+	if( int( item.HexY ) != hy )
 	{
-		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_FAR );
+		int dHy = item.HexY - hy;
+		
+		dx -= ( dHy * hex_width );
+		dy -= ( dHy * hex_height );
 	}
-	return;			
+
+	offset( item, dx, dy );
 }
 
-void unsafe_itemhit( Critter& player, int id, int itemId, int param2, string@ param3, int[] @ param4 )
+void unsafe_itemthrow( Critter& player, int hx, int hy, int precision, string@ param3, int[]@ data ) 
 {
-    Critter @ target = GetCritter( id );
-
-    if( player.IsDead() || player.IsKnockout() )
+	if( player.IsBusy() || (player.Stat[ ST_CURRENT_AP ] < 50 && player.Stat[ ST_ACTION_POINTS ] > 50 ) )
 	{
-		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_DO_THAT );
 		return;
 	}
 	
-	if( !valid( target ) )
-	{
-		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MISS_KNOCK );
-		return;
-	}
-	
-	if( player.Timeout[ TO_SK_STEAL ] > 0 )
-	{
-		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_KNOCK_TOO_MUCH );
-		return;
-	}
-	
-	if( target.IsDead() || target.IsKnockout())
-	{	
-		DragAndDrop( player, target );
-		player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 3 );
-		return;
-	}		
-	
-	if( ABS( int(target.HexX - player.HexX) ) <= 1 && ABS( int(target.HexY - player.HexY) ) <= 1 )
-	{
-		Item@ weapon = _CritGetItemHand( player );
-		SayLog( player, crInfo( player ) + " bangs on: " + crInfo( target, true ) + "." );
-
-		if( !(weapon is null) )
-		{
-			uint16 weight = weapon.Proto.Weight;
-			weight = CLAMP( weight, 2000, 8000 );
-			int  ap = int( weight * 0.001 );
-			ap = CLAMP( ap, 20, 80 );
-			
-			if( ap <= player.Stat[ ST_CURRENT_AP ] )
-			{
-				player.SetDir( GetDirection( player.HexX, player.HexY, target.HexX, target.HexY ) );
-				_CritAnimateThrow( player );
-				player.Wait ( 1000 );
-				player.StatBase[ ST_CURRENT_AP ] -= ap * 100;
-				
-				if ( player.Skill[ SK_MELEE_WEAPONS ] - target.Stat[ ST_ARMOR_CLASS ] - int( weight * 0.002 ) < Random( 0, 100) )
-				{
-					player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MISS_KNOCK );
-					return;
-				}
-				uint8 strBonus = ( player.Stat[ ST_STRENGTH ] > 6 ? player.Stat[ ST_STRENGTH ] - 6 : 1 );
-				int damage = strBonus + player.StatBase[ ST_MELEE_DAMAGE ] + Random( 0, int( weight * 0.002 ) );
-				InjureCritter( target, damage, DAMAGE_NORMAL, target.Dir, player.Id, HIT_LOCATION_NONE, false );
-				
-				player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
-				player.TimeoutBase[ TO_AGGRESSOR ] = __FullSecond + REAL_MINUTE( 1 );
-
-				if( target.IsNpc() && target.IsSee( player ) )
-				{
-					target.AddEnemyInStack( player.Id );
-				}
-				return;
-			}
-			player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NOT_ENOUGH_AP );
-			return;
-		}
-		else if( 40 <= player.Stat[ ST_CURRENT_AP ] )
-		{
-			player.SetDir( GetDirection( player.HexX, player.HexY, target.HexX, target.HexY ) );
-			_CritAnimateThrow( player );
-			player.Wait ( 1000 );
-			player.StatBase[ ST_CURRENT_AP ] -= 40 * 100;
-			
-			if ( player.Skill[ SK_UNARMED ] - target.Stat[ ST_ARMOR_CLASS ] < Random( 0, 100) )
-			{
-				player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_MISS_KNOCK );
-				return;
-			}
-			uint8 strBonus = ( player.Stat[ ST_STRENGTH ] > 6 ? player.Stat[ ST_STRENGTH ] - 6 : 1 );
-			int damage = Random( strBonus, strBonus + player.StatBase[ ST_MELEE_DAMAGE ] + 1 );           // every 500g 1dmg point
-			InjureCritter( target, damage, DAMAGE_NORMAL, target.Dir, player.Id, HIT_LOCATION_NONE, false );
-			
-			player.TimeoutBase[ TO_SK_STEAL ] = __FullSecond + REAL_SECOND( 2 );
-			player.TimeoutBase[ TO_AGGRESSOR ] = __FullSecond + REAL_MINUTE( 1 );
-
-			if( target.IsNpc() && target.IsSee( player ) )
-			{
-				target.AddEnemyInStack( player.Id );
-			}
-			return;
-		}
-		else
-		{
-			player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_NOT_ENOUGH_AP );
-		}
-		return;			
-	}
-	else
-	{
-		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_FAR );
-	}
-}
-
-void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ param3, int[] @ param4 ) 
-{
-	if( player.IsBusy() || player.Stat[ ST_CURRENT_AP ] < 50 )
-	{
-		return;
-	}
+	bool offsetting = true;
+	bool IsGM = isGM(player);
+	bool precise_throw = ( precision != 0 ) || IsGM;
 	
 	uint16 tx = hx, ty = hy;
 	uint distance = GetDistantion( player.HexX, player.HexY, hx, hy );
-	Map@ currentMap = player.GetMap ();
+	if( distance > 10 && !IsGM )
+	{
+		precise_throw = false;
+	}
+	
+	Map@ currentMap = player.GetMap();
 
-	if( !valid(currentMap) || player.IsDead() || player.IsKnockout() || distance > uint( player.Stat [ST_STRENGTH] * 2 ) )
+	if( !valid( currentMap ) || player.IsDead() || player.IsKnockout() || ( !IsGM && distance > uint( player.Stat [ ST_STRENGTH ] * 2 ) ) )
 	{
 		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_FAR_TO_THROW );
 		return;
 	}
 	
-	currentMap.GetHexCoord( player.HexX,  player.HexY, tx, ty,  0.0f, distance );
+	RustyGetHexCoord( currentMap, player.HexX,  player.HexY, tx, ty,  0.0f, distance );
+
+	bool obstructed_path = ( ( int(tx) != hx ) || ( int(ty) != hy ) );
+	if( obstructed_path && distance > 10 && !IsGM )
+	{
+		offsetting = false;
+		precise_throw = false;
+	}
+	
 	Critter@ target = currentMap.GetCritter( tx, ty );
 
 	Item@[] items;
@@ -1170,9 +1385,27 @@ void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ par
 		}
 	}
 	
-	if( !currentMap.IsHexPassed( tx, ty ) && !valid(target) && !valid(container) )
+	if( precise_throw || ( !currentMap.IsHexPassed( tx, ty ) && !valid(target) && !valid(container) ) )
 	{
-		currentMap.GetHexCoordWall( player.HexX,  player.HexY, tx, ty,  0.0f, distance );
+		RustyGetHexCoordWall( currentMap, player.HexX, player.HexY, tx, ty,  0.0f, distance );
+				
+		uint32 target_item_id = MAKELONG( data[5], data[6] );
+		if( target_item_id != 0 )
+		{
+			Item@ target_item = GetItem( target_item_id );
+			
+			if( valid( target_item ) )
+			{
+				tx = target_item.HexX;
+				ty = target_item.HexY;
+				
+				if( target_item.GetType() == ITEM_TYPE_CONTAINER && ( !target_item.Proto.Container_Changeble || FLAG( target_item.LockerCondition, LOCKER_ISOPEN ) ) )
+				{
+					@container = @target_item;
+				}
+			}
+
+		}
 	}
 	
 	Item@ itemInHand = _CritGetItemHand( player );
@@ -1182,7 +1415,7 @@ void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ par
 	}
 	
 	uint pid = itemInHand.GetProtoId();
-	uint[] impossibles = { PID_WORKBENCH_TOKEN, PID_FIREPLACE_TOKEN };
+	uint[] impossibles = { PID_WORKBENCH_TOKEN, PID_FIREPLACE_TOKEN, PID_AMMOBENCH_TOKEN };
 	if( impossibles.find( pid ) > -1 || ( itemInHand.Proto.Item_Subtype == ITEM_SUBTYPE_BONDAGE && itemInHand.BONDAGE_STATE == BONDAGE_STATE_ON ) )
 	{
 		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CANT_THROW );
@@ -1190,94 +1423,141 @@ void unsafe_itemthrow ( Critter& player, int hx, int hy, int param2, string@ par
 	}
 
 	SayLog( player, crInfo( player ) + " throws " + itemName( pid ) + " to (" + tx + ":" + ty + ")." );
-
-	player.SetDir( GetDirection( player.HexX, player.HexY, tx, ty ) );
-	if( valid(target) && !target.IsDead() )
+	
+	player.MoveItem( itemInHand.Id, 1, SLOT_INV );
+	if( itemInHand.IsStackable() )
 	{
-		bool targetFreeHands = ( _CritGetItemHand ( target ) is null );
-		if( targetFreeHands && !( target is player ) )
+		player.MoveItem( itemInHand.Id, 1, SLOT_HAND1 );
+	}
+	
+	player.SetDir( GetDirection( player.HexX, player.HexY, tx, ty ) );
+	if( valid( target ) && !target.IsDead() && !target.IsKnockout() )
+	{
+		bool targetFreeHands = !valid(_CritGetItemHand ( target ));
+		if( targetFreeHands && CanCatch( target, itemInHand ) && !( target is player ) && !target.IsNpc() )
 		{
-			MoveItem( itemInHand, 1, target);
+			MoveItem( itemInHand, 1, target );
 			target.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_CATCHES );
 		}
 		else
 		{
-			MoveItem( itemInHand, 1, currentMap, tx, ty);
-			if( !( target is player ) )
+			throw_on_ground( player, itemInHand, currentMap, tx, ty, pid, offsetting, data );
+			if( !( target is player ) ) 
 			{ 
 				target.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_CATCH_FAIL );
 			}
 		}
+		ChangeCritterSpeed( target );
 	}
 	else
 	{
-		if( valid( container ) && FLAG( itemInHand.Flags, ITEM_NO_BLOCK ) && !currentMap.IsHexPassed( tx, ty ) && !FLAG( container.Flags, ITEM_CAN_PICKUP ) )
-		{
-			MoveItem( itemInHand, 1, container, 0 );
-			CheckCartPicMap( container );
+		if( precise_throw )
+		{ //New "Alt-J" throw - precise placement over any item/container, without breaking "thrown" item;
+			throw_on_ground( player, itemInHand, currentMap, tx, ty, pid, offsetting, data );
 		}
-		
-		if( find_any_glass( itemInHand ) != 0 )
-		{
+		else if( pid == PID_OIL_LAMP && itemInHand.Val0 != 0 )
+		{ //Thrown lighted oil lamps - explodes;
+			_SubItem( itemInHand, 1 );
+			GenerateFire( currentMap, tx, ty, 1, 1, player.Id );
+		}
+		else if( find_any_glass( itemInHand ) != 0 || itemInHand.Proto.Material == MATERIAL_GLASS )
+		{ //Thrown glass items - shatters them;
 			uint break_chance = Random( 1, 100 );
 			if ( break_chance >= 20 )
 			{
 				currentMap.PlaySound( glass_break_sounds[ Random( 0, glass_break_sounds.length() -1 ) ], tx, ty, 10 );
 				uint total_break_chance = Random( 0, 2 );
 				
-				if( total_break_chance != 2 || find_other_glass( itemInHand ) )
+				if( total_break_chance != 2 || itemInHand.Proto.Material == MATERIAL_GLASS )
 				{
 					currentMap.SetTextMsg( tx, ty, COLOR_LGRAY, TEXTMSG_TEXT, STR_MAPMSG_BREAKS );
 				}
 				else
 				{
-					currentMap.AddItem( tx, ty, PID_ROSETTE, 1 );
+					Item@ item = currentMap.AddItem( tx, ty, PID_ROSETTE, 1 );
+					if( offsetting ) offsetItem( item, data ); else offset( item, 0, 0 );				
 				}
 				_SubItem( itemInHand , 1 );
 			}
 			else
 			{
-				MoveItem( itemInHand, 1, currentMap, tx, ty );
+				throw_on_ground( player, itemInHand, currentMap, tx, ty, pid, offsetting, data );
 			}
-		}
-		else if ( pid == PID_OIL_LAMP && itemInHand.Val0 != 0 )
-		{
-			_SubItem( itemInHand , 1 );
-			GenerateFire( currentMap, tx, ty, 1, 1, player.Id );
 		}
 		else
-		{
-			if( itemInHand.IsStackable() )
-			{
-				_SubItem( itemInHand, 1 );
-				Item@ thrownItem = currentMap.AddItem( tx, ty, pid, 1 );
-				uint[] values = { thrownItem.Id };
-				CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "critter_item_movement@e_stack_items", values, true );
-			}
-			else
-			{
-				MoveItem( itemInHand, 1, currentMap, tx, ty );
-			}
+		{ //Default "J"-throw - unprecise throw on the ground below cursor;
+			throw_on_ground( player, itemInHand, currentMap, tx, ty, pid, offsetting, data );
 		}
 	}
 	
+	if( IsGM ) return;
+
 	currentMap.RunFlyEffect( _WeaponEffect( GetProtoItem(PID_FRAG_GRENADE), _WeaponModeUse (0) ), player, target, player.HexX, player.HexY, tx, ty );
-	_CritAnimateThrow (player);
+	_CritAnimateThrow( player );	
 	player.SayMsg( SAY_EMOTE, TEXTMSG_TEXT, STR_EMOTE_THROW );
 	player.Wait( 200 * 5 ); 
 	player.ParamBase[ ST_CURRENT_AP ] -= 50 * 100;
+	ChangeCritterSpeed( player );
+}
+
+void throw_on_ground( Critter& player, Item& itemInHand, Map& currentMap, uint16 tx, uint16 ty, uint pid, bool offsetting, int[]@ data )
+{
+	if( itemInHand.IsStackable() )
+	{
+		_SubItem( itemInHand, 1 );
+		Item@ thrownItem = currentMap.AddItem( tx, ty, pid, 1 );
+		if( offsetting ) offsetItem( thrownItem, data );				
+		else
+		{
+			uint[] values = { thrownItem.Id };
+			CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "critter_item_movement@e_stack_items", values, true );
+		}
+	}
+	else
+	{
+		MoveItem( itemInHand, 1, currentMap, tx, ty );
+		if( offsetting ) offsetItem( itemInHand, data ); else offset( itemInHand, 0, 0 );
+	}	
+}
+
+void unsafe_setAFK( Critter& player, int param0, int param1, int param2, string@ text, int[]@ param4 )
+{
+    if( !valid(text) || text == "" )
+	{
+		player.SetLexems( null );
+		
+		player.ParamBase[ CR_AFK_MODE ] = 0;
+		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CHANGE_DISABLED_AFK );
+		SayLog( player, crInfo( player ) + " disabled AFK" );
+	}
+	else
+	{
+		string@ lexem = player.GetLexems();
+		uint index = findFirstOf( lexem, "_", 0 );
+		string oldLex = substring( lexem, 0, index );
+		player.SetLexems( lexem_length_check( oldLex + "_" + text ) );
+		
+		player.ParamBase[ CR_AFK_MODE ] = 1;
+		player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CHANGE_LEX_AFK );
+		SayLog( player, crInfo( player ) + " AFK: " + text );
+	}
+	
+	player.AddTimeEvent( "player_menu@cte_AFK_mode", 0, CTE_AFK, 0 );
 }
 
 void unsafe_selfLex( Critter& player, int param0, int param1, int param2, string@ text, int[]@ param4 )
 {
+	player.ParamBase[ CR_AFK_MODE ] = 0;
+
     if( !valid(text) || text == "" )
 	{
 		player.SetLexems( null );
 	}
 	else
 	{
-		player.SetLexems( text );
+		player.SetLexems( lexem_length_check(text) );
 	}
+	
 	player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_CHANGE_LEX_SELF );
 }
 
@@ -1360,12 +1640,17 @@ void getNaked( Critter& cr )
 	}
 }
 
-void unsafe_KnockSay( Critter& cr, int sayType, int param1, int param2, string@ message, int[]@ ) 
+void unsafe_KnockSay( Critter& cr, int sayType, int param1, int param2, string@ message, int[]@ param4 ) 
 { 
-	cr.Say( sayType, message ); 
+	cr.Say( sayType, message );
 }
 
-void unsafe_animation( Critter& cr, int type, int val, int targetId, string@, int[]@ )
+void unsafe_PetCommand( Critter& cr, int num, int val, int to, string@ message, int[]@ param4 ) 
+{
+	cr.SendMessage( num, val, to );
+}
+
+void unsafe_animation( Critter& cr, int type, int val, int targetId, string@ param3, int[]@ param4 )
 {
 	Critter@ target = @cr;
 	if( isGM( cr ) && targetId != 0 )
@@ -1400,88 +1685,52 @@ void unsafe_animation( Critter& cr, int type, int val, int targetId, string@, in
 	}
 }
 
-//Shiv writing + lex
-void unsafe_MakeDescLex( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+void unsafe_addLexem( Critter& player, int itemId, int param1, int param2, string@ text, int[]@ param4 )
 {
-	MakeDescLex( player, 0, param3 );
-}
-
-void MakeDescLex( Critter& player, uint answerI, string& answerS )
-{
-    if( !valid( player ) )
-	{
-		return;
-    }
-	int item_id = player.Stat[ ST_LAST_DOOR_ID ];
-    int accessory = player.Stat[ ST_LAST_CONT_ID ];
-    Item@ target;
-    Map@ map = player.GetMap();
-    switch( accessory ) {
-        case( ACCESSORY_NONE ):
-			player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
-			break;
-        case( ACCESSORY_CRITTER ):   
-			@target = player.GetItemById(item_id);
-			break;
-        case( ACCESSORY_HEX ):
-		{
-			if( valid( map ) )
-			{
-				@target = map.GetItem(item_id);
-			}
-			break;
-		}
-        case( ACCESSORY_CONTAINER ):
-			player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TAKE_ITEM_OUT );
-			break;
-        default: 
-			player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_SOMETHING_WENT_WRONG );
-			break;
-    }
+	player.StatBase[ ST_LAST_DOOR_ID ] = 0;
 	
-    if( !valid(target) )
+	Item@ item;
+	if( itemId != 0 )
 	{
-        player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_ITEM_NOT_FOUND );
-        return;
-    }
-   
-	target.SetLexems( null );
-    if( answerS.length() > 1 )
-	{
-        player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DESCRIPTION_MADE );
-        target.SetLexems( answerS );
-    }
+		@item = GetItem( itemId );
+	}
 	else
 	{
-        player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_DESCRIPTION_REMOVED );
-    }
-    target.Update();
-}
-
-void unsafe_addLexem( Critter& player, int param0, int param1, int param2, string@ text, int[]@ param4 )
-{
-	Item@ hand = _CritGetItemHand( player );
-    if( !valid( hand ) )
+		@item = _CritGetItemHand( player );
+	}
+	
+    if( !valid( item ) )
 	{
 		return;
 	}
 	
-	if( !valid( text ) || text.length() == 0 )
+	uint type = item.GetType();
+	bool isFurniture = ( type == ITEM_TYPE_DOOR || type == ITEM_TYPE_CONTAINER );
+	
+	if( !valid( text ) || text.length() < 2 )
 	{
 		player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_ILEX_CLEARED );
-		hand.SetLexems( null );
+		setLexDesc( item, "" );
+		
+		if( isFurniture )
+		{
+			setOverridenDesc( item, false );
+		}
 	}
 	else
 	{
-		hand.SetLexems( text );
-		
-		string@ lexem = Item_GetLexems( hand ); 
-		uint remaining = 127; 
-		remaining -= lexem.length();
+		string desc = getLexDescRaw( item );
+		setLexDesc( item, desc + text );
 
+		if( isFurniture )
+		{
+			setOverridenDesc( item, true );
+		}
+		
+		text = checkNull( Item_GetLexems( item ), "" );
+		int remaining = 126 - text.length();
 		player.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_ILEX_EXPANDED, "$remaining" + remaining );
 	}
-	hand.Update();
 }
 
 void unsafe_toglobal( Critter& cr, int, int, int, string@, int[]@ )
@@ -1517,7 +1766,7 @@ void unsafe_store_last_checked_item( Critter& cr, int itemId, int type, int, str
 
 void unsafe_rolling( Critter& player, int param0, int param1, int param2, string@ param3, int[]@ param4 )
 {
-	Roll( player, param0, param1, param2 );
+	roll( player, param0, param1, param2 );
 }
 
 void unsafe_rolling_GM( Critter& gm, int param0, int param1, int param2, string@ param3, int[]@ vals )
@@ -1533,10 +1782,10 @@ void unsafe_rolling_GM( Critter& gm, int param0, int param1, int param2, string@
 		return;
 	}
 	
-	Roll( cr, vals[0], vals[1], vals[2] );
+	roll( cr, vals[0], vals[1], vals[2], gm.Id );
 }
 
-void Roll( Critter& cr, int stat, int n, int val )
+void roll( Critter& cr, int stat, int n, int val, int roller_id = 0 )
 {
 	if( stat < 0 || stat > 7 || n < 0 || val < 0 )
 	{
@@ -1567,83 +1816,28 @@ void Roll( Critter& cr, int stat, int n, int val )
 		result += " " + summ;
 	}
 	
+	string info = "";
+	if( roller_id != 0 )
+	{
+		Critter@ gm = GetCritter( roller_id );
+		if( valid( gm ) )
+		{
+			info += "{ " + crInfo( gm ) + " } " ;
+		}
+	}
+	
+	info += crInfo( cr ) + " rolls ";
 	if( stat != 0 )
 	{
 		cr.SayMsg( SAY_NORM, TEXTMSG_TEXT, statMsg, "$result" + result );
+		info += PARAM_NAME(stat-1);
 	}
 	else
 	{
 		cr.Say( SAY_NORM, "|0xA6EEF900 " + result );
 	}
-}
-
-void unsafe_setCombatState( Critter& cr, int state, int, int, string@, int[]@ )
-{
-	if( state == 1 && cr.GetTimeEvents( CTE_AGGRESSION, null, null, null ) == 0 )
-	{
-		if( cr.IsKnockout() || cr.IsDead() )
-		{
-			return;
-		}
-		
-		cr.AddTimeEvent( "cte_aggression", REAL_SECOND( 3 ), CTE_AGGRESSION );
-	}
-	
-	if( state == 0 )
-	{
-		if( cr.ParamBase[ CR_IS_AGGRESSIVE ] > 1 )
-		{
-			cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, STR_EMOTE_MANIAC_RELAX );
-		}
-		cr.EraseTimeEvents( CTE_AGGRESSION );
-	}
-	cr.ParamBase[ CR_IS_AGGRESSIVE ] = state;
-}
-
-uint cte_aggression( Critter& cr, int identifier, uint& rate )
-{
-	cr.ParamBase[ CR_IS_AGGRESSIVE ] = 2;
-	
-	if( cr.IsKnockout() || cr.IsDead() )
-	{
-		return 0;
-	}
-	
-	uint[] emote = { STR_EMOTE_MANIAC0, STR_EMOTE_MANIAC1, STR_EMOTE_MANIAC2, STR_EMOTE_MANIAC3, STR_EMOTE_MANIAC4, STR_EMOTE_MANIAC5 };
-	
-	uint[] grade = { 40, 30, 20, 3, 3, 3 };
-	uint i = 0;
-	
-	if( grade.length() != emote.length() )
-	{
-		return 0;
-	}
-	
-	uint maxval = 0;
-	for( i = 0; i < grade.length(); i++ )
-	{
-		maxval += grade[i];
-	}
-	
-	uint roll = Random( 0, maxval );
-	for( i = 0; i < grade.length(); i++ )
-	{
-		if( roll <= grade[i] )
-		{
-			break;
-		}
-		else
-		{
-			roll -= grade[i];
-		}
-	}	
-	cr.SayMsg( SAY_EMOTE_ON_HEAD, TEXTMSG_GAME, emote[ CLAMP( i, 0, rate ) ] );
-	
-	if( rate < emote.length() )
-	{
-		rate++;
-	}
-	return REAL_SECOND( Random( 5, 10 ) );
+	info += result;
+	SayLog( cr, info );
 }
 
 void unsafe_InitSexState( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
@@ -1654,6 +1848,182 @@ void unsafe_InitSexState( Critter& player, int param0, int param1, int param2, s
 void unsafe_InitDevourState( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
 {
 	player.ParamBase[ CR_INIT_DEVOUR ] = 1;
+}
+
+void unsafe_StopNamingState( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	player.ParamBase[ CR_REMEMBERING_NAME ] = 0;
+}
+
+void unsafe_FullAutoStop( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	player.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
+	player.Wait( 0 );
+}
+
+void unsafe_SelectPetTarget( Critter& player, int command, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	player.ParamBase[ CR_SELECT_PET_TARGET ] = command;
+}
+
+void unsafe_StopSelectPetTarget( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	player.ParamBase[ CR_SELECT_PET_TARGET ] = 0;
+}
+
+void unsafe_ToggleVoiceRadius( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	FLAG( player.Param[ PLAYER_FLAGS ], PLAYER_FLAG_VOICE_R ) ? UNSETFLAG( player.ParamBase[ PLAYER_FLAGS ], PLAYER_FLAG_VOICE_R ) : SETFLAG( player.ParamBase[ PLAYER_FLAGS ], PLAYER_FLAG_VOICE_R );
+}
+
+void unsafe_ToggleWeaponRadius( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	FLAG( player.Param[ PLAYER_FLAGS ], PLAYER_FLAG_WEAPON_R ) ? UNSETFLAG( player.ParamBase[ PLAYER_FLAGS ], PLAYER_FLAG_WEAPON_R ) : SETFLAG( player.ParamBase[ PLAYER_FLAGS ], PLAYER_FLAG_WEAPON_R );
+}
+
+void unsafe_turn_critter( Critter& player, int hexX, int hexY, int param2, string@ param3, int[] @ param4 )
+{
+	if( player.IsLife() )
+	{
+		uint8 dir = GetDirection( player.HexX, player.HexY, hexX, hexY );
+		player.SetDir( dir );
+		player.Wait( 500 );
+		LookDataRefresh( player );
+	}
+}
+
+void unsafe_SendGuitTabs( Critter& player, int param0, int param1, int param2, string@ param3, int[] @ fets )
+{
+	Critter@[] critters;
+    int count = player.GetMap().GetCrittersHex( player.HexX, player.HexY, 15, FIND_ALL | FIND_ONLY_PLAYERS, critters );
+	
+	for(int i = 0; i < count; i++)
+	{
+		if(player.Id == critters[i].Id) continue;
+		critters[i].RunClientScript( "client_guitar@RecvGuitTabs", player.Id, param1, 0, null, fets );
+	}
+}
+
+class CmdDef
+{
+	string Cmd;
+	uint8 Id;
+
+	CmdDef(string@ cmd, uint8 id)
+	{
+		this.Cmd = cmd;
+		this.Id = id;
+	}
+}
+
+class CmdDefArray
+{
+	CmdDef@[] array;
+	uint len = 0;
+
+	CmdDefArray@ AddEntry( CmdDef@ entry )
+	{
+		return this.AddEntry( entry.Cmd, entry.Id );
+	}
+
+	CmdDefArray@ AddEntry( string cmd, uint8 id )
+	{
+		array.insertLast( CmdDef( cmd, id ) );
+		len++;
+		return this;
+	}
+
+	int GetCommandType( string@ command )
+	{
+		int res = -1;
+		int findres = -1;
+		for( uint i = 0; i < len; i++ )
+		{
+			CmdDef@ currEntry = array[i];
+			findres = findFirst( command, array[i].Cmd );
+			if( findres != -1 )
+			{
+				res = currEntry.Id;
+			}
+		}
+		
+		return res;
+	}
+}
+
+CmdDefArray cmdDef;
+bool isCmdDefInited = false;
+
+void InitCmdDef()
+{
+	cmdDef.AddEntry("exit", CMD_EXIT)
+	.AddEntry("myinfo", CMD_MYINFO)
+	.AddEntry("gameinfo", CMD_GAMEINFO)
+	.AddEntry("id", CMD_GAMEINFO)
+	.AddEntry("move", CMD_MOVECRIT)
+	.AddEntry("kill", CMD_KILLCRIT)
+	.AddEntry("disconnect", CMD_DISCONCRIT)
+	.AddEntry("toglobal", CMD_TOGLOBAL)
+	.AddEntry("respawn", CMD_RESPAWN)
+	.AddEntry("param", CMD_PARAM)
+	.AddEntry("getaccess", CMD_GETACCESS)
+	.AddEntry("additem", CMD_ADDITEM)
+	.AddEntry("additemself", CMD_ADDITEM_SELF)
+	.AddEntry("ais", CMD_ADDITEM_SELF)
+	.AddEntry("addnpc", CMD_ADDNPC)
+	.AddEntry("addloc", CMD_ADDLOCATION)
+	.AddEntry("reloadscripts", CMD_RELOADSCRIPTS)
+	.AddEntry("loadscript", CMD_LOADSCRIPT)
+	.AddEntry("load", CMD_LOADSCRIPT)
+	.AddEntry("reloadclientscripts", CMD_RELOAD_CLIENT_SCRIPTS)
+	.AddEntry("rcs", CMD_RELOAD_CLIENT_SCRIPTS)
+	.AddEntry("runscript", CMD_RUNSCRIPT)
+	.AddEntry("run", CMD_RUNSCRIPT)
+	.AddEntry("reloadlocations", CMD_RELOADLOCATIONS)
+	.AddEntry("loadlocation", CMD_LOADLOCATION)
+	.AddEntry("reloadmaps", CMD_RELOADMAPS)
+	.AddEntry("loadmap", CMD_LOADMAP)
+	.AddEntry("regenmap", CMD_REGENMAP)
+	.AddEntry("reloaddialogs", CMD_RELOADDIALOGS)
+	.AddEntry("loaddialog", CMD_LOADDIALOG)
+	.AddEntry("reloadtexts", CMD_RELOADTEXTS)
+	.AddEntry("reloadai", CMD_RELOADAI)
+	.AddEntry("checkvar", CMD_CHECKVAR)
+	.AddEntry("cvar", CMD_CHECKVAR)
+	.AddEntry("setvar", CMD_SETVAR)
+	.AddEntry("svar", CMD_SETVAR)
+	.AddEntry("settime", CMD_SETTIME)
+	.AddEntry("ban", CMD_BAN)
+	.AddEntry("deleteself", CMD_DELETE_ACCOUNT)
+	.AddEntry("changepassword", CMD_CHANGE_PASSWORD)
+	.AddEntry("changepass", CMD_CHANGE_PASSWORD)
+	.AddEntry("dropuid", CMD_DROP_UID)
+	.AddEntry("drop", CMD_DROP_UID)
+	.AddEntry("log", CMD_LOG);
+
+	isCmdDefInited = true;
+}
+
+void unsafe_TryLogCommand( Critter& player, int param0, int param1, int param2, string@ command, int[] @ param4 )
+{
+	if(!isCmdDefInited)
+	{
+		InitCmdDef();
+	}
+
+	int findRes = cmdDef.GetCommandType(command);
+	if(findRes == -1)
+	{
+		return;
+	}
+
+	if(!isGM(player) || !player_allowcommand(player, null, findRes))
+	{
+		return;
+	}
+
+	SayLogGM(player, crInfo(player) + " Using command: '" + command + "'" );
+
 }
 
 #endif // GENERAL_UNSAFE

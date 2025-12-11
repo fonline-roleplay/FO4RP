@@ -1,9 +1,6 @@
 #define __SUCK_LESS__
 
-#include "_defines.fos"
-#include "_math.fos"
-#include "_dialogbox.fos"
-
+#include "_utils.fos"
 
 #define BUTTONS_PER_PAGE_USEFUL (17)
 #define BUTTONS_PER_PAGE_UTILITY (2)
@@ -16,6 +13,12 @@ class Menu: iDialogBox {
     string[] m_buttons;
     string@[] m_buttons_ext;
     string@[] m_buttons_say;
+	
+	int[] m_buttons_msg_file;
+	int[] m_buttons_msg_line;
+	int[] m_buttons_msg_say_line;
+	//m_buttons_ext as lexem
+	
     int m_page;
     int m_page_max;
     iMenuHandler@ m_handler;
@@ -31,13 +34,14 @@ class Menu: iDialogBox {
 
     string@ m_say_return;
 
-    Menu(string& name, uint cr_id, iMenuHandler& handler) {
+    Menu( string& name, uint cr_id, iMenuHandler& handler ) {
         m_cr_id = cr_id;
         m_state = uint(-1);
         m_name = name;
         m_page = 0;
         @m_handler = handler;
         m_press_handled = false;
+		m_delay_redraw = false;
         @m_child = null;
         m_is_root = true;
         @m_say_return = null;
@@ -47,6 +51,8 @@ class Menu: iDialogBox {
 	
 	string name() { return m_name; }
 
+	string fullName() { return "'" + name() + "'" + ( valid( m_child ) ? " : " + m_child.fullName() : "" ); }
+
     bool OpenChild(string& name, iMenuHandler& handler) {
         Menu@ menu = Menu(name, m_cr_id, handler);
         menu.m_is_root = false;
@@ -54,29 +60,85 @@ class Menu: iDialogBox {
         return true;
     }
 
-    bool Button(string& text) {
-        return ButtonExtSay(text, null, null);
+	bool ButtonCheck( Critter& cr, int PID )
+	{
+		if( hasItem( cr, PID ) ) {
+			if( ButtonMsg( STR_ITEMNAME, "$description" + STR_INSERT_ITEM_LINE( PID * 100 ) ) ) {
+				return true;
+			}
+		} else { 
+			ButtonMsg( STR_HAVENT, "$description" + STR_INSERT_ITEM_LINE( PID * 100 ) );
+		}
+		return false;
+	}
+
+	bool ButtonMsg( int line ) {
+        return ButtonExtSay( "", TEXTMSG_TEXT, line, null, null, 0 );
     }
 
-    bool ButtonSay(string& text, string@ say) {
-        return ButtonExtSay(text, null, say);
+    bool ButtonMsg( int line, string@ lexems ) {
+        return ButtonExtSay( "", TEXTMSG_TEXT, line, lexems, null, 0 );
+	}
+
+    bool ButtonMsg( int file, int line ) {
+       return ButtonExtSay( "", file, line, null, null, 0 );
+	}
+
+    bool ButtonMsg( int file, int line, string@ lexems ) {
+       return ButtonExtSay( "", file, line, lexems, null, 0 );
+	}
+
+    bool Button( string& text ) {
+        return ButtonExtSay( text, TEXTMSG_NONE, 0, null, null, 0 );
     }
 
-    bool ButtonExt(string& text, string@ ext) {
-        return ButtonExtSay(text, ext, null);
+    bool ButtonSay( string& text, string@ say ) {
+        return ButtonExtSay( text, TEXTMSG_NONE, 0, null, say, 0 );
     }
 
-    bool ButtonExtSay(string& text, string@ ext, string@ say) {
-        if( m_state == uint(-1) ) {
+    bool ButtonSayMsg( int line ) {
+        return ButtonSayMsg( line, line );
+    }
+
+    bool ButtonSayMsg( int line, int say_line ) {
+        return ButtonExtSay( "", TEXTMSG_TEXT, line, null, null, say_line );
+    }
+
+    bool ButtonSayMsg( int line, string@ ext, int say_line ) {
+        return ButtonExtSay( "", TEXTMSG_TEXT, line, ext, null, say_line );
+    }
+
+    bool ButtonExt( string& text, string@ ext ) {
+        return ButtonExtSay( text, TEXTMSG_NONE, 0, ext, null, 0 );
+    }
+
+    bool ButtonExtSay( string& text, string@ ext, string@ say ) {
+        return ButtonExtSay( text, TEXTMSG_NONE, 0, ext, say, 0 );
+	}
+	
+    bool ButtonExtSay( string& text, int file, int line, string@ ext, string@ say, int say_line ) 
+	{        
+		if( text.length() == 0 ) {
+			if( !valid( ext ) ) {
+				@ext = "";
+			}			
+			text = "[ " + file + ":" + line + ":" + say_line + " " + ext + " ]";
+		}
+
+		if( m_state == uint(-1) ) {			
             m_buttons.insertLast(text);
             m_buttons_ext.insertLast(ext);
             m_buttons_say.insertLast(say);
+			m_buttons_msg_file.insertLast(file);
+			m_buttons_msg_line.insertLast(line);
+			m_buttons_msg_say_line.insertLast(say_line);
             return false;
         }
-        if( m_buttons[m_state] == text) {
-            m_press_handled = true;
-            return true;
-        }
+		
+		if( m_buttons[m_state] == text) {
+			m_press_handled = true;
+			return true;
+		}
         return false;
     }
 
@@ -85,6 +147,7 @@ class Menu: iDialogBox {
     }
 
     // Private:
+	
     
     void CalcPagination() {
         uint count = m_buttons.length();
@@ -110,12 +173,19 @@ class Menu: iDialogBox {
         }
     }
     bool Draw() {
-        if( m_child !is null ) {
+        if( valid(m_child) ) {
+			if( !m_delay_redraw && m_child.m_delay_redraw ) {
+				m_child.m_delay_redraw = false;
+			}
             return m_child.Draw();
         }
+		
+		if( m_delay_redraw ) {
+			return true;
+		}
 
         Critter@ cr = GetCritter(m_cr_id);
-        if(cr is null || cr.IsNpc()) {
+        if(!valid(cr) || cr.IsNpc()) {
             return false;
         }
 
@@ -123,7 +193,11 @@ class Menu: iDialogBox {
         m_buttons.resize(0);
         m_buttons_ext.resize(0);
         m_buttons_say.resize(0);
-        bool keep_open = m_handler.MenuUpdate(cr, this);
+		m_buttons_msg_file.resize(0);
+		m_buttons_msg_line.resize(0);
+		m_buttons_msg_say_line.resize(0);
+		
+		bool keep_open = m_handler.MenuUpdate(cr, this);
 
         if( keep_open ) {
             CalcPagination();
@@ -132,27 +206,46 @@ class Menu: iDialogBox {
             cr.ShowScreen( SCREEN_DIALOGBOX, buttons_total, "answer_dialog_box" );
 
             for(uint j = this_page_first; j < this_page_last; j++) {
-                cr.Say( SAY_DIALOGBOX_BUTTON( i++ ), m_handler.ButtonDecorator(m_buttons[j], m_buttons_ext[j]) );
-            }
+				if( m_buttons_msg_file[j] == TEXTMSG_NONE )
+					cr.Say( SAY_DIALOGBOX_BUTTON( i++ ), m_handler.ButtonDecorator(m_buttons[j], m_buttons_ext[j]) );
+				else
+					cr.SayMsg( SAY_DIALOGBOX_BUTTON( i++ ), 
+						m_buttons_msg_file[j], 
+						m_buttons_msg_line[j], 
+						valid( m_buttons_ext[j] ) ? m_buttons_ext[j] : "" );
+	        }
 
             string@ text = null;
                         
             if( this_multipage ) {
                 @text = m_handler.ButtonNextPage(m_page, m_page_max);
-                cr.Say( SAY_DIALOGBOX_BUTTON( i++ ), (text is null) ? "Next ->" : text);
+				if( !valid( text ) )
+					cr.SayMsg( SAY_DIALOGBOX_BUTTON( i++ ), TEXTMSG_TEXT, STR_PREVIOUS );
+                else
+					cr.Say( SAY_DIALOGBOX_BUTTON( i++ ), text);
             
                 @text = m_handler.ButtonPrevPage(m_page, m_page_max);
-                cr.Say( SAY_DIALOGBOX_BUTTON( i++ ), (text is null) ? "<- Previous" : text);
+				if( !valid( text ) )
+					cr.SayMsg( SAY_DIALOGBOX_BUTTON( i++ ), TEXTMSG_TEXT, STR_NEXT );
+				else
+					cr.Say( SAY_DIALOGBOX_BUTTON( i++ ), text);
             }
 
             @text = m_handler.ButtonCancel();
-            if( text !is null ) {
+            if( valid(text) ) {
                 cr.Say( SAY_DIALOGBOX_BUTTON( i++ ), text );
             }
+			else
+				cr.SayMsg( SAY_DIALOGBOX_BUTTON( i++ ), TEXTMSG_TEXT, STR_HIDE_MENU_BUTTON );
 
             @text = m_handler.Description(cr);
-            if( text !is null ) {
-                cr.Say( SAY_DIALOGBOX_TEXT, text );
+			int fileName = m_handler.getDescriptionFile();
+			int line = m_handler.getDescriptionLine();
+			if( fileName != TEXTMSG_NONE && line != 0 ) {
+				cr.SayMsg( SAY_DIALOGBOX_TEXT, fileName, line, valid( text ) ? text : "" );
+			}
+			else if( valid(text) ) {
+				cr.Say( SAY_DIALOGBOX_TEXT, text );
             }
 
             m_handler.OnMenuDraw(cr);
@@ -162,7 +255,7 @@ class Menu: iDialogBox {
         return keep_open;
     }
     bool UpdateDialogBox(uint answerI) {
-        if( m_child !is null ) {
+        if( valid(m_child) ) {
             if( !m_child.UpdateDialogBox(answerI) ) {
                 @m_child = null;
                 Draw();
@@ -171,11 +264,11 @@ class Menu: iDialogBox {
         }
 
         Critter@ cr = GetCritter(m_cr_id);
-        if(cr is null || cr.IsNpc()) {
+        if(!valid(cr) || cr.IsNpc()) {
             return false;
         }
 
-        if( this_multipage  ) {
+        if( this_multipage ) {
             if( answerI >= this_page_count ) {
                 if( answerI == this_page_count ) {
                     m_page += 1;
@@ -191,16 +284,21 @@ class Menu: iDialogBox {
             m_state = answerI;
         }
 
-        if( m_buttons_say[m_state] !is null) {
-            cr.ShowScreen( SCREEN_SAY, 0, "answer_say");
-            cr.Say( SAY_SAY_TITLE, m_buttons_say[m_state]);
+        if( valid(m_buttons_say[m_state]) || m_buttons_msg_say_line[m_state] != 0 ) {
+            cr.ShowScreen( SCREEN_SAY, 0, "answer_say" );
+			if( m_buttons_msg_say_line[m_state] != 0 && m_handler.getDescriptionFile() != TEXTMSG_NONE ) {
+				cr.SayMsg( SAY_SAY_TITLE, m_handler.getDescriptionFile(), m_buttons_msg_say_line[m_state], "" + ( valid( m_buttons_say[m_state] ) ? m_buttons_say[m_state] : "" ) );
+			} else {
+				cr.Say( SAY_SAY_TITLE, valid( m_buttons_say[m_state]) ? m_buttons_say[m_state] : "!valid text" );
+			}
             return true;
         }
 
         return Update(cr);
     }
-    bool UpdateSay(string& answerS) {
-        if( m_child !is null ) {
+    
+	bool UpdateSay(string& answerS) {
+        if( valid(m_child) ) {
             if( !m_child.UpdateSay(answerS) ) {
                 @m_child = null;
                 Draw();
@@ -209,14 +307,27 @@ class Menu: iDialogBox {
         }
 
         Critter@ cr = GetCritter(m_cr_id);
-        if(cr is null || cr.IsNpc()) {
+        if(!valid(cr) || cr.IsNpc()) {
             return false;
         }
 
         @m_say_return = answerS;
         return Update(cr);
     }
-    bool Update(Critter& cr) {
+    
+	bool m_delay_redraw;
+	
+	bool DelayRedraw() {
+		m_delay_redraw = true;
+		return true;
+	}
+	
+	bool Update(Critter& cr) 
+	{		
+		if( m_delay_redraw ) {
+			m_delay_redraw = false;
+		}
+
         m_press_handled = false;
 
         bool keep_open = m_handler.MenuUpdate(cr, this);
@@ -227,7 +338,7 @@ class Menu: iDialogBox {
         }
 
         if( keep_open ) {
-            Draw();
+			Draw();
         } else if (m_is_root) {
             Forget();
         } else {
@@ -243,14 +354,14 @@ class Menu: iDialogBox {
         }
     }
     string@ ChildName() {
-        if( m_child is null ) {
+        if( !valid(m_child) ) {
             return m_name;
         } else {
             return m_child.ChildName();
         }
     }
     bool RedrawLoop(Critter& cr) {
-        if( m_child is null ) {
+        if( !valid(m_child) ) {
             if( m_handler.ShouldRedraw(cr) ) {
                 return Draw();
             }
@@ -285,25 +396,60 @@ string _debug_menu(Menu& menu) {
     }    
 }
 
+void Restore( Critter& player, int param0, int param1, int param2 ) {
+    if( RestoreMenu(player) ) {
+        player.Say(SAY_NETMSG, "Меню восстановлено.");
+    } else {
+        player.Say(SAY_NETMSG, "Меню не найдено.");
+    }
+}
+
+void enlistKeys( Critter& cr ) {
+	string@[] keys;
+	uint l = menus.keys( keys );
+	for( uint i = 0; i < l; i++ ) {
+		cr.Say( SAY_NETMSG, i + ") " + keys[i] );
+	}
+}
+
 //export
-bool RestoreMenu(Critter& cr, string@ name) {
+bool ForgetMenu(Critter& cr) {
+	string@ key = ""+cr.Id;
+	menus.delete(key);
+	return true;
+}
+
+//export
+bool RestoreMenu(Critter& cr) {
     string@ key = ""+cr.Id;
     Menu@ menu = null;
     menus.get(key, @menu);
-    if(menu !is null) {
-        if(name is null || menu.ChildName() == name) {
-            menu.Draw();
-            return true;
-        }
+	
+    if( valid( menu ) ) {
+		menu.m_delay_redraw = false;
+		menu.Draw();
+		return true;
     }
     return false;
+}
+
+bool RestoreMenu( Critter& player, Item& item ) //export
+{
+	if( item.MapId == player.GetMapId() && GetDistantion( player.HexX, player.HexY, item.HexX, item.HexY ) <= 1 )
+	{
+		return RestoreMenu( player );				
+	}
+
+	player.SayMsg( SAY_NETMSG, TEXTMSG_TEXT, STR_TOO_FAR ); 
+	player.ShowScreen( SCREEN_CLOSE, 0, "" );
+	return false;
 }
 
 bool handle_redraw_loop(string& key) {
     int result = 0;
     if ( StrToInt(key, result) ) {
         Critter@ player = GetCritter(result);
-        if( player !is null && player.IsPlayer() ) {
+        if( valid(player) && player.IsPlayer() ) {
             Menu@ menu = null;
             if( menus.get(key, @menu) ) {
                 return menu.RedrawLoop(player);
@@ -325,7 +471,7 @@ void MenuRedrawLoop(uint tick) {
     uint count = menus.keys(keys);
     for(uint i = 0; i<count; i++) {
         string@ key = keys[i];
-        if( key is null || !handle_redraw_loop(key)) {
+        if( !valid(key) || !handle_redraw_loop(key)) {
             menus.delete(key);
         }
     }
@@ -336,13 +482,13 @@ string DebugMenu(Critter& cr) {
     string@ key = ""+cr.Id;
     Menu@ menu = null;
     menus.get(key, @menu);
-    if( menu is null) {
+    if( !valid(menu) ) {
         return "Нет меню";
     }
     string path = _debug_menu(menu);
     while(true) {
         @menu = menu.m_child;
-        if( menu is null ) {
+        if( !valid(menu) ) {
             break;
         }
         path += " > " + _debug_menu(menu);
@@ -351,8 +497,7 @@ string DebugMenu(Critter& cr) {
 }
 
 // движковый колбэк
-void answer_dialog_box( Critter& cr, uint answerI, string& answerS )
-{
+void answer_dialog_box( Critter& cr, uint answerI, string& answerS ) {
     Menu@ menu = null;
     string@ key = ""+cr.Id;
     if( menus.get(key, @menu) ) {
