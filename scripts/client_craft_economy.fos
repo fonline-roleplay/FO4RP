@@ -1,6 +1,8 @@
 #include "_utils.fos"
 #include "craft_recipes.fosh"
 
+#define COEFFICIENT				(1)
+
 class ItemPart
 {
     uint16 Pid = 0;
@@ -24,8 +26,8 @@ class ItemPartArray
     dictionary pidAssosiateList;
     uint Tier = 1;
     uint Tools = 0;
-    uint CalcCost = 0;
-    uint ProtoCost = 0;
+    int CalcCost = 0;
+    int ProtoCost = 0;
     
     void Add(uint16 pid, uint count)
     {
@@ -92,7 +94,7 @@ ItemPartArray@ ProcessDecraftRecipe(CraftRecipe@ recipe)
 
     if( valid( proto ) )
     {
-        Decraft.ProtoCost = proto.Cost;
+        Decraft.ProtoCost = MAX(proto.Cost, 1);
         if( ( proto.Type == ITEM_TYPE_ARMOR || proto.Type == ITEM_TYPE_WEAPON ) )
         {
             SETFLAG(Decraft.Tools, TOOL_MULTITOOL);
@@ -114,7 +116,7 @@ ItemPartArray@ ProcessDecraftRecipe(CraftRecipe@ recipe)
 		CraftRecipe@ ComponentRecipe = GetCraftByItemPID( pid );
 		if( !valid( ComponentRecipe ) ) 
 		{
-            Decraft.CalcCost += ResourceProto.Cost * count;
+            Decraft.CalcCost += MAX(ResourceProto.Cost, 1) * count;
 			Decraft.Add(pid, count);
 			continue;
 		}
@@ -138,6 +140,9 @@ ItemPartArray@ ProcessDecraftRecipe(CraftRecipe@ recipe)
 			Decraft.Add(currCompDecraftRes.Pid, currCompDecraftRes.Count * count);
 		}
 	}
+
+	Decraft.CalcCost = Decraft.CalcCost * COEFFICIENT;
+	Decraft.CalcCost = Decraft.CalcCost / recipe.OutputCount[0];
 
 	if(Decraft.length() > 0)
 	{
@@ -167,7 +172,7 @@ void CreateEconomyList()
 		return;
 	}
 
-	file_data.writeString( "NAME,PID,PID_COST,CALC_COST\n" );
+	file_data.writeString( "OUTPUT0_NAME,OUTPUT0_PID,OUTPUT0_AMOUNT,OUTPUT0_PID_COST,OUTPUT0_CALC_COST,OUTPUT1_NAME,OUTPUT1_PID,OUTPUT1_AMOUNT,OUTPUT1_PID_COST,OUTPUT1_CALC_COST\n" );
 
 	for(uint i = 0, len = GetMaxCraftsCount(); i < len; i++)
     {
@@ -177,12 +182,56 @@ void CreateEconomyList()
 
 		ItemPartArray@ currParts = GetItemParts(pid);
 		if(!valid(currParts)) continue;
+		
+		int calcCost = currParts.CalcCost;
 
-		string name = ReplaceText(GetMsgStr( TEXTMSG_ITEM, pid * 100 ), ",", "");
-		name = ReplaceText(name, ",", "");
+		for(uint j = 1, jlen = currRecipe.Output.length(); j < jlen; j++)
+		{
+			int count = currRecipe.OutputCount[j] > 1 ? currRecipe.OutputCount[j] : 1;
+			ItemPartArray@ currSecondOutput = GetItemParts(currRecipe.Output[j]);
+			if(!valid(currSecondOutput)) continue;
+			calcCost = calcCost - (currSecondOutput.CalcCost * count);
+		}
 
-        file_data.writeString( "" + name + "," + pid + "," + currParts.ProtoCost + "," + currParts.CalcCost + "\n" );
-    }
+		string result = "";
+		
+		for(uint j = 0; j < 2; j++)
+		{
+			if(j > 0)
+				result += ",";
+			if(currRecipe.Output.length() - 1 < j)
+			{
+				result += ",,,,";
+				continue;
+			}
+
+			uint16 outputPid = currRecipe.Output[j];
+			ItemPartArray@ outputParts = GetItemParts(outputPid);
+			if(!valid(outputParts)) continue;
+
+			string name = ReplaceText(GetMsgStr( TEXTMSG_ITEM, outputPid * 100 ), ",", "");
+			name = ReplaceText(name, ",", "");
+			result += name + "," + outputPid + "," + currRecipe.OutputCount[j] + "," + outputParts.ProtoCost + "," + (j == 0 ? calcCost : outputParts.CalcCost);
+		}
+
+		string formula = "";
+
+		for(uint j = 0, jlen = currParts.length(); j < jlen; j++)
+		{
+			ItemPart@ currPart = currParts[j];
+			if(!valid(currPart)) continue;
+			ProtoItem@ protoItem = GetProtoItem(currPart.Pid);
+			if(!valid(protoItem)) continue;
+
+			formula += ",";
+			
+			string name = ReplaceText(GetMsgStr( TEXTMSG_ITEM, currPart.Pid * 100 ), ",", "");
+			name = ReplaceText(name, ",", "");
+			formula += name + "," + currPart.Pid + "," + MAX(protoItem.Cost, 1) + "," + currPart.Count + "," + COEFFICIENT;
+		}
+
+        file_data.writeString( result + formula + "\n" );
+	}
 
 	file_data.close();
 }
