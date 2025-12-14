@@ -1,0 +1,189 @@
+#ifndef ENERGY
+#define ENERGY
+
+#include "_utils.fos"
+#include "item_h.fos"
+#include "defib_h.fos"
+#include "geiger_h.fos"
+#include "energy_h.fos"
+
+
+enum RechargeGroup
+{
+	/*
+		Rechargeable item groups (logical categories). 
+		Rules are applied per group instead of per-item PID.	
+	*/
+	RG_None = 0,			// Not a supported group
+	RG_FlashlightBuiltIn,	// Built-in flashlight (perk-based)
+	RG_Geiger,				// Geiger counter
+	RG_Sensor,				// Motion sensor (include active variant)
+	RG_Defib,				// Reanimation kit
+}
+
+
+class BatteryRule
+{
+	/*
+		Exception rule for a specific pair (target group + battery type).
+	*/
+	RechargeGroup TargetGroup;	// Target rechargeable group.
+	uint16 BatteryPid;			// Battery/energy cell PID.
+	bool Allowed;				// Whether charging is allowed.
+	float Coef;					// Charge multiplier (1.0 = unchanged).
+	
+	BatteryRule( RechargeGroup group, uint16 batteryPid, bool allowed, float coef )
+	{
+		TargetGroup = group;
+		BatteryPid  = batteryPid;
+		Allowed     = allowed;
+		Coef        = coef;
+	}
+}
+
+
+// Exception rules table (initialized in InitBatteryRules)
+BatteryRule@[] BatteryRules;
+
+
+void InitBatteryRules()
+{
+	/*
+		Populates the rules table once. 
+		Keeps all exceptions in one place and avoids heavy global initialization.	
+	*/
+    if (BatteryRules.length() != 0)
+        return;
+
+	BatteryRules.insertLast( @BatteryRule( RG_Sensor, 		      PID_CUENCELL_LOW,      true,   0.5f ) ); // Sensor charge debuff if use PID_CUENCELL_LOW
+	BatteryRules.insertLast( @BatteryRule( RG_Sensor, 		      PID_SMALL_ENERGY_CELL, true,   0.5f ) ); // Sensor charge debuff if use PID_SMALL_ENERGY_CELL
+	BatteryRules.insertLast( @BatteryRule( RG_Sensor, 		      PID_MICRO_FUSION_CELL, true,   0.5f ) ); // Sensor charge debuff if use PID_MICRO_FUSION_CELL
+	BatteryRules.insertLast( @BatteryRule( RG_FlashlightBuiltIn,  PID_MICRO_FUSION_CELL, false,  1.0f ) ); // Flashlights cannot be charged from an PID_MICRO_FUSION_CELL
+}
+
+
+RechargeGroup GetRechargeGroup( Item& rechargeableItem )
+{
+	/*
+		Detects rechargeable group for an item (perk-based built-in flashlight first, then PID-based devices).
+	*/
+	
+    if ( !valid( rechargeableItem ) )
+	{
+        return RG_None;
+	}
+
+    if ( FLAG( rechargeableItem.Proto.HeadItem_Perk, HEAD_PERK_FLASHLIGHT ) || FLAG( rechargeableItem.Proto.Weapon_Perk, WEAPON_PERK_FLASHLIGHT ) )
+	{
+        return RG_FlashlightBuiltIn;
+	}
+
+    uint16 pid = rechargeableItem.GetProtoId();
+    if ( pid == PID_GEIGER_COUNTER ) 
+	{
+		return RG_Geiger;
+    }
+	
+	if ( pid == PID_REANIMATION_KIT )
+	{
+		return RG_Defib;
+	}
+	
+    if ( pid == PID_MOTION_SENSOR || pid == PID_ACTIVE_MOTION_SENSOR )
+	{
+		return RG_Sensor;
+	}
+
+    return RG_None;
+}
+
+
+BatteryRule@ GetRechargeRule( uint16 batteryPid, Item& rechargeableItem )
+{
+	/*
+		Looks up an exception rule for (batteryPid + rechargeableItem group).
+		Returns null if no rule exists (meaning "use default behavior").
+	*/
+	RechargeGroup targetGroup = GetRechargeGroup( rechargeableItem );
+	for ( uint i = 0; i < BatteryRules.length(); i++ )
+	{
+		// if find rule for group
+		if ( BatteryRules[i].TargetGroup == targetGroup && BatteryRules[i].BatteryPid == batteryPid )
+		{
+			BatteryRule@ item_rule = BatteryRules[i];
+			return item_rule;
+		}
+		
+	}
+
+	return null;
+}
+
+uint GetEnergyChargeFromBattery( uint16 batteryPid, Item& rechargeableItem )
+{
+	/*
+		Public entry point.
+		Returns how much charge batteryPid provides for rechargeableItem,
+		applying exception rules (deny/multiplier).
+	*/
+
+	if( energy_cells.find( batteryPid ) == -1 )
+	{
+		return 0;
+	}
+	
+	float multiplier = 1.0f;
+	if( valid( rechargeableItem ) )
+	{
+		BatteryRule@ rule = GetRechargeRule( batteryPid, rechargeableItem );
+		if ( valid( rule ) )
+		{
+			if ( !rule.Allowed )
+			{
+				return 0;
+			}
+			
+			multiplier = rule.Coef;
+		}
+	}
+
+	uint charge_value = uint(float(GetProtoItem( batteryPid ).Item_Charge) * float(multiplier));
+	return charge_value;
+}
+
+
+bool ChargeItem( Critter& cr, Item& batteryItem, Item& rechargeableItem )
+{
+	/*
+		Public entry point for applying a battery to a rechargeable item.
+		Internally dispatches to a charging handler based on the item's recharge group.
+	*/
+	if( !valid( batteryItem ) || !valid( rechargeableItem ) )
+	{
+		return false;
+	}
+	
+	RechargeGroup rechargeableGroup = GetRechargeGroup( rechargeableItem );
+	
+	switch( rechargeableGroup )
+	{
+		case( RG_None ): 
+			return false;
+		case( RG_Defib ):
+			ChargeDefib( cr, batteryItem, rechargeableItem );
+			return true;
+		case( RG_FlashlightBuiltIn ):
+			ChargeFlashlight( cr, batteryItem, rechargeableItem );
+			return true;
+		case( RG_Geiger ):
+			UseItemOnGeiger( cr, rechargeableItem, batteryItem ); // cr, geiger, battery
+			return true;
+		case( RG_Sensor ):
+			ChargeSensor( cr, batteryItem, rechargeableItem );
+			return true;
+	}
+	
+	return false;
+
+}
+#endif // ENERGY
