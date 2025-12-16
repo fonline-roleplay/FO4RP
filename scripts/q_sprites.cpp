@@ -207,6 +207,11 @@ void Field_ClearTiles( bool roofs, Field* field )
         field->Tiles.clear();
 }
 
+bool Field_HasRoof( Field* field )
+{
+    return !field->Roofs.empty();
+}
+
 void Field_ChangeTileLayer( bool isRoof, uint8 fromLayer, uint8 toLayer, Field* field )
 {
     Field::TileVec* tiles;
@@ -270,6 +275,8 @@ void RegisterNativeSprites( asIScriptEngine* engine, bool compiler )
 
     r = engine->RegisterObjectMethod( "NativeField", "void ClearTiles(bool)", asFUNCTION( Field_ClearTiles ), asCALL_CDECL_OBJLAST );
     r = engine->RegisterObjectMethod( "NativeField", "void ChangeTileLayer(bool, uint8, uint8)", asFUNCTION( Field_ChangeTileLayer ), asCALL_CDECL_OBJLAST );
+
+    r = engine->RegisterObjectMethod( "NativeField", "bool HasRoof()", asFUNCTION( Field_HasRoof ), asCALL_CDECL_OBJLAST );
 
     r = engine->RegisterGlobalFunction( "NativeField@ GetField(uint16, uint16)", asFUNCTION( GetField ), asCALL_CDECL );
 
