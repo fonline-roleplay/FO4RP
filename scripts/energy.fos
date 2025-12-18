@@ -2,31 +2,12 @@
 #define ENERGY
 
 #include "_utils.fos"
-#include "item_h.fos"
-#include "defib_h.fos"
-#include "geiger_h.fos"
 #include "energy_h.fos"
-
-
-enum RechargeGroup
-{
-	/*
-		Rechargeable item groups (logical categories). 
-		Rules are applied per group instead of per-item PID.	
-	*/
-	RG_None = 0,			// Not a supported group
-	RG_FlashlightBuiltIn,	// Built-in flashlight (perk-based)
-	RG_Geiger,				// Geiger counter
-	RG_Sensor,				// Motion sensor (include active variant)
-	RG_Defib,				// Reanimation kit
-}
 
 
 class BatteryRule
 {
-	/*
-		Exception rule for a specific pair (target group + battery type).
-	*/
+	// Exception rule for a specific pair (target group + battery type).
 	RechargeGroup TargetGroup;	// Target rechargeable group.
 	uint16 BatteryPid;			// Battery/energy cell PID.
 	bool Allowed;				// Whether charging is allowed.
@@ -48,63 +29,29 @@ BatteryRule@[] BatteryRules;
 
 void InitBatteryRules()
 {
-	/*
-		Populates the rules table once. 
-		Keeps all exceptions in one place and avoids heavy global initialization.	
-	*/
+	// Populates the rules table once. 
+	// Keeps all exceptions in one place and avoids heavy global initialization.	
     if (BatteryRules.length() != 0)
         return;
 
-	BatteryRules.insertLast( @BatteryRule( RG_Sensor, 		      PID_CUENCELL_LOW,      true,   0.5f ) ); // Sensor charge debuff if use PID_CUENCELL_LOW
-	BatteryRules.insertLast( @BatteryRule( RG_Sensor, 		      PID_SMALL_ENERGY_CELL, true,   0.5f ) ); // Sensor charge debuff if use PID_SMALL_ENERGY_CELL
-	BatteryRules.insertLast( @BatteryRule( RG_Sensor, 		      PID_MICRO_FUSION_CELL, true,   0.5f ) ); // Sensor charge debuff if use PID_MICRO_FUSION_CELL
-	BatteryRules.insertLast( @BatteryRule( RG_FlashlightBuiltIn,  PID_MICRO_FUSION_CELL, false,  1.0f ) ); // Flashlights cannot be charged from an PID_MICRO_FUSION_CELL
-}
-
-
-RechargeGroup GetRechargeGroup( Item& rechargeableItem )
-{
-	/*
-		Detects rechargeable group for an item (perk-based built-in flashlight first, then PID-based devices).
-	*/
-	
-    if ( !valid( rechargeableItem ) )
-	{
-        return RG_None;
-	}
-
-    if ( FLAG( rechargeableItem.Proto.HeadItem_Perk, HEAD_PERK_FLASHLIGHT ) || FLAG( rechargeableItem.Proto.Weapon_Perk, WEAPON_PERK_FLASHLIGHT ) )
-	{
-        return RG_FlashlightBuiltIn;
-	}
-
-    uint16 pid = rechargeableItem.GetProtoId();
-    if ( pid == PID_GEIGER_COUNTER ) 
-	{
-		return RG_Geiger;
-    }
-	
-	if ( pid == PID_REANIMATION_KIT )
-	{
-		return RG_Defib;
-	}
-	
-    if ( pid == PID_MOTION_SENSOR || pid == PID_ACTIVE_MOTION_SENSOR )
-	{
-		return RG_Sensor;
-	}
-
-    return RG_None;
+	// BatteryRules.insertLast( @BatteryRule( RG_Sensor, 		      PID_CUENCELL_LOW,      true,   0.5f ) ); 	// Example. Sensor charge debuff if use PID_CUENCELL_LOW
+	BatteryRules.insertLast( @BatteryRule( RG_FlashlightBuiltIn,   PID_MICRO_FUSION_CELL,	false,  1.0f ) ); 	// Example. Flashlights cannot be charged from an PID_MICRO_FUSION_CELL
+	BatteryRules.insertLast( @BatteryRule( RG_FlashlightBuiltIn,   PID_ATOMIC_CELL, 		false,  1.0f ) ); 	// Example. Flashlights cannot be charged from an PID_ATOMIC_CELL
 }
 
 
 BatteryRule@ GetRechargeRule( uint16 batteryPid, Item& rechargeableItem )
 {
-	/*
-		Looks up an exception rule for (batteryPid + rechargeableItem group).
-		Returns null if no rule exists (meaning "use default behavior").
-	*/
+	// Looks up an exception rule for (batteryPid + rechargeableItem group).
+	// Returns null if no rule exists (meaning "use default behavior").
+	
 	RechargeGroup targetGroup = GetRechargeGroup( rechargeableItem );
+	
+	if ( targetGroup == RG_None )
+	{
+		return null;
+	}
+	
 	for ( uint i = 0; i < BatteryRules.length(); i++ )
 	{
 		// if find rule for group
@@ -119,15 +66,14 @@ BatteryRule@ GetRechargeRule( uint16 batteryPid, Item& rechargeableItem )
 	return null;
 }
 
-uint GetEnergyChargeFromBattery( uint16 batteryPid, Item& rechargeableItem )
-{
-	/*
-		Public entry point.
-		Returns how much charge batteryPid provides for rechargeableItem,
-		applying exception rules (deny/multiplier).
-	*/
 
-	if( energy_cells.find( batteryPid ) == -1 )
+int GetEnergyChargeFromBattery( uint16 batteryPid, Item& rechargeableItem )
+{
+	// Public entry point.
+	// Returns how much charge batteryPid provides for rechargeableItem,
+	// applying exception rules (deny/multiplier).
+	
+	if( energyCells.find( batteryPid ) == -1 )
 	{
 		return 0;
 	}
@@ -146,44 +92,83 @@ uint GetEnergyChargeFromBattery( uint16 batteryPid, Item& rechargeableItem )
 			multiplier = rule.Coef;
 		}
 	}
-
-	uint charge_value = uint(float(GetProtoItem( batteryPid ).Item_Charge) * float(multiplier));
+	
+	int charge_value = int( float( GetProtoItem( batteryPid ).Item_Charge ) * multiplier );
 	return charge_value;
 }
 
 
-bool ChargeItem( Critter& cr, Item& batteryItem, Item& rechargeableItem )
+bool CanChargeItem( Critter& cr, Item& batteryItem, Item& rechargeableItem )
 {
-	/*
-		Public entry point for applying a battery to a rechargeable item.
-		Internally dispatches to a charging handler based on the item's recharge group.
-	*/
+	// Public entry point.
+	// Validates whether a rechargeable item can be charged from the given battery before performing the charge.
+	// Checks item validity, resolves the item's recharge group, verifies battery compatibility (provided charge),
+	// and ensures current charge is below the max; sends a user-facing message on failure.
 	if( !valid( batteryItem ) || !valid( rechargeableItem ) )
 	{
 		return false;
 	}
 	
-	RechargeGroup rechargeableGroup = GetRechargeGroup( rechargeableItem );
-	
-	switch( rechargeableGroup )
+	RechargeGroup rechargeable_group = GetRechargeGroup( rechargeableItem );
+	if ( rechargeable_group == RG_None )
 	{
-		case( RG_None ): 
-			return false;
-		case( RG_Defib ):
-			ChargeDefib( cr, batteryItem, rechargeableItem );
-			return true;
-		case( RG_FlashlightBuiltIn ):
-			ChargeFlashlight( cr, batteryItem, rechargeableItem );
-			return true;
-		case( RG_Geiger ):
-			UseItemOnGeiger( cr, rechargeableItem, batteryItem ); // cr, geiger, battery
-			return true;
-		case( RG_Sensor ):
-			ChargeSensor( cr, batteryItem, rechargeableItem );
-			return true;
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_RECHARGE_DEVICE_WRONG_CHARGE_TYPE );
+		return false;
 	}
 	
-	return false;
+	int battery_energy = GetEnergyChargeFromBattery( batteryItem.GetProtoId(), rechargeableItem );
+	if ( battery_energy == 0 )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_RECHARGE_DEVICE_WRONG_CHARGE_TYPE );
+		return false;
+	}
+	
+	int charge_max = int ( GetMaxChargeForGroup( rechargeable_group ) );
+	if ( rechargeableItem.ITEM_CUR_CHARGE >= charge_max )
+	{
+		cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_RECHARGE_DEVICE_CHARGED );
+		return false;
+	}
+	
+	return true;
+}
 
+
+bool ChargeItem( Critter& cr, Item& batteryItem, Item& rechargeableItem )
+{
+	// Public entry point for applying a battery to a rechargeable item.
+	// Internally dispatches to a charging handler based on the item's recharge group.
+	
+	if ( !CanChargeItem( cr, batteryItem, rechargeableItem ) )
+	{
+		return false;
+	}
+	
+	int battery_energy = GetEnergyChargeFromBattery( batteryItem.GetProtoId(), rechargeableItem );
+	RechargeGroup rechargeableGroup = GetRechargeGroup( rechargeableItem );
+	
+	int charge_max = GetMaxChargeForGroup( rechargeableGroup );
+	rechargeableItem.ITEM_CUR_CHARGE += battery_energy;
+	
+	if ( rechargeableItem.ITEM_CUR_CHARGE > charge_max )
+	{
+		rechargeableItem.ITEM_CUR_CHARGE = charge_max;
+	}
+	
+	string rechargeable_item_name = itemName( rechargeableItem );
+	string charge_info = rechargeable_item_name + " |0xFFFF00 " + rechargeableItem.ITEM_CUR_CHARGE + "|0x3CF800 /" + "|0xFFFF00 " + charge_max + "|0x3CF800 .";
+	cr.SayMsg( SAY_EMOTE, TEXTMSG_GAME, STR_EMOTE_RECHARGE_DEVICE_PROCESS, "$itemName" + rechargeable_item_name );
+	cr.SayMsg( SAY_NETMSG, TEXTMSG_GAME, STR_RECHARGE_DEVICE_PROCESS, "$value" + charge_info );
+
+	_SubItem( batteryItem, 1 );
+	rechargeableItem.Update();
+	
+	Map@ map = cr.GetMap();
+	if( valid( map ) )
+	{
+		PlayGenericSound( map, cr.HexX, cr.HexY, "WRJ1XXX1.mp3", 6 );
+	}
+	
+	return true;
 }
 #endif // ENERGY
