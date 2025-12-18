@@ -785,7 +785,6 @@ struct ProtoItem
     const uint8 Padding1;
 
     const uint8  Partial_Item;
-    const uint8  Fuel_Efficiency;
 
     const uint8  Look_BlockDir[6];
     const uint8  Look_Block;
