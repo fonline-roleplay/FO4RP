@@ -18,6 +18,7 @@
 #include "defib_h.fos"
 #include "drugs_h.fos"
 #include "effects_h.fos"
+#include "energy_h.fos"
 #include "explode_h.fos"
 #include "firestarter_h.fos"
 #include "fish_h.fos"
@@ -93,6 +94,7 @@ void init()
 {
     InitializeGame();
 	InitSpeedArray();
+	InitBatteryRules();
 }
 
 uint16 GetVersionWorldSave( ::string@ time )
@@ -1024,37 +1026,6 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		case( PID_MOTION_SENSOR ):
 		case( PID_ACTIVE_MOTION_SENSOR ):
 			return TryUseSensor( cr, item );
-		case( PID_SMALL_ENERGY_CELL ):
-		case( PID_CUENCELL_LOW ):
-		{
-			Item@ flashlight = _CritGetItemHand( cr );
-			if( valid( flashlight ) )
-			{
-				if( FLAG( flashlight.Proto.HeadItem_Perk, HEAD_PERK_FLASHLIGHT ) || FLAG( flashlight.Proto.Weapon_Perk, WEAPON_PERK_FLASHLIGHT ) )
-				{
-					ChargeFlashlight( cr, item, flashlight );
-					return true;
-				}
-			}
-		}
-		case( PID_MICRO_FUSION_CELL ):
-		{
-			Item@ hand = _CritGetItemHand( cr );
-			if( valid( hand ) )
-			{
-				uint16 hand_pid = hand.GetProtoId();
-				if( hand_pid == PID_REANIMATION_KIT )
-				{
-					ChargeDefib( cr, item, hand );
-					return true;
-				}
-				else if( hand_pid == PID_MOTION_SENSOR || hand_pid == PID_ACTIVE_MOTION_SENSOR )
-				{
-					ChargeSensor( cr, item, hand );
-					return true;
-				}
-			}
-		}
 		case( PID_PLANT_OIL ):
 		{
 			Item@ lamp = _CritGetItemHand( cr );
@@ -1105,6 +1076,18 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 			}
 		}
 	}
+	// Charge Items (energy_h.fos)
+	if ( energyCells.find( pid ) != -1 )
+	{
+		Item@ rechargeableItem = valid( targetItem ) ? targetItem : _CritGetItemHand( cr );
+		// Use battery on target item or on item in hand
+		if ( valid( rechargeableItem ) && GetRechargeGroup( rechargeableItem ) != RG_None )
+		{
+			ChargeItem( cr, item, rechargeableItem );
+			return true;
+		}
+	}
+	
 	//Profession perk books
 	if( IsProfBook( item ) )
 	{
@@ -1449,24 +1432,10 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
 		FlashlightUse( cr, item );
         return true;
     }
-
-	// Flashlight charging
-	if( ( pid == PID_SMALL_ENERGY_CELL || pid == PID_CUENCELL_LOW ) && tpid != 0 
-	&& ( tpid == PID_FLASHLIGHT_OFF || tpid == PID_FLASHLIGHT_ON || tpid == PID_FLASHLIGHT_HELMET || tpid == PID_10MM_PISTOL_FLASHLIGHT || pid == PID_HELMET_RANGER ) )
-	{
-		ChargeFlashlight( cr, item, targetItem );
-		return true;
-	}
 	// OilLamp charging
 	if( pid == PID_PLANT_OIL && valid( targetItem ) && tpid == PID_OIL_LAMP )
 	{
 		ChargeLamp( cr, item, targetItem );
-		return true;
-	}
-	// Reanimation Kit charging
-	if( pid == PID_MICRO_FUSION_CELL && valid( targetItem ) && tpid == PID_REANIMATION_KIT )
-	{
-		ChargeDefib( cr, item, targetItem );
 		return true;
 	}
 	// Flare extinguish
@@ -1521,15 +1490,15 @@ bool critter_use_item( Critter& cr, Item& item, Critter@ targetCr, Item@ targetI
         TryRemoveLock( cr, item, targetItem );
 		return true;
     }
-    // Geiger counter
+    // Geiger counter - use geiger on self
     if( pid == PID_GEIGER_COUNTER && useOnSelf && UseGeiger( cr, item ) )
 	{
         return true;
 	}
-
-    if( valid( targetItem ) && targetItem.GetProtoId() == PID_GEIGER_COUNTER && UseItemOnGeiger( cr, targetItem, item ) )
+	// Geiger counter - use geiger on critter
+	if( pid == PID_GEIGER_COUNTER && valid( targetCr ) && GeigerCheckRadLevel( cr, item, targetCr ) )
 	{
-        return true;
+		return true;
 	}
 	//Showel on self to make a bed in GM mode
     if( pid == PID_SHOVEL && useOnSelf )
@@ -1652,11 +1621,6 @@ bool critter_use_skill( Critter& cr, int skill, Critter@ targetCr, Item@ targetI
 		cr.Wait( GetSkillTime( skill, cr ) );
 	}
 
-    // Geiger counter
-    if( valid( targetItem ) && targetItem.GetProtoId() == PID_GEIGER_COUNTER && UseSkillOnGeiger( cr, targetItem, skill ) )
-	{
-        return true;
-	}
 	// homebrew pot interface
 	if( valid( targetItem ) && targetItem.GetProtoId() == PID_POT_ALCO )
 	{
