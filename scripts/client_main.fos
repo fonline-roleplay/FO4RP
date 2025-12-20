@@ -74,6 +74,9 @@ import void InitCraftList() from "craft_recipes";
 import void InitEconomy() from "client_craft_economy";
 import void CreateEconomyList() from "client_craft_economy";
 
+import void qmap_iface() from "qmap_client";
+import void DrawRectangle( int x, int y, int w, int h, int color ) from "client_avatars";
+
 dictionary chosenContainerItems;
 
 uint prevId = 0; // required for loading saved names
@@ -99,6 +102,15 @@ bool IfaceHidden = false;
 int APCountX, APCountY;
 uint LastGridX = 0;
 uint LastGridY = 0;
+uint FullAutoTick = 0;
+
+uint CoverSpriteTargetId = 0;
+uint CoverSpriteDir0Id = 0;
+uint CoverSpriteDir1Id = 0;
+uint CoverSpriteDir2Id = 0;
+uint CoverSpriteDir3Id = 0;
+uint CoverSpriteDir4Id = 0;
+uint CoverSpriteDir5Id = 0;
 
 bool start()
 {
@@ -206,7 +218,15 @@ bool start()
 	TradeSpriteId	= LoadSprite( "TraderIcon.png",		int( PT_ART_INTRFACE ) );
 	OreSpriteId		= LoadSprite( "OreMarker.png",		int( PT_ART_INTRFACE ) );
 	JunkSpriteId	= LoadSprite( "JunkMarker.png",		int( PT_ART_INTRFACE ) );
-		
+
+	CoverSpriteTargetId = LoadSprite( "CMTarget.png", int( PT_ART_INTRFACE ) );
+	CoverSpriteDir0Id 	= LoadSprite( "CMDir0.png", int( PT_ART_INTRFACE ) );
+	CoverSpriteDir1Id 	= LoadSprite( "CMDir1.png", int( PT_ART_INTRFACE ) );
+	CoverSpriteDir2Id 	= LoadSprite( "CMDir2.png", int( PT_ART_INTRFACE ) );
+	CoverSpriteDir3Id 	= LoadSprite( "CMDir3.png", int( PT_ART_INTRFACE ) );
+	CoverSpriteDir4Id 	= LoadSprite( "CMDir4.png", int( PT_ART_INTRFACE ) );
+	CoverSpriteDir5Id 	= LoadSprite( "CMDir5.png", int( PT_ART_INTRFACE ) );
+	
 	array<Sprite@> avatarsPlaceholder =
 	{
 		CreateSprite( GetStrHash( "Avatars\\AvatarPlaceholderNone.png" ), 0 ),
@@ -401,6 +421,7 @@ void render_iface( FOWindow@ window, uint layer )
 	
     if( layer == 1 )
     {
+		qmap_iface();
         show_player_info();
     }
     else if( layer == 2 )
@@ -438,6 +459,23 @@ void render_iface( FOWindow@ window, uint layer )
 		if( ( __sinf & SINF_MOB_SIGN ) != 0 )
 		{
 			ShowMobSpawners();
+		}
+
+		if( ( __sinf & SINF_HEX ) != 0  && _MainScreen == CLIENT_MAIN_SCREEN_GAME)
+		{
+			uint16 hexX = 0, hexY = 0;
+			GetMonitorHex( __MouseX, __MouseY, hexX, hexY );
+			DrawText( hexX + ":" + hexY, __MouseX + 22, __MouseY - 18, 50, 10, COLOR_RED, FONT_FALLOUT, 0 );
+		}
+
+		for ( uint i = 0; i < GeigerActiveSlots.length(); i++ )
+		{
+			ItemCl@ geiger = choo.GetItem( 0, GeigerActiveSlots[i] );
+			if ( valid( geiger ) && geiger.GetProtoId() == PID_GEIGER_COUNTER )
+			{
+				ShowRadiationToPlayer( choo, geiger );
+				break;
+			}
 		}
 
 		if( valid( choo ) && isGM( choo ) )
@@ -511,6 +549,14 @@ void render_iface( FOWindow@ window, uint layer )
 			action_points = ap;
 			int colour = ap > 0 ? COLOR_GREEN : COLOR_RED;
 			DrawText( action_points, APCountX, APCountY, action_points.length() * 15, 15, colour, FONT_FAT, FT_BORDERED );
+		}
+
+		if( valid( choo ) )
+		{
+			DrawCharRadiuses(choo);
+			DrawLTPProgressbar(choo);
+			DrawSTA(choo);
+			DrawCovers(choo);
 		}
 	}
     else if( layer == 3 )
@@ -615,6 +661,10 @@ void render_iface( FOWindow@ window, uint layer )
 	}
     else if( layer == 4 )
 	{
+		if(valid(choo))
+		{
+			DrawCombatUI(choo);
+		}
 	}
     else if( layer == 5 )
     {
@@ -6982,4 +7032,962 @@ void ShowSensorBlip( int hx, int hy, int msg, string@ param3, int[]@ param4 )
 {
 	string text = GetMsgStr( TEXTMSG_TEXT, STR_SENSOR_MAP_PING );
 	MapMessage( text, hx, hy, __DamageHitDelay, COLOR_LRED, true, Random( -5, 5 ), -20 );
+}
+
+void drawHexRange( int x, int y, int radius, uint RGBA )
+{
+	int[] drawData;
+	int hx = 0, hy = 0;
+	
+	if( radius < 1 )
+	{
+		radius = 1;
+	}
+	
+	for( uint8 i = 0; i <= 6; i++ )
+	{
+		uint16 tx = x, ty = y;
+		MoveHexByDir( tx, ty, i % 6, radius );
+		GetHexPos( tx, ty, hx, hy );
+		
+		drawData.insertLast( hx );
+		drawData.insertLast( hy );
+		drawData.insertLast( RGBA );
+	}
+	
+	DrawPrimitive( DRAW_PRIMITIVE_LINESTRIP, drawData );
+}
+
+void drawFanRange( int x, int y, int radius, uint RGBA )
+{
+	int[] drawData;
+	int hx = 0, hy = 0;
+	
+	if( radius < 1 )
+	{
+		radius = 1;
+	}
+	
+	for( uint8 i = 0; i < 6; i++ )
+	{
+		uint16 tx = x, ty = y;
+		MoveHexByDir( tx, ty, i, radius );
+		GetHexPos( tx, ty, hx, hy );
+		drawData.insertLast( hx );
+		drawData.insertLast( hy );
+		drawData.insertLast( RGBA );
+	}
+	
+	DrawPrimitive( DRAW_PRIMITIVE_TRIANGLEFAN, drawData );
+}
+
+void DrawCharRadiuses(CritterCl@ choo)
+{
+	//Character Voice Radius
+	if( FLAG( choo.Param[ PLAYER_FLAGS ], PLAYER_FLAG_VOICE_R ) )
+	{
+		drawHexRange( choo.HexX, choo.HexY, 50 - choo.Stat[ ST_SPEECH_VOLUME ], COLOR_RGBA( 0x00, 0x80, 0xFF, 255 ) );
+	}
+	
+	//Character Weapon Radius
+	if( FLAG( choo.Param[ PLAYER_FLAGS ], PLAYER_FLAG_WEAPON_R ) )
+	{
+		uint8 mode = 0;
+		ProtoItem@ ProtoWeapon = choo.GetSlotProto( SLOT_HAND1, mode );
+		uint skillNum = _WeaponSkill( ProtoWeapon, mode );
+		if( skillNum > 0 )
+		{
+			int skillVal = choo.Skill[ skillNum ];
+			int wpnMaxDist = _WeaponMaxDist( ProtoWeapon, mode );
+			ItemCl@ weapon = choo.GetItem( 0, SLOT_HAND1 );
+			ProtoItem@ ammo = valid( weapon ) ? GetProtoItem( weapon.AmmoPid ) : null;
+			
+			if( valid( weapon ) && FLAG( weapon.Proto.Weapon_Perk, WEAPON_PERK_SCOPE_RANGE ) && choo.Param[ CR_IS_WINDUPED ] > 0 )
+			{
+				wpnMaxDist *= 2;
+			}
+			
+			bool isShotgun = valid( ammo ) && FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT );
+
+			int radius_1 = 1;
+			if( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS || isShotgun )
+			{
+				radius_1 = wpnMaxDist;
+			}
+			else
+			{
+				radius_1 = HitchanceOptimal( wpnMaxDist, skillVal );
+			}
+			
+			if( radius_1 <= 0 )
+			{
+				radius_1 = 1;
+			}
+
+			drawHexRange( choo.HexX, choo.HexY, radius_1, COLOR_RGBA( 0xFF,0x00, 0x00, 255 ) );
+			
+			if( valid( weapon ) )
+			{
+				int radius_2 = 0;
+				
+				if( ( skillNum == SK_THROWING || ProtoWeapon.Item_Subtype == ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER ) && skillVal < MAX_SKILL_DISTANCE )
+				{
+					radius_2 = skillNum == SK_THROWING ? MIN( wpnMaxDist, 3 * MIN( int(10), choo.Stat[ ST_STRENGTH ] ) ) : wpnMaxDist;
+				}
+				else if( isShotgun )
+				{
+					radius_2 = wpnMaxDist * 2;
+				}
+				
+				if( radius_2 != 0 )
+				{
+					drawHexRange( choo.HexX, choo.HexY, radius_2, COLOR_RGBA( 0xFF, 0x00, 0x00, 155 ) );
+				}
+			}
+		}
+	}
+}
+
+void DrawLTPProgressbar(CritterCl@ chosen)
+{
+	if( chosen.Param[ ST_LTP_SEQUENCE ] != -1 )
+	{	
+		int cx = chosen.HexX;//int( __ScreenWidth  * 0.5f - 60 );
+		int cy = chosen.HexY;//int( __ScreenHeight * 0.5f - 130 );
+		int hx = 0, hy = 0;
+		GetHexPos( cx, cy, hx, hy );
+		int max_width = 50;
+		int max_hight = 10;
+		hx -= max_width / 2;
+		hy += 15;
+		uint8 r0 = 0xDA, g0 = 0xA5, b0 = 0x20;
+		int tick_start = chosen.Param[ ST_LTP_TIME ];
+		int duration = ( ( chosen.Param[ ST_LTP_SEQUENCE ] + 1 ) * chosen.Param[ ST_LTP_SEQUENCE_WAIT ] * __TimeMultiplier / 1000 );
+		int current_length = CLAMP( max_width * ( __FullSecond - tick_start ) / duration, 1, max_width );
+
+		//Can't be automated without OOP - since there is difference in colors or dots.
+		int[] drawData;
+		drawData.insertLast( hx );
+		drawData.insertLast( hy );
+		drawData.insertLast( COLOR_RGBA( r0, g0, b0, 200 ) );
+		drawData.insertLast( hx + current_length );
+		drawData.insertLast( hy );
+		drawData.insertLast( COLOR_RGBA( r0, g0, b0, 100 ) );
+		drawData.insertLast( hx + current_length );
+		drawData.insertLast( hy + max_hight );
+		drawData.insertLast( COLOR_RGBA( r0, g0, b0, 100 ) );
+		drawData.insertLast( hx );
+		drawData.insertLast( hy + max_hight );
+		drawData.insertLast( COLOR_RGBA( r0, g0, b0, 200 ) );
+		drawData.insertLast( hx );
+		drawData.insertLast( hy );
+		drawData.insertLast( COLOR_RGBA( r0, g0, b0, 100 ) );
+		DrawPrimitive( DRAW_PRIMITIVE_TRIANGLEFAN, drawData );
+		
+		DrawRectangle( hx, hy, hx + max_width, hy + max_hight, COLOR_RGBA( r0, g0, b0, 255 ) );
+	}
+}
+
+// Smart Target Assist
+bool CheckSTA( CritterCl& chosen )
+{
+	ItemCl@ armor = chosen.GetItem( 0, SLOT_ARMOR );
+	if( valid( armor ) )
+	{
+		if( FLAG( armor.Proto.Armor_Perk, ARMOR_PERK_STA ) )
+		{
+			return true;
+		}
+	}
+	
+	ItemCl@ visor = chosen.GetItem( 0, SLOT_HEAD );
+	if( valid( visor ) )
+	{
+		if( FLAG( visor.Proto.HeadItem_Perk, HEAD_PERK_STA  ) )
+		{
+			return true;
+		}
+	}
+	
+	return false;
+}
+
+// Target Grid Contour Offsets
+int[] GetTargetingData( CritterCl& target )
+{
+	int bodyType = target.Param[ ST_BODY_TYPE ];
+	int crType = target.CrType;
+
+	int bt_W_mod = 0;
+	int bt_H_mod = 0;
+	int bt_X_mod = 0;
+	int bt_Y_mod = 0;
+
+	switch( bodyType )
+	{
+		case( BT_WOMEN ):
+			bt_W_mod += 10;
+			bt_X_mod += 5;
+			break;
+		case( BT_CHILDREN ):
+			bt_W_mod += 8;
+			bt_X_mod += 8;
+			bt_Y_mod += 2;
+			break;
+		case( BT_SUPER_MUTANT ):
+			break;
+		case( BT_GHOUL ):
+			bt_W_mod += 10;
+			bt_X_mod += 5;
+			break;
+		case( BT_BRAHMIN ):
+			bt_W_mod -= 5;
+			bt_H_mod -= 10;
+			bt_X_mod -= 10;
+			bt_Y_mod += 5;
+			break;
+		case( BT_RADSCORPION ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_RADSCORPION_SMALL ):
+					bt_W_mod -= 5;
+					bt_H_mod -= 10;
+					bt_X_mod -= 5;
+					bt_Y_mod += 5;
+					break;
+				case( CRTYPE_RADSCORPION ):
+					bt_W_mod -= 15;
+					bt_H_mod -= 15;
+					bt_X_mod -= 10;
+					bt_Y_mod += 10;
+					break;
+				default:
+					bt_W_mod -= 30;
+					bt_H_mod -= 25;
+					bt_X_mod -= 30;
+					bt_Y_mod += 10;
+					break;
+			}
+			break;
+		}
+		case( BT_RAT ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_RAT ):
+					bt_W_mod += 5;
+					bt_H_mod -= 5;
+					break;
+				case( CRTYPE_RAT_PIGRAT ):
+					bt_H_mod -= 2;
+					bt_Y_mod += 3;
+					break;
+				default:
+					bt_W_mod -= 15;
+					bt_H_mod -= 10;
+					bt_X_mod -= 10;
+					bt_Y_mod += 10;
+					break;
+			}
+			break;
+		}
+		case( BT_FLOATER ):
+			bt_H_mod -= 15;
+			bt_X_mod -= 10;
+			break;
+		case( BT_CENTAUR ):
+			bt_W_mod -= 65;
+			bt_H_mod -= 45;
+			bt_X_mod -= 25;
+			bt_Y_mod += 15;
+			break;
+		case( BT_ROBOT ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_TURRET_MINIGUN ):
+					bt_X_mod -= 5;
+					break;
+				case( CRTYPE_TURRET_PLASMA ):
+					bt_W_mod -= 20;
+					bt_H_mod -= 5;
+					bt_X_mod -= 15;
+					bt_Y_mod += 10;
+					break;
+				case( CRTYPE_TURRET_LASER_TOWER ):
+					bt_W_mod -= 25;
+					bt_H_mod -= 30;
+					bt_X_mod -= 30;
+					bt_Y_mod += 15;
+					break;
+				case( CRTYPE_TURRET_LASER ):
+					bt_W_mod -= 25;
+					bt_H_mod -= 10;
+					bt_X_mod -= 20;
+					bt_Y_mod += 15;
+					break;
+				case( CRTYPE_ROBOT_HANDY ):
+					bt_W_mod -= 20;
+					bt_H_mod -= 15;
+					bt_X_mod -= 15;
+					bt_Y_mod += 15;
+					break;
+				case( CRTYPE_ROBOT_PROTECTRON ):	
+				case( CRTYPE_ROBOT_PROTECTRON2 ):
+
+					break;	
+				case( CRTYPE_ROBOBRAIN ):
+					bt_W_mod -= 10;
+					bt_H_mod -= 8;
+					bt_X_mod -= 15;
+					bt_Y_mod += 10;
+					break;
+				case( CRTYPE_ROBODOG ):
+
+					break;
+				case( CRTYPE_ROBOT ):	
+				case( CRTYPE_ROBOT_BLUE ):
+					bt_W_mod -= 15;
+					bt_H_mod -= 5;
+					bt_X_mod -= 15;
+					bt_Y_mod += 5;
+					break;
+				default:
+					break;
+			}
+			break;
+		}
+		case( BT_DOG ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_DOG_SMALL ):
+					bt_W_mod += 15;
+					bt_H_mod -= 3;
+					bt_X_mod += 5;
+					bt_Y_mod += 5;
+					break;
+				default:
+					bt_W_mod += 10;
+					bt_H_mod -= 5;
+					bt_Y_mod += 5;
+					break;
+			}
+			break;
+		}
+		case( BT_MANTI ):
+			bt_W_mod += 10;
+			bt_H_mod -= 5;
+			break;
+		case( BT_DEATHCLAW ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_DEADCLAW_SMALL ):
+					bt_H_mod -= 5;
+					bt_Y_mod += 5;
+					break;
+				case( CRTYPE_DEADCLAW ):
+					bt_W_mod -= 15;
+					bt_H_mod -= 15;
+					bt_Y_mod += 10;
+					break;
+				default:
+					bt_W_mod -= 10;
+					bt_H_mod -= 10;
+					bt_Y_mod += 10;
+					break;
+			}
+			break;
+		}
+		case( BT_PLANT ):
+			bt_W_mod -= 10;
+			bt_H_mod -= 10;
+			bt_Y_mod += 6;
+			break;
+		case( BT_GECKO ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_GECKO_SILV ):
+				case( CRTYPE_GECKO_GOLD_SMALL ):
+					bt_H_mod -= 15;
+					bt_Y_mod += 5;
+					break;
+				default:
+					bt_H_mod -= 15;
+					bt_X_mod -= 5;
+					bt_Y_mod += 5;
+					break;
+				}
+			break;
+		}
+		case( BT_ALIEN ):
+		{
+			switch( crType )
+			{
+				case( CRTYPE_ALIEN_EGG ):
+					bt_W_mod += 10;
+					bt_H_mod += 5;
+					break;
+				default:
+					bt_W_mod -= 10;
+					bt_H_mod -= 7;
+					break;
+			}
+			break;
+		}
+		case( BT_GIANT_ANT ):
+			bt_W_mod -= 10;
+			bt_H_mod -= 10;
+			break;
+		case( BT_BIG_BAD_BOSS ):
+			bt_W_mod -= 15;
+			bt_H_mod -= 5;
+			bt_X_mod -= 20;
+			bt_Y_mod += 10;
+			break;
+		case( BT_GIANT_BEETLE ):
+			bt_H_mod -= 5;
+			break;
+		case( BT_GIANT_WASP ):
+			bt_H_mod -= 15;
+			bt_Y_mod -= 60;
+			break;
+		case( BT_YAO ):
+			bt_W_mod -= 15;
+			bt_H_mod -= 25;
+			bt_X_mod -= 20;
+			bt_Y_mod += 10;
+			break;
+		case( BT_SWAMP_LURKER ):
+			bt_W_mod -= 25;
+			bt_H_mod -= 10;
+			bt_X_mod -= 10;
+			break;
+		case( BT_CROCS ):
+			break;
+		case( BT_MILLEPEDE ):
+			break;	
+		case( BT_LAVASH ):
+			break;
+		case( BT_SPIDER ):
+			break;
+		default:
+			break;
+	}
+	
+	int[] data = { bt_W_mod, bt_H_mod, bt_X_mod, bt_Y_mod };
+	
+	return data;
+}
+
+void OutlineCritter( Critter@ target, uint8 r0, uint8 g0, uint8 b0 )
+{
+	string cr_sprite_name = GetCritterTypeName( target.CrType ) + "aa.frm";
+	uint CrSpriteId = LoadSprite( cr_sprite_name, int( PT_ART_CRITTERS ) );
+	
+	if( CrSpriteId == 0 )
+	{
+		return;
+	}
+	
+	int[] targeter_data = GetTargetingData( target );
+	int bt_W_mod = targeter_data[0];
+	int bt_H_mod = targeter_data[1];
+	int bt_X_mod = targeter_data[2];
+	int bt_Y_mod = targeter_data[3];
+	
+	bt_X_mod = int( bt_X_mod / __SpritesZoom );
+	bt_Y_mod = int( bt_Y_mod / __SpritesZoom );
+	
+	int crWidth = int( ( GetSpriteWidth( CrSpriteId, 0 ) + bt_W_mod ) / __SpritesZoom );
+	int crHeight = int( ( GetSpriteHeight( CrSpriteId, 0 ) + bt_H_mod ) / __SpritesZoom );
+	int step20 = int( 20 / __SpritesZoom );
+	int step19 = int( 19 / __SpritesZoom );
+	int step18 = int( 18 / __SpritesZoom );
+	int step12 = int( 12 / __SpritesZoom );
+	int step11 = int( 11 / __SpritesZoom );
+	int step10 = int( 10 / __SpritesZoom );
+	int step8 = int( 8 / __SpritesZoom );
+	int step7 = int( 7 / __SpritesZoom );
+	int step5 = int( 5 / __SpritesZoom );
+	int step3 = int( 3 / __SpritesZoom );
+	int step2 = int( 2 / __SpritesZoom );
+	int step1 = int( 1 / __SpritesZoom );
+	
+	uint8 r1 = 0x00, g1 = 0x00, b1 = 0x00;
+	
+	uint8 coloured = 255;
+	uint8 transparent = 0;
+	
+	int hx = 0, hy = 0;
+	GetHexPos( target.HexX, target.HexY, hx, hy );
+	
+	array<int> drawData( 116 );
+	
+	if( true ) 
+	{
+		
+	//reference: https://imgur.com/a/ABNAPuE
+	//0
+	drawData.insertAt( 0, hx + bt_X_mod - step10 );
+	drawData.insertAt( 1, hy - crHeight );
+	drawData.insertAt( 2, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//1
+	drawData.insertAt( 3, hx + bt_X_mod - step20 );
+	drawData.insertAt( 4, hy - crHeight );
+	drawData.insertAt( 5, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//2
+	drawData.insertAt( 6, hx + bt_X_mod - step20 );
+	drawData.insertAt( 7, hy - crHeight + step10 );
+	drawData.insertAt( 8, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//3
+	drawData.insertAt( 9, hx + bt_X_mod - step20 );
+	drawData.insertAt( 10, hy - crHeight + step10 );
+	drawData.insertAt( 11, COLOR_RGBA( r0, g0, b0, transparent ) );
+	//4
+	drawData.insertAt( 12, hx+ bt_X_mod - step19 );
+	drawData.insertAt( 13, hy - crHeight + step8 );
+	drawData.insertAt( 14, COLOR_RGBA( r0, g0, b0, transparent ) );
+	//5
+	drawData.insertAt( 15, hx + bt_X_mod - step19 );
+	drawData.insertAt( 16, hy - crHeight + step8 );
+	drawData.insertAt( 17, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//6
+	drawData.insertAt( 18, hx + bt_X_mod - step19 );
+	drawData.insertAt( 19, hy - crHeight + step1 );
+	drawData.insertAt( 20, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//7
+	drawData.insertAt( 21, hx + bt_X_mod - step12 );
+	drawData.insertAt( 22, hy - crHeight + step1 );
+	drawData.insertAt( 23, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//8
+	drawData.insertAt( 24, hx + bt_X_mod - step12 );
+	drawData.insertAt( 25, hy - crHeight + step1 );
+	drawData.insertAt( 26, COLOR_RGBA( r1, g1, b1, transparent ) );
+	//9
+	drawData.insertAt( 27, hx + crWidth - step18 );
+	drawData.insertAt( 28, hy - crHeight + step1 );
+	drawData.insertAt( 29, COLOR_RGBA( r1, g1, b1, transparent ) );
+	//10
+	drawData.insertAt( 30, hx + crWidth - step18 );
+	drawData.insertAt( 31, hy - crHeight + step1 );
+	drawData.insertAt( 32, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//11
+	drawData.insertAt( 33, hx + crWidth - step11 );
+	drawData.insertAt( 34, hy - crHeight + step1 );
+	drawData.insertAt( 35, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//12
+	drawData.insertAt( 36, hx + crWidth - step11 );
+	drawData.insertAt( 37, hy - crHeight + step8 );
+	drawData.insertAt( 38, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//13
+	drawData.insertAt( 39, hx + crWidth - step11 );
+	drawData.insertAt( 40, hy - crHeight + step8 );
+	drawData.insertAt( 41, COLOR_RGBA( r0, g0, b0, transparent ) );
+	//14
+	drawData.insertAt( 42, hx + crWidth - step10 );
+	drawData.insertAt( 43, hy - crHeight + step10 );
+	drawData.insertAt( 44, COLOR_RGBA( r0, g0, b0, transparent ) );
+	//15
+	drawData.insertAt( 45, hx + crWidth - step10 );
+	drawData.insertAt( 46, hy - crHeight + step10 );
+	drawData.insertAt( 47, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//16
+	drawData.insertAt( 48, hx + crWidth - step10 );
+	drawData.insertAt( 49, hy - crHeight );
+	drawData.insertAt( 50, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//17
+	drawData.insertAt( 51, hx + crWidth - step20 );
+	drawData.insertAt( 52, hy - crHeight );
+	drawData.insertAt( 53, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//18
+	drawData.insertAt( 54, hx + crWidth - step20 );
+	drawData.insertAt( 55, hy - crHeight );
+	drawData.insertAt( 56, COLOR_RGBA( r1, g1, b1, transparent ) );
+	//19
+	drawData.insertAt( 57, hx + crWidth - step18 );
+	drawData.insertAt( 58, hy + bt_Y_mod + step2 );
+	drawData.insertAt( 59, COLOR_RGBA( r1, g1, b1, transparent ) );
+	//20
+	drawData.insertAt( 60, hx + crWidth - step18 );
+	drawData.insertAt( 61, hy + bt_Y_mod + step2 );
+	drawData.insertAt( 62, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//21
+	drawData.insertAt( 63, hx + crWidth - step11 );
+	drawData.insertAt( 64, hy + bt_Y_mod + step2 );
+	drawData.insertAt( 65, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//22
+	drawData.insertAt( 66, hx + crWidth - step11 );
+	drawData.insertAt( 67, hy + bt_Y_mod - step5 );
+	drawData.insertAt( 68, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//23
+	drawData.insertAt( 69, hx + crWidth - step11 );
+	drawData.insertAt( 70, hy + bt_Y_mod - step5 );
+	drawData.insertAt( 71, COLOR_RGBA( r0, g0, b0, transparent ) );
+	//24
+	drawData.insertAt( 72, hx + crWidth - step10 );
+	drawData.insertAt( 73, hy + bt_Y_mod - step7 );
+	drawData.insertAt( 74, COLOR_RGBA( r0, g0, b0, transparent ) );
+	//25
+	drawData.insertAt( 75, hx + crWidth - step10 );
+	drawData.insertAt( 76, hy + bt_Y_mod - step7 );
+	drawData.insertAt( 77, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//26
+	drawData.insertAt( 78, hx + crWidth - step10 );
+	drawData.insertAt( 79, hy + bt_Y_mod + step3 );
+	drawData.insertAt( 80, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//27
+	drawData.insertAt( 81, hx + crWidth - step20 );
+	drawData.insertAt( 82, hy + bt_Y_mod + step3 );
+	drawData.insertAt( 83, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//28
+	drawData.insertAt( 84, hx + crWidth - step20 );
+	drawData.insertAt( 85, hy + bt_Y_mod + step3 );
+	drawData.insertAt( 86, COLOR_RGBA( r0, g0, b0, transparent ) );
+	//29
+	drawData.insertAt( 87, hx + bt_X_mod - step10 );
+	drawData.insertAt( 88, hy + bt_Y_mod + step3 );
+	drawData.insertAt( 89, COLOR_RGBA( r0, g0, b0, transparent ) );
+	//30
+	drawData.insertAt( 90, hx + bt_X_mod - step10 );
+	drawData.insertAt( 91, hy + bt_Y_mod + step3 );
+	drawData.insertAt( 92, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//31
+	drawData.insertAt( 93, hx + bt_X_mod - step20 );
+	drawData.insertAt( 94, hy + bt_Y_mod + step3 );
+	drawData.insertAt( 95, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//32
+	drawData.insertAt( 96, hx + bt_X_mod - step20 );
+	drawData.insertAt( 97, hy + bt_Y_mod - step7 );
+	drawData.insertAt( 98, COLOR_RGBA( r0, g0, b0, coloured ) );
+	//33
+	drawData.insertAt( 99, hx + bt_X_mod - step20 );
+	drawData.insertAt( 100, hy + bt_Y_mod - step7 );
+	drawData.insertAt( 101, COLOR_RGBA( r1, g1, b1, transparent ) );
+	//34
+	drawData.insertAt( 99, hx + bt_X_mod - step19 );
+	drawData.insertAt( 100, hy + bt_Y_mod - step5 );
+	drawData.insertAt( 101, COLOR_RGBA( r1, g1, b1, transparent ) );
+	//35
+	drawData.insertAt( 102, hx + bt_X_mod - step19 );
+	drawData.insertAt( 103, hy + bt_Y_mod - step5 );
+	drawData.insertAt( 104, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//36
+	drawData.insertAt( 105, hx + bt_X_mod - step19 );
+	drawData.insertAt( 106, hy + bt_Y_mod + step2 );
+	drawData.insertAt( 107, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//37
+	drawData.insertAt( 108, hx + bt_X_mod - step12 );
+	drawData.insertAt( 109, hy + bt_Y_mod + step2 );
+	drawData.insertAt( 110, COLOR_RGBA( r1, g1, b1, coloured ) );
+	//38
+	drawData.insertAt( 111, hx + bt_X_mod - step12 );
+	drawData.insertAt( 112, hy + bt_Y_mod + step2 );
+	drawData.insertAt( 113, COLOR_RGBA( r0, g0, b0, transparent ) );
+	//39
+	drawData.insertAt( 114, hx + bt_X_mod - step10 );
+	drawData.insertAt( 115, hy - crHeight );
+	drawData.insertAt( 116, COLOR_RGBA( r0, g0, b0, transparent ) );
+	}
+	
+	DrawPrimitive( DRAW_PRIMITIVE_LINESTRIP, drawData );
+}
+
+void DrawSTA(CritterCl@ chosen)
+{
+	if( !CheckSTA( chosen ) ) return;
+
+	if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_STA ) )
+	{
+		CritterCl@[] targets;
+		CritterCl@ target = null;
+		GetCritters( 0, FIND_LIFE_AND_KO|FIND_ALL, targets );
+		for( uint i = 0, len = targets.length(); i < len; i ++ )
+		{
+			@ target = targets[i];
+			if( !valid( target ) )
+			{
+				continue;
+			}
+			
+			if( target.IsDead() )
+			{
+				continue;
+			}
+			
+			if( target.Id == chosen.Id )
+			{
+				continue;
+			}
+			
+			uint8 a0 = 0xFF, r0 = 0xFF, g0 = 0x00, b0 = 0x00;
+			uint crColor = target.ContourColor;
+			__GetColor(a0, r0, g0, b0, crColor);
+			
+			OutlineCritter( target, r0, g0, b0 );
+		}
+		
+		targets.resize(0);
+	}
+}
+
+// Combat UI
+void DrawCombatUI(CritterCl@ chosen)
+{
+	if( GetCurrentCursor() != CURSOR_USE_WEAPON ) return;
+
+	uint8 mode = 0;
+	ItemCl@ weapon = chosen.GetItem( 0, SLOT_HAND1 );
+	bool validWeapon = valid( weapon );
+	ProtoItem@ ProtoWeapon = chosen.GetSlotProto( SLOT_HAND1, mode );
+	uint skillNum = _WeaponSkill( ProtoWeapon, mode );
+	int skillVal = chosen.Skill[ skillNum ];
+	
+	CritterCl@ target = MouseCritter;
+
+	uint16 tx = 0, ty = 0;
+	if( !valid( target ) || target.IsDead() || target.Id == chosen.Id )
+	{
+		GetMonitorHex( __MouseX, __MouseY, tx, ty );
+	}
+	
+	if( validWeapon )
+	{
+		uint8 subtype = weapon.Proto.Item_Subtype;
+		uint8 blastRadius = weapon.Proto.Blast_Radius;
+		bool isGrenade = blastRadius > 0;
+		bool isRocket = false;
+		bool usesAmmo = weapon.Proto.Weapon_MaxAmmoCount > 0;
+		ProtoItem@ ammo = validWeapon ? GetProtoItem( weapon.AmmoPid ) : null;
+		bool validAmmo = valid( ammo );
+		bool isShotgun = validAmmo && FLAG( ammo.Ammo_Perk, AMMO_PERK_SPREADSHOT );
+			
+		if( usesAmmo && validAmmo )
+		{
+			if( ammo.Blast_Radius > 0 )
+			{
+				blastRadius = ammo.Blast_Radius;
+				isRocket = true;
+			}
+			
+			int use = _WeaponModeUse( weapon.Mode );
+			bool isFullAuto = ( _WeaponAnim2( ProtoWeapon, use ) == ANIM2_AUTO );
+			
+			bool[] MousePressed = GUI_GetMousePressed();
+
+			if( isFullAuto && MousePressed[ MOUSE_CLICK_LEFT ] )
+			{
+				uint waitTime = _GetProtoWaitTime( ProtoWeapon, use );
+				
+				if( chosen.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
+				{
+					waitTime = _GetProtoWindupTime( ProtoWeapon );
+				}
+				
+				uint tick = GetTick();
+				
+				if( ( FullAutoTick + waitTime ) <  tick )
+				{
+					if( !chosen.IsBusy() )
+					{
+						if( valid( target ) && !target.IsDead() && target.Id != chosen.Id )
+						{
+							RunServerScriptUnsafe( "general_unsafe@unsafe_critter_attack", target.Id, 0, ProtoWeapon.ProtoId, null, null );
+						}
+						else if( tx != 0 && ty != 0 )
+						{
+							RunServerScriptUnsafe( "general_unsafe@unsafe_hex_attack", tx, ty, ProtoWeapon.ProtoId, null, null );
+						}
+						else
+						{
+							return;
+						}
+						
+						FullAutoTick = tick;
+					}
+				}
+			}
+			else if( isFullAuto && chosen.Param[ CR_AUTO_ROUNDS_FIRED ] > 0 )
+			{
+				RunServerScriptUnsafe( "general_unsafe@unsafe_FullAutoStop", 0, 0, 0, null, null );
+			}
+		}
+
+		uint16 hxX = 0, hxY = 0;
+		GetMonitorHex( __MouseX, __MouseY, hxX, hxY ); // CHECK IF ACTUALLY NEED THIS
+		if( valid( target ) && target.Id != chosen.Id )
+		{
+			hxX = target.HexX;
+			hxY = target.HexY;
+			
+			if( target.Param[ CR_IS_RELAXING ] == 5 )
+			{
+				uint color = 0;
+				uint16 hx = chosen.HexX, hy = chosen.HexY;
+				uint8 dir = GetDirection( target.HexX, target.HexY, hx, hy );
+				int coverType = GET_COVER_TYPE( dir, target.Param[ CR_IN_COVER ] );
+				if( coverType > 0 )
+				{
+					switch( coverType )
+					{
+						case( 1 ):
+							color = COLOR_GREEN;
+							break;
+						case( 2 ):
+							color = COLOR_YELLOW;
+							break;
+						case( 3 ):
+							color = COLOR_ORANGE;
+							break;
+						case( 4 ):
+							color = COLOR_RED;
+							break;
+						default:
+							color = COLOR_GREEN;
+					}
+					
+					DrawSprite( CoverSpriteTargetId, -1, __MouseX - 35, __MouseY - 10, 24, 24, true, true, color );
+				}
+			}
+		}
+		
+		if( ( isGrenade || isRocket ) && subtype != ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER )
+		{
+			drawFanRange( hxX, hxY, blastRadius, COLOR_RGBA( 0xFF, 0x00, 0x00, 20 ) );
+			
+			if( subtype == ITEM_SUBTYPE_WEAPON_GRENADE_MOLOTOV || subtype == ITEM_SUBTYPE_WEAPON_GRENADE_FLASH || subtype == ITEM_SUBTYPE_WEAPON_GRENADE_SMOKE || ammo.ProtoId == PID_NAPALM_40MM || ammo.ProtoId == PID_FLASHNADE_40MM )
+			{
+				drawHexRange( hxX, hxY, blastRadius, COLOR_RGBA( 0xFF, 0x00, 0x00, 150 ) );
+			}
+			else
+			{
+				drawFanRange( hxX, hxY, int( blastRadius * 2.5 ), COLOR_RGBA( 0xFF, 0x00, 0x00, 20 ) );
+				drawHexRange( hxX, hxY, int( blastRadius * 2.5 ), COLOR_RGBA( 0xFF, 0x00, 0x00, 150 ) );
+			}
+		}
+		
+		if( subtype == ITEM_SUBTYPE_WEAPON_NORMAL_FLAMETHROWER || isShotgun )
+		{
+			int[] data;
+			
+			float a1 = 15.0f, a2 = -30.0f;
+			uint wpnMaxDist = _WeaponMaxDist( weapon.Proto, mode );
+			if( isShotgun )
+			{
+				wpnMaxDist *= 2;
+				a1 = 5.0f;
+				a2 = -10.0f;
+			}
+
+			int cx = 0, cy = 0;
+			int hx = 0, hy = 0;
+			uint16 toX = hxX, toY = hxY;
+			int toX_pix = 0, toY_pix = 0;
+			uint8 r0 = 0xFF, g0 = 0x00, b0 = 0x00;
+			uint16 chx = chosen.HexX, chy = chosen.HexY;
+
+			GetHexCoord( chx, chy, toX, toY, 0.0f, wpnMaxDist );
+			GetHexPos( toX, toY, cx, cy );
+
+			//shooting pos
+			GetHexPos( chx, chy, hx, hy );
+			data.insertLast( hx );
+			data.insertLast( hy );
+			data.insertLast( COLOR_RGBA( r0, g0, b0, 0 ) );						
+
+			//left corner
+			GetHexCoord( chx, chy, toX, toY, a1, wpnMaxDist );
+			GetHexPos( toX, toY, toX_pix, toY_pix );
+			data.insertLast( toX_pix );
+			data.insertLast( toY_pix );
+			data.insertLast( COLOR_RGBA( r0, g0, b0, 100 ) );
+
+			//cursor pos
+			data.insertLast( cx );
+			data.insertLast( cy );
+			data.insertLast( COLOR_RGBA( r0, g0, b0, 100 ) );
+
+			//right corner
+			GetHexCoord( chx, chy, toX, toY, a2, wpnMaxDist );
+			GetHexPos( toX, toY, toX_pix, toY_pix );
+			data.insertLast( toX_pix );
+			data.insertLast( toY_pix );
+			data.insertLast( COLOR_RGBA( r0, g0, b0, 100 ) );
+			
+			//shooting pos
+			data.insertLast( hx );
+			data.insertLast( hy );
+			data.insertLast( COLOR_RGBA( r0, g0, b0, 0 ) );						
+			
+			DrawPrimitive( DRAW_PRIMITIVE_TRIANGLEFAN, data );
+		}
+	}
+}
+
+// Covers
+void DrawCovers(CritterCl@ chosen)
+{
+	if( chosen.Param[ CR_IS_RELAXING ] != 5 ) return;
+
+	int coverType;
+	for( uint i = 0; i < 6 ; i++ )
+	{
+		uint color = 0;
+		coverType = GET_COVER_TYPE( i, chosen.Param[ CR_IN_COVER ] );
+		if( coverType <= 0 ) continue;
+
+		switch( coverType )
+		{
+		case( 1 ):
+			color = COLOR_GREEN;
+			break;
+		case( 2 ):
+			color = COLOR_YELLOW;
+			break;
+		case( 3 ):
+			color = COLOR_ORANGE;
+			break;
+		case( 4 ):
+			color = COLOR_RED;
+			break;
+		default:
+			color = COLOR_GREEN;
+			break;
+		}
+
+		uint16 cx = chosen.HexX, cy = chosen.HexY;
+		MoveHexByDir( cx, cy, i, 1 );
+		int hx = 0, hy = 0;
+		GetHexPos( cx, cy, hx, hy );
+		
+		uint coverSprite = 0;
+		switch( i )
+		{
+		case( 0 ):
+			coverSprite = CoverSpriteDir0Id;
+			break;
+		case( 1 ):
+			coverSprite = CoverSpriteDir1Id;
+			break;
+		case( 2 ):
+			coverSprite = CoverSpriteDir2Id;
+			break;
+		case( 3 ):
+			coverSprite = CoverSpriteDir3Id;
+			break;
+		case( 4 ):
+			coverSprite = CoverSpriteDir4Id;
+			break;
+		case( 5 ):
+			coverSprite = CoverSpriteDir5Id;
+			break;
+		default:
+			break;
+		}
+		
+		DrawSprite( coverSprite, -1, hx - 10, hy - 17, 24, 24, true, true, color );
+	}
 }
