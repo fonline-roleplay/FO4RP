@@ -23,6 +23,7 @@
 #include "client_screen_palette_h.fos"
 #include "client_sound_ambient_system.fosh"
 #include "client_hotkey_manager.fosh"
+#include "client_gm_controls.fosh"
 
 import void InitializeGame() from "config";
 
@@ -104,6 +105,7 @@ int APCountX, APCountY;
 uint LastGridX = 0;
 uint LastGridY = 0;
 uint FullAutoTick = 0;
+uint RMBUpLastTick = 0;
 
 uint CoverSpriteTargetId = 0;
 uint CoverSpriteDir0Id = 0;
@@ -179,6 +181,7 @@ bool start()
 	InitPaletteScreen();
 	InitSoundEnviroments();
 	HotkeyMngr_Init();
+	initControlPanel();
 
     arrow.resize( 8 );
     arrow[ 0 ].Load( "arrow0.png", int(PT_ART_INTRFACE) );
@@ -299,7 +302,7 @@ uint loop()
 
 void SelectionBarUpdate() 
 {
-	if( !isLMB_on() )
+	if( !__MouseLPressed )
 	{
 		return;
 	}
@@ -560,12 +563,15 @@ void render_iface( FOWindow@ window, uint layer )
 			DrawLTPProgressbar(choo);
 			DrawSTA(choo);
 			DrawCovers(choo);
+			DrawRTSOutline(choo);
 		}
 	}
     else if( layer == 3 )
     {
 		DrawChosenTabs();
 		GUI_Render();
+		if(_MainScreen == CLIENT_MAIN_SCREEN_GAME)
+			DrawControlPanel();
 
 		ItemCl@ item = GetMonitorItem( __MouseX, __MouseY );
 		if( valid( item ) )
@@ -920,6 +926,14 @@ bool mouse_down( FOWindow@ window, int click )
 {
 	if( window !is MainWindow )
 		return false;
+
+	if( click == MOUSE_CLICK_LEFT )
+	{
+		__MouseLastPressedX = __MouseX;
+		__MouseLastPressedY = __MouseY;
+		__MouseLPressed = true;
+	}
+
 	if( IsDebugLookMode() && GetCurrentCursor() == CURSOR_MOVE && !IsMonitorGui( __MouseX, __MouseY ) )
 	{
 		CritterCl@ chosen = GetChosen();
@@ -938,10 +952,19 @@ bool mouse_down( FOWindow@ window, int click )
 	
 	if( GUI_GetActiveScreen() == CLIENT_MAIN_SCREEN_GAME )
 	{
-		if( valid(chosen) )
+		if( valid(chosen) && !__waiting )
 		{
 			RTSOnMouseDown(chosen, click);
 			GridOnMouseDown(chosen, click, __MouseX, __MouseY);
+			SpecialCursorMouseDown(chosen, click);
+
+			if( click == MOUSE_CLICK_LEFT && FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) && __mobhotkeys )
+			{
+				if( GetCurrentCursor() == CURSOR_RTS )
+				{
+					addNewSelection();	
+				}
+			}
 		}
 	}
 
@@ -952,7 +975,18 @@ bool mouse_up( FOWindow@ window, int click )
 {
 	if( window !is MainWindow )
 		return false;
-		
+	
+	if( click == MOUSE_CLICK_LEFT )
+	{
+		__MouseLPressed = false;
+	}
+
+	if(GUI_GetActiveScreen() == CLIENT_MAIN_SCREEN_GAME)
+	{
+		RTSMouseUp(click);
+        clearShiftGroup();
+	}
+
     return GUI_MouseUp( click, __MouseX, __MouseY );
 }
 
@@ -994,6 +1028,12 @@ bool key_down( FOWindow@ window, uint8 key )
 	{
         __MapZooming = true;
     }
+
+	if( !__ConsoleActive )
+	{
+		if( !__shiftDown )
+			clearShiftGroup();
+	}
 
 	//F1 help
 	if( key == DIK_F1 && !__altDown && !__shiftDown )
@@ -1055,6 +1095,11 @@ bool key_down( FOWindow@ window, uint8 key )
 	{
 		if( GUI_GetActiveScreen() == CLIENT_MAIN_SCREEN_GAME || GUI_GetActiveScreen() == CLIENT_MAIN_SCREEN_GLOBAL_MAP )
         {
+			if( ControlPanelKeyPress( key ) )
+            {
+                return true;
+            }
+
 			//alt + hotkey
 			if( __altDown && !__shiftDown && !__ctrlDown )
 			{
@@ -8104,6 +8149,28 @@ void DrawCovers(CritterCl@ chosen)
 	}
 }
 
+void DrawRTSOutline(CritterCl@ chosen)
+{
+	if( !valid( chosen ) )
+	{
+		return;
+	}
+
+	if( __MouseLPressed && FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) && __mobhotkeys )
+	{
+		if( GetCurrentCursor() == CURSOR_RTSA )
+		{
+			drawBar( 0xFF, 0x00, 0x00 );
+			OutlineAttackTargets();
+		}
+		else if( GetCurrentCursor() == CURSOR_RTS )
+		{
+			drawBar( 0x00, 0xFF, 0x00 );
+			addNewSelection();	
+		}
+	}
+}
+
 void RTSOnMouseDown(CritterCl@ chosen, int click)
 {
 	if(__waiting) return;
@@ -8151,4 +8218,89 @@ void GridOnMouseDown(CritterCl@ chosen, int click, int x, int y)
 			return;
 		}
 	}
+}
+
+void SpecialCursorMouseDown(CritterCl@ chosen, int click)
+{
+	if(!valid(chosen))
+	{
+		return;
+	}
+
+	if( click != MOUSE_CLICK_LEFT || GetCurrentCursor() != CURSOR_USE_SKILL || chosen.Param[ CR_REMEMBERING_NAME ] <= 0 )
+	{
+		return;
+	}
+	CritterCl@ target = MouseCritter;
+	if( !valid( target ) )
+	{
+		return;
+	}
+
+	if( chosen.Param[ CR_REMEMBERING_NAME ] == 1 )
+	{
+		CharClick( target );
+	}
+	else if( chosen.Param[ CR_REMEMBERING_NAME ] == 2 && ABS( target.Param[ QST_MEDIUM ] ) != 2 )
+	{
+		OpenPaletteScreen( PALETTE_TYPE_CRITTER, target.Id, 0 );
+	}
+	
+	RunServerScriptUnsafe( "general_unsafe@unsafe_StopNamingState", 0, 0, 0, null, null );
+}
+
+void RTSMouseUp(int click)
+{
+	clearShiftGroup();
+
+	CritterCl@ chosen = GetChosen();
+	if( !valid( chosen ) )
+	{
+		return; //TODO: Work even without chosen.
+	}
+
+	if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) && GetCurrentCursor() == CURSOR_RTSA )
+	{
+		AssaultAttackTargets();
+		ChangeCursor( CURSOR_RTS );
+	}
+
+	if( click == MOUSE_CLICK_RIGHT && __mouse2Pressed )
+	{
+		__mouse2Pressed = false;
+		if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) )
+		{
+			bool run = __shiftDown || ( RMBUpLastTick != 0 && GetTick() - RMBUpLastTick <= 300 );
+			uint16 hexX = 0, hexY = 0;
+			GetMonitorHex (__MouseX, __MouseY, hexX, hexY );
+			int cursorLast = GetLastCursor();
+			if( !__mobhotkeys ) 
+			{
+				uint[] actions = { CHOSEN_MOVE, hexX, hexY, run ? 1 : 0, 0, 0, 0 };
+				SetChosenActions( actions );
+			}
+			else
+			{
+				RunServerScriptUnsafe( "mobcontrol@unsafe_moveMob", hexX, hexY, run ? 1 : 0, null, control() );
+			}
+			cursorLast == CURSOR_WAIT ? ChangeCursor( CURSOR_DEFAULT ) : ChangeCursor( cursorLast );
+			RMBUpLastTick = GetTick();
+			return;
+		}
+	}
+}
+
+void drawBar( uint8 r0, uint8 g0, uint8 b0 )
+{
+	int x1 = MIN( __MouseLastPressedX, __MouseX ); int y1 = MIN( __MouseLastPressedY, __MouseY ); 
+	int x2 = MAX( __MouseLastPressedX, __MouseX ); int y2 = MAX( __MouseLastPressedY, __MouseY );
+
+	int[] ps2 = { 
+		x1, y1, COLOR_RGBA( r0, g0, b0, 255 ),
+		x2, y1, COLOR_RGBA( r0, g0, b0, 255 ),
+		x2, y2, COLOR_RGBA( r0, g0, b0, 255 ),
+		x1, y2, COLOR_RGBA( r0, g0, b0, 255 ),
+		x1, y1, COLOR_RGBA( r0, g0, b0, 255 ) 
+	};
+	DrawPrimitive( DRAW_PRIMITIVE_LINESTRIP, ps2 );
 }
