@@ -69,6 +69,9 @@ import void CreateEconomyList() from "client_craft_economy";
 import void qmap_iface() from "qmap_client";
 import void DrawRectangle( int x, int y, int w, int h, int color ) from "client_avatars";
 
+import void InputBoxKeyPressed( uint8 key ) from "client_screen_inputbox";
+import void InputBoxClipboardInsert()  from "client_screen_inputbox";
+
 dictionary chosenContainerItems;
 
 uint prevId = 0; // required for loading saved names
@@ -96,6 +99,9 @@ uint LastGridX = 0;
 uint LastGridY = 0;
 uint FullAutoTick = 0;
 uint RMBUpLastTick = 0;
+
+int GM_store_type = -1;
+bool playerMenuActive = false;
 
 uint CoverSpriteTargetId = 0;
 uint CoverSpriteDir0Id = 0;
@@ -917,6 +923,11 @@ bool mouse_down( FOWindow@ window, int click )
 		__MouseLPressed = true;
 	}
 
+	if( GUI_GetActiveScreen() == CLIENT_MAIN_SCREEN_GAME && click == MOUSE_CLICK_RIGHT )
+	{
+		__mouse2Pressed = true;
+	}
+
 	if( IsDebugLookMode() && GetCurrentCursor() == CURSOR_MOVE && !IsMonitorGui( __MouseX, __MouseY ) )
 	{
 		CritterCl@ chosen = GetChosen();
@@ -941,6 +952,9 @@ bool mouse_down( FOWindow@ window, int click )
 			GridOnMouseDown(chosen, click, __MouseX, __MouseY);
 			SpecialCursorMouseDown(chosen, click);
 			HexAttackMouseDown(chosen, click);
+			PetCommandsMouseDown(chosen, click);
+			UseItemMouseDown(chosen, click);
+			GMMouseDown(chosen, click);
 
 			if( click == MOUSE_CLICK_LEFT && FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) && __mobhotkeys )
 			{
@@ -1303,6 +1317,9 @@ bool key_down( FOWindow@ window, uint8 key )
 		}
 	}
 	
+	ContainerHookKeyDown(chosen, key);
+	InputBoxKeyDown(key);
+
 	if(GUI_GetActiveScreen() != CLIENT_MAIN_SCREEN_LOGIN)
 		HotkeyMngr_OnKeyStateChange(key, true);
 	if( GUI_KeyDown( key ) )
@@ -8238,6 +8255,166 @@ void SpecialCursorMouseDown(CritterCl@ chosen, int click)
 	RunServerScriptUnsafe( "general_unsafe@unsafe_StopNamingState", 0, 0, 0, null, null );
 }
 
+void PetCommandsMouseDown(CritterCl@ chosen, int click)
+{
+	if(!valid(chosen)) return;
+
+	if(click != MOUSE_CLICK_LEFT) return;
+
+	if( GetCurrentCursor() == CURSOR_RTSA && chosen.Param[ CR_SELECT_PET_TARGET ] > 0 )
+	{
+		CritterCl@ target = MouseCritter;
+		if( valid( target ) )
+		{
+			RunServerScriptUnsafe( "general_unsafe@unsafe_PetCommand", chosen.Param[ CR_SELECT_PET_TARGET ], target.Id, MESSAGE_TO_I_SEE, null, null );
+		}
+		
+		RunServerScriptUnsafe( "general_unsafe@unsafe_StopSelectPetTarget", 0, 0, 0, null, null );
+		ChangeCursor( GetLastCursor() );
+		return;
+	}
+	else if( GetCurrentCursor() == CURSOR_RTS && chosen.Param[ CR_SELECT_PET_TARGET ] > 0 )
+	{
+		CritterCl@ target = MouseCritter;
+		if( valid( target ) )
+		{
+			RunServerScriptUnsafe( "general_unsafe@unsafe_PetCommand", chosen.Param[ CR_SELECT_PET_TARGET ], target.Id, MESSAGE_TO_I_SEE, null, null );
+		}
+		else
+		{
+			ItemCl@ targetItm = GetMonitorItem( __MouseX, __MouseY );
+			if( valid( targetItm ) )
+			{
+				RunServerScriptUnsafe( "general_unsafe@unsafe_PetCommand", chosen.Param[ CR_SELECT_PET_TARGET ], targetItm.Id, MESSAGE_TO_I_SEE, null, null );
+			}
+		}
+		
+		RunServerScriptUnsafe( "general_unsafe@unsafe_StopSelectPetTarget", 0, 0, 0, null, null );
+		ChangeCursor( GetLastCursor() );
+		return;
+	}
+}
+
+void UseItemMouseDown(CritterCl@ chosen, int click)
+{
+	if( click != MOUSE_CLICK_LEFT || GetCurrentCursor() != CURSOR_USE_OBJECT ) return;
+	if(!valid(chosen)) return;
+
+	if( chosen.IsBusy() )
+	{
+		return;
+	}
+
+	CritterCl@ cr = MouseCritter;
+	if( valid( cr ) )
+	{
+		return;
+	}
+	
+	uint16 hexX = 0, hexY = 0;
+	GetMonitorHex( __MouseX, __MouseY, hexX, hexY );
+	
+	ItemCl@ it = GetMonitorItem( __MouseX, __MouseY );
+	if( valid( it ) )
+	{
+		return;
+	}
+	
+	RunServerScriptUnsafe( "general_unsafe@unsafe_hex_useItem", hexX, hexY, 0, null, null );		
+}
+
+void GMMouseDown(CritterCl@ chosen, int click)
+{
+	if(!valid(chosen)) return;
+
+	if( click == MOUSE_CLICK_RIGHT && __altDown )
+	{
+		if( __mobhotkeys )
+		{
+			CritterCl@ cr = MouseCritter;
+			if( @cr != null )
+			{
+				if( cr.IsPlayer() )
+				{
+					RunServerScriptUnsafe( "gm@unsafe_GM_PANNEL_CRITTER_PLAYER", cr.Id, 0, 0, null, null );	// Player GM pannel
+				}
+				else
+				{
+					RunServerScriptUnsafe( "gm@unsafe_GM_PANNEL_CRITTER_NPC", cr.Id, 0, 0, null, null );	// NPC GM pannel
+				}
+				return;
+			}
+			
+			uint16 cx = __MouseX, cy = __MouseY;
+			ItemCl@ it = GetMonitorItem( cx, cy );
+			if( @it != null )
+			{
+				RunServerScriptUnsafe( "gm@unsafe_GM_PANNEL_ITEM", it.Id, 0, 0, null, null );				// Item GM pannel
+				return;
+			}
+			
+			uint16 hexX = 0, hexY = 0;
+			GetMonitorHex( cx, cy, hexX, hexY );
+			RunServerScriptUnsafe( "gm@unsafe_GM_PANNEL_HEX", hexX, hexY, 0, null, null );				// Hex gm pannel
+			return;
+		}
+	}
+	else if( click == MOUSE_CLICK_RIGHT && __ctrlDown )
+	{
+		if( __mobhotkeys )
+		{
+			uint16 hexX = 0, hexY = 0;
+			GetMonitorHex( __MouseX, __MouseY, hexX, hexY );
+			RunServerScriptUnsafe( "gm@unsafe_GM_PANNEL_HEX", hexX, hexY, 0, null, null );					// Hex gm pannel
+			return;
+		}
+	}
+	else if( click == MOUSE_CLICK_MIDDLE && !__ctrlDown && !__altDown )
+	{
+		uint16 hexX = 0, hexY = 0;
+		GetMonitorHex( __MouseX, __MouseY, hexX, hexY );
+		if( isGM(chosen) && FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) )
+		{
+			RunServerScriptUnsafe( "mobcontrol@unsafe_rotateMob", hexX, hexY, 0, null, control() );
+		}
+		RunServerScriptUnsafe( "general_unsafe@unsafe_turn_critter", hexX, hexY, 0, null, null );
+		return;
+	}
+	else if( click == MOUSE_CLICK_MIDDLE && ( __ctrlDown || __altDown ) && GetCurrentCursor() == CURSOR_DEFAULT )
+	{
+		__isContMenuOpen = true;
+		__contMenuCrId = 0;
+		__contMenuItId = 0;
+		
+		CritterCl@ target = MouseCritter;
+		if( valid( target ) )
+		{
+			__contMenuCrId = target.Id;
+			if( target.IsDead() )
+			{
+				__pickType = 0;
+			}
+			else
+			{
+				__pickType = 1;
+			}
+			::ShowScreen( CLIENT_SCREEN_CONTMENU, __MouseX, __MouseY, 0 );
+			return;
+		}
+		
+		ItemCl@ trItem = GetMonitorItem( __MouseX, __MouseY );
+		if( valid( trItem ) )
+		{
+			__contMenuItId = trItem.Id;
+			__itemHexX = trItem.HexX;
+			__itemHexY = trItem.HexY;
+			__itemPid = trItem.GetProtoId();
+			::ShowScreen( CLIENT_SCREEN_CONTMENU, __MouseX, __MouseY, 0 );
+			return;
+		}
+	}
+}
+
 void RTSMouseUp(int click)
 {
 	clearShiftGroup();
@@ -8276,6 +8453,54 @@ void RTSMouseUp(int click)
 			RMBUpLastTick = GetTick();
 			return;
 		}
+	}
+}
+
+void ContainerHookKeyDown(CritterCl@ chosen, uint8 key)
+{
+	if(!valid(chosen)) return;
+
+	int screen_type = GUI_GetActiveScreen();
+	if( key == DIK_ESCAPE )
+	{
+		if( screen_type == CLIENT_SCREEN_PICKUP && isGM( chosen ) && GM_store_type != -1 )
+		{
+			RunServerScriptUnsafe( "store@unsafe_StoreMenu", GM_store_type, 0, 0, null, null );
+			GM_store_type = -1;
+			return;
+		}
+		
+		if( playerMenuActive )
+		{
+			RunServerScriptUnsafe( "teleports@unsafe_stopPlayerMenu", 0, 0, 0, null, null );
+			playerMenuActive = false;
+		}
+	}
+
+	if( screen_type == CLIENT_SCREEN_PICKUP || screen_type == CLIENT_SCREEN_INVENTORY )
+	{
+		if( __shiftDown && key == DIK_Q )
+		{
+			RunServerScriptUnsafe( "gm@unsafe_show_containments", 0, 0, 0, null, null );
+			return;
+		}
+	}
+}
+
+void InputBoxKeyDown(uint8 key)
+{
+	if(GUI_GetActiveScreen() != CLIENT_SCREEN_INPUTBOX) return;
+
+	if( __ctrlDown && key == DIK_V )
+	{
+		InputBoxClipboardInsert();
+		return;
+	}
+	
+	if( ( key != DIK_ESCAPE || key == DIK_RETURN ) && !__ConsoleActive )
+	{
+		InputBoxKeyPressed( key );
+		return;
 	}
 }
 
@@ -8334,4 +8559,14 @@ void HexAttackMouseDown(CritterCl@ chosen, int click)
 			RunServerScriptUnsafe( "general_unsafe@unsafe_critter_attack", target.Id, 0, ProtoWeapon.ProtoId, null, null );
 		}
 	}
+}
+
+void SetGMstore( int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	GM_store_type = param0;
+}
+
+void SetPlayerMenuActive( int param0, int param1, int param2, string@ param3, int[] @ param4 )
+{
+	playerMenuActive = param0 != 0;
 }
