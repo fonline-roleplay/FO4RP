@@ -1,9 +1,18 @@
 #ifndef CLIENT_HOTKEY_BIND
 #define CLIENT_HOTKEY_BIND
 
+#define LAYER_AUTODETECT	( 0 )
+#define LAYER_NORMAL		( 1 )
+#define LAYER_RTS			( 2 )
+#define LAYER_WASD			( 3 )
+#define LAYER_GM			( 4 )
+
 #include "_utils.fos"
 #include "client_hotkey_manager.fosh"
 #include "client_gm_controls.fosh"
+
+// APAMk2 TO APAmk2: Redo this shit, make all callbacks to have their own last call time, to determine if we can (or can't) execute it again
+uint LastLayerChangeTime = 0;
 
 import void SwitchCraftScreen() from "client_screen_fixboy";
 
@@ -129,40 +138,47 @@ void CoverCallback(int state, int[] args)
 
 void ToggleWSADCallback(int state, int[] args)
 {
-	if(state != KEY_PRESS) return;
+	if(state != KEY_PRESS || LastLayerChangeTime + 100 > GetTick()) return;
 	CritterCl@ chosen = GetChosen();
 	if(!valid(chosen)) return;
+	if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) )
+	{
+		Message("Disable RTS movement first!");
+		return;
+	}
 
 	RunServerScriptUnsafe( "player_menu@unsafe_toggle_WSAD", 0, 0, 0, null, null );
 	
 	if( !FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_WSAD ) )
 	{
-		HotkeyMngr_SetGroupState("WASD", true);
-		HotkeyMngr_SetGroupState("Main", false);
+		SwitchHotkeyLayer(LAYER_WASD);
 	}
 	else
 	{
-		HotkeyMngr_SetGroupState("WASD", false);
-		HotkeyMngr_SetGroupState("Main", true);
+		SwitchHotkeyLayer(LAYER_NORMAL);
 	}
 }
 
 void ToggleRTSCallback(int state, int[] args)
 {
-	if(state != KEY_PRESS) return;
+	if(state != KEY_PRESS || LastLayerChangeTime + 100 > GetTick()) return;
 	CritterCl@ chosen = GetChosen();
 	if(!valid(chosen)) return;
+	if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_WSAD ) )
+	{
+		Message("Disable WASD movement first!");
+		return;
+	}
+	
 	RunServerScriptUnsafe( "player_menu@unsafe_toggle_RTS", 0, 0, 0, null, null );
 	
 	if( !FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) )
 	{
-		HotkeyMngr_SetGroupState("RTS", true);
-		HotkeyMngr_SetGroupState("Main", false);
+		SwitchHotkeyLayer(LAYER_RTS);
 	}
 	else
 	{
-		HotkeyMngr_SetGroupState("RTS", false);
-		HotkeyMngr_SetGroupState("Main", true);
+		SwitchHotkeyLayer(LAYER_NORMAL);
 	}
 	
 	if( isGM( chosen ) )
@@ -216,12 +232,13 @@ void AmmoChangeCallback(int state, int[] args)
 
 void ToggleGMHotkeysCallback(int state, int[] args)
 {
-	if(state != KEY_PRESS) return;
+	if(state != KEY_PRESS || LastLayerChangeTime + 100 > GetTick()) return;
 	CritterCl@ chosen = GetChosen();
 	if(!valid(chosen)) return;
 	if( isGM( chosen ) )
 	{
 		__mobhotkeys = !__mobhotkeys;
+		SwitchHotkeyLayer(LAYER_AUTODETECT);
 		Message( TEXTMSG_TEXT, ( __mobhotkeys ? STR_GM_HOTKEY_MODE_ON : STR_GM_HOTKEY_MODE_OFF ) );
 		if( __mobhotkeys && FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) )
 		{
@@ -686,6 +703,63 @@ void HotkeysInit()
 	HotkeyMngr_AddHotkey("GM", "GMMobGoHome", array<uint8> = {DIK_LCONTROL, DIK_B}, GMMobGoHomeCallback);
 	HotkeyMngr_AddHotkey("GM", "GMMobUseBandage", array<uint8> = {DIK_LCONTROL, DIK_Z}, GMMobUseBandageCallback);
 	HotkeyMngr_AddHotkey("GM", "GMMobUseMeds", array<uint8> = {DIK_LCONTROL, DIK_V}, GMMobUseMedsCallback);
+}
+
+void SwitchHotkeyLayer(int layer)
+{
+	LastLayerChangeTime = GetTick();
+	if(layer == LAYER_AUTODETECT)
+	{
+		layer = LAYER_NORMAL;
+		if(__mobhotkeys) layer = LAYER_GM;
+		CritterCl@ chosen = GetChosen();
+		if( valid(chosen) && FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_WSAD ) ) layer = LAYER_WASD;
+		if( valid(chosen) && FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) ) layer = LAYER_RTS;
+	}
+
+	switch(layer)
+	{
+	case LAYER_NORMAL:
+	{
+		HotkeyMngr_SetGroupState("Main", true);
+		HotkeyMngr_SetGroupState("RTS", false);
+		HotkeyMngr_SetGroupState("WASD", false);
+		HotkeyMngr_SetGroupState("GM", false);
+	}
+	break;
+	case LAYER_RTS:
+	{
+		HotkeyMngr_SetGroupState("RTS", true);
+		HotkeyMngr_SetGroupState("Main", false);
+		HotkeyMngr_SetGroupState("WASD", false);
+		HotkeyMngr_SetGroupState("GM", false);
+	}
+	break;
+	case LAYER_WASD:
+	{
+		HotkeyMngr_SetGroupState("WASD", true);
+		HotkeyMngr_SetGroupState("Main", false);
+		HotkeyMngr_SetGroupState("RTS", false);
+		HotkeyMngr_SetGroupState("GM", false);
+	}
+	break;
+	case LAYER_GM:
+	{
+		HotkeyMngr_SetGroupState("GM", true);
+		HotkeyMngr_SetGroupState("Main", false);
+		HotkeyMngr_SetGroupState("RTS", false);
+		HotkeyMngr_SetGroupState("WASD", false);
+	}
+	break;
+	default:
+	{
+		HotkeyMngr_SetGroupState("Main", true);
+		HotkeyMngr_SetGroupState("RTS", false);
+		HotkeyMngr_SetGroupState("WASD", false);
+		HotkeyMngr_SetGroupState("GM", false);
+	}
+	break;
+	}
 }
 
 #endif // CLIENT_HOTKEY_BIND
