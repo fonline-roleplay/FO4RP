@@ -5,7 +5,7 @@
 #include "npc_planes_h.fos"
 #include "heal_h.fos"
 #include "reload_h.fos"
-#include "Fractions.fosh"
+#include "factions_h.fos"
 #include "lockers_h.fos"
 #include "windup_h.fos"
 
@@ -46,6 +46,19 @@ void _CritterLookAt( Critter& npc, Critter& target )
 		return;
 	}
 	
+	if( IsAlly( npc, target ) )
+	{
+		return;
+	}
+	
+	if( IsEnemy( npc, target ) )
+	{
+		if( !npc.CheckEnemyInStack( target.Id ) )
+		{
+			npc.AddEnemyInStack( target.Id );
+		}
+	}
+	
 	if( npc.CheckEnemyInStack( target.Id ) )
 	{
 		if( target.IsDead() )
@@ -58,14 +71,6 @@ void _CritterLookAt( Critter& npc, Critter& target )
 		AddAttackPlane( npc, 0, target );
 		return;
 	}
-	
-	/*if( Random( 0, 100 ) == 100 )
-	{
-		uint16 hx = npc.HexX, hy = npc.HexY;
-		uint16 tx = target.HexX, ty = target.HexY;
-		uint dir = GetDirection( hx, hy, tx, ty );
-		npc.SetDir( dir );
-	}*/
 }
 
 void _CritterOutOfSight( Critter& npc, Critter& target )
@@ -132,7 +137,7 @@ void _Idle( Critter& npc )
 		{
 			UseHealingItem( npc );
 		}
-	}	
+	}
 }
 
 void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
@@ -146,13 +151,8 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 	{
 		return;
 	}
-	
-    if( npc.Stat[ ST_TEAM_ID ] == 0 )
-	{
-		return;
-	}
-	
-    if( npc.Stat[ ST_TEAM_ID ] != fromCrit.Stat[ ST_TEAM_ID ] )
+
+    if( !IsAlly( npc, fromCrit ) )
 	{
 		return;
 	}
@@ -208,7 +208,7 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 						if( npc.IsSee( target ) ) 
 						{
 							npc.AddEnemyInStack( target.Id );
-							AddAttackPlane( npc, 0, target );
+							AddAttackPlane( npc, 0, target, __RunOnCombat );
 						}
 					}
 				}
@@ -217,7 +217,7 @@ void _OnMessage( Critter& npc, Critter& fromCrit, int message, int value )
 		else
 		{
 			npc.AddEnemyInStack( target.Id );
-			AddAttackPlane( npc, 0, target );
+			AddAttackPlane( npc, 0, target, __RunOnCombat );
 		}
 	}
 }
@@ -244,8 +244,13 @@ int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Ite
 		{
 			return PLANE_RUN_GLOBAL;
 		}
-
-        if( target.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] )
+		
+		if( target.IsDead() )
+		{
+			return PLANE_RUN_GLOBAL;
+		}
+		
+        if( IsAlly( npc, target ) )
 		{
 			return PLANE_DISCARD; 
 		}
@@ -257,6 +262,22 @@ int _PlaneBegin( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Ite
 	}
 	else if ( reason == REASON_FROM_SCRIPT )
 	{
+		Critter@ target = GetCritter( plane.Attack_TargId );
+        if( !valid( target ) )
+		{
+			return PLANE_RUN_GLOBAL;
+		}
+		
+		if( target.IsDead() )
+		{
+			return PLANE_RUN_GLOBAL;
+		}
+		
+        if( IsAlly( npc, target ) )
+		{
+			return PLANE_DISCARD; 
+		}
+		
 		return PLANE_KEEP;
 	}
 	
@@ -272,7 +293,7 @@ int _PlaneEnd( Critter& npc, NpcPlane& plane, int reason, Critter@ someCr, Item@
 	
 	if( reason == REASON_GAG_CRITTER && someCr.IsNpc() )
 	{
-        if( someCr.ParamBase[ ST_TEAM_ID ] != npc.ParamBase[ ST_TEAM_ID ] )
+        if( !IsAlly( npc, someCr ) )
 		{
             return PLANE_RUN_GLOBAL;
 		}
@@ -392,11 +413,6 @@ bool _Attacked( Critter& npc, Critter& attacker )
 		return false;
 	}
 	
-	if( sameFaction( npc, attacker ) )
-	{
-		return false;
-	}
-	
 	Map@ map = npc.GetMap();
 	if( !valid( map ) )
 	{
@@ -408,6 +424,16 @@ bool _Attacked( Critter& npc, Critter& attacker )
 		return false;
 	}
 	
+	if( IsAlly( npc, attacker ) )
+	{
+		return false;
+	}
+	
+	if( IsEnemy( npc, attacker ) )
+	{
+		npc.AddEnemyInStack( attacker.Id );
+	}
+
 	if( !npc.IsKnockout() && hasItems( npc, heal_items, -1 ) )
 	{	
 		UseHealingItem( npc );
@@ -427,7 +453,8 @@ bool _Attacked( Critter& npc, Critter& attacker )
 			relaxNPC( IDs );
 		}
 	}	
-
+	
+	npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
 	NpcPlane@ plane = npc.GetCurPlane();
 	if( valid( plane ) )
 	{
@@ -445,19 +472,23 @@ bool _Attacked( Critter& npc, Critter& attacker )
 					{
 						npc.DropPlanes();
 						npc.AddEnemyInStack( attacker.Id );
-						npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
-						AddAttackPlane( npc, 0, attacker );
+						AddAttackPlane( npc, 0, attacker, __RunOnCombat );
+					}
+					else
+					{
+						return false;
 					}
 				}
 			}
 		}
 	}
-	else if( npc.IsNoPlanes() ) 
+	else
 	{
 		npc.Wait( AI_REACTION_TIME );
 		npc.AddEnemyInStack( attacker.Id );
-		AddAttackPlane( npc, 0, attacker );
-
+		AddAttackPlane( npc, 0, attacker, __RunOnCombat );
+		npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
+		
 		if( !npc.IsSee( attacker ) )
 		{
 			npc.SetDir( dir );
@@ -612,19 +643,14 @@ void _FindKiller( Critter& npc, Critter& fromCrit, Critter@ killer )
 		return;
 	}
 	
-    if( npc.Stat[ ST_TEAM_ID ] == 0 )
-	{
-		return;
-	}
-	
-    if( npc.Stat[ ST_TEAM_ID ] != fromCrit.Stat[ ST_TEAM_ID ] )
+    if( !IsAlly( npc, fromCrit ) )
 	{
 		return;
 	}
  
-	if( fromCrit.IsPlayer() )
-	{ 
-		AddAttackPlane( npc, 10, fromCrit ); 
+    if( IsAlly( npc, killer ) )
+	{
+		return;
 	}
 	
 	if( npc.IsSee( killer ) )
@@ -653,20 +679,14 @@ void _AssistAttack( Critter& npc, Critter& fromCr, Critter& target )
 		return;
 	}
 	
-	if( fromCr.Stat[ ST_TEAM_ID ] == 0 )
+	if( !IsAlly( npc, fromCr ) )
 	{
 		return;
 	}
 	
-	if( fromCr.Stat[ ST_TEAM_ID ] == npc.Stat[ ST_TEAM_ID ] )
-	{
-		if( target.Stat[ ST_TEAM_ID ] != npc.Stat[ ST_TEAM_ID ] && !target.IsDead() )
-		{
-			npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
-			npc.AddEnemyInStack( target.Id );
-			AddAttackPlane( npc, 0, target );
-		}
-	}
+	npc.SendMessage( MSG_GROUP_ATTACK, target.Id, MESSAGE_TO_WHO_SEES_ME );
+	npc.AddEnemyInStack( target.Id );
+	AddAttackPlane( npc, 0, target, __RunOnCombat );
 }
 
 void _AssistAttacked( Critter& npc, Critter& fromCr, Critter& attacker )
@@ -681,16 +701,21 @@ void _AssistAttacked( Critter& npc, Critter& fromCr, Critter& attacker )
 		return;
 	}
 	
-	if( sameFaction( npc, attacker ) )
+	if( IsAlly( npc, attacker ) )
 	{
 		return;
 	}
 	
-	if( sameFaction( npc, fromCr ) )
+	if( IsEnemy( npc, fromCr ) )
+	{
+		return;
+	}
+
+	if( IsAlly( npc, fromCr ) )
 	{
 		npc.SendMessage( MSG_GROUP_ATTACK, attacker.Id, MESSAGE_TO_WHO_SEES_ME );
 		npc.AddEnemyInStack( attacker.Id );
-		AddAttackPlane( npc, 0, attacker );
+		AddAttackPlane( npc, 0, attacker, __RunOnCombat );
 	}
 }
 
@@ -724,7 +749,7 @@ bool _ReactToSkill( Critter& npc, Critter& whoUse, int skill )
 		return false;
 	}
 	
-	if( sameFaction( npc, whoUse ) )
+	if( IsAlly( npc, whoUse ) )
 	{
 		return false;
 	}
@@ -733,7 +758,7 @@ bool _ReactToSkill( Critter& npc, Critter& whoUse, int skill )
 	{
 		npc.SendMessage( MSG_GROUP_ATTACK, whoUse.Id, MESSAGE_TO_WHO_SEES_ME );
 		npc.AddEnemyInStack( whoUse.Id );
-		AddAttackPlane( npc, 0, whoUse );
+		AddAttackPlane( npc, 0, whoUse, __RunOnCombat );
 		return true;
 	}
 	
@@ -770,6 +795,58 @@ void _TargetDown( Critter& self, Critter& enemy, uint anim2begin, uint anim2idle
 	}
 }
 
+bool IsEnemy( Critter& npc, Critter& target )
+{
+	if( isGM( target ) )
+	{
+		return false;
+	}
+	
+	if( !valid(fraction) )
+	{
+		return false;
+	}
+	
+	IRelations@ relation = GetFractionRelation( GetFraction( npc ), target );
+	
+	if( !valid( relation ) )
+	{
+		if( npc.Param[ CR_IS_AGGRESSIVE ] > 0 )
+		{
+			return true;
+		}
+		else
+		{
+			return false;
+		}
+	}
+	
+	return relation.Value == RELATION_WAR && npc.Param[ CR_IS_AGGRESSIVE ] > 0;
+}
+	
+bool IsAlly( Critter& npc, Critter& target )
+{
+	if( isGM( target ) )
+	{
+		return false;
+	}
+	
+	if( !valid( fraction ) )
+	{
+		return false;
+	}
+	
+	IRelations@ relation = GetFractionRelation( GetFraction( npc ), target );
+	if( !valid( relation ) )
+	{
+		return false;
+	}
+	
+	bool ally = sameFaction( npc, target ) || relation.Value == RELATION_ALLY; 
+	
+	return ally;
+}
+	
 /*
 void _ReactToDrop( Critter& npc, Critter& fromCr, Item& item )
 {
