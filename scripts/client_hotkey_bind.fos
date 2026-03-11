@@ -1,0 +1,825 @@
+#ifndef CLIENT_HOTKEY_BIND
+#define CLIENT_HOTKEY_BIND
+
+#define LAYER_AUTODETECT	( 0 )
+#define LAYER_NORMAL		( 1 )
+#define LAYER_RTS			( 2 )
+#define LAYER_WASD			( 3 )
+#define LAYER_GM			( 4 )
+#define LAYER_GMRTS			( 5 )
+#define LAYER_GMWASD		( 6 )
+
+#include "_utils.fos"
+#include "client_hotkey_manager.fosh"
+#include "client_gm_controls.fosh"
+
+const string[] MainGroupsList = {"Main", "RTS", "WASD", "GM", "GMRTS", "GMWASD"};
+const string[] GMGroupsList = {"GM", "GMRTS", "GMWASD"};
+
+// APAMk2 TO APAmk2: Redo this shit, make all callbacks to have their own last call time, to determine if we can (or can't) execute it again
+uint LastLayerChangeTime = 0;
+
+import void SwitchCraftScreen() from "client_screen_fixboy";
+
+void AimCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive )
+	{				
+		RunServerScriptUnsafe( "main@unsafe_set_aim", args[0], 0, 0, null, null );
+	}
+}
+
+void GMInvisCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+	if( !__ConsoleActive )
+	{
+		RunServerScriptUnsafe( "main@unsafe_swap_invis", 0, 0, 0, null, null );
+	}
+}
+
+void UseNearCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+	if( !__ConsoleActive )
+	{
+		RunServerScriptUnsafe( "general_unsafe@unsafe_OpenDoor", 0, 0, 0, "", null );
+	}
+}
+
+void DragCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+	if( GetCurrentCursor() == CURSOR_DEFAULT && !__ConsoleActive )
+	{
+		CritterCl@ cr = MouseCritter;
+		if( valid(cr) )
+		{
+			RunServerScriptUnsafe( "gameplay@unsafe_DragAndDrop", cr.Id, 0, 0, null, null );
+		}
+		
+		ChangeCursor( CURSOR_DEFAULT );
+	}
+}
+
+void ItemThrowCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+	if( !__ConsoleActive )
+	{
+		CritterCl@ chosen = GetChosen();
+		if(!valid(chosen)) return;
+		uint16 hexX = 0, hexY = 0;
+		GetMonitorHex( __MouseX, __MouseY, hexX, hexY);
+		if( !chosen.IsBusy() )
+		{
+			CritterCl@ target = MouseCritter;
+			if( valid( target ) )
+			{
+				hexX = target.HexX;
+				hexY = target.HexY;
+			}
+			
+			int mx = 0, my = 0;
+			GetHexPos( hexX, hexY, mx, my );
+			ItemCl@ target_item = GetMonitorItem( __MouseX, __MouseY );
+			
+			uint16 target_item_id = valid( target_item ) ? target_item.Id : 0;
+			uint16 target_item_id_extra = 0;
+			if( valid( target_item ) && target_item.Id != target_item_id )
+			{
+				target_item_id 			= uint16( target_item.Id >> 16 );
+				target_item_id_extra	= uint16( target_item.Id );
+			}
+			
+			int[] data = { int( __SpritesZoom * 1000 ), __MouseX - mx, __MouseY - my, hexX, hexY, target_item_id, target_item_id_extra };
+			
+			int alt_flag = ( __altDown ? 1 : 0 );
+			RunServerScriptUnsafe ( "general_unsafe@unsafe_itemthrow", hexX, hexY, alt_flag, null, data );
+		}
+	}
+}
+
+void ReloadWeaponCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;	
+	if( !__ConsoleActive )
+	{
+		CritterCl@ chosen = GetChosen();
+		if(!valid(chosen)) return;
+		if( !chosen.IsBusy() )
+		{
+			ItemCl@ weapon = chosen.GetItem( 0, SLOT_HAND1 );
+			if( valid( weapon ) )
+			{
+				RunServerScriptUnsafe( "reload@unsafe_CheckAmmo", weapon.Id, 0, 0, null, null );
+			}
+		}
+	}
+}
+
+void CoverCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+	if( !__ConsoleActive )
+	{
+		CritterCl@ chosen = GetChosen();
+		if(!valid(chosen)) return;
+		if( !__waiting )
+		{
+			if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) && __mobhotkeys )
+			{
+				RunServerScriptUnsafe( "mobcontrol@unsafe_relaxNPC", 0, 0, 0, null, control() );
+			}
+			else
+			{
+				RunServerScriptUnsafe( "general_unsafe@unsafe_relax", chosen.Param[ CR_IS_RELAXING ] == 0 ? 5 : 0, 0, 0, null, null );
+			}
+		}
+	}
+}
+
+void ToggleWSADCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS || LastLayerChangeTime + 100 > GetTick()) return;
+	CritterCl@ chosen = GetChosen();
+	if(!valid(chosen)) return;
+	if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) )
+	{
+		Message("Disable RTS movement first!");
+		return;
+	}
+
+	RunServerScriptUnsafe( "player_menu@unsafe_toggle_WSAD", 0, 0, 0, null, null );
+	
+	if( !FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_WSAD ) )
+	{
+		SwitchHotkeyLayer(LAYER_WASD);
+	}
+	else
+	{
+		SwitchHotkeyLayer(LAYER_NORMAL);
+	}
+}
+
+void ToggleRTSCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS || LastLayerChangeTime + 100 > GetTick()) return;
+	CritterCl@ chosen = GetChosen();
+	if(!valid(chosen)) return;
+	if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_WSAD ) )
+	{
+		Message("Disable WASD movement first!");
+		return;
+	}
+	
+	RunServerScriptUnsafe( "player_menu@unsafe_toggle_RTS", 0, 0, 0, null, null );
+	
+	if( !FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) )
+	{
+		SwitchHotkeyLayer(LAYER_RTS);
+	}
+	else
+	{
+		SwitchHotkeyLayer(LAYER_NORMAL);
+	}
+	
+	if( isGM( chosen ) )
+	{
+		if( !FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) && __mobhotkeys )
+		{
+			ChangeCursor( CURSOR_RTS );
+		}
+		else
+		{
+			ChangeCursor( CURSOR_DEFAULT );
+		}
+	}
+}
+
+void ToggleGMModeCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+	RunServerScriptUnsafe( "gm@unsafe_GMSwitch", 0, 0, 0, null, null );
+}
+
+void AnimateCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+	if( !__ConsoleActive )
+	{
+		CritterCl@ cr = MouseCritter;
+		RunServerScriptUnsafe( "general_unsafe@unsafe_animation", args[0], args[1], valid( cr ) ? cr.Id : 0, null, null );
+	}
+}
+
+void FixboyCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS || __ConsoleActive) return;
+	SwitchCraftScreen();
+}
+
+void AmmoChangeCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+	CritterCl@ chosen = GetChosen();
+	if( valid( chosen ) && !chosen.IsBusy() )
+	{
+		ItemCl@ weapon = chosen.GetItem( 0, SLOT_HAND1 );
+		if( valid( weapon ) )
+		{
+			RunServerScriptUnsafe( "reload@unsafe_CheckAmmo", weapon.Id, 1, 0, null, null );
+		}
+	}
+}
+
+void ToggleGMHotkeysCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS || LastLayerChangeTime + 100 > GetTick()) return;
+	CritterCl@ chosen = GetChosen();
+	if(!valid(chosen)) return;
+	if( isGM( chosen ) )
+	{
+		__mobhotkeys = !__mobhotkeys;
+		SwitchHotkeyLayer(LAYER_AUTODETECT);
+		Message( TEXTMSG_TEXT, ( __mobhotkeys ? STR_GM_HOTKEY_MODE_ON : STR_GM_HOTKEY_MODE_OFF ) );
+		if( __mobhotkeys && FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) )
+		{
+			ChangeCursor( CURSOR_RTS );
+		}
+		else
+		{
+			ChangeCursor( CURSOR_DEFAULT );
+		}
+	}
+}
+
+void GMShowContainmentsCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		CritterCl@ target = MouseCritter;
+		uint targetId = valid(target) ? target.Id : 0;
+		ItemCl@ targetItem = GetMonitorItem( __MouseX, __MouseY );
+		uint targetItemId = valid(targetItem) ? targetItem.Id : 0;
+		
+		RunServerScriptUnsafe( "gm@unsafe_show_containments", targetId, targetItemId, args[0], null, null );
+	}
+}
+
+void GMTeleportCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		CritterCl@ chosen = GetChosen();
+		if(!valid(chosen)) return;
+		uint16 hexX = 0, hexY = 0;
+		GetMonitorHex( __MouseX, __MouseY, hexX, hexY );
+		
+		RunServerScriptUnsafe( "gm_commands@unsafe_GM_tel", chosen.Id, hexX, hexY, null, null );
+	}
+}
+
+void GMToNextPlayerCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{	
+		RunServerScriptUnsafe( "gm@unsafe_GM_teleport_to_next_player",  0, 0, 0, null, null );
+	}
+}
+
+void GMPanelCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{	
+		RunServerScriptUnsafe( "gm@unsafe_GM_PANNEL_SELF", 0, 0, 0, null, null );
+	}
+}
+
+void GMSetChatTargetCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		CritterCl@ target = MouseCritter;
+		uint targetId = valid(target) ? target.Id : 0;
+		RunServerScriptUnsafe( "rp_chat@unsafe_SetChatTarget",  targetId, 0, 0, null, null );
+	}
+}
+
+void GMVoiceCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		uint16 hexX = 0, hexY = 0;
+		GetMonitorHex( __MouseX, __MouseY, hexX, hexY );
+		RunServerScriptUnsafe( "gm@unsafe_GM_voice", hexX, hexY, 0, null, null );
+	}
+}
+
+void GMSayCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		CritterCl@ target = MouseCritter;
+		uint targetId = valid(target) ? target.Id : 0;
+		RunServerScriptUnsafe( "gm@unsafe_GM_say", targetId, SAY_NETMSG, 0, null, null );
+	}
+}
+
+void GMMobSetHomeCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		RunServerScriptUnsafe( "mobcontrol@unsafe_HomeMob", 0, 0, 0, null, control() );
+	}
+}
+
+void GMMobTakeControlCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		CritterCl@ target = MouseCritter;
+		if( valid(target) )
+		{
+			SetControlCritters( target.Id );
+		}
+	}
+}
+
+void GMMobSetTargetCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		CritterCl@ target = MouseCritter;
+		uint16 hexX = 0, hexY = 0;
+		GetMonitorHex( __MouseX, __MouseY, hexX, hexY );
+		if( !valid( target ) )
+		{
+			RunServerScriptUnsafe( "mobcontrol@unsafe_moveMob", hexX, hexY, 1, null, control() );
+		}
+		else
+		{
+			RunServerScriptUnsafe( "mobcontrol@unsafe_attackMob", target.Id, 0, 0, null, control() );
+		}
+	}
+}
+
+void GMMobWeaponUpdateCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		RunServerScriptUnsafe( "test@unsafe_weapon_update", 0, 0, 0, null, control() );
+	}
+}
+
+void GMMobWeaponShowCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		RunServerScriptUnsafe( "test@unsafe_weapon_show", 0, 0, 0, null, control() );
+	}
+}
+
+void GMMobWeaponHideCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		RunServerScriptUnsafe( "test@unsafe_weapon_hide", 0, 0, 0, null, control() );
+	}
+}
+
+void GMMobArmorUpdateCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		RunServerScriptUnsafe( "test@unsafe_armor_update", 0, 0, 0, null, control() );
+	}
+}
+
+void GMMobHeadUpdateCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		RunServerScriptUnsafe( "test@unsafe_head_update", 0, 0, 0, null, control() );
+	}
+}
+
+void GMMobBackUpdateCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		RunServerScriptUnsafe( "test@unsafe_back_update", 0, 0, 0, null, control() );
+	}
+}
+
+void GMMobMiscUpdateCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		RunServerScriptUnsafe( "test@unsafe_misc_update", 0, 0, 0, null, control() );
+	}
+}
+
+void GMMobHoldPositionCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		uint16 hexX = 0, hexY = 0;
+		GetMonitorHex( __MouseX, __MouseY, hexX, hexY );
+		RunServerScriptUnsafe( "mobcontrol@unsafe_MobHoldPosition", hexX, hexY, 0, null, control() );
+	}
+}
+
+void GMMobStopCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		uint16 hexX = 0, hexY = 0;
+		GetMonitorHex( __MouseX, __MouseY, hexX, hexY );
+		RunServerScriptUnsafe( "mobcontrol@unsafe_stopMob", hexX, hexY, 0, null, control() );
+	}
+}
+
+void GMMobMoveCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		uint16 hexX = 0, hexY = 0;
+		GetMonitorHex( __MouseX, __MouseY, hexX, hexY );
+		RunServerScriptUnsafe( "mobcontrol@unsafe_moveMob", hexX, hexY, 0, null, control() );
+	}
+}
+
+void GMMobClearSelectionCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		ClearMobSelection();
+	}
+}
+
+void GMMobGoHomeCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS || __ConsoleActive) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		CritterCl@ target = MouseCritter;
+		if( valid(target) )
+		{
+			RunServerScriptUnsafe( "general_unsafe@unsafe_MobGoHome", target.Id, 0, 0, "", null );
+		}
+	}
+}
+
+void GMMobUseBandageCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		RunServerScriptUnsafe( "mobcontrol@unsafe_useBandage", 0, 0, 0, "", control() );
+	}
+}
+
+void GMMobUseMedsCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+
+	if( !__ConsoleActive && __mobhotkeys )
+	{
+		RunServerScriptUnsafe( "mobcontrol@unsafe_useMeds", 0, 0, 0, "", control() );
+	}
+}
+
+void ChangeCursorCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+	CritterCl@ chosen = GetChosen();
+	if(!valid(chosen)) return;
+
+	if( __ConsoleActive ) return;
+
+	int currCursor = GetCurrentCursor();
+
+	if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) && __mobhotkeys )
+	{
+		if(currCursor == CURSOR_RTS)
+			ChangeCursor( CURSOR_RTSA );
+		else 
+			ChangeCursor( CURSOR_RTS );
+		return;
+	}
+	
+	uint8 mode = 0;				
+	ProtoItem@ hand = chosen.GetSlotProto( SLOT_HAND1, mode );
+	if( currCursor == CURSOR_USE_WEAPON || currCursor == CURSOR_USE_OBJECT )
+	{
+		if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) && !__mobhotkeys )
+		{
+			ChangeCursor( CURSOR_DEFAULT );
+		}
+		else
+		{
+			ChangeCursor( GetLastCursor() );
+		}
+		return;
+	}
+	else if( mode == 4 )
+	{
+		ChangeCursor( CURSOR_USE_OBJECT );
+	}
+	else if( valid( hand ) && hand.Type == ITEM_TYPE_WEAPON )
+	{
+		ChangeCursor( CURSOR_USE_WEAPON );
+	}
+}
+
+void OpenConsoleCallback(int state, int[] args)
+{
+	if(state != KEY_PRESS) return;
+	if( __ConsoleActive ) return;
+
+	SetConsoleMode(true);
+}
+
+void AddMainHotkey(string name, uint8[] keys, HotkeyOnKeyState@ callback, int[] args)
+{
+	for(uint i = 0, len = MainGroupsList.length(); i < len; i++)
+	{
+		HotkeyMngr_AddHotkey(MainGroupsList[i], name, keys, callback, args);
+	}
+}
+
+void AddMainHotkey(string name, uint8 key, HotkeyOnKeyState@ callback, int[] args)
+{
+	for(uint i = 0, len = MainGroupsList.length(); i < len; i++)
+	{
+		HotkeyMngr_AddHotkey(MainGroupsList[i], name, key, callback, args);
+	}
+}
+
+void AddMainHotkey(string name, uint8[] keys, HotkeyOnKeyState@ callback)
+{
+	for(uint i = 0, len = MainGroupsList.length(); i < len; i++)
+	{
+		HotkeyMngr_AddHotkey(MainGroupsList[i], name, keys, callback);
+	}
+}
+
+void AddMainHotkey(string name, uint8 key, HotkeyOnKeyState@ callback)
+{
+	for(uint i = 0, len = MainGroupsList.length(); i < len; i++)
+	{
+		HotkeyMngr_AddHotkey(MainGroupsList[i], name, key, callback);
+	}
+}
+
+void AddGMHotkey(string name, uint8[] keys, HotkeyOnKeyState@ callback, int[] args)
+{
+	for(uint i = 0, len = GMGroupsList.length(); i < len; i++)
+	{
+		HotkeyMngr_AddHotkey(GMGroupsList[i], name, keys, callback, args);
+	}
+}
+
+void AddGMHotkey(string name, uint8 key, HotkeyOnKeyState@ callback, int[] args)
+{
+	for(uint i = 0, len = GMGroupsList.length(); i < len; i++)
+	{
+		HotkeyMngr_AddHotkey(GMGroupsList[i], name, key, callback, args);
+	}
+}
+
+void AddGMHotkey(string name, uint8[] keys, HotkeyOnKeyState@ callback)
+{
+	for(uint i = 0, len = GMGroupsList.length(); i < len; i++)
+	{
+		HotkeyMngr_AddHotkey(GMGroupsList[i], name, keys, callback);
+	}
+}
+
+void AddGMHotkey(string name, uint8 key, HotkeyOnKeyState@ callback)
+{
+	for(uint i = 0, len = GMGroupsList.length(); i < len; i++)
+	{
+		HotkeyMngr_AddHotkey(GMGroupsList[i], name, key, callback);
+	}
+}
+
+void HotkeysInit()
+{
+	// Hotkey groups
+	HotkeyMngr_AddGroup("Main", true);
+	HotkeyMngr_AddGroup("RTS", false);
+	HotkeyMngr_AddGroup("WASD", false);
+	HotkeyMngr_AddGroup("GM", false);
+	HotkeyMngr_AddGroup("GMRTS", false);
+	HotkeyMngr_AddGroup("GMWASD", false);
+
+	// Main Hotkeys
+	AddMainHotkey("AimNone", DIK_NUMPAD0, AimCallback, array<int> = {HIT_LOCATION_NONE});
+	AddMainHotkey("AimEyes", DIK_NUMPAD7, AimCallback, array<int> = {HIT_LOCATION_EYES});
+	AddMainHotkey("AimHead", DIK_NUMPAD8, AimCallback, array<int> = {HIT_LOCATION_HEAD});
+	AddMainHotkey("AimLeftArm", DIK_NUMPAD4, AimCallback, array<int> = {HIT_LOCATION_LEFT_ARM});
+	AddMainHotkey("AimTorso", DIK_NUMPAD5, AimCallback, array<int> = {HIT_LOCATION_TORSO});
+	AddMainHotkey("AimRightArm", DIK_NUMPAD6, AimCallback, array<int> = {HIT_LOCATION_RIGHT_ARM});
+	AddMainHotkey("AimLeftLeg", DIK_NUMPAD1, AimCallback, array<int> = {HIT_LOCATION_LEFT_LEG});
+	AddMainHotkey("AimGroin", DIK_NUMPAD2, AimCallback, array<int> = {HIT_LOCATION_GROIN});
+	AddMainHotkey("AimRightLeg", DIK_NUMPAD3, AimCallback, array<int> = {HIT_LOCATION_RIGHT_LEG});
+	AddMainHotkey("Invis", DIK_GRAVE, GMInvisCallback);
+	AddMainHotkey("UseNear", DIK_E, UseNearCallback);
+	AddMainHotkey("DragCritter", DIK_H, DragCallback);
+	AddMainHotkey("ItemThrow", DIK_J, ItemThrowCallback);
+	AddMainHotkey("ReloadWeapon", DIK_R, ReloadWeaponCallback);
+	AddMainHotkey("Cover", DIK_SPACE, CoverCallback);
+	AddMainHotkey("ToggleWSAD", array<uint8> = {DIK_LMENU, DIK_Z}, ToggleWSADCallback);
+	AddMainHotkey("ToggleRTS", array<uint8> = {DIK_LMENU, DIK_X}, ToggleRTSCallback);
+	AddMainHotkey("ToggleGM", array<uint8> = {DIK_LMENU, DIK_LSHIFT, DIK_F}, ToggleGMModeCallback);
+	AddMainHotkey("AnimateDamage1", DIK_L, AnimateCallback, array<int> = {ACTION_DAMAGE, 1});
+	AddMainHotkey("AnimateDamage2", DIK_K, AnimateCallback, array<int> = {ACTION_DAMAGE, 2});
+	AddMainHotkey("AnimatePickGround", DIK_U, AnimateCallback, array<int> = {ACTION_PICK_ITEM, 0});
+	AddMainHotkey("AnimateDodge", DIK_Y, AnimateCallback, array<int> = {ACTION_DODGE, 0});
+	AddMainHotkey("AnimateFidget", DIK_V, AnimateCallback, array<int> = {ACTION_FIDGET, 0});
+	AddMainHotkey("AnimateWindup", DIK_X, AnimateCallback, array<int> = {ACTION_WINDUP, 0});
+	AddMainHotkey("Fixboy", DIK_F, FixboyCallback);
+	AddMainHotkey("ChangeAmmo", array<uint8> = {DIK_LCONTROL, DIK_R}, AmmoChangeCallback);
+	AddMainHotkey("ToggleGMHotkeys", array<uint8> = {DIK_LCONTROL, DIK_F}, ToggleGMHotkeysCallback);
+	AddMainHotkey("ChangeCursor", array<uint8> = {DIK_A}, ChangeCursorCallback);
+	AddMainHotkey("OpenConsole", array<uint8> = {DIK_T}, OpenConsoleCallback);
+
+	// GM Group
+	AddGMHotkey("GMShowSlotInv", array<uint8> = {DIK_LSHIFT, DIK_Q}, GMShowContainmentsCallback, array<int> = {SLOT_INV});
+	AddGMHotkey("GMShowSlotHand1", array<uint8> = {DIK_LSHIFT, DIK_I}, GMShowContainmentsCallback, array<int> = {SLOT_HAND1});
+	AddGMHotkey("GMShowSlotHand2", array<uint8> = {DIK_LSHIFT, DIK_O}, GMShowContainmentsCallback, array<int> = {SLOT_HAND2});
+	AddGMHotkey("GMShowSlotArmor", array<uint8> = {DIK_LSHIFT, DIK_P}, GMShowContainmentsCallback, array<int> = {SLOT_ARMOR});
+	AddGMHotkey("GMShowSlotHead", array<uint8> = {DIK_LSHIFT, DIK_J}, GMShowContainmentsCallback, array<int> = {SLOT_HEAD});
+	AddGMHotkey("GMShowSlotBack", array<uint8> = {DIK_LSHIFT, DIK_K}, GMShowContainmentsCallback, array<int> = {SLOT_BACK});
+	AddGMHotkey("GMShowSlotMisc", array<uint8> = {DIK_LSHIFT, DIK_L}, GMShowContainmentsCallback, array<int> = {SLOT_MISC});
+	AddGMHotkey("GMTeleport", array<uint8> = {DIK_LCONTROL, DIK_T}, GMTeleportCallback);
+	AddGMHotkey("GMToNextPlayer", array<uint8> = {DIK_LCONTROL, DIK_N}, GMToNextPlayerCallback);
+	AddGMHotkey("GMPanel", array<uint8> = {DIK_LCONTROL, DIK_G}, GMPanelCallback);
+	AddGMHotkey("GMSetChatTarget", array<uint8> = {DIK_LCONTROL, DIK_S}, GMSetChatTargetCallback);
+	AddGMHotkey("GMVoice", array<uint8> = {DIK_LCONTROL, DIK_D}, GMVoiceCallback);
+	AddGMHotkey("GMSay", array<uint8> = {DIK_LCONTROL, DIK_Y}, GMSayCallback);
+	AddGMHotkey("GMMobSetHome", array<uint8> = {DIK_LCONTROL, DIK_H}, GMMobSetHomeCallback);
+	AddGMHotkey("GMMobTakeControl", array<uint8> = {DIK_LCONTROL, DIK_C}, GMMobTakeControlCallback);
+	AddGMHotkey("GMMobSetTarget", array<uint8> = {DIK_LCONTROL, DIK_A}, GMMobSetTargetCallback);
+	AddGMHotkey("GMMobWeaponUpdate", array<uint8> = {DIK_LCONTROL, DIK_M}, GMMobWeaponUpdateCallback);
+	AddGMHotkey("GMMobWeaponShow", array<uint8> = {DIK_LCONTROL, DIK_J}, GMMobWeaponShowCallback);
+	AddGMHotkey("GMMobWeaponHide", array<uint8> = {DIK_LCONTROL, DIK_K}, GMMobWeaponHideCallback);
+	AddGMHotkey("GMMobArmorUpdate", array<uint8> = {DIK_LCONTROL, DIK_L}, GMMobArmorUpdateCallback);
+	AddGMHotkey("GMMobHeadUpdate", array<uint8> = {DIK_LCONTROL, DIK_O}, GMMobHeadUpdateCallback);
+	AddGMHotkey("GMMobBackUpdate", array<uint8> = {DIK_LCONTROL, DIK_COMMA}, GMMobBackUpdateCallback);
+	AddGMHotkey("GMMobMiscUpdate", array<uint8> = {DIK_LCONTROL, DIK_PERIOD}, GMMobMiscUpdateCallback);
+	AddGMHotkey("GMMobHoldPosition", array<uint8> = {DIK_LCONTROL, DIK_E}, GMMobHoldPositionCallback);
+	AddGMHotkey("GMMobStop", array<uint8> = {DIK_LCONTROL, DIK_X}, GMMobStopCallback);
+	AddGMHotkey("GMMobMove", array<uint8> = {DIK_LCONTROL, DIK_W}, GMMobMoveCallback);
+	AddGMHotkey("GMMobClearSelection", array<uint8> = {DIK_LCONTROL, DIK_Q}, GMMobClearSelectionCallback);
+	AddGMHotkey("GMMobGoHome", array<uint8> = {DIK_LCONTROL, DIK_B}, GMMobGoHomeCallback);
+	AddGMHotkey("GMMobUseBandage", array<uint8> = {DIK_LCONTROL, DIK_Z}, GMMobUseBandageCallback);
+	AddGMHotkey("GMMobUseMeds", array<uint8> = {DIK_LCONTROL, DIK_V}, GMMobUseMedsCallback);
+}
+
+void SwitchHotkeyLayer(int layer)
+{
+	LastLayerChangeTime = GetTick();
+	if(layer == LAYER_AUTODETECT)
+	{
+		layer = __mobhotkeys ? LAYER_GM : LAYER_NORMAL;
+		CritterCl@ chosen = GetChosen();
+
+		if(valid(chosen))
+		{
+			if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_WSAD ) ) layer = __mobhotkeys ? LAYER_GMWASD : LAYER_WASD;
+			if( FLAG( chosen.Param[ PLAYER_FLAGS ], PLAYER_FLAG_RTS ) ) layer = __mobhotkeys ? LAYER_GMRTS : LAYER_RTS;
+		}
+	}
+
+	if(__mobhotkeys)
+	{
+		if( layer == LAYER_NORMAL) layer = LAYER_GM;
+		if( layer == LAYER_RTS ) layer = LAYER_GMRTS;
+		if( layer == LAYER_WASD ) layer = LAYER_GMWASD;
+	}
+
+	switch(layer)
+	{
+	case LAYER_NORMAL:
+	{
+		HotkeyMngr_SetGroupState("Main", true);
+		HotkeyMngr_SetGroupState("RTS", false);
+		HotkeyMngr_SetGroupState("WASD", false);
+		HotkeyMngr_SetGroupState("GM", false);
+		HotkeyMngr_SetGroupState("GMRTS", false);
+		HotkeyMngr_SetGroupState("GMWASD", false);
+	}
+	break;
+	case LAYER_RTS:
+	{
+		HotkeyMngr_SetGroupState("RTS", true);
+		HotkeyMngr_SetGroupState("Main", false);
+		HotkeyMngr_SetGroupState("WASD", false);
+		HotkeyMngr_SetGroupState("GM", false);
+		HotkeyMngr_SetGroupState("GMRTS", false);
+		HotkeyMngr_SetGroupState("GMWASD", false);
+	}
+	break;
+	case LAYER_WASD:
+	{
+		HotkeyMngr_SetGroupState("WASD", true);
+		HotkeyMngr_SetGroupState("Main", false);
+		HotkeyMngr_SetGroupState("RTS", false);
+		HotkeyMngr_SetGroupState("GM", false);
+		HotkeyMngr_SetGroupState("GMRTS", false);
+		HotkeyMngr_SetGroupState("GMWASD", false);
+	}
+	break;
+	case LAYER_GM:
+	{
+		HotkeyMngr_SetGroupState("GM", true);
+		HotkeyMngr_SetGroupState("GMRTS", false);
+		HotkeyMngr_SetGroupState("GMWASD", false);
+		HotkeyMngr_SetGroupState("Main", false);
+		HotkeyMngr_SetGroupState("RTS", false);
+		HotkeyMngr_SetGroupState("WASD", false);
+	}
+	break;
+	case LAYER_GMRTS:
+	{
+		HotkeyMngr_SetGroupState("GMRTS", true);
+		HotkeyMngr_SetGroupState("GM", false);
+		HotkeyMngr_SetGroupState("GMWASD", false);
+		HotkeyMngr_SetGroupState("Main", false);
+		HotkeyMngr_SetGroupState("RTS", false);
+		HotkeyMngr_SetGroupState("WASD", false);
+	}
+	break;
+	case LAYER_GMWASD:
+	{
+		HotkeyMngr_SetGroupState("GMWASD", true);
+		HotkeyMngr_SetGroupState("GMRTS", false);
+		HotkeyMngr_SetGroupState("GM", false);
+		HotkeyMngr_SetGroupState("Main", false);
+		HotkeyMngr_SetGroupState("RTS", false);
+		HotkeyMngr_SetGroupState("WASD", false);
+	}
+	break;
+	default:
+	{
+		HotkeyMngr_SetGroupState("Main", true);
+		HotkeyMngr_SetGroupState("RTS", false);
+		HotkeyMngr_SetGroupState("WASD", false);
+		HotkeyMngr_SetGroupState("GM", false);
+		HotkeyMngr_SetGroupState("GMRTS", false);
+		HotkeyMngr_SetGroupState("GMWASD", false);
+	}
+	break;
+	}
+}
+
+#endif // CLIENT_HOTKEY_BIND
