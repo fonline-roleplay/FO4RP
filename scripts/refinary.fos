@@ -1,0 +1,426 @@
+#ifndef REFINARY
+#define REFINARY
+
+#include "_utils.fos"
+#include "refinary_h.fos"
+#include "speed_h.fos"
+#include "furniture_h.fos"
+
+void StartMenuRefinary( Critter& cr, Item& refinary )
+{
+    Map@ map = cr.GetMap();
+    if( !valid( map ) )
+	{
+        return;
+    }
+
+    iMenuHandler@ handler = MenuRefinary( refinary, map );
+    iDialogBox@ menu = OpenMenu( cr, "Uranium Refinary", handler );
+}
+
+class MenuRefinary: CenteredMenuHandler
+{
+    uint Refinary_id;
+    uint map_id;
+	
+    MenuRefinary( Item& Refinary, Map& map )
+	{
+		Refinary_id = Refinary.Id;
+        map_id = map.Id;
+    }
+
+    bool MenuUpdate( Critter& cr, iDialogBox& menu )
+	{
+        Map@ map = GetMap( map_id );
+        if( !valid( map ) )
+		{
+            return false;
+        }
+
+        Item@ Refinary = GetItem( Refinary_id );
+        if( !valid( Refinary ) )
+		{
+            return false;
+        }
+
+		if( locked_in_place( Refinary ) )
+		{
+			if( Refinary.REFINARY_STATE == STATE_OFF )
+			{
+				if( menu.ButtonMsg( STR_FURNITURE_MENU_EXAMINE ) )
+				{
+					PlayGenericSound( map, Refinary.HexX, Refinary.HexY, "CLANK1.mp3", 15 );
+					ShowContainer( cr, Refinary, TRANSFER_HEX_CONT_UP );
+					return false;
+				}
+				
+				if( menu.ButtonMsg( STR_DEVICE_ACTIVATE ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					if( MapHasPower( map ) )
+					{
+						Refinary.REFINARY_STATE = STATE_ON;
+						Refinary.PicMap = PIC_REFINARY_ANIM_ON;
+						UNSETFLAG( Refinary.Flags, ITEM_SHOW_ANIM_EXT );
+						Refinary.Update();
+						
+						uint[] vals = { Refinary.Id, map.Id };
+						Refinary.REFINARY_EVENT = CreateTimeEvent( AFTER( REAL_MS( 1500 ) ),"e_RefinaryWork", vals, true );
+					}
+					
+					return true;
+				}
+			}
+			else
+			{
+				if( menu.ButtonMsg( STR_DEVICE_DEACTIVATE ) )
+				{
+					PlayGenericSound( map, cr.HexX, cr.HexY, "BUTIN1.mp3", 5 );
+					RefinaryDeactivate( Refinary, map );
+					return true;
+				}
+			}
+		}
+		
+		if( Refinary.REFINARY_STATE == STATE_OFF && menu.ButtonMsg( STR_FURNITURE_MENU_BUTTON ) )
+		{
+			{
+				_InitFurniture( Refinary, true );
+				Refinary.Update();
+				StartMenuFurniture( cr, Refinary );
+				return false;
+			}		
+		}
+		
+		if( menu.ButtonMsg( STR_CLOSE_MENU_BUTTON ) )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+	
+    int getDescriptionFile()
+    {
+    	return TEXTMSG_TEXT;
+    }
+
+	int getDescriptionLine()
+	{
+		return STR_CRUSHER_MENU_MAIN;
+	}
+	
+    string@ Description( Critter& cr )
+	{
+		Map@ map = GetMap( map_id );
+		Item@ Refinary = GetItem( Refinary_id );
+		
+		Item@[] MaterialsCheck;
+		uint count = Refinary.GetItems( uint( -1 ), MaterialsCheck );
+		Item@ material = null;
+		
+		string info;
+		if( MapHasPower( map ) )
+		{
+			info += STR_CHECK_DEVICE_FLAG( "powerStatus", true );
+		}
+		else
+		{
+			info += STR_CHECK_DEVICE_FLAG( "powerStatus", false );
+		}
+		
+		info += "$contains";
+		uint16 materialPid;
+		
+		if( count == 0 )
+		{ 
+			info += STR_INSERT_TEXT_LINE( STR_CRUSHER_MENU_EMPTY ); 
+		}
+		else
+		{
+			for( uint i = 0; i < MaterialsCheck.length(); i ++ )
+			{
+				materialPid = MaterialsCheck[i].GetProtoId();
+				if( RefinaryMaterialList.find( materialPid ) != -1 )
+				{
+					@material = MaterialsCheck[i];
+					break;
+				}
+			}
+			
+			if( !valid( material ) )
+			{ 
+				info += STR_INSERT_TEXT_LINE( STR_CRUSHER_MENU_CONTAINS_JUNK );
+			}
+			else
+			{
+				info += STR_INSERT_TEXT_LINE( STR_CRUSHER_MENU_CONTAINS )
+					 + "$item" + STR_INSERT_ITEM_LINE( materialPid * 100 )
+					 + "$amount" + material.GetCount();
+			}
+		}		
+	
+		return info;
+    }
+	
+	bool ShouldRedraw( Critter& cr )
+	{
+		Item@ Refinary = GetItem( Refinary_id );
+
+		if( !valid( Refinary ) || GetDistantion( cr.HexX, cr.HexY, Refinary.HexX, Refinary.HexY ) >= 2 )
+		{
+			return false;
+		}
+		
+		return true;
+    }
+}
+
+void RefinaryDeactivate( Item& Refinary, Map& map )
+{
+	if( !valid( Refinary ) || !valid( map ) )
+	{
+		return;
+	}
+	
+	Refinary.REFINARY_STATE = STATE_OFF;
+	EraseTimeEvent( Refinary.REFINARY_EVENT );
+	Refinary.REFINARY_EVENT = 0;
+	Refinary.PicMap = Refinary.Proto.PicMap;
+	SETFLAG( Refinary.Flags, ITEM_SHOW_ANIM_EXT );
+	Refinary.Update();
+	PlayGenericSound( map, Refinary.HexX, Refinary.HexY, "STEAM.mp3", 30 );
+}
+
+uint e_RefinaryWork( uint[]@ values )
+{
+	Map@ map = GetMap( values[1] );
+	if( !valid( map ) )
+	{
+		return 0;
+	}
+
+	Item@ Refinary = GetItem( values[0] );
+	if( valid( Refinary ) )    
+	{
+		if( Refinary.REFINARY_STATE == STATE_OFF )
+		{
+			return 0;
+		}
+		
+		PlayGenericSound( map, Refinary.HexX, Refinary.HexY, "wood_saw_work.mp3", 30 );
+		
+		Item@[] stuff;
+		Refinary.GetItems( uint( -1 ), stuff );
+		if( stuff.length() > 0 )
+		{
+			Refine( Refinary, stuff[0], map );
+		}
+		
+		return REFINARY_CYCLE_TIME;
+	}
+	return 0;
+}
+
+void Refine( Item& Refinary, Item& uranium, Map& map )
+{
+	if( !valid( Refinary) && !valid( uranium ) )
+	{
+		return;
+	}
+	
+	uint16 materialPid = uranium.GetProtoId();
+	
+	if( RefinaryMaterialList.find( materialPid ) == -1 )
+	{
+		RefinaryDeactivate( Refinary, map );
+		return;
+	}
+	
+	uint8 index = RefinaryMaterialList.find( materialPid );
+
+	uint16 resultPid = RefinaryResultList[ index ];
+	uint8 amount = RefinaryAmount[index];
+
+	if( resultPid > 0 && amount > 0 )
+	{
+		uint16 hx = Refinary.HexX, hy = Refinary.HexY;
+		map.MoveHexByDir( hx, hy, 2, 2 );
+		map.MoveHexByDir( hx, hy, 1, 1 );
+
+		Item@ container;
+		@ container = map.GetItem( hx, hy, PID_IBOX_O );
+		if( !valid( container ) )
+		{
+			@ container = map.GetItem( hx, hy, PID_IBOX_N );
+		}
+		
+		Item@ product = map.AddItem( hx, hy, resultPid, amount );
+		if( valid( product ) )
+		{
+			if( valid( container ) )
+			{
+				MoveItem( product, amount, container, 0 );
+				PlayGenericSound( map, Refinary.HexX, Refinary.HexY, "CLANK1.mp3", 15 );
+			}
+			else if( product.IsStackable() )
+			{
+				uint[] values = { product.Id };
+				CreateTimeEvent( AFTER( REAL_MS( 1000 ) ), "critter_item_movement@e_stack_items", values, true );
+			}
+		}
+	}
+	
+	PlayGenericSound( map, Refinary.HexX, Refinary.HexY, "CLANK1.mp3", 30 );
+	_SubItem( uranium, 1 );
+}
+
+void BlockRefinary( Item& refinary )
+{
+	uint16 hx = 0, hy = 0;
+	Map@ map = refinary.GetMapPosition( hx, hy );
+	if( !valid( map ) )
+	{
+		return;
+	}
+	
+	UNSETFLAG( refinary.Flags, ITEM_NO_BLOCK );
+	UNSETFLAG( refinary.Flags, ITEM_CAN_PICKUP );
+	
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker0 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker0 ) )
+	{
+		blocker0.PARENT_ITM_ID = refinary.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker1 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker1 ) )
+	{
+		blocker1.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker2 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker2 ) )
+	{
+		blocker2.PARENT_ITM_ID = refinary.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 1, 1 );
+	Item@ blocker3 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker3 ) )
+	{
+		blocker3.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 5, 1 );
+	Item@ blocker4 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker4 ) )
+	{
+		blocker4.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker5 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker5 ) )
+	{
+		blocker5.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 5, 1 );
+	Item@ blocker6 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker6 ) )
+	{
+		blocker6.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 5, 1 );
+	Item@ blocker7 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker7 ) )
+	{
+		blocker7.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 4, 1 );
+	Item@ blocker8 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker8 ) )
+	{
+		blocker8.PARENT_ITM_ID = refinary.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 4, 1 );
+	Item@ blocker9 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker9 ) )
+	{
+		blocker9.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 3, 1 );
+	Item@ blocker10 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker10 ) )
+	{
+		blocker10.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 3, 1 );
+	Item@ blocker11 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker11 ) )
+	{
+		blocker11.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker12 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker12 ) )
+	{
+		blocker12.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker13 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker13 ) )
+	{
+		blocker13.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 0, 1 );
+	Item@ blocker14 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker14 ) )
+	{
+		blocker14.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 1, 1 );
+	Item@ blocker15 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker15 ) )
+	{
+		blocker15.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 2, 1 );
+	Item@ blocker16 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker16 ) )
+	{
+		blocker16.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	map.MoveHexByDir( hx, hy, 3, 1 );
+	Item@ blocker17 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker17 ) )
+	{
+		blocker17.PARENT_ITM_ID = refinary.Id;
+	}
+
+	map.MoveHexByDir( hx, hy, 5, 1 );
+	Item@ blocker18 = map.AddItem( hx, hy, PID_NO_SHOOT_METAL_BLOCKER, 1 );
+	if( valid( blocker18 ) )
+	{
+		blocker18.PARENT_ITM_ID = refinary.Id;
+	}
+	
+	refinary.SetEvent( ITEM_EVENT_FINISH, "furniture@_DeleteBlockers" );
+}
+
+#endif //REFINARY
