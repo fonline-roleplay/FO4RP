@@ -11,9 +11,9 @@ import void HotkeysInit() from "client_hotkey_bind";
 //#define HOTKEY_DEBUG
 
 // Some shitty stub to call anything, don't know if that's really needed - APAMk2
-void StubOnKeyStateCallback(int state, int[] args)
+bool StubOnKeyStateCallback(int state, int[] args)
 {
-	return;
+	return false;
 }
 
 bool[] KeyStateArray;
@@ -24,6 +24,7 @@ class Hotkey
 	uint8[] Keys;
 	int[] Args;
 	HotkeyOnKeyState@ Callback;
+	int Flags;
 
 	Hotkey(string name, uint8[] keys, HotkeyOnKeyState@ callback)
 	{
@@ -40,6 +41,23 @@ class Hotkey
 		@Callback = callback;
     }
 
+	Hotkey(string name, uint8[] keys, HotkeyOnKeyState@ callback, int flags)
+	{
+		this.Name = name;
+        Keys = keys;
+		@Callback = callback;
+		Flags = flags;
+    }
+
+	Hotkey(string name, uint8[] keys, HotkeyOnKeyState@ callback, int[] args, int flags)
+	{
+		this.Name = name;
+        Keys = keys;
+		this.Args = args;
+		@Callback = callback;
+		Flags = flags;
+    }
+
 	bool HasKey(uint8 key)
 	{
         for(uint i = 0; i < Keys.length(); i++) 
@@ -52,19 +70,22 @@ class Hotkey
     }
 	bool IsFulfilled()
 	{
-		if((KeyStateArray[DIK_LSHIFT] && !HasKey(DIK_LSHIFT)) || (KeyStateArray[DIK_RSHIFT] && !HasKey(DIK_RSHIFT)))
+		if(!FLAG(Flags, HOTKEY_IGNORE_MODIFIERS))
 		{
-			return false;
-		}
+			if((KeyStateArray[DIK_LSHIFT] && !HasKey(DIK_LSHIFT)) || (KeyStateArray[DIK_RSHIFT] && !HasKey(DIK_RSHIFT)))
+			{
+				return false;
+			}
 
-		if((KeyStateArray[DIK_LCONTROL] && !HasKey(DIK_LCONTROL)) || (KeyStateArray[DIK_RCONTROL] && !HasKey(DIK_RCONTROL)))
-		{
-			return false;
-		}
+			if((KeyStateArray[DIK_LCONTROL] && !HasKey(DIK_LCONTROL)) || (KeyStateArray[DIK_RCONTROL] && !HasKey(DIK_RCONTROL)))
+			{
+				return false;
+			}
 
-		if((KeyStateArray[DIK_LMENU] && !HasKey(DIK_LMENU)) || (KeyStateArray[DIK_RMENU] && !HasKey(DIK_RMENU)))
-		{
-			return false;
+			if((KeyStateArray[DIK_LMENU] && !HasKey(DIK_LMENU)) || (KeyStateArray[DIK_RMENU] && !HasKey(DIK_RMENU)))
+			{
+				return false;
+			}
 		}
 
         for(uint i = 0; i < Keys.length(); i++) 
@@ -94,13 +115,14 @@ class HotkeyGroup
 		this.Enabled = enabled;
 	}
 
-	void AddHotkey(string name, uint8[] keys, HotkeyOnKeyState@ callback, int[] args)
+	void AddHotkey(string name, uint8[] keys, HotkeyOnKeyState@ callback, int[] args, int flags)
 	{
-		Hotkeys.set(name, Hotkey(name, keys, callback, args));
+		Hotkeys.set(name, Hotkey(name, keys, callback, args, flags));
 	}
 
-	void InvokeCallbacks(uint8 callbackType)
+	bool InvokeCallbacks(uint8 callbackType)
 	{
+		int abortRequests = 0;
 		string@[] hotkeyNames;
 		Hotkeys.keys(hotkeyNames);
 		for (uint i = 0, len = hotkeyNames.length(); i < len; i++)
@@ -114,42 +136,46 @@ class HotkeyGroup
 				Message("Invoking " + Name + ":" + hotkeyNames[i]);
 				#endif
 				
-				currHotkey.Callback( callbackType, currHotkey.Args );
+				if(currHotkey.Callback( callbackType, currHotkey.Args ))
+					abortRequests++;
 			}
 		}
+
+		return abortRequests > 0;
 	}
 	
-	void OnKeyStateChange(uint8 key, bool pressed)
+	bool OnKeyStateChange(uint8 key, bool pressed)
 	{
 		if (pressed)
 		{
-			InvokeCallbacks(KEY_PRESS);
-			return;
+			return InvokeCallbacks(KEY_PRESS);
 		}
 
 		string@[] hotkeyNames;
 		Hotkeys.keys(hotkeyNames);
+
+		int abortRequests = 0;
 
 		for (uint i = 0, len = hotkeyNames.length(); i < len; i++)
 		{
 			Hotkey@ currHotkey;
 			Hotkeys.get(hotkeyNames[i], @currHotkey);
 			if(!valid(currHotkey)) continue;
-			if (currHotkey.HasKey(key))
+			if (currHotkey.HasKey(key) && !currHotkey.IsFulfilled())
 			{
-				if (currHotkey.IsFulfilled())
-				{
-					currHotkey.Callback( KEY_RELEASE, currHotkey.Args );
-				}
+				if(currHotkey.Callback( KEY_RELEASE, currHotkey.Args ))
+					abortRequests++;
 			}
 		}
+
+		return abortRequests > 0;
 	}
 }
 
 dictionary HotkeyGroups;
 dictionary KeyStrToValList;
 
-void HotkeyMngr_AddHotkey(string groupName, string name, uint8[] keys, HotkeyOnKeyState@ callback, int[] args)
+void HotkeyMngr_AddHotkey(string groupName, string name, uint8[] keys, HotkeyOnKeyState@ callback, int[] args, int flags)
 {
 	HotkeyGroup@ currGroup;
 	HotkeyGroups.get(groupName, @currGroup);
@@ -159,48 +185,42 @@ void HotkeyMngr_AddHotkey(string groupName, string name, uint8[] keys, HotkeyOnK
 		return;
 	}
 	
-    currGroup.AddHotkey(name, keys, callback, args);
+    currGroup.AddHotkey(name, keys, callback, args, flags);
+}
+
+void HotkeyMngr_AddHotkey(string groupName, string name, uint8[] keys, HotkeyOnKeyState@ callback, int[] args)
+{
+	HotkeyMngr_AddHotkey(groupName, name, keys, callback, args, 0);
 }
 
 void HotkeyMngr_AddHotkey(string groupName, string name, uint8 key, HotkeyOnKeyState@ callback, int[] args)
 {
-	HotkeyGroup@ currGroup;
-	HotkeyGroups.get(groupName, @currGroup);
-	if(!valid(currGroup))
-	{
-		Log("Can't add hotkey [" + name + "] to [" + groupName + "] group. Reason: GROUP_NOT_EXISTS");
-		return;
-	}
-	
-	uint8[] keys = {key};
-    currGroup.AddHotkey(name, keys, callback, args);
+	HotkeyMngr_AddHotkey(groupName, name, array<uint8> = {key}, callback, args, 0);
 }
 
 void HotkeyMngr_AddHotkey(string groupName, string name, uint8[] keys, HotkeyOnKeyState@ callback)
 {
-	HotkeyGroup@ currGroup;
-	HotkeyGroups.get(groupName, @currGroup);
-	if(!valid(currGroup))
-	{
-		Log("Can't add hotkey [" + name + "] to [" + groupName + "] group. Reason: GROUP_NOT_EXISTS");
-		return;
-	}
-	
-	currGroup.AddHotkey(name, keys, callback, array<int>());
+	HotkeyMngr_AddHotkey(groupName, name, keys, callback, array<int>(), 0);
 }
 
 void HotkeyMngr_AddHotkey(string groupName, string name, uint8 key, HotkeyOnKeyState@ callback)
 {
-	HotkeyGroup@ currGroup;
-	HotkeyGroups.get(groupName, @currGroup);
-	if(!valid(currGroup))
-	{
-		Log("Can't add hotkey [" + name + "] to [" + groupName + "] group. Reason: GROUP_NOT_EXISTS");
-		return;
-	}
+	HotkeyMngr_AddHotkey(groupName, name, array<uint8> = {key}, callback, array<int>(), 0);
+}
 
-	uint8[] keys = {key};
-    currGroup.AddHotkey(name, keys, callback, array<int>());
+void HotkeyMngr_AddHotkey(string groupName, string name, uint8 key, HotkeyOnKeyState@ callback, int[] args, int flags)
+{
+	HotkeyMngr_AddHotkey(groupName, name, array<uint8> = {key}, callback, args, flags);
+}
+
+void HotkeyMngr_AddHotkey(string groupName, string name, uint8[] keys, HotkeyOnKeyState@ callback, int flags)
+{
+	HotkeyMngr_AddHotkey(groupName, name, keys, callback, array<int>(), flags);
+}
+
+void HotkeyMngr_AddHotkey(string groupName, string name, uint8 key, HotkeyOnKeyState@ callback, int flags)
+{
+	HotkeyMngr_AddHotkey(groupName, name, array<uint8> = {key}, callback, array<int>(), flags);
 }
 
 uint8 KeyStrToVal(string keyStr)
@@ -394,11 +414,11 @@ void HotkeyMngr_Init()
 	ParseConfig();
 }
 
-void HotkeyMngr_OnKeyStateChange(uint8 key, bool pressed)
+bool HotkeyMngr_OnKeyStateChange(uint8 key, bool pressed)
 {
 	KeyStateArray[key] = pressed;
 	
-	if(GUI_GetActiveScreen() != CLIENT_MAIN_SCREEN_GAME && GUI_GetActiveScreen() != CLIENT_MAIN_SCREEN_GLOBAL_MAP) return;
+	if(GUI_GetActiveScreen() != CLIENT_MAIN_SCREEN_GAME && GUI_GetActiveScreen() != CLIENT_MAIN_SCREEN_GLOBAL_MAP) return false;
 
 	string@[] groupNames;
     HotkeyGroups.keys(groupNames);
@@ -410,8 +430,10 @@ void HotkeyMngr_OnKeyStateChange(uint8 key, bool pressed)
 
 		if(!currGroup.Enabled) continue;
 
-		currGroup.OnKeyStateChange(key, pressed);
+		return currGroup.OnKeyStateChange(key, pressed);
 	}
+
+	return false;
 }
 
 void HotkeyMngr_Tick()
@@ -482,6 +504,40 @@ void HotkeyMngr_InputLost()
 	{
 		KeyStateArray[i] = false;
 	}
+}
+
+uint8[] HotkeyMngr_GetHotkeyKeys(string groupName, string name)
+{
+	HotkeyGroup@ currGroup;
+	HotkeyGroups.get(groupName, @currGroup);
+	if(!valid(currGroup)) return array<uint8> = {0};
+	
+	Hotkey@ currHotkey;
+	currGroup.Hotkeys.get(name, @currHotkey);
+	if(!valid(currHotkey)) return array<uint8> = {0};
+	
+	return currHotkey.Keys;
+}
+
+string@[] HotkeyMngr_GetAllGroupNames()
+{
+	string@[] groupNames;
+	HotkeyGroups.keys(groupNames);
+
+	return groupNames;
+}
+
+string@[] HotkeyMngr_GettAllKeyNames(string groupName)
+{
+	string@[] hotkeyNames;
+
+	HotkeyGroup@ currGroup;
+	HotkeyGroups.get(groupName, @currGroup);
+	if(!valid(currGroup)) return hotkeyNames;
+
+	currGroup.Hotkeys.keys(hotkeyNames);
+
+	return hotkeyNames;
 }
 
 #endif // CLIENT_HOTKEY_MANAGER
