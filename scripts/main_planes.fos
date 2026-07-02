@@ -10,6 +10,7 @@
 #include "combat_h.fos"
 #include "hitchance_h.fos"
 #include "speed_h.fos"
+#include "windup_h.fos"
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Called on some plane added.
@@ -268,7 +269,7 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
         // Default weapons
         r0 = 0;       // Use unarmed by default
         r1 = 0;
-        r2 = ( Random( 0, 3 ) == 0 ? 1000 : 1020 );
+        r2 = ( Random( 0, 3 ) == 0 ? 250 : 500 );
 
         // Damaged two arms
         if( npc.IsDmgTwoArm() )
@@ -367,10 +368,13 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
         int optimalDist = _WeaponMaxDist( weapon, use );
 		int wpnMaxDist = optimalDist;
 		bool isSniper = ( FLAG( weapon.Weapon_Perk, WEAPON_PERK_SCOPE_RANGE ) && npc.Param[ CR_IS_WINDUPED ] > 0 );
+		bool isBurst = ( _WeaponAnim2( weapon, use ) == ANIM2_BURST );
+		bool isAuto  = ( _WeaponAnim2( weapon, use ) == ANIM2_AUTO );
+		bool rapid_fire = ( ( isBurst || isAuto ) && npc.Param[ CR_AUTO_ROUNDS_FIRED ] > 1 );
 
 		if( skillNum == SK_SMALL_GUNS || skillNum == SK_MEDIUM_GUNS || skillNum == SK_BIG_GUNS )
 		{
-			if( isSniper )
+			if( isSniper || FLAG( weapon.Weapon_Perk, WEAPON_PERK_SUPPRESIVE ) )
 			{
 				optimalDist *= 2;
 				wpnMaxDist *= 2;
@@ -481,6 +485,14 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
         ProtoItem@ weapon = npc.GetSlotProto( SLOT_HAND1, mode );
 		ProtoItem@ ammo = ( weapon.Weapon_MaxAmmoCount > 0 && weapon.Weapon_Caliber != 0 ? GetProtoItem( _CritGetItemHand( npc ).AmmoPid ) : null );
         int use = _WeaponModeUse( mode );
+		bool isBurst = ( _WeaponAnim2( weapon, use ) == ANIM2_BURST );
+		bool isAuto  = ( _WeaponAnim2( weapon, use ) == ANIM2_AUTO );
+		bool rapid_fire = ( ( isBurst || isAuto ) && npc.Param[ CR_AUTO_ROUNDS_FIRED ] > 1 );
+
+		if( FLAG( weapon.Weapon_Perk, WEAPON_PERK_MOUNTABLE ) && npc.Param[ CR_IS_WINDUPED ] == 0 )
+		{
+			ChangeWindup( npc, false );
+		}
 		
 		if( npc.Param[ CR_AUTO_ROUNDS_FIRED ] == 0 )
 		{
@@ -499,11 +511,12 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
 			}
 		}
 		
-		if( weapon.Weapon_Anim2_0 == ANIM2_AUTO )
+		if( isAuto )
 		{
 			r1 = HIT_LOCATION_NONE;
 			//Log( " npc.Param[ CR_AUTO_ROUNDS_FIRED ] "  + npc.Param[ CR_AUTO_ROUNDS_FIRED ] );
-			if( npc.Param[ CR_AUTO_ROUNDS_FIRED ] >= 10 )
+			
+			if( npc.Param[ CR_AUTO_ROUNDS_FIRED ] >= 40 )
 			{
 				//Log( " npc.Param[ CR_AUTO_ROUNDS_FIRED ] >= 10 " );
 				npc.ParamBase[ CR_AUTO_ROUNDS_FIRED ] = 0;
@@ -525,6 +538,32 @@ bool npc_plane_run( Critter& npc, NpcPlane& plane, int reason, uint& r0, uint& r
 			r1 = ChooseAim( npc, target, toHit );
 		}
 		//Log( "aim_return_true, r0 " + r0 + " r1 " + r1 + " r2 " + r2 );
+
+		if( rapid_fire )
+		{
+			uint attacks = 0;
+			if( FLAG( weapon.Weapon_Perk, WEAPON_PERK_ROF3 ) )
+			{
+				attacks = 2;
+			}
+			else if( FLAG( weapon.Weapon_Perk, WEAPON_PERK_ROF2 ) )
+			{
+				attacks = 1;
+			}
+
+			uint time = _GetProtoWaitTime( weapon, mode );
+			for( uint i = 0; i < attacks; i ++ )
+			{
+				if ( i > 1 )
+				{
+					time = _GetProtoWaitTime( weapon, mode ) * i;
+				}
+			
+				uint[] values = { npc.Id, target.Id, weapon.ProtoId, mode, ammo.ProtoId, target.HexX, target.HexY, 1, 0, 0 };
+				CreateTimeEvent( AFTER( REAL_MS( time ) ), "combat@e_DelayedAttack", values, false );
+			}
+		}
+		
         return true;
     }
 	//Log( "aim_return_false" );
@@ -624,10 +663,10 @@ bool ValidateBurst( Critter& npc, Critter& target, ProtoItem@ weapon, ProtoItem@
     uint16 sy = hy;
     uint16 ex = tx;
     uint16 ey = hy;
-    uint8  dir = GetOffsetDir( hx, hy, tx, ty, 2.0f );
+    uint8  dir = GetOffsetDir( hx, hy, tx, ty, MISS_ANGLE );
     map.MoveHexByDir( sx, sy, dir, 1 );
     map.MoveHexByDir( ex, ey, dir, 1 );
-    @blocker = TraceFirstCritter( sx, sy, ex, ey, map, maxDist, hx, hy, 3 );
+    @blocker = TraceFirstCritter( sx, sy, ex, ey, map, maxDist, hx, hy, 5 );
     if( valid( blocker ) && !IsCurrentEnemy( npc, blocker.Id ) )
     {
         return false;
@@ -637,10 +676,10 @@ bool ValidateBurst( Critter& npc, Critter& target, ProtoItem@ weapon, ProtoItem@
     sy = hy;
     ex = tx;
     ey = hy;
-    dir = GetOffsetDir( hx, hy, tx, ty, -2.0f );
+    dir = GetOffsetDir( hx, hy, tx, ty, -MISS_ANGLE );
     map.MoveHexByDir( sx, sy, dir, 1 );
     map.MoveHexByDir( ex, ey, dir, 1 );
-    @blocker = TraceFirstCritter( sx, sy, ex, ey, map, maxDist, hx, hy, 3 );
+    @blocker = TraceFirstCritter( sx, sy, ex, ey, map, maxDist, hx, hy, 5 );
     if( valid( blocker ) && !IsCurrentEnemy( npc, blocker.Id ) )
     {
         return false;
