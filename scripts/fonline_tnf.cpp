@@ -590,7 +590,12 @@ EXPORT int getParam_DamageResistance( CritterMutual& cr, uint index )
     }
 
     if( armor->GetId() && armor->IsArmor() )
-        val += drVal * ( 100 -( armor-> GetDeteriorationProc() / DETORIORATION_MODIFIER ) ) / 100;
+    {
+        val += drVal;
+        int deterProc = armor->GetDeteriorationProc();
+        if(deterProc > 10)
+            val = val * ( 100 - ( armor->GetDeteriorationProc() / ARMOR_DETERIORATION_DR_MOD ) ) / 100;
+    }
 
     if( dmgType == DAMAGE_EMP )
         return CLAMP( val, 0, 999 );
@@ -640,7 +645,12 @@ EXPORT int getParam_DamageThreshold( CritterMutual& cr, uint index )
     }
 
     if( armor->GetId() && armor->IsArmor() )
-        val += dtVal * ( 100 - ( armor-> GetDeteriorationProc() / DETORIORATION_MODIFIER ) ) / 100;
+    {
+        val += dtVal;
+        int deterProc = armor->GetDeteriorationProc();
+        if(deterProc > 10)
+            val = val * ( 100 - int( armor-> GetDeteriorationProc() / ARMOR_DETERIORATION_DT_MOD ) ) / 100;
+    }
 
     return CLAMP( val, 0, 999 );
 }
