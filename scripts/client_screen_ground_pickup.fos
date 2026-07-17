@@ -1,0 +1,294 @@
+#include "client_gui_h.fos"
+#include "_utils.fos"
+
+import int GetIniValue(string& iniKey, int defaultValue) from "ini_parser";
+import int[]@ GetIniValues4(string& iniKey, int[]@ defaultValues) from "ini_parser";
+
+ScreenMain@ Screen;
+ItemCl@[] ItemsList;
+string UseScrUpPic = "";
+string UseScrUpPicDn = "";
+string UseScrUpPicOff = "";
+
+string UseScrDownPic = "";
+string UseScrDownPicDn = "";
+string UseScrDownPicOff = "";
+
+class ScreenMain : IGUIScreenCallbackShow, IGUIScreenCallbackHide
+{
+    IGUIScreenOpt@ screenOpt;
+    ItemBtn@[] ItemBtns;
+    ScrollBtn@[] ScrollBtns;
+    uint CurrScroll = 0;
+    uint ScrollOffs = 0;
+
+    void OnShow( int type, int arg0, int arg1 )
+    {
+        @screenOpt = GUI_GetScreenOptions();
+        ItemsList.resize(0);
+        CritterCl@ chosen = GetChosen();
+        if(!valid(chosen) || GUI_GetActiveScreen() == CLIENT_MAIN_SCREEN_GLOBAL_MAP) return;
+        uint gotItems = GetItems(chosen.HexX, chosen.HexY, ItemsList);
+        if(gotItems == 0)
+        {
+            Message("There's no items on hex!");
+            HideScreen( CLIENT_SCREEN_GROUND_PICKUP, 0, 0, 0);
+            return;
+        }
+        ReloadItemsList();
+    }
+
+    void OnHide( int p0, int p1, int p2 )
+    {}
+
+    void ReloadItemsList()
+    {
+        for(uint i = 0, len = ItemBtns.length(); i < len; i++)
+        {
+            ItemBtn@ currBtn = ItemBtns[i];
+            if(!valid(currBtn)) continue;
+            if(i + CurrScroll >= ItemsList.length())
+            {
+                currBtn.SetCount(-1);
+                currBtn.ItemID = 0;
+                currBtn.Options.SetVisible(false);
+                continue;
+            }
+            
+            ItemCl@ currItem = ItemsList[i + CurrScroll];
+            if(!valid(currItem)) continue;
+            
+            currBtn.SetPicByPid(currItem.GetProtoId());
+            currBtn.SetCount(currItem.GetCount());
+            currBtn.ItemID = currItem.Id;
+            currBtn.Options.SetVisible(true);
+        }
+    }
+
+    void UpdateScroll(bool isUp)
+    {
+        uint initialScroll = CurrScroll;
+        if(isUp && CurrScroll > 0)
+        {
+            CurrScroll -= 1;
+        }
+        else if(!isUp && CurrScroll + 1 < GetMaxScroll())
+        {
+            CurrScroll += 1;
+        }
+        if(CurrScroll != initialScroll) ReloadItemsList();
+
+        if(CurrScroll == 0)
+        {
+            ScrollBtns[0].Options.Pic(UseScrUpPicOff, PT_ART_INTRFACE)
+                .DownPic(UseScrUpPicOff);
+        }
+        else if(CurrScroll >= GetMaxScroll())
+        {
+            ScrollBtns[1].Options.Pic(UseScrDownPicOff, PT_ART_INTRFACE)
+                .DownPic(UseScrDownPicOff);
+        }
+
+        if(CurrScroll > 0 && CurrScroll < GetMaxScroll())
+        {
+            ScrollBtns[0].Options.Pic(UseScrUpPic, PT_ART_INTRFACE)
+                .DownPic(UseScrUpPicDn);
+
+            ScrollBtns[1].Options.Pic(UseScrDownPic, PT_ART_INTRFACE)
+                .DownPic(UseScrDownPicDn);
+        }
+    }
+
+    uint GetMaxScroll()
+    {
+        return ItemsList.length() - (ItemsList.length() > ScrollOffs ? ScrollOffs / 2 : ItemsList.length());
+    }
+}
+
+class ItemBtn : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
+{
+    IGUIElementOpt@ Options;
+    int Count = -1;
+    uint ItemID = 0;
+    int ItemWidth = 66;
+    int ItemHeight = 30;
+
+    ItemBtn(int itemWidth, int itemHeight)
+    {
+        ItemWidth = itemWidth;
+        ItemHeight = itemHeight;
+    }
+
+    void OnInit()
+    {
+        @Options = GUI_GetElementOptions();
+        SETFLAG(Options.RenderFlags, RENDER_FLAG_DONT_STRETCH);
+        SETFLAG(Options.RenderFlags, RENDER_FLAG_CENTERED);
+    }
+
+    void OnMouseClick( int click )
+    {
+        if(click != MOUSE_CLICK_LEFT || Count == -1 || ItemID == 0) return;
+        uint[] actions = {CHOSEN_USE_SKL_ON_ITEM, 0, uint(SKILL_PICK_ON_GROUND), ItemID, 0, 0, 0};
+	    SetChosenActions( actions );
+        HideScreen( CLIENT_SCREEN_GROUND_PICKUP, 0, 0, 0);
+    }
+
+    void SetPicByPid(uint16 pid)
+    {
+        ProtoItem@ proto = GetProtoItem(pid);
+        if(!valid(proto))
+        {
+            return;
+        }
+
+        int w = ItemWidth, h = ItemHeight;
+        Options.GetSize(w, h);
+
+        if( w == 0 ) w = ItemWidth;
+        if( h == 0 ) h = ItemHeight;
+
+        Sprite@ invPic = Sprite();
+        invPic.Load(proto.PicInv, 0);
+        Options.SetSprite(invPic);
+        Options.SetSize(w, h);
+    }
+
+    void SetCount(int newCount)
+    {
+        this.Count = newCount;
+        if(Count > 1)
+            Options.Text("x"+Count, FONT_FALLOUT, COLOR_WHITE, 0, 0);
+        else
+            Options.Text("", FONT_FALLOUT, COLOR_WHITE, 0, 0);
+    }
+}
+
+class ScrollBtn : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
+{
+    IGUIElementOpt@ Options;
+    bool IsUp = false;
+    bool zoneMode = false;
+
+    ScrollBtn(bool isUp)
+    {
+        IsUp = isUp;
+    }
+
+    void OnInit()
+    {
+        @Options = GUI_GetElementOptions();
+    }
+
+    void OnMouseClick( int click )
+    {
+        if(!valid(Screen)) return;
+        if(click == MOUSE_CLICK_LEFT)
+        {
+            Screen.UpdateScroll(IsUp);
+        }
+        if(!zoneMode)
+        {
+            return;
+        }
+        else if(click == MOUSE_CLICK_WHEEL_UP)
+        {
+            Screen.UpdateScroll(true);
+        }
+        else if(click == MOUSE_CLICK_WHEEL_DOWN)
+        {
+            Screen.UpdateScroll(false);
+        }
+    }
+}
+
+class OkBtn : IGUIElementCallbackInit, IGUIElementCallbackMouseClick
+{
+    IGUIElementOpt@ Options;
+
+    void OnInit()
+    {
+        @Options = GUI_GetElementOptions();
+    }
+
+    void OnMouseClick( int click )
+    {
+        if(click != MOUSE_CLICK_LEFT) return;
+        HideScreen( CLIENT_SCREEN_GROUND_PICKUP, 0, 0, 0);
+    }
+}
+
+void ShowPickupScreen( int p0, int p1, int p2, string@ p3, int[]@ p4 )
+{
+    ShowScreen( CLIENT_SCREEN_GROUND_PICKUP, p0, p1, p2 );
+}
+
+void HideScreen( int p0, int p1, int p2, string@ p3, int[]@ p4 )
+{
+    GUI_HideScreen( CLIENT_SCREEN_GROUND_PICKUP, p0, p1, p2 );
+}
+
+void GUIInit()
+{
+    @Screen = ScreenMain();
+    GUI_CreateScreenIni( CLIENT_SCREEN_GROUND_PICKUP, "Use" )
+    .CallbackHide( Screen )
+    .CallbackShow( Screen )
+    .AutoCursor( true, CURSOR_DEFAULT );
+
+    int UseHeightItem = GetIniValue("UseHeightItem", 30);
+    int[] UseInv = GetIniValues4("UseInv", null);
+    
+    int len = (UseInv[3] - UseInv[1]) / UseHeightItem;
+    Screen.ScrollOffs = len;
+    for( int row = 0; row < len; row++ )
+    { 
+        ItemBtn@ currBtn = ItemBtn(UseInv[2] - UseInv[0], UseHeightItem);
+        GUI_AddScreenElement( CLIENT_SCREEN_GROUND_PICKUP, "", UseInv[0], UseInv[1] + (row * UseHeightItem))
+            .CallbackInit( currBtn )
+            .CallbackMouseClick( currBtn )
+            .SetSize(UseInv[2] - UseInv[0], UseHeightItem);
+        Screen.ItemBtns.insertLast(currBtn);
+    }
+
+    ScrollBtn scrZone(false);
+    GUI_AddScreenElement( CLIENT_SCREEN_GROUND_PICKUP, "", UseInv[0], UseInv[1])
+        .CallbackInit( scrZone )
+        .CallbackMouseClick( scrZone )
+        .SetSize(UseInv[2] - UseInv[0], UseInv[3] - UseInv[1]);
+    scrZone.zoneMode = true;
+
+    UseScrUpPic = GetIfaceIniStr( "UseScrUpPic" );
+    UseScrUpPicDn = GetIfaceIniStr( "UseScrUpPicDn" );
+    UseScrUpPicOff = GetIfaceIniStr( "UseScrUpPicOff" );
+    int[] UseScrUp = GetIniValues4("UseScrUp", null);
+    ScrollBtn upBtn(true);
+    GUI_AddScreenElement( CLIENT_SCREEN_GROUND_PICKUP, "", UseScrUp[0], UseScrUp[1])
+        .CallbackInit( upBtn )
+        .CallbackMouseClick( upBtn )
+        .Pic(UseScrUpPicOff, PT_ART_INTRFACE)
+        .DownPic(UseScrUpPicOff)
+        .SetSize(UseScrUp[2] - UseScrUp[0], UseScrUp[3] - UseScrUp[1]);
+    Screen.ScrollBtns.insertLast(upBtn);
+
+    UseScrDownPic = GetIfaceIniStr( "UseScrDownPic" );
+    UseScrDownPicDn = GetIfaceIniStr( "UseScrDownPicDn" );
+    UseScrDownPicOff = GetIfaceIniStr( "UseScrDownPicOff" );
+    int[] UseScrDown = GetIniValues4("UseScrDown", null);
+    ScrollBtn dnBtn(false);
+    GUI_AddScreenElement( CLIENT_SCREEN_GROUND_PICKUP, "", UseScrDown[0], UseScrDown[1])
+        .CallbackInit( dnBtn )
+        .CallbackMouseClick( dnBtn )
+        .Pic(UseScrDownPic, PT_ART_INTRFACE)
+        .DownPic(UseScrDownPicDn)
+        .SetSize(UseScrDown[2] - UseScrDown[0], UseScrDown[3] - UseScrDown[1]);
+    Screen.ScrollBtns.insertLast(dnBtn);
+
+    int[] UseCancel = GetIniValues4("UseCancel", null);
+    OkBtn okBtn;
+    GUI_AddScreenElement( CLIENT_SCREEN_GROUND_PICKUP, "", UseCancel[0], UseCancel[1])
+        .CallbackInit( okBtn )
+        .CallbackMouseClick( okBtn )
+        .DownPic(GetIfaceIniStr( "UseCancelPicDn" ))
+        .SetSize(UseCancel[2] - UseCancel[0], UseCancel[3] - UseCancel[1]);
+}
