@@ -453,6 +453,9 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
         return;
     }
 	
+	uint8 dir = GetDirection( attacker.HexX, attacker.HexY, toHx, toHy );
+	attacker.SetDir( dir );
+	
 	if( valid( hand ) )
 	{
 		bool brokenArm = attacker.Damage[ DAMAGE_LEFT_ARM ] + attacker.Damage[ DAMAGE_RIGHT_ARM ] > 0;
@@ -472,7 +475,7 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 	}
 	
 	uint windupTime = GetProtoWindupTime( weapon, mode, attacker );
-	if( attacker.Param[ CR_AUTO_AIM ] == HIT_LOCATION_NONE || attacker.Param[ CR_AUTO_ROUNDS_FIRED ] > 1 )
+	if( attacker.Param[ CR_AUTO_AIM ] == HIT_LOCATION_NONE )
 	{
 		windupTime /= 2;
 	}
@@ -494,9 +497,6 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 	{
 		if( hand.AmmoCount == 0 || hand.Deterioration == 10000 )
 		{
-			uint8 dir = GetDirection( attacker.HexX, attacker.HexY, toHx, toHy );
-			attacker.SetDir( dir );
-
 			if( weaponType == WS_GUN )
 			{
 				attacker.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, valid( hand ) ? hand : null );
@@ -605,7 +605,7 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 	{
 		if( attacker.Param[ CR_AUTO_ROUNDS_FIRED ] > 0 )
 		{
-			attacker.Wait( _GetProtoWaitTime( weapon, mode ) );
+			attacker.Wait( waitTime );
 		}
 		else
 		{
@@ -623,49 +623,27 @@ void unsafe_hex_attack( Critter& attacker, int hexX, int hexY, int weaponProto, 
 		attacker.StatBase[ ST_CURRENT_AP ] -= needAp * 100;
 	}
 	
-	if( _WeaponAnim2( weapon, mode ) == ANIM2_AUTO )
-	{
-		attacker.ParamBase[ CR_AUTO_ROUNDS_FIRED ] ++;
-	}
-	
 	attacker.ParamBase[ CR_AIMING_HEIGHT ] = AimToHeight( attacker.Param[ CR_AUTO_AIM ] ) + attacker.Param[ ST_HEIGHT_GROUP ];
 	if( weapon.Windup_Time != 0 && !_ItemIsBroken( hand ) && GetDeteriorationProcent( hand ) < 100 )
 	{
-
-		uint attacks = 0;
-		if( FLAG( weapon.Weapon_Perk, WEAPON_PERK_ROF3 ) )
-		{
-			attacks = 3;
-		}
-		else if( FLAG( weapon.Weapon_Perk, WEAPON_PERK_ROF2 ) )
-		{
-			attacks = 2;
-		}
-		else
-		{
-			attacks = 1;
-		}
-		
 		attacker.Action( ACTION_WINDUP, ACTION_FLAG_CHOSEN_INCLUSIVE << 12 | mode, hand );
 		attacker.SetAnims( COND_LIFE, 0, ANIM2_WINDUP );
 		
-		for( uint i = 0; i < attacks; i ++ )
-		{
-			uint time = windupTime;
-			uint[] values = { attacker.Id, targetId, weapon.ProtoId, mode, ammoPID, hexX, hexY, 1, 0, 0 };
+		uint time = windupTime;
+		uint[] values = { attacker.Id, targetId, weapon.ProtoId, mode, ammoPID, hexX, hexY, 1, 0, 0 };
 
-			if ( i > 1 )
-			{
-				time = _GetProtoWaitTime( weapon, mode ) * i;
-			}
-			else if( i > 0 )
-			{
-				time = _GetProtoWaitTime( weapon, mode );
-			}
-			
-			CreateTimeEvent( AFTER( REAL_MS( time ) ), "combat@e_DelayedAttack", values, false );
+		if( attacker.Param[ CR_AUTO_ROUNDS_FIRED ] > 0 )
+		{
+			time = _GetProtoWaitTime( weapon, mode );
 		}
 		
+		if( _WeaponAnim2( weapon, mode ) == ANIM2_AUTO )
+		{
+			attacker.ParamBase[ CR_AUTO_ROUNDS_FIRED ] ++;
+		}
+		
+		CreateTimeEvent( AFTER( REAL_MS( time ) ), "combat@e_DelayedAttack", values, false );
+
 		attacker.ParamBase[ CR_IS_ATTACKING ] = 1;
 	}
 	else
@@ -680,6 +658,12 @@ void unsafe_critter_attack( Critter& attacker, int target_Id, int param1, int we
 	if( !attacker.IsLife() )
 	{
 		return;
+	}
+
+	Map@ map = attacker.GetMap();
+	if( !valid( map ) )
+	{
+        return;
 	}
 
 	Critter@ target = GetCritter( target_Id );
@@ -731,7 +715,16 @@ void unsafe_critter_attack( Critter& attacker, int target_Id, int param1, int we
 		return;
 	}
 
-    int dist = GetDistantion( attacker.HexX, attacker.HexY, target.HexX, target.HexY );
+	uint16 tHx = target.HexX, tHy = target.HexY;
+	int dist = GetDistantion( attacker.HexX, attacker.HexY, tHx, tHy );
+	uint16 toHx = tHx, toHy = tHy;
+	RustyGetHexCoord( map, attacker.HexX, attacker.HexY, toHx, toHy, 0.0f, dist );
+	if( tHx != toHx || tHy != toHy )
+    {
+        attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_NEED_AIM_BLOCKED );
+        return;
+    }
+
 	int wpnMaxDist = _WeaponMaxDist( weapon, mode );
 	
 	if( weaponType == WS_THROWING )
@@ -756,48 +749,10 @@ void unsafe_critter_attack( Critter& attacker, int target_Id, int param1, int we
 		attacker.RunClientScript( "client_main@__ChosenMoveToCritAction", target_Id, run, attack_dist, null, null );
 		return;
 	}
-	
-	if( ( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS ) && dist > wpnMaxDist )
-	{
-		attacker.SayMsg( SAY_NETMSG, TEXTMSG_COMBAT, STR_COMBAT_OUT_OF_RANGE );
-		return;
-	}
-	
-	attacker.SetDir( GetDirection( attacker.HexX, attacker.HexY, target.HexX, target.HexY ) );
-	
-	if( skillNum == SK_UNARMED || skillNum == SK_MELEE_WEAPONS )
-	{
-		critter_attack( attacker, target, weapon, mode, ammo );
-		return;
-	}
-	
-	uint attacks = 0;
-	if( FLAG( weapon.Weapon_Perk, WEAPON_PERK_ROF3 ) )
-	{
-		attacks = 3;
-	}
-	else if( FLAG( weapon.Weapon_Perk, WEAPON_PERK_ROF2 ) )
-	{
-		attacks = 2;
-	}
-	else
-	{
-		attacks = 1;
-	}
-	
-	for( uint i = 0; i < attacks; i ++ )
-	{
 
-		if( i == 1 )
-		{
-			critter_attack( attacker, target, weapon, mode, ammo );
-		}
-		else
-		{
-			uint[] values = { attacker.Id, target_Id, weapon.ProtoId, mode, ammoPid, target.HexX, target.HexY, 1, 0, 0 };
-			CreateTimeEvent( AFTER( REAL_MS( _GetProtoWaitTime( weapon, mode ) * i ) ), "combat@e_DelayedAttack", values, false );
-		}
-	}
+	attacker.SetDir( GetDirection( attacker.HexX, attacker.HexY, tHx, tHy ) );
+
+	critter_attack( attacker, target, weapon, mode, ammo );
 }
 
 uint e_emptySFX( uint[]@ values )
