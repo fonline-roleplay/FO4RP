@@ -4,8 +4,8 @@
 
 #undef __PERFCOUNT__
 
-#include "_defines.fos"
-#include "fonline.h"
+#include "../../_defines.fos"
+#include "../../fonline.h"
 
 #if defined ( FO_WINDOWS )
 	#define __PERFCOUNT__

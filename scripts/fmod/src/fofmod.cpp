@@ -1,7 +1,7 @@
 
 #include "fofmod.h"
-#include "_defines.fos"
-#include "fonline.h"
+#include "../../_defines.fos"
+#include "../../fonline.h"
 #include "fofmodchannelAS.h"
 #include "fofmodsoundAS.h"
 #include "fofmoddspAS.h"

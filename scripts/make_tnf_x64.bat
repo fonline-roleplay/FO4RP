@@ -2,8 +2,8 @@
 setlocal
 
 rem Output DLL names. Keep these in sync with the names referenced by the scripts.
-set "OUTPUT_DLL_NAME=fonline_tnf64.dll"
-set "CLIENT_OUTPUT_DLL_NAME=fonline_tnf_client64.dll"
+set "OUTPUT_DLL_NAME=fonline_tnf.dll"
+set "CLIENT_OUTPUT_DLL_NAME=fonline_tnf_client.dll"
 set "SERVER_IMPORT_LIB=..\Server64.lib"
 set "CLIENT_IMPORT_LIB=..\..\..\fo2 sdk\Client\ClientOGL64.lib"
 set "BUILD_CLIENT=1"

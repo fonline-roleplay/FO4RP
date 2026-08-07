@@ -3,8 +3,8 @@
 
 #include <cstring>
 #include "stdio.h"
-#include "_defines.fos"
-#include "fonline.h"
+#include "../../_defines.fos"
+#include "../../fonline.h"
 
 
 #if defined ( FO_GCC )

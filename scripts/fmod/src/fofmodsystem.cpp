@@ -3,8 +3,8 @@
 
 
 #include "fofmodsystem.h"
-#include "_defines.fos"
-#include "fonline.h"
+#include "../../_defines.fos"
+#include "../../fonline.h"
 #include "tinydir.h"
 #include "miniz.h"
 #include "util.h"

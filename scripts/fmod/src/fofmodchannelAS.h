@@ -2,7 +2,7 @@
 #define __FOFMOD_CHANNEL_AS_H__
 
 #include "fofmodchannel.h"
-#include "fonline.h"
+#include "../../fonline.h"
 
 namespace FOFMOD
 {

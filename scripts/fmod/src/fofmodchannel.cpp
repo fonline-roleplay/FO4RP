@@ -5,8 +5,8 @@
 #include "fofmodchannel.h"
 #include "fofmodchannelAS.h"
 #include "stddef.h"
-#include "_defines.fos"
-#include "fonline.h"
+#include "../../_defines.fos"
+#include "../../fonline.h"
 #include "macros.h"
 #include "fofmoddsp.h"
 

@@ -2,7 +2,7 @@
 #define __FOFMOD_DSP_AS_H__
 
 #include "fofmoddsp.h"
-#include "fonline.h"
+#include "../../fonline.h"
 
 namespace FOFMOD
 {
