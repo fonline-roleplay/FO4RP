@@ -1,41 +1,59 @@
 #include "scriptarray.h"
 
-extern "C"
+#ifdef _WIN32
+#include <windows.h>
+
+static FARPROC ResolveScriptArrayFunction(const char* name)
 {
-    __declspec(dllimport) int ScriptArray_GetElementTypeId(const CScriptArray* array);
-    __declspec(dllimport) asUINT ScriptArray_GetSize(const CScriptArray* array);
-    __declspec(dllimport) void ScriptArray_Resize(CScriptArray* array, asUINT size);
-    __declspec(dllimport) void ScriptArray_ResizeAt(CScriptArray* array, int delta, asUINT at);
-    __declspec(dllimport) void ScriptArray_InsertAt(CScriptArray* array, asUINT index, void* value);
-    __declspec(dllimport) void* ScriptArray_GetBuffer(CScriptArray* array);
+	return GetProcAddress(GetModuleHandle(nullptr), name);
 }
+#else
+#include <dlfcn.h>
+
+static void* ResolveScriptArrayFunction(const char* name)
+{
+	return dlsym(RTLD_DEFAULT, name);
+}
+#endif
 
 int CScriptArray::GetElementTypeId() const
 {
-    return ScriptArray_GetElementTypeId(this);
+	using Function = int (*)(const CScriptArray*);
+	static Function function = reinterpret_cast<Function>(ResolveScriptArrayFunction("ScriptArray_GetElementTypeId"));
+	return function(this);
 }
 
 asUINT CScriptArray::GetSize() const
 {
-    return ScriptArray_GetSize(this);
+	using Function = asUINT (*)(const CScriptArray*);
+	static Function function = reinterpret_cast<Function>(ResolveScriptArrayFunction("ScriptArray_GetSize"));
+	return function(this);
 }
 
 void CScriptArray::Resize(asUINT size)
 {
-    ScriptArray_Resize(this, size);
+	using Function = void (*)(CScriptArray*, asUINT);
+	static Function function = reinterpret_cast<Function>(ResolveScriptArrayFunction("ScriptArray_Resize"));
+	function(this, size);
 }
 
 void CScriptArray::Resize(int delta, asUINT at)
 {
-    ScriptArray_ResizeAt(this, delta, at);
+	using Function = void (*)(CScriptArray*, int, asUINT);
+	static Function function = reinterpret_cast<Function>(ResolveScriptArrayFunction("ScriptArray_ResizeAt"));
+	function(this, delta, at);
 }
 
 void CScriptArray::InsertAt(asUINT index, void* value)
 {
-    ScriptArray_InsertAt(this, index, value);
+	using Function = void (*)(CScriptArray*, asUINT, void*);
+	static Function function = reinterpret_cast<Function>(ResolveScriptArrayFunction("ScriptArray_InsertAt"));
+	function(this, index, value);
 }
 
 void* CScriptArray::GetBuffer()
 {
-    return ScriptArray_GetBuffer(this);
+	using Function = void* (*)(CScriptArray*);
+	static Function function = reinterpret_cast<Function>(ResolveScriptArrayFunction("ScriptArray_GetBuffer"));
+	return function(this);
 }
