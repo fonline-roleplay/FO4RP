@@ -649,9 +649,9 @@ EXPORT_UNINITIALIZED GameOptions* FOnline;
 struct Mutex
 {
 #if defined ( FO_X86 )
-    const int Locker[ 6 ];      // CRITICAL_SECTION, include Windows.h
+    const int Locker[ 11 ];
 #else // FO_X64
-    const int Locker[ 10 ];
+    const int Locker[ 16 ];
 #endif
 };
 
@@ -809,13 +809,15 @@ struct ProtoItem
     const uint8  Hear_BlockDir[6];
     const uint8  Hear_Block;
 
-    //padding 140 bytes
     const uint8 Padding140[140];
 
     const uint8  Item_Hitpoints;
     const uint8  Fire_Strength;
     const uint8  Blast_Radius;
     const uint	 FlyEffect_Speed;
+
+    // Preserve the complete 512-byte ProtoItem user-data area.
+    const uint8 Padding12[12];
 
     // Type specific data
     const bool   Weapon_IsUnarmed;
@@ -2018,6 +2020,7 @@ inline void static_asserts()
     STATIC_ASSERT( sizeof( uint ) == 4 );
     STATIC_ASSERT( sizeof( uint64 ) == 8 );
     STATIC_ASSERT( sizeof( bool ) == 1 );
+    STATIC_ASSERT( sizeof( ProtoItem ) == 920 );
     #if defined ( FO_X86 )
     STATIC_ASSERT( sizeof( size_t ) == 4 );
     STATIC_ASSERT( sizeof( void* ) == 4 );

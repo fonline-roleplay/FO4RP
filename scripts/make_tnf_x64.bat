@@ -2,10 +2,8 @@
 setlocal
 
 rem Output DLL names. Keep these in sync with the names referenced by the scripts.
-set "OUTPUT_DLL_NAME=fonline_tnf.dll"
-set "CLIENT_OUTPUT_DLL_NAME=fonline_tnf_client.dll"
-set "SERVER_IMPORT_LIB=..\Server64.lib"
-set "CLIENT_IMPORT_LIB=..\..\..\fo2 sdk\Client\ClientOGL64.lib"
+set "OUTPUT_DLL_NAME=fonline_tnf64.dll"
+set "CLIENT_OUTPUT_DLL_NAME=fonline_tnf_client64.dll"
 set "BUILD_CLIENT=1"
 
 rem Locate Visual Studio and initialize its native x64 build environment.
@@ -25,17 +23,13 @@ call "%VS_PATH%\Common7\Tools\VsDevCmd.bat" -arch=amd64 -host_arch=amd64
 if errorlevel 1 exit /b %errorlevel%
 
 echo Building server library %OUTPUT_DLL_NAME%...
-if not exist "%SERVER_IMPORT_LIB%" (
-    echo Error: server import library "%SERVER_IMPORT_LIB%" was not found.
-    exit /b 1
-)
 cl.exe /nologo /MT /W3 /O2 /Gd /D__SERVER /c /Fo"fonline_tnf_server.obj" fonline_tnf.cpp
 if errorlevel 1 goto :failed
 cl.exe /nologo /MT /W3 /O2 /Gd /D__SERVER /c /Fo"qmap_tools_server.obj" qmap_tools.cpp
 if errorlevel 1 goto :failed
 cl.exe /nologo /MT /W3 /O2 /Gd /D__SERVER /c /Fo"scriptarray_api_server.obj" AngelScript\scriptarray_api.cpp
 if errorlevel 1 goto :failed
-link.exe /nologo /dll /incremental:no /machine:X64 fonline_tnf_server.obj qmap_tools_server.obj scriptarray_api_server.obj "%SERVER_IMPORT_LIB%" /implib:"fonline_tnf_server.lib" /out:"%OUTPUT_DLL_NAME%.new"
+link.exe /nologo /dll /incremental:no /machine:X64 fonline_tnf_server.obj qmap_tools_server.obj scriptarray_api_server.obj /implib:"fonline_tnf_server.lib" /out:"%OUTPUT_DLL_NAME%.new"
 if errorlevel 1 goto :failed
 move /y "%OUTPUT_DLL_NAME%.new" "%OUTPUT_DLL_NAME%" >nul
 if errorlevel 1 goto :failed
@@ -43,10 +37,6 @@ if errorlevel 1 goto :failed
 if /i not "%BUILD_CLIENT%"=="1" goto :success
 
 echo Building client library %CLIENT_OUTPUT_DLL_NAME%...
-if not exist "%CLIENT_IMPORT_LIB%" (
-    echo Error: client import library "%CLIENT_IMPORT_LIB%" was not found.
-    exit /b 1
-)
 cl.exe /nologo /MT /W3 /O2 /Gd /D__CLIENT /c /Fo"fonline_tnf_client.obj" fonline_tnf.cpp
 if errorlevel 1 goto :failed
 cl.exe /nologo /MT /W3 /O2 /Gd /D__CLIENT /c /Fo"qmap_tools_client.obj" qmap_tools.cpp
@@ -55,7 +45,7 @@ cl.exe /nologo /MT /W3 /O2 /Gd /D__CLIENT /c /Fo"q_sprites_client.obj" q_sprites
 if errorlevel 1 goto :failed
 cl.exe /nologo /MT /W3 /O2 /Gd /D__CLIENT /c /Fo"scriptarray_api_client.obj" AngelScript\scriptarray_api.cpp
 if errorlevel 1 goto :failed
-link.exe /nologo /dll /incremental:no /machine:X64 fonline_tnf_client.obj qmap_tools_client.obj q_sprites_client.obj scriptarray_api_client.obj "%CLIENT_IMPORT_LIB%" /implib:"fonline_tnf_client.lib" /out:"%CLIENT_OUTPUT_DLL_NAME%.new"
+link.exe /nologo /dll /incremental:no /machine:X64 fonline_tnf_client.obj qmap_tools_client.obj q_sprites_client.obj scriptarray_api_client.obj /implib:"fonline_tnf_client.lib" /out:"%CLIENT_OUTPUT_DLL_NAME%.new"
 if errorlevel 1 goto :failed
 move /y "%CLIENT_OUTPUT_DLL_NAME%.new" "%CLIENT_OUTPUT_DLL_NAME%" >nul
 if errorlevel 1 goto :failed

@@ -6,7 +6,6 @@ set "OUTPUT_DLL_NAME=fofmod_client64.dll"
 set "FMOD_RUNTIME_OUTPUT_NAME=fmod64.dll"
 set "FMOD_IMPORT_LIB=lib\fmod64\fmod_vc.lib"
 set "FMOD_RUNTIME=lib\fmod64\fmod.dll"
-set "CLIENT_IMPORT_LIB=..\..\..\..\fo2 sdk\Client\ClientOGL64.lib"
 set "OBJ_DIR=obj\x64"
 set "TEMP_OUTPUT_DIR=%OBJ_DIR%\output"
 
@@ -28,10 +27,6 @@ if not exist "%FMOD_IMPORT_LIB%" (
 )
 if not exist "%FMOD_RUNTIME%" (
     echo Error: FMOD runtime "%FMOD_RUNTIME%" was not found.
-    exit /b 1
-)
-if not exist "%CLIENT_IMPORT_LIB%" (
-    echo Error: client import library "%CLIENT_IMPORT_LIB%" was not found.
     exit /b 1
 )
 
@@ -79,7 +74,7 @@ for %%F in (
 )
 
 echo Linking %OUTPUT_DLL_NAME%...
-link.exe /nologo /dll /incremental:no /machine:X64 "%OBJ_DIR%\*.obj" "%FMOD_IMPORT_LIB%" "%CLIENT_IMPORT_LIB%" /implib:"%OBJ_DIR%\fofmod_client.lib" /out:"%TEMP_OUTPUT_DIR%\%OUTPUT_DLL_NAME%"
+link.exe /nologo /dll /incremental:no /machine:X64 "%OBJ_DIR%\*.obj" "%FMOD_IMPORT_LIB%" /implib:"%OBJ_DIR%\fofmod_client.lib" /out:"%TEMP_OUTPUT_DIR%\%OUTPUT_DLL_NAME%"
 if errorlevel 1 goto :failed
 
 move /y "%TEMP_OUTPUT_DIR%\%OUTPUT_DLL_NAME%" "%OUTPUT_DIR%\%OUTPUT_DLL_NAME%" >nul
