@@ -321,14 +321,34 @@ shared class Serializator
 
     Serializator@ Set( const string& value )
     {
-        uint len = value.length();
-        if( CurPos + len + 1 > BufSize )
-            GrowBuffer( CurPos + len + 1 - BufSize + DEFAULT_GROW );
-        for( uint i = 0; i < len; i++ )
-            Array[ CurPos++ ] = value[ i ];
-        Array[ CurPos++ ] = 0;
-        if( CurPos > DataSize )
-            DataSize = CurPos;
+        for( uint i = 0, len = value.length(); i < len; i++ )
+        {
+            uint utf8Length = 0;
+            uint codepoint = DecodeUTF8( value[i], utf8Length );
+            if( codepoint <= 0x7F )
+            {
+                Set( uint8( codepoint ) );
+            }
+            else if( codepoint <= 0x7FF )
+            {
+                Set( uint8( 0xC0 | ( codepoint >> 6 ) ) );
+                Set( uint8( 0x80 | ( codepoint & 0x3F ) ) );
+            }
+            else if( codepoint <= 0xFFFF )
+            {
+                Set( uint8( 0xE0 | ( codepoint >> 12 ) ) );
+                Set( uint8( 0x80 | ( ( codepoint >> 6 ) & 0x3F ) ) );
+                Set( uint8( 0x80 | ( codepoint & 0x3F ) ) );
+            }
+            else
+            {
+                Set( uint8( 0xF0 | ( codepoint >> 18 ) ) );
+                Set( uint8( 0x80 | ( ( codepoint >> 12 ) & 0x3F ) ) );
+                Set( uint8( 0x80 | ( ( codepoint >> 6 ) & 0x3F ) ) );
+                Set( uint8( 0x80 | ( codepoint & 0x3F ) ) );
+            }
+        }
+        Set( uint8( 0 ) );
         return this;
     }
 
@@ -607,24 +627,58 @@ shared class Serializator
 
     Serializator@ Get( string& str )
     {
-        uint len = 0;
-        for( uint i = CurPos; ; i++ )
+        str = "";
+        while( CurPos < DataSize )
         {
-            if( i == DataSize )
+            uint first = Array[ CurPos++ ];
+            if( first == 0 )
+                return this;
+
+            uint codepoint = 0;
+            uint continuationCount = 0;
+            if( first < 0x80 )
+            {
+                codepoint = first;
+            }
+            else if( ( first & 0xE0 ) == 0xC0 )
+            {
+                codepoint = first & 0x1F;
+                continuationCount = 1;
+            }
+            else if( ( first & 0xF0 ) == 0xE0 )
+            {
+                codepoint = first & 0x0F;
+                continuationCount = 2;
+            }
+            else if( ( first & 0xF8 ) == 0xF0 )
+            {
+                codepoint = first & 0x07;
+                continuationCount = 3;
+            }
+            else
             {
                 str = "";
                 return this;
             }
-            if( Array[ i ] == 0 )
+
+            if( CurPos + continuationCount > DataSize )
             {
-                len = i - CurPos;
-                break;
+                str = "";
+                return this;
             }
+            for( uint i = 0; i < continuationCount; i++ )
+            {
+                uint next = Array[ CurPos++ ];
+                if( ( next & 0xC0 ) != 0x80 )
+                {
+                    str = "";
+                    return this;
+                }
+                codepoint = ( codepoint << 6 ) | ( next & 0x3F );
+            }
+            str += EncodeUTF8( codepoint );
         }
-        str.resize( len );
-        for( uint i = 0; i < len; i++ )
-            str[ i ] = Array[ CurPos++ ];
-        CurPos++;         // Skip zero
+        str = "";
         return this;
     }
 
