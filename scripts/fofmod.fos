@@ -14,6 +14,7 @@
 // https://fmod.com/resources/documentation-api?version=2.02&page=core-api.html
 
 #define FOFMOD_CHANNEL_COUNT ( 64 ) // 32 is okay, Range: [0, 4095]
+#define LOUD_SOUND_OCCLUSION_SCALE ( 0.2f )
 
 //Translate hex coordinates into more human coordinates: X is right and Y is down
 void CoordinatesHexToGrid(int x, int y, float &out ox, float &out oy)
@@ -156,6 +157,12 @@ void FMOD_Set3DListenerUp(const float, const float, const float)
 bool FMOD_ReplaceGeometry(double[]@, int[]@, double[]@)
 {
 	return true;
+}
+
+void FMOD_GetGeometryOcclusion(float, float, float, float&out direct, float&out reverb)
+{
+	direct = 0.0f;
+	reverb = 0.0f;
 }
 
 void FMOD_Set3DListenerForward(const float, const float, const float)
@@ -533,6 +540,26 @@ FMODChannel@ FOFMOD_PlaySound( string& filename, uint16 hexX, uint16 hexY, uint 
 	return result;
 }
 
+void ApplyLoudGeometryOcclusion(FMODChannel@ sound, float x, float y)
+{
+	if(!valid(sound)) return;
+	float direct = 0.0f;
+	float reverb = 0.0f;
+	FMOD_GetGeometryOcclusion(x, y, 0.0f, direct, reverb);
+	sound.Set3DIgnoreGeometry(true);
+	// Scale attenuation strength rather than the final combined value. This
+	// keeps a single wall mild while allowing many underground walls to stack.
+	if(direct < 0.0f) direct = 0.0f;
+	if(direct > 1.0f) direct = 1.0f;
+	if(reverb < 0.0f) reverb = 0.0f;
+	if(reverb > 1.0f) reverb = 1.0f;
+	direct = 1.0f - pow(1.0f - direct, LOUD_SOUND_OCCLUSION_SCALE);
+	reverb = 1.0f - pow(1.0f - reverb, LOUD_SOUND_OCCLUSION_SCALE);
+	sound.Set3DOcclusion(
+		direct,
+		reverb);
+}
+
 //For using weapons
 void __PlayWeaponSound( int soundId, int hexX, int hexY, string@ path, int[]@ param4 )
 {
@@ -583,10 +610,13 @@ void __PlayWeaponSound( int soundId, int hexX, int hexY, string@ path, int[]@ pa
 	float ox = 0.0f, oy = 0.0f;
 	CoordinatesHexToAudio( hexX, hexY, ox, oy );
 	float maxDist = param4[2];
-	float minDist = maxDist / 2; 
+	bool isLoudShot = param4.length() > 3 && param4[3] != 0;
+	if(isLoudShot && maxDist < 30.0f) maxDist = 30.0f;
+	float minDist = maxDist / 2;
 	sound.Set3DPosition( ox, oy, 0.0f );
 	sound.Set3DLevel( 0.9f );
 	sound.Set3DMinMaxDistance( minDist, maxDist );
+	if(isLoudShot) ApplyLoudGeometryOcclusion(sound, ox, oy);
 	float mod = Random( -99, 99 ) / 1000.0f;
 	float val = 1.0f - mod;
 	sound.SetPitch( val );
@@ -769,10 +799,12 @@ void __PlaySound( int soundId, int hexX, int hexY, string@ path, int[]@ param4 )
 	float ox = 0.0f, oy = 0.0f;
 	CoordinatesHexToAudio( hexX, hexY, ox, oy );
 	float maxDist = param4[0];
-	float minDist = maxDist / 2; 
+	bool isLoud = param4.length() > 1 && param4[1] != 0;
+	float minDist = maxDist / 2;
 	sound.Set3DPosition( ox, oy, 0.0f );
 	sound.Set3DLevel( 0.7f );
 	sound.Set3DMinMaxDistance( minDist, maxDist );
+	if(isLoud) ApplyLoudGeometryOcclusion(sound, ox, oy);
 	float mod = Random( -99, 99 ) / 1000.0f;
 	float val = 1.0f - mod;
 	sound.SetPaused ( false );

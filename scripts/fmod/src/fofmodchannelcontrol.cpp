@@ -239,6 +239,22 @@ namespace FOFMOD
 			this->cchandle->get3DLevel( value );
 		}
 	}
+
+	void ChannelControl::Set3DIgnoreGeometry( bool ignore )
+	{
+		if( !this->cchandle ) return;
+		FMOD_MODE mode = FMOD_DEFAULT;
+		if( this->cchandle->getMode( &mode ) != FMOD_OK ) return;
+		if( ignore ) mode |= FMOD_3D_IGNOREGEOMETRY;
+		else mode &= ~FMOD_3D_IGNOREGEOMETRY;
+		this->cchandle->setMode( mode );
+	}
+
+	void ChannelControl::Set3DOcclusion( float direct, float reverb )
+	{
+		if( this->cchandle )
+			this->cchandle->set3DOcclusion( direct, reverb );
+	}
 }
 
 #endif // __FOFMOD_CHANNELCONTROL__

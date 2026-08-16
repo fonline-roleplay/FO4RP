@@ -57,6 +57,8 @@ namespace FOFMOD
 	extern void Script_Channel_Get3DMinMaxDistance( float* minDistance, float* maxDistance, FOFMOD::Channel* ptr );
 	extern void Script_Channel_Set3DLevel( float level, FOFMOD::Channel* ptr );
 	extern float Script_Channel_Get3DLevel( FOFMOD::Channel* ptr );
+	extern void Script_Channel_Set3DIgnoreGeometry( bool ignore, FOFMOD::Channel* ptr );
+	extern void Script_Channel_Set3DOcclusion( float direct, float reverb, FOFMOD::Channel* ptr );
 
 	// loops
 	extern int Script_Channel_GetLoopCount( FOFMOD::Channel* ptr );

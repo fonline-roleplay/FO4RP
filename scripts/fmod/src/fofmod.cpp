@@ -50,6 +50,7 @@ void FMOD_Set3DListenerVelocity( float x, float y, float z );
 void FMOD_Set3DListenerForward( float x, float y, float z );
 void FMOD_Set3DListenerUp( float x, float y, float z );
 bool FMOD_ReplaceGeometry( CScriptArray* vertices, CScriptArray* polygons, CScriptArray* occlusions );
+void FMOD_GetGeometryOcclusion( float x, float y, float z, float* direct, float* reverb );
 
 FOFMOD::Sound* FMOD_GetSound( ScriptString& soundName, int soundType );
 
@@ -272,6 +273,15 @@ bool FMOD_ReplaceGeometry( CScriptArray* vertices, CScriptArray* polygons, CScri
 	return true;
 }
 
+void FMOD_GetGeometryOcclusion( float x, float y, float z, float* direct, float* reverb )
+{
+	FMODCHECK(NONE)
+	if( !direct || !reverb ) return;
+	*direct = 0.0f;
+	*reverb = 0.0f;
+	FMODSystem->GetGeometryOcclusion( x, y, z, direct, reverb );
+}
+
 FOFMOD::DSP* FMOD_CreateEffect( int effectType, CScriptArray* params )
 {
 	FMODCHECK(NULL);
@@ -465,6 +475,12 @@ void RegisterASInterface()
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Set3DMinMaxDistance(float min, float max)", 	asFUNCTION(FOFMOD::Script_Channel_Set3DMinMaxDistance), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::Set3DMinMaxDistance", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Set3DIgnoreGeometry(bool ignore)", asFUNCTION(FOFMOD::Script_Channel_Set3DIgnoreGeometry), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::Set3DIgnoreGeometry", r );
+		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Set3DOcclusion(float direct, float reverb)", asFUNCTION(FOFMOD::Script_Channel_Set3DOcclusion), asCALL_CDECL_OBJLAST);
+		if( !r )
+			Log(STR_BIND_ERROR, "FMODChannel::Set3DOcclusion", r );
 		r = ASEngine->RegisterObjectMethod("FMODChannel", "void Get3DMinMaxDistance(float& min, float& max)", 	asFUNCTION(FOFMOD::Script_Channel_Get3DMinMaxDistance), asCALL_CDECL_OBJLAST);
 		if( !r )
 			Log(STR_BIND_ERROR, "FMODChannel::Get3DMinMaxDistance", r );
@@ -570,6 +586,9 @@ void RegisterASInterface()
 		r = ASEngine->RegisterGlobalFunction("bool FMOD_ReplaceGeometry(array<double>@+ vertices, array<int>@+ polygons, array<double>@+ occlusions)", asFUNCTION(FMOD_ReplaceGeometry), asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_ReplaceGeometry", r );
+		r = ASEngine->RegisterGlobalFunction("void FMOD_GetGeometryOcclusion(float x, float y, float z, float&out direct, float&out reverb)", asFUNCTION(FMOD_GetGeometryOcclusion), asCALL_CDECL );
+		if( !r )
+			Log(STR_BIND_ERROR, "FMOD_GetGeometryOcclusion", r );
 		r = ASEngine->RegisterGlobalFunction("FMODSound@ FMOD_GetSound( string& soundName, int soundType )",   		asFUNCTION(FMOD_GetSound), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_GetSound", r );

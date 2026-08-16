@@ -225,6 +225,14 @@ namespace FOFMOD
 		return FMOD_OK;
 	}
 
+	FMOD_RESULT System::GetGeometryOcclusion( float x, float y, float z, float* direct, float* reverb )
+	{
+		if( !this->FSystem || !this->initialized || !direct || !reverb )
+			return FMOD_ERR_INVALID_PARAM;
+		FMOD_VECTOR source = { x, y, z };
+		return this->FSystem->getGeometryOcclusion( &this->listener.position, &source, direct, reverb );
+	}
+
 	FMOD_RESULT System::Initialize( unsigned int channelCount )
 	{
 		FMOD_RESULT result;
