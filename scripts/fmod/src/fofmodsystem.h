@@ -95,6 +95,7 @@ namespace FOFMOD
 		protected:
 			
 			FMOD::System* FSystem;
+			FMOD::Geometry* currentGeometry;
 			FOFMOD::ChannelGroup*   soundChannelGroup;
 			FOFMOD::ChannelGroup*   musicChannelGroup;
 			bool initialized;
@@ -155,6 +156,9 @@ namespace FOFMOD
 			void Set3DListenerVelocity( float x, float y, float z );
 			void Set3DListenerForward( float x, float y, float z );
 			void Set3DListenerUp( float x, float y, float z );
+			FMOD_RESULT ReplaceGeometry( const double* vertices, unsigned int vertexValueCount,
+				const int* polygons, unsigned int polygonValueCount,
+				const double* occlusions, unsigned int occlusionCount );
 			///////////////////////////////////
 			
 			///////////////////////////////////

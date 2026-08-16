@@ -49,6 +49,7 @@ void FMOD_Set3DListenerPosition( float x, float y, float z );
 void FMOD_Set3DListenerVelocity( float x, float y, float z );
 void FMOD_Set3DListenerForward( float x, float y, float z );
 void FMOD_Set3DListenerUp( float x, float y, float z );
+bool FMOD_ReplaceGeometry( CScriptArray* vertices, CScriptArray* polygons, CScriptArray* occlusions );
 
 FOFMOD::Sound* FMOD_GetSound( ScriptString& soundName, int soundType );
 
@@ -251,6 +252,24 @@ void FMOD_Set3DListenerUp( float x, float y, float z )
 {
 	FMODCHECK(NONE)
 	FMODSystem->Set3DListenerUp( x, y, z );
+}
+
+bool FMOD_ReplaceGeometry( CScriptArray* vertices, CScriptArray* polygons, CScriptArray* occlusions )
+{
+	FMODCHECK(false)
+	if( !vertices || !polygons || !occlusions )
+		return false;
+
+	FMOD_RESULT result = FMODSystem->ReplaceGeometry(
+		(const double*)vertices->GetBuffer(), vertices->GetSize(),
+		(const int*)polygons->GetBuffer(), polygons->GetSize(),
+		(const double*)occlusions->GetBuffer(), occlusions->GetSize() );
+	if( result != FMOD_OK )
+	{
+		Log("FMOD geometry update failed! (%d) %s\n", result, FMOD_ErrorString(result));
+		return false;
+	}
+	return true;
 }
 
 FOFMOD::DSP* FMOD_CreateEffect( int effectType, CScriptArray* params )
@@ -548,6 +567,9 @@ void RegisterASInterface()
 		r = ASEngine->RegisterGlobalFunction("void FMOD_Set3DListenerUp(float x, float y, float z)",   				asFUNCTION(FMOD_Set3DListenerUp), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_Set3DListenerUp", r );
+		r = ASEngine->RegisterGlobalFunction("bool FMOD_ReplaceGeometry(array<double>@+ vertices, array<int>@+ polygons, array<double>@+ occlusions)", asFUNCTION(FMOD_ReplaceGeometry), asCALL_CDECL );
+		if( !r )
+			Log(STR_BIND_ERROR, "FMOD_ReplaceGeometry", r );
 		r = ASEngine->RegisterGlobalFunction("FMODSound@ FMOD_GetSound( string& soundName, int soundType )",   		asFUNCTION(FMOD_GetSound), 		asCALL_CDECL );
 		if( !r )
 			Log(STR_BIND_ERROR, "FMOD_GetSound", r );
