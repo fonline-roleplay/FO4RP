@@ -3,8 +3,8 @@
 
 
 #include "fofmodsystem.h"
-#include "_defines.fos"
-#include "fonline.h"
+#include "../../_defines.fos"
+#include "../../fonline.h"
 #include "tinydir.h"
 #include "miniz.h"
 #include "util.h"
@@ -109,6 +109,7 @@ namespace FOFMOD
 	{
 		this->initialized = false;
 		this->FSystem = NULL;
+		this->currentGeometry = NULL;
 		this->soundChannelGroup = NULL;
 		this->musicChannelGroup = NULL;
 		this->indexedArchives.clear();
@@ -118,6 +119,12 @@ namespace FOFMOD
 
 	System::~System()
 	{
+		if( this->currentGeometry )
+		{
+			this->currentGeometry->release();
+			this->currentGeometry = NULL;
+		}
+
 		if( this->soundChannelGroup )
 		{
 			delete( this->soundChannelGroup );
@@ -145,6 +152,85 @@ namespace FOFMOD
 	void System::Update()
 	{
 		this->FSystem->update();
+	}
+
+	FMOD_RESULT System::ReplaceGeometry( const double* vertices, unsigned int vertexValueCount,
+		const int* polygons, unsigned int polygonValueCount,
+		const double* occlusions, unsigned int occlusionCount )
+	{
+		if( !this->FSystem || !this->initialized )
+			return FMOD_ERR_UNINITIALIZED;
+		if( polygonValueCount == 0 )
+		{
+			if( this->currentGeometry )
+			{
+				this->currentGeometry->release();
+				this->currentGeometry = NULL;
+			}
+			return FMOD_OK;
+		}
+		if( !vertices || vertexValueCount == 0 || vertexValueCount % 3 != 0 || !polygons )
+			return FMOD_ERR_INVALID_PARAM;
+
+		unsigned int polygonCount = 0;
+		unsigned int polygonVertices = 0;
+		for( unsigned int pos = 0; pos < polygonValueCount; )
+		{
+			const int count = polygons[pos++];
+			if( count < 3 || pos + (unsigned int)count > polygonValueCount )
+				return FMOD_ERR_INVALID_PARAM;
+			for( int i = 0; i < count; i++ )
+			{
+				if( polygons[pos + i] < 0 || (unsigned int)polygons[pos + i] >= vertexValueCount / 3 )
+					return FMOD_ERR_INVALID_PARAM;
+			}
+			pos += count;
+			polygonCount++;
+			polygonVertices += count;
+		}
+		if( !occlusions || occlusionCount != polygonCount )
+			return FMOD_ERR_INVALID_PARAM;
+
+		FMOD::Geometry* replacement = NULL;
+		FMOD_RESULT result = this->FSystem->createGeometry( (int)polygonCount, (int)polygonVertices, &replacement );
+		if( result != FMOD_OK )
+			return result;
+
+		unsigned int polygonIndex = 0;
+		for( unsigned int pos = 0; pos < polygonValueCount; polygonIndex++ )
+		{
+			const int count = polygons[pos++];
+			std::vector<FMOD_VECTOR> polygon( count );
+			for( int i = 0; i < count; i++ )
+			{
+				const unsigned int vertex = (unsigned int)polygons[pos + i] * 3;
+				polygon[i].x = (float)vertices[vertex];
+				polygon[i].y = (float)vertices[vertex + 1];
+				polygon[i].z = (float)vertices[vertex + 2];
+			}
+			const double rawOcclusion = occlusions[polygonIndex];
+			const float occlusion = (float)( rawOcclusion < 0.0 ? 0.0 : ( rawOcclusion > 1.0 ? 1.0 : rawOcclusion ) );
+			result = replacement->addPolygon( occlusion, occlusion, true, count, &polygon[0], NULL );
+			if( result != FMOD_OK )
+			{
+				replacement->release();
+				return result;
+			}
+			pos += count;
+		}
+
+		if( this->currentGeometry )
+			this->currentGeometry->release();
+		this->currentGeometry = replacement;
+		return FMOD_OK;
+	}
+
+	FMOD_RESULT System::GetGeometryOcclusion( float x, float y, float z, float* direct, float* reverb )
+	{
+		if( !this->FSystem || !this->initialized || !direct || !reverb )
+			return FMOD_ERR_INVALID_PARAM;
+		FMOD_VECTOR source = { x, y, z };
+		return this->FSystem->getGeometryOcclusion( &this->listener.position, &source, direct, reverb );
 	}
 
 	FMOD_RESULT System::Initialize( unsigned int channelCount )

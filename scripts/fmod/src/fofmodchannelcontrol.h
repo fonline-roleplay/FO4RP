@@ -45,6 +45,8 @@ namespace FOFMOD
 			void Get3DMinMaxDistance( float* minDistance, float* maxDistance );
 			void Set3DLevel( float level );
 			void Get3DLevel( float* value );
+			void Set3DIgnoreGeometry( bool ignore );
+			void Set3DOcclusion( float direct, float reverb );
 			
 			virtual void Stop();
 	};

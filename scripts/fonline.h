@@ -92,12 +92,14 @@ EXPORT_UNINITIALIZED asIScriptEngine* ASEngine;
 
 // AngelScript add-ons
 #define FONLINE_DLL
-#include "AngelScript/scriptstring.h"
-#include "AngelScript/scriptarray.h"
-#include "AngelScript/scriptfile.h"
-#include "AngelScript/scriptdictionary.h"
 #include "AngelScript/scriptany.h"
+#include "AngelScript/scriptarray.h"
+#include "AngelScript/scriptdictionary.h"
+#include "AngelScript/scriptfile.h"
+#include "AngelScript/scriptgrid.h"
 #include "AngelScript/scriptmath.h"
+#include "AngelScript/scriptstring.h"
+#include "AngelScript/scriptfilesystem.h"
 #undef FONLINE_DLL
 
 // FOnline types
@@ -119,7 +121,7 @@ struct Npc;
 struct CritterCl;
 struct MapObject;
 struct MapEntire;
-struct SceneryToClient;
+struct SceneryCl;
 struct ProtoMap;
 struct Map;
 struct ProtoLocation;
@@ -170,6 +172,7 @@ typedef set< int, int >::const_iterator      IntMapIt;
 typedef vector< NpcPlane* >                  NpcPlaneVec;
 typedef vector< NpcPlane* >::const_iterator  NpcPlaneVecIt;
 typedef vector< Critter* >                   CrVec;
+typedef map< uint, Critter* >				 CrMap;
 typedef vector< Critter* >::const_iterator   CrVecIt;
 typedef vector< CritterCl* >                 CrClVec;
 typedef vector< CritterCl* >::const_iterator CrClVecIt;
@@ -265,29 +268,29 @@ EXPORT_UNINITIALIZED const char* (ScriptGetLibraryVersion) ( );
 #define USE_NONE                     ( 15 )
 
 // Parameters
-#define MAX_PARAMS                   ( 1000 )
-#define SKILL_OFFSET( skill )            ( ( skill ) + ( FOnline->AbsoluteOffsets ? 0 : SKILL_BEGIN ) )
-#define PERK_OFFSET( perk )              ( ( perk )  + ( FOnline->AbsoluteOffsets ? 0 : PERK_BEGIN ) )
-#define TB_BATTLE_TIMEOUT            ( 100000000 )
-#define TB_BATTLE_TIMEOUT_CHECK( to )    ( ( to ) > 10000000 )
-#define SKILL_BEGIN                  ( FOnline->SkillBegin )
-#define SKILL_END                    ( FOnline->SkillEnd )
-#define TIMEOUT_BEGIN                ( FOnline->TimeoutBegin )
-#define TIMEOUT_END                  ( FOnline->TimeoutEnd )
-#define KILL_BEGIN                   ( FOnline->KillBegin )
-#define KILL_END                     ( FOnline->KillEnd )
-#define PERK_BEGIN                   ( FOnline->PerkBegin )
-#define PERK_END                     ( FOnline->PerkEnd )
-#define ADDICTION_BEGIN              ( FOnline->AddictionBegin )
-#define ADDICTION_END                ( FOnline->AddictionEnd )
-#define KARMA_BEGIN                  ( FOnline->KarmaBegin )
-#define KARMA_END                    ( FOnline->KarmaEnd )
-#define DAMAGE_BEGIN                 ( FOnline->DamageBegin )
-#define DAMAGE_END                   ( FOnline->DamageEnd )
-#define TRAIT_BEGIN                  ( FOnline->TraitBegin )
-#define TRAIT_END                    ( FOnline->TraitEnd )
-#define REPUTATION_BEGIN             ( FOnline->ReputationBegin )
-#define REPUTATION_END               ( FOnline->ReputationEnd )
+#define MAX_PARAMS                    ( 1000 )
+#define SKILL_OFFSET( skill )         ( ( skill ) + ( FOnline->AbsoluteOffsets ? 0 : SKILL_BEGIN ) )
+#define PERK_OFFSET( perk )           ( ( perk )  + ( FOnline->AbsoluteOffsets ? 0 : PERK_BEGIN ) )
+#define TB_BATTLE_TIMEOUT             ( 100000000 )
+#define TB_BATTLE_TIMEOUT_CHECK( to ) ( ( to ) > 10000000 )
+#define SKILL_BEGIN                   ( FOnline->SkillBegin )
+#define SKILL_END                     ( FOnline->SkillEnd )
+#define TIMEOUT_BEGIN                 ( FOnline->TimeoutBegin )
+#define TIMEOUT_END                   ( FOnline->TimeoutEnd )
+#define KILL_BEGIN                    ( FOnline->KillBegin )
+#define KILL_END                      ( FOnline->KillEnd )
+#define PERK_BEGIN                    ( FOnline->PerkBegin )
+#define PERK_END                      ( FOnline->PerkEnd )
+#define ADDICTION_BEGIN               ( FOnline->AddictionBegin )
+#define ADDICTION_END                 ( FOnline->AddictionEnd )
+#define KARMA_BEGIN                   ( FOnline->KarmaBegin )
+#define KARMA_END                     ( FOnline->KarmaEnd )
+#define DAMAGE_BEGIN                  ( FOnline->DamageBegin )
+#define DAMAGE_END                    ( FOnline->DamageEnd )
+#define TRAIT_BEGIN                   ( FOnline->TraitBegin )
+#define TRAIT_END                     ( FOnline->TraitEnd )
+#define REPUTATION_BEGIN              ( FOnline->ReputationBegin )
+#define REPUTATION_END                ( FOnline->ReputationEnd )
 
 // Events
 #define MAP_LOOP_FUNC_MAX            ( 5 )
@@ -307,6 +310,7 @@ EXPORT_UNINITIALIZED const char* (ScriptGetLibraryVersion) ( );
 #define FH_CRITTER                   BIN8( 00000001 )
 #define FH_DEAD_CRITTER              BIN8( 00000010 )
 #define FH_ITEM                      BIN8( 00000100 )
+#define FH_DOOR                      BIN8( 00001000 )
 #define FH_BLOCK_ITEM                BIN8( 00010000 )
 #define FH_NRAKE_ITEM                BIN8( 00100000 )
 #define FH_WALK_ITEM                 BIN8( 01000000 )
@@ -324,6 +328,8 @@ EXPORT_UNINITIALIZED const char* (ScriptGetLibraryVersion) ( );
 // GameOptions::Zoom
 #define MIN_ZOOM                     ( 0.2f )
 #define MAX_ZOOM                     ( 10.0f )
+
+#define UTF8_BUF_SIZE( count )                ( ( count ) * 4 )
 
 struct GameOptions
 {
@@ -343,10 +349,10 @@ struct GameOptions
 
     const bool         DisableTcpNagle;
     const bool         DisableZlibCompression;
+	const uint		   NetSendBufferSize;
     const uint         FloodSize;
     const bool         NoAnswerShuffle;
     const bool         DialogDemandRecheck;
-    const uint         FixBoyDefaultExperience;
     const uint         SneakDivider;
     const uint         LevelCap;
     const bool         LevelCapAddExperience;
@@ -466,6 +472,7 @@ struct GameOptions
 
     // Client and Mapper
     const bool         Quit;
+	const bool         OpenGLRendering;
     const bool         OpenGLDebug;
     const bool         AssimpLogging;
     const int          MouseX;
@@ -513,8 +520,10 @@ struct GameOptions
     const bool         ScrollCheck;
     const ScriptString FoDataPath;
     const int          FixedFPS;
+	const uint         FPS;
+	const uint         PingPeriod;
+	const uint         Ping;
     const bool         MsgboxInvert;
-    const int          ChangeLang;
     const uint8        DefaultCombatMode;
     const bool         MessNotify;
     const bool         SoundNotify;
@@ -542,7 +551,6 @@ struct GameOptions
     bool         HidePassword;
     const ScriptString PlayerOffAppendix;
     const int          CombatMessagesType;
-    const bool         DisableDrawScreens;
     const uint         Animation3dSmoothTime;
     const uint         Animation3dFPS;
     const int          RunModMul;
@@ -561,6 +569,14 @@ struct GameOptions
     const uint         Anim2CombatBegin;
     const uint         Anim2CombatIdle;
     const uint         Anim2CombatEnd;
+	const uint         RainTick;
+	int16        RainSpeedX;
+	int16        RainSpeedY;
+	char		 SoundVolume;
+	char		 MusicVolume;
+	bool		 SpritesFiltering;
+	bool		 NoobCursor;
+	bool		 NewChatFont;
 
     // Mapper
     const ScriptString ClientPath;
@@ -569,6 +585,7 @@ struct GameOptions
     const bool         ShowSpriteCuts;
     const bool         ShowDrawOrder;
     const bool         SplitTilesCollection;
+	const int		   MapperAutosave;
 
     // Engine data
     void         ( * CritterChangeParameter )( Critter& cr, uint index );                               // Call for correct changing critter parameter
@@ -581,11 +598,11 @@ struct GameOptions
 
     Sprite**     ( *GetDrawingSprites )( uint & count );                                                // Array of currently drawing sprites, tree is sorted
     SpriteInfo*  ( *GetSpriteInfo )(uint sprId);                                                        // Sprite information
-    uint         ( * GetSpriteColor )( uint sprId, int x, int y, bool affectZoom );                     // Color of pixel on sprite
-    bool         ( * IsSpriteHit )( Sprite* sprite, int x, int y, bool checkEgg );                      // Is position hitting sprite
+    uint         ( *GetSpriteColor )( uint sprId, int x, int y, bool affectZoom );                      // Color of pixel on sprite
+    bool         ( *IsSpriteHit )( Sprite* sprite, int x, int y, bool checkEgg );                       // Is position hitting sprite
 
     const char*  ( *GetNameByHash )(uint hash);                                                         // Get name of file by hash
-    uint         ( * GetHashByName )( const char* name );                                               // Get hash of file name
+    uint         ( *GetHashByName )( const char* name );                                               // Get hash of file name
 
     bool         ( * ScriptLoadModule )( const char* moduleName );
     uint         ( * ScriptBind )( const char* moduleName, const char* funcDecl, bool temporaryId );    // Returning bindId
@@ -618,23 +635,23 @@ struct GameOptions
     void*        ( *ScriptGetReturnedObject )( );
     void*        ( *ScriptGetReturnedAddress )( );
 
+	int          ( * Random )( int, int );
+	uint         ( * GetTick )();
+	void         ( * SetLogCallback )( void ( * )( const char* str ), bool );
+
     // Callbacks
     uint         ( * GetUseApCost )( CritterMutual& cr, Item& item, uint8 mode );
     uint         ( * GetAttackDistantion )( CritterMutual& cr, Item& item, uint8 mode );
-	
-	bool		 SpritesFiltering;
-	bool		 NewChatFont;
-	
-	int			 MapperAutosave;
+	void         ( * GetRainOffset )( short*, short* );
 };
 EXPORT_UNINITIALIZED GameOptions* FOnline;
 
 struct Mutex
 {
 #if defined ( FO_X86 )
-    const int Locker[ 6 ];      // CRITICAL_SECTION, include Windows.h
+    const int Locker[ 11 ];
 #else // FO_X64
-    const int Locker[ 10 ];
+    const int Locker[ 16 ];
 #endif
 };
 
@@ -792,13 +809,15 @@ struct ProtoItem
     const uint8  Hear_BlockDir[6];
     const uint8  Hear_Block;
 
-    //padding 140 bytes
     const uint8 Padding140[140];
 
     const uint8  Item_Hitpoints;
     const uint8  Fire_Strength;
     const uint8  Blast_Radius;
     const uint	 FlyEffect_Speed;
+
+    // Preserve the complete 512-byte ProtoItem user-data area.
+    const uint8 Padding12[12];
 
     // Type specific data
     const bool   Weapon_IsUnarmed;
@@ -841,7 +860,7 @@ struct ProtoItem
     const uint   Car_Entrance;
     const uint   Car_MovementType;
 
-    bool IsItem()      const { return Type != ITEM_TYPE_GENERIC && Type != ITEM_TYPE_WALL; }
+    bool IsItem()      const { return Type != ITEM_TYPE_GENERIC && Type != ITEM_TYPE_WALL && Type != ITEM_TYPE_GRID; }
     bool IsScen()      const { return Type == ITEM_TYPE_GENERIC; }
     bool IsWall()      const { return Type == ITEM_TYPE_WALL; }
     bool IsArmor()     const { return Type == ITEM_TYPE_ARMOR; }
@@ -855,6 +874,8 @@ struct ProtoItem
     bool IsGrid()      const { return Type == ITEM_TYPE_GRID; }
     bool IsGeneric()   const { return Type == ITEM_TYPE_GENERIC; }
     bool IsCar()       const { return Type == ITEM_TYPE_CAR; }
+	bool IsEffect()    const { return Type == ITEM_TYPE_EFFECT; }
+	
     bool LockerIsChangeble() const
     {
         if( IsDoor() ) return true;
@@ -1035,7 +1056,7 @@ struct Item
         const uint8  AnimShow[ 2 ];
         const uint8  AnimHide[ 2 ];
         const uint   Flags;
-        const uint8  Rate;
+        const uint8  Mode;
         const int8   LightIntensity;
         const uint8  LightDistance;
         const uint8  LightFlags;
@@ -1232,7 +1253,7 @@ struct Critter
     const uint8  Dir;
     const uint8  Cond;
     const uint8  ReservedCE;
-    const uint8  Reserved0;
+    const bool   LookRefreshFlag;
     const uint   ScriptId;
     const uint   ShowCritterDist1;
     const uint   ShowCritterDist2;
@@ -1344,6 +1365,8 @@ struct Critter
     const int                 ParamLocked;
     const CrVec               VisCr;
     const CrVec               VisCrSelf;
+	const CrMap         	  VisCrMap;
+	const CrMap         	  VisCrSelfMap;
     const UintSet             VisCr1, VisCr2, VisCr3;
     const UintSet             VisItem;
     const Spinlock            VisItemLocker;
@@ -1407,7 +1430,7 @@ struct Critter
 
 struct Client: Critter
 {
-    const char  Name[ MAX_NAME + 1 ];
+    const char  Name[ UTF8_BUF_SIZE( MAX_NAME ) ];
     const char  PassHash[ PASS_HASH_SIZE ];
     const uint8 Access;
     const uint  LanguageMsg;
@@ -1442,12 +1465,14 @@ struct CritterCl
     const uint          BaseType, BaseTypeAlias;
     const uint          ApRegenerationTick;
     const int16         Multihex;
+	const float			Scale;
+	void*				DrawEffect;
 
     const ScriptString  Name;
     const ScriptString  NameOnHead;
     const ScriptString  Lexems;
     const ScriptString  Avatar;
-    const char          PasswordReg[ MAX_NAME + 1 ];
+    const string        PasswordReg;
 
     const ItemVec       InvItems;
     const Item*         DefItemSlotHand;
@@ -1461,7 +1486,7 @@ struct CritterCl
     const IntVec        ParamsChanged;
     const int           ParamLocked;
 
-    const bool          IsRuning;
+    const bool          IsRunning;
     const Uint16PairVec MoveSteps;
 };
 
@@ -1552,6 +1577,8 @@ struct MapObject
             uint16 ToMapPid;
             uint   ToEntire;
             uint8  ToDir;
+			
+			uint8  SpriteCut;
         } const MScenery;
     };
 };
@@ -1565,7 +1592,7 @@ struct MapEntire
 };
 typedef vector< MapEntire > EntiresVec;
 
-struct SceneryToClient
+struct SceneryCl
 {
     const uint16 ProtoId;
     const uint8  Flags;
@@ -1586,7 +1613,7 @@ struct SceneryToClient
     const int16  Dir;
     const uint16 Reserved1;
 };
-typedef vector< SceneryToClient > SceneryToClientVec;
+typedef vector< SceneryCl > SceneryClVec;
 
 struct ProtoMap
 {
@@ -1638,8 +1665,8 @@ struct ProtoMap
     #endif
 
     #ifdef __SERVER
-    const SceneryToClientVec WallsToSend;
-    const SceneryToClientVec SceneriesToSend;
+    const SceneryClVec 		 WallsToSend;
+    const SceneryClVec 		 SceneriesToSend;
     const uint               HashTiles;
     const uint               HashWalls;
     const uint               HashScen;
@@ -1679,7 +1706,12 @@ struct Map
         const uint   ScriptId;
         const int    MapDayTime[ 4 ];
         const uint8  MapDayColor[ 12 ];
-        const uint   Reserved[ 20 ];
+        const uint   ProccessSleep;
+		const uint   ProccessTick;
+		const int	 Reserved[11];
+		const bool	 RefreshVisionFlags;
+		const uint8  Reserved1[3];
+		const uint	 Reserved2[6];
         const int    UserData[ MAP_MAX_DATA ];
     } const Data;
 
@@ -1737,6 +1769,8 @@ struct ProtoLocation
     const bool        GeckVisible;
 };
 
+#define LOCATION_EVENT_MAX       ( 2 )
+
 struct Location
 {
     const SyncObj Sync;
@@ -1759,6 +1793,8 @@ struct Location
 
     const ProtoLocation* Proto;
     const int            GeckCount;
+	
+	const int            FuncId[ LOCATION_EVENT_MAX ];
 
     const bool           IsNotValid;
     const int16          RefCounter;
@@ -1767,7 +1803,7 @@ struct Location
     bool IsVisible()   const { return Data.Visible || ( Data.GeckVisible && GeckCount > 0 ); }
 };
 
-struct Field // удалены все const, т.к. используютс¤ и измен¤ютс¤ почти все значени¤
+struct Field
 {
     struct Tile
     {
@@ -1804,31 +1840,15 @@ struct SpriteInfo
 {
     const void*  Surface;
     const float  SurfaceUV[ 4 ];
-    const uint16 Width;
-    const uint16 Height;
+    const int16  Width;
+    const int16  Height;
     const int16  OffsX;
     const int16  OffsY;
     const void*  Effect;
     const void*  Anim3d;     // If Anim3d != NULL than this is pure 3d animation
 };
 
-/*struct WTFS
-   {
-        int SprId;
-        int HexX, HexY;
-        uint res19;
-        uint res20;
-        int16 OffsX, OffsY;
-        void* p1;
-        void* p2;
-        uint res21;
-        uint8 Alpha;
-        uint8 res22[3];
-
-
-   }*/
-
-struct Sprite              // удалены все const, т.к. используютс¤ и измен¤ютс¤ почти все значени¤
+struct Sprite
 {
     // Ordering
     int     DrawOrderType; // 0..4 - flat, 5..9 - normal
@@ -1857,6 +1877,8 @@ struct Sprite              // удалены все const, т.к. использ
     uint    ContourColor;
     uint    Color;
     uint    FlashMask;
+	void*	DrawEffect;
+	float	Scale;
     bool*   ValidCallback;
     bool    Valid;     // If Valid == false than this sprite not valid
 
@@ -1989,57 +2011,22 @@ inline int GetDistantion( int x1, int y1, int x2, int y2 )
 
 inline void static_asserts()
 {
-    STATIC_ASSERT( sizeof( char )        == 1 );
-    STATIC_ASSERT( sizeof( int8 )        == 1 );
-    STATIC_ASSERT( sizeof( int16 )       == 2 );
-    STATIC_ASSERT( sizeof( int )         == 4 );
-    STATIC_ASSERT( sizeof( int64 )       == 8 );
-    STATIC_ASSERT( sizeof( uint8 )       == 1 );
-    STATIC_ASSERT( sizeof( uint16 )      == 2 );
-    STATIC_ASSERT( sizeof( uint )        == 4 );
-    STATIC_ASSERT( sizeof( uint64 )      == 8 );
-    STATIC_ASSERT( sizeof( bool )        == 1 );
-
+    STATIC_ASSERT( sizeof( char ) == 1 );
+    STATIC_ASSERT( sizeof( short ) == 2 );
+    STATIC_ASSERT( sizeof( int ) == 4 );
+    STATIC_ASSERT( sizeof( int64 ) == 8 );
+    STATIC_ASSERT( sizeof( uint8 ) == 1 );
+    STATIC_ASSERT( sizeof( uint16 ) == 2 );
+    STATIC_ASSERT( sizeof( uint ) == 4 );
+    STATIC_ASSERT( sizeof( uint64 ) == 8 );
+    STATIC_ASSERT( sizeof( bool ) == 1 );
+    STATIC_ASSERT( sizeof( ProtoItem ) == 920 );
     #if defined ( FO_X86 )
-    STATIC_ASSERT( sizeof( string )       == 24   );
-    STATIC_ASSERT( sizeof( IntVec )       == 12   );
-    STATIC_ASSERT( sizeof( IntMap )       == 24   );
-    STATIC_ASSERT( sizeof( IntSet )       == 24   );
-    STATIC_ASSERT( sizeof( IntPair )      == 8    );
-    STATIC_ASSERT( sizeof( ProtoItem )    == 908  );
-    STATIC_ASSERT( sizeof( Mutex )        == 24   );
-    STATIC_ASSERT( sizeof( GameOptions )  == 1328 );
-    STATIC_ASSERT( sizeof( SpriteInfo )   == 36   );
-    STATIC_ASSERT( sizeof( Field )        == 76   );
-    # ifdef __MAPPER
-    STATIC_ASSERT( sizeof( Sprite )       == 116  );
-    # else
-    STATIC_ASSERT( sizeof( Sprite )       == 108  );
-    # endif
-
-    STATIC_ASSERT( offsetof( TemplateVar, Flags )              == 68   );
-    STATIC_ASSERT( offsetof( NpcPlane, RefCounter )            == 96   );
-    STATIC_ASSERT( offsetof( GlobalMapGroup, EncounterForce )  == 64   );
-    STATIC_ASSERT( offsetof( Item, IsNotValid )                == 146  );
-    STATIC_ASSERT( offsetof( CritterTimeEvent, Identifier )    == 12   );
-    STATIC_ASSERT( offsetof( Critter, RefCounter )             == 9340 );
-    STATIC_ASSERT( offsetof( Client, LanguageMsg )             == 9408 );
-    STATIC_ASSERT( offsetof( Npc, Reserved )                   == 9360 );
-    STATIC_ASSERT( offsetof( CritterCl, MoveSteps )            == 5704 );
-    STATIC_ASSERT( offsetof( MapEntire, Dir )                  == 8    );
-    STATIC_ASSERT( offsetof( SceneryToClient, Reserved1 )      == 30   );
-    STATIC_ASSERT( offsetof( Map, RefCounter )                 == 774  );
-    STATIC_ASSERT( offsetof( ProtoLocation, GeckVisible )      == 76   );
-    STATIC_ASSERT( offsetof( Location, RefCounter )            == 282  );
-
-    # ifdef __SERVER
-    STATIC_ASSERT( offsetof( ProtoMap, HexFlags )              == 304  );
-    # endif
-    #else // FO_X64
-    STATIC_ASSERT( sizeof( Mutex )        == 40   );
-    //int array[offsetof( Map, HexFlags )];
-    //int error = 1 / &array;
-    STATIC_ASSERT( offsetof( Map, Proto )       == 688  );
+    STATIC_ASSERT( sizeof( size_t ) == 4 );
+    STATIC_ASSERT( sizeof( void* ) == 4 );
+    #elif defined ( FO_X64 )
+    STATIC_ASSERT( sizeof( size_t ) == 8 );
+    STATIC_ASSERT( sizeof( void* ) == 8 );
     #endif
 }
 

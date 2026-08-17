@@ -310,6 +310,18 @@ namespace FOFMOD
 			ptr->Set3DMinMaxDistance( minDistance, maxDistance );
 		}
 	}
+
+	void Script_Channel_Set3DIgnoreGeometry( bool ignore, FOFMOD::Channel* ptr )
+	{
+		if( ptr )
+			ptr->Set3DIgnoreGeometry( ignore );
+	}
+
+	void Script_Channel_Set3DOcclusion( float direct, float reverb, FOFMOD::Channel* ptr )
+	{
+		if( ptr )
+			ptr->Set3DOcclusion( direct, reverb );
+	}
 	
 	void Script_Channel_Get3DMinMaxDistance( float* minDistance, float* maxDistance, FOFMOD::Channel* ptr )
 	{

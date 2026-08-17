@@ -24,6 +24,7 @@
 #include "client_sound_ambient_system.fosh"
 #include "client_hotkey_manager.fosh"
 #include "client_gm_controls.fosh"
+#include "obj_model.fosh"
 
 import void InitializeGame() from "config";
 
@@ -49,11 +50,13 @@ import bool OutMessage(string& message, int& sayType) from "chat";
 import bool InMessage(string& message, int& sayType, uint& senderCritterID, uint& delay) from "chat";
 import bool MapMessage(string& message, uint16& hexX, uint16& hexY, uint& color, uint& delay) from "chat";
 
+/*
 import void AvatarRender( CritterCl& critter, int x, int y, int w, int h, uint alpha ) from "client_avatars";
 import void SetAvatarPlaceholders( const array<Sprite@>@ placeholders ) from "client_avatars";
 import void AvatarSizeUp() from "client_avatars";
 import void AvatarSizeDown() from "client_avatars";
 import void AvatarLoop() from "client_avatars";
+*/
 
 import int[]@ GetIniValues2(string& iniKey, int[]@ defaultValues) from "ini_parser";
 import int[]@ GetIniValues4(string& iniKey, int[]@ defaultValues) from "ini_parser";
@@ -66,9 +69,8 @@ import void InitEconomy() from "client_craft_economy";
 import void CreateEconomyList() from "client_craft_economy";
 
 import void qmap_iface() from "qmap_client";
-import void DrawRectangle( int x, int y, int w, int h, int color ) from "client_avatars";
 
-import void InputBoxKeyPressed( uint8 key ) from "client_screen_inputbox";
+import void InputBoxKeyPressed( uint8 key, string& text ) from "client_screen_inputbox";
 import void InputBoxClipboardInsert()  from "client_screen_inputbox";
 import void SwitchHotkeyLayer(int layer) from "client_hotkey_bind";
 
@@ -235,7 +237,7 @@ bool start()
 		CreateSprite( GetStrHash( "Avatars\\AvatarPlaceholderUpload.png" ), 0 )
 	};
 	
-	SetAvatarPlaceholders( avatarsPlaceholder );
+	//SetAvatarPlaceholders( avatarsPlaceholder );
 
     return result;
 }
@@ -244,10 +246,27 @@ bool start()
 // Main loop function. Returned time of next call in milliseconds.
 
 uint loop_turn = 0;
+uint16 SoundMeshMapPid = 0;
+bool SoundMeshLoaded = false;
 
 uint loop()
 {
     FOFMOD_Update();
+
+    uint16 currentMapPid = GetCurrentMapPid();
+    bool localMapLoaded = valid(GetChosen()) && GetMapWidth() > 0 && GetMapHeight() > 0;
+    if(localMapLoaded && (!SoundMeshLoaded || SoundMeshMapPid != currentMapPid))
+    {
+        SoundMeshLoaded = RegenerateCurrentFModMesh();
+        if(SoundMeshLoaded) SoundMeshMapPid = currentMapPid;
+    }
+    else if(!localMapLoaded && SoundMeshLoaded)
+    {
+        ClearCurrentFModMesh();
+        SoundMeshLoaded = false;
+        SoundMeshMapPid = 0;
+    }
+
     WASDInputLoop();
 	ProcessEvents();
 
@@ -286,7 +305,7 @@ uint loop()
         loop_turn = 0;
 	}
 	
-	AvatarLoop();
+	//AvatarLoop();
 	SoundAmbientTick();
 	HotkeyMngr_Tick();
 	
@@ -410,22 +429,17 @@ void _dr( int param0, int param1, int param2, string@ param3, int[] @ param4 ) /
 // Extra layers:
 // Global map
 //    100 (over map), 101 (over all)
-void render_iface( FOWindow@ window, uint layer )
+void render_iface( uint layer )
 {
-	if( window !is MainWindow )
-	{
-		return;
-	}
-	
 	CritterCl@ choo = GetChosen();
 	
-    if( layer == 1 )
+    if( layer == 2 )
     {
+		RenderLatestSoundBlockingHexes();
 		qmap_iface();
         show_player_info();
-    }
-    else if( layer == 2 )
-    {
+		GUI_Render( true );
+
 		if( !hideF1 )
 		{
 			ShowF1Help();
@@ -571,7 +585,7 @@ void render_iface( FOWindow@ window, uint layer )
     else if( layer == 3 )
     {
 		DrawChosenTabs();
-		GUI_Render();
+		GUI_Render( false );
 		if(_MainScreen == CLIENT_MAIN_SCREEN_GAME)
 			DrawControlPanel();
 
@@ -873,8 +887,7 @@ void render_global_map()
                     int a = ( data_char[ i * 2 + 1 ] & 0x00FFFFFF ) | 0xFF000000;
                     int b = data_char[ i * 2 + 1 ] >> 24;
 
-                    string str = " ";
-                    str[ 0 ] = b;
+                    string str = EncodeUTF8( uint( b ) );
 
                     int tw = 0, th = 0, lines = 0;
                     GetTextInfo( str, 0, 0, font, flags, tw, th, lines );
@@ -924,11 +937,8 @@ void render_map()
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Mouse behaviours. Click states look in _client_defines.fos, Mouse click states.
 // Return true to disable engine events.
-bool mouse_down( FOWindow@ window, int click )
+bool mouse_down( int click )
 {
-	if( window !is MainWindow )
-		return false;
-
 	if( click == MOUSE_CLICK_LEFT )
 	{
 		__MouseLastPressedX = __MouseX;
@@ -986,11 +996,8 @@ bool mouse_down( FOWindow@ window, int click )
     return GUI_MouseDown( click, __MouseX, __MouseY );
 }
 
-bool mouse_up( FOWindow@ window, int click )
+bool mouse_up( int click )
 {
-	if( window !is MainWindow )
-		return false;
-	
 	if( click == MOUSE_CLICK_LEFT )
 	{
 		__MouseLPressed = false;
@@ -1005,11 +1012,8 @@ bool mouse_up( FOWindow@ window, int click )
     return GUI_MouseUp( click, __MouseX, __MouseY );
 }
 
-void mouse_move( FOWindow@ window, int x, int y )
+void mouse_move( int x, int y )
 {
-	if( window !is MainWindow )
-		return;
-		
     GUI_MouseMove( x, y );
 }
 
@@ -1017,13 +1021,8 @@ void mouse_move( FOWindow@ window, int x, int y )
 // Keyboard behaviours. Key codes look in _client_defines.fos DirectInput keyboard scan codes.
 // Return true to disable engine events.
 
-bool key_down( FOWindow@ window, uint8 key )
+bool key_down( uint8 key, string& text )
 {
-	if( window !is MainWindow )
-	{
-		return false;
-	}
-	
     if( key == DIK_LMENU || key == DIK_RMENU )
 	{
         __altDown = true;
@@ -1278,13 +1277,13 @@ bool key_down( FOWindow@ window, uint8 key )
 	{
 		if( key == DIK_LBRACKET )
 		{
-			AvatarSizeDown();
+			//AvatarSizeDown();
 			return true;
 		}
 		
 		if( key == DIK_RBRACKET )
 		{
-			AvatarSizeUp();
+			//AvatarSizeUp();
 			return true;
 		}
 		
@@ -1322,11 +1321,21 @@ bool key_down( FOWindow@ window, uint8 key )
 	}
 	
 	ContainerHookKeyDown(chosen, key);
-	InputBoxKeyDown(key);
+	InputBoxKeyDown(key, text);
 
-	if(GUI_GetActiveScreen() != CLIENT_MAIN_SCREEN_LOGIN && HotkeyMngr_OnKeyStateChange(key, true))
+	bool isModifier = key == DIK_LMENU || key == DIK_RMENU ||
+		key == DIK_LCONTROL || key == DIK_RCONTROL ||
+		key == DIK_LSHIFT || key == DIK_RSHIFT;
+	bool hotkeyConsumed = GUI_GetActiveScreen() != CLIENT_MAIN_SCREEN_LOGIN && HotkeyMngr_OnKeyStateChange(key, true);
+	if( isModifier )
+	{
+		GUI_KeyDown( key, text );
+		return false;
+	}
+	if( hotkeyConsumed )
 		return true;
-	if( GUI_KeyDown( key ) )
+	
+	if( GUI_KeyDown( key, text ) )
 	{
 		// Hotkey consumed
 		return true;
@@ -1343,13 +1352,8 @@ bool key_down( FOWindow@ window, uint8 key )
     return false;
 }
 
-bool key_up( FOWindow@ window, uint8 key )
+bool key_up( uint8 key, string& text )
 {
-	if( window !is MainWindow )
-	{
-		return false;
-	}
-
     if( key == DIK_LMENU || key == DIK_RMENU )
 	{
         __altDown = false;
@@ -1386,7 +1390,16 @@ bool key_up( FOWindow@ window, uint8 key )
 	{
         __MapZooming = false;
 	}
-	if(GUI_GetActiveScreen() != CLIENT_MAIN_SCREEN_LOGIN && HotkeyMngr_OnKeyStateChange(key, false))
+	bool is_modifier = key == DIK_LMENU || key == DIK_RMENU ||
+		key == DIK_LCONTROL || key == DIK_RCONTROL ||
+		key == DIK_LSHIFT || key == DIK_RSHIFT;
+	bool hotkey_consumed = GUI_GetActiveScreen() != CLIENT_MAIN_SCREEN_LOGIN && HotkeyMngr_OnKeyStateChange(key, false);
+	if( is_modifier )
+	{
+		GUI_KeyUp( key );
+		return false;
+	}
+	if( hotkey_consumed )
 		return true;
 	
     return GUI_KeyUp( key );
@@ -1394,18 +1407,14 @@ bool key_up( FOWindow@ window, uint8 key )
 
 // //////////////////////////////////////////////////////////////////////////////////////////////////
 // Called on mouse/keyboard input lost (alt-tab, minimize, lost focus).
-void input_lost( FOWindow@ window )
+void input_lost( )
 {
-	if( window !is MainWindow )
-	{
-		return;
-	}
-	
     __altDown = false;
     __ctrlDown = false;
 	__shiftDown = false;
     __MapZooming = false;
 
+	WASDInputLost();
 	HotkeyMngr_InputLost();
     GUI_InputLost();
 }
@@ -1495,8 +1504,6 @@ void critter_in( CritterCl& cr )
 	}
 	
 	checkCritterControl( cr );
-
-	cr.SpriteZoom = cr.Param[ ST_SCALE_FACTOR ] * 0.01f;
 
    // if( __fastPanel )
 	//{
@@ -1684,7 +1691,7 @@ bool out_command( string& message, int& sayType )
         __MessagePrefix = "";
     }
 
-    if( message[ 0 ] == '%' ) // Command
+    if( message[ 0 ] == "%" ) // Command
 	{
 		if( message.length() > 8 )
 		{
@@ -1721,13 +1728,21 @@ bool out_command( string& message, int& sayType )
 		return false;
 	}
 	
-	if( message[ 0 ] == '~' ) // Command
+	if( message[ 0 ] == "~" ) // Command
     {
 		CritterCl@ chosen = GetChosen();
 
 		if( message == "~economy" )
 		{
 			CreateEconomyList();
+			return false;
+		}
+
+		if( message == "~mesh" )
+		{
+			SoundMeshLoaded = RegenerateCurrentFModMesh();
+			if(SoundMeshLoaded) SoundMeshMapPid = GetCurrentMapPid();
+			SetSoundMeshDebugVisible(true);
 			return false;
 		}
 
@@ -1918,7 +1933,7 @@ bool out_command( string& message, int& sayType )
         return true;
     }
 
-    if( message[ 0 ] == '#' || message[ 0 ] == '%' || message[ 0 ] == '$' ) // tnf commands
+    if( message[ 0 ] == "#" || message[ 0 ] == "%" || message[ 0 ] == "$" ) // tnf commands
     {
 		CritterCl @target = MouseCritter;
 		string targetInfo = valid( target ) ? "[" + target.Name + " #" + target.Id + "]" : "";
@@ -1943,7 +1958,7 @@ bool out_speak( string& message, int& sayType )
 	bool result = false;
     for( uint i = 0, j = message.length(); i < j; i++ )
     {
-        if( message[ i ] != ' ' )
+        if( message[ i ] != " " )
         {
             result = true;
             break;
@@ -3383,11 +3398,11 @@ string item_description( ItemCl& item, int lookType )
 }
 
 string replaceLetterN( string line )
-{//'#' ==	`35` && '¹' == 185
-	return replaceLetter( line, uint('#'), uint('¹') );
+{
+	return replaceLetter( line, "#", "â„–" );
 }
 
-string replaceLetter( string line, uint letter, uint replacement )
+string replaceLetter( string line, const string& letter, const string& replacement )
 {
 	for( uint i = 0, l = line.length(); i < l; i++ )
 	{
@@ -4929,7 +4944,7 @@ void player_data_generate( int[]& data )
     CritterGenerate( data );
 }
 
-bool player_data_check( int[]& data )
+bool player_data_check( string& name, int[]& data )
 {
     SetCrtype( data );
 
@@ -6344,7 +6359,7 @@ void __ReInit (int p0, int p1, int p2, string@ p3, int[]@ p4)
 	start (); // wtf?
 	screen_change( true, CLIENT_MAIN_SCREEN_LOGIN, 0, 0, 0); // wtf?
 	screen_change( false, CLIENT_MAIN_SCREEN_LOGIN, 0, 0, 0); // wtf?
-	render_iface( MainWindow, 2 ); // wtf?
+	render_iface( 2 ); // wtf?
 }
 
 void __Talk(int param0, int param1, int param2, string@ param3, int[]@ param4)
@@ -6448,6 +6463,17 @@ int last_player_info_tick = 0;
 uint[][] IDs;
 void show_player_info()
 {
+	if( _MainScreen != CLIENT_MAIN_SCREEN_GAME )
+	{
+		return;
+	}
+
+	CritterCl@ cr = GetChosen();
+	if( !valid( cr ) )
+	{
+		return;
+	}
+
     #ifndef PHYSICAL_UI
 	    if( GetTick() - last_player_info_tick < SHOW_PLAYER_INFO_DELAY * 0.95 )
 		{
@@ -6464,12 +6490,6 @@ void show_player_info()
 		physical_selected_type = 0;
         physical_selected_id = 0;
     #endif //PHYSICAL_UI
-	
-	CritterCl@ cr = GetChosen();
-	if( !valid( cr ) )
-	{
-		return;
-	}
 	bool is_gm = isGM( cr );
 
     Color@ line_color = NewColor( 0xe3, 0xad, 0x4f );
@@ -7148,62 +7168,6 @@ void ShowDesc()
 	items.resize(0);
 }
 
-class FOWindowEventShowData : FOWindowEventData
-{
-	
-}
-
-class FOWindowEventInitData : FOWindowEventData
-{
-	
-}
-
-class FOWindowEventHideData : FOWindowEventData
-{
-	
-}
-
-FOWindowEventResult window_event( FOWindow@ window, FOWindowEvent event, FOWindowEventData@ data )
-{
-	switch( event )
-	{	
-		case FOWindowEvent::Init:
-		{
-			
-		} break;
-		
-		case FOWindowEvent::Finish:
-		{
-			
-		} break;
-		
-		case FOWindowEvent::Show:
-		{
-			
-		} break;
-		
-		case FOWindowEvent::Hide:
-		{
-			
-		} break;
-		
-		case FOWindowEvent::Custom:
-		{
-			
-		} break;
-		
-		case FOWindowEvent::None:
-			break;
-	}
-	return FOWindowEventResult::None;
-}
-
-
-void imgui_render( FOWindow@ window )
-{
-
-}
-
 void critter_name_render( CritterCl@ critter, int x, int y, int w, int h, uint alpha )
 {
 	if( !valid( critter ) )
@@ -7211,7 +7175,7 @@ void critter_name_render( CritterCl@ critter, int x, int y, int w, int h, uint a
 		return;
 	}
 	
-    AvatarRender( critter, x, y, w, h, alpha );
+    //AvatarRender( critter, x, y, w, h, alpha );
 }
 
 //import void DrawText_info( string& text, int x, int y, int length, int width ) from "client_main";
@@ -7381,6 +7345,19 @@ void DrawCharRadiuses(CritterCl@ choo)
 			}
 		}
 	}
+}
+
+void DrawRectangle( int x, int y, int w, int h, int color )
+{
+	int[] data = {
+		x, y, color,
+		x, h, color,
+		w, h, color,
+		w, y, color,
+		x, y, color
+	};
+	
+	DrawPrimitive( DRAW_PRIMITIVE_LINESTRIP, data );
 }
 
 void DrawLTPProgressbar(CritterCl@ chosen)
@@ -8787,7 +8764,7 @@ void ContainerHookKeyDown(CritterCl@ chosen, uint8 key)
 	}
 }
 
-void InputBoxKeyDown(uint8 key)
+void InputBoxKeyDown(uint8 key, string& text)
 {
 	if(GUI_GetActiveScreen() != CLIENT_SCREEN_INPUTBOX) return;
 
@@ -8799,7 +8776,7 @@ void InputBoxKeyDown(uint8 key)
 	
 	if( ( key != DIK_ESCAPE || key == DIK_RETURN ) && !__ConsoleActive )
 	{
-		InputBoxKeyPressed( key );
+		InputBoxKeyPressed( key, text );
 		return;
 	}
 }

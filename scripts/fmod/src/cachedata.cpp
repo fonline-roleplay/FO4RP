@@ -2,8 +2,8 @@
 #define __FOFMOD_CACHEDATA__
 
 #include "cachedata.h"
-#include "_defines.fos"
-#include "fonline.h"
+#include "../../_defines.fos"
+#include "../../fonline.h"
 
 namespace FOFMOD
 {

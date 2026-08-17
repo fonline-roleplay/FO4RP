@@ -2,8 +2,8 @@
 #define __FOFMOD_SOUND__
 
 #include <stddef.h>
-#include "_defines.fos"
-#include "fonline.h"
+#include "../../_defines.fos"
+#include "../../fonline.h"
 #include "fofmodsound.h"
 
 namespace FOFMOD

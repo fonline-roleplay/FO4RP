@@ -2,7 +2,17 @@
 #define MAIN
 
 #include "fonline_tnf.h"
-#include "AngelScript/scriptfilesystem.cpp"
+
+#define __PIZDEC // oy vey !
+
+#ifdef __PIZDEC
+	#include "qmap_tools.h"
+	
+	#ifdef __CLIENT
+		#pragma comment(lib, "User32.lib")
+		#include "q_sprites.h"
+	#endif
+#endif
 
 #include <time.h>
 
@@ -86,6 +96,23 @@ EXPORT uint Critter_GetCurrentIp( Critter& cr );
 /*                          TNF - includes                              */
 /************************************************************************/
 
+uint GetElementSize( CScriptArray& data )
+{
+    int element_type_id = data.GetElementTypeId();
+    uint element_size = ASEngine->GetSizeOfPrimitiveType( element_type_id );
+
+    if( element_size == 0 ) {
+        asITypeInfo* typeInfo = ASEngine->GetTypeInfoById( element_type_id );
+        if( typeInfo ) {
+            element_size = typeInfo->GetSize();
+        }
+        else if( element_type_id & asTYPEID_OBJHANDLE ) {
+            element_size = sizeof( void* );
+        }
+    }
+
+    return element_size;
+}
 
 #ifdef __SERVER
 time_t GetTime( )
@@ -270,7 +297,7 @@ void __attribute__( ( destructor ) )  DllUnload() {}
 FONLINE_DLL_ENTRY( isCompiler )
 {
     #ifdef __CLIENT
-   RegisterNativeSprites( ASEngine, isCompiler );
+	RegisterNativeSprites( ASEngine, isCompiler );
 
     ASEngine->RegisterGlobalFunction( "bool CBPaste(string&)", asFUNCTION( CBPaste ), asCALL_CDECL );
     ASEngine->RegisterGlobalFunction( "uint GetHardware()", asFUNCTION( GetHardware ), asCALL_CDECL );
@@ -279,7 +306,6 @@ FONLINE_DLL_ENTRY( isCompiler )
     #endif
 
     RegisterQmapTools( ASEngine, isCompiler );
-	RegisterScriptFileSystem( );
 
     #ifdef __SERVER
     ASEngine->RegisterGlobalFunction( "void AddStartCallback(string&, string&)", asFUNCTION( AddStartCallback ), asCALL_CDECL );
@@ -1068,7 +1094,7 @@ EXPORT uint Map_GetTiles( Map& map, uint16 hexX, uint16 hexY, bool is_roof, CScr
 {
     vector< uint > finded;
 
-    if( array.GetElementSize() != 4 )
+    if( GetElementSize(array) != 4 )
         return 0;
 
     uint delta = GetTiles( map, hexX, hexY, is_roof, finded );
@@ -1205,11 +1231,6 @@ EXPORT int Map_GetScenParam( uint16 tx, uint16 ty, uint protoId, uint8 num )
     }
 
     return -1;
-}
-
-EXPORT uint8 Item_GetDurability( Item& item )
-{
-    return item.Data.Rate;
 }
 
 #endif // MAIN

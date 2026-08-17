@@ -2,8 +2,8 @@
 #define __REFCOUNT_H__
 
 
-#include "_defines.fos"
-#include "fonline.h"
+#include "../../_defines.fos"
+#include "../../fonline.h"
 #include "fofmodlock.h"
 
 

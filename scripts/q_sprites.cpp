@@ -2,6 +2,7 @@
 #define Q_SPRITES
 
 #include "q_sprites.h"
+#include "fonline_tnf.h"
 
 void Blank_Ref( void* obj )
 {}
@@ -163,7 +164,7 @@ void fillNoiseBuffer( float* buffer, uint8 size )
  */
 void GenerateDesert( CScriptArray* array, uint size )
 {
-    if( array->GetElementSize() != sizeof( float ) )
+    if( GetElementSize( *array ) != sizeof( float ) )
     {
         Log( "GenerateDesert: Error! Wrong type of array." );
         return;

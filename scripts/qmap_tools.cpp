@@ -2,10 +2,11 @@
 #define QMAP_TOOLS
 
 #include "qmap_tools.h"
+#include "fonline_tnf.h"
 
 inline bool DMO64_ChechDataSize( CScriptArray* array, uint tile )
 {
-    return ( ( array->GetElementSize() <= 8 ) && ( ( array->GetSize() * array->GetElementSize() ) >= ( tile + 1 ) * 8 ) );
+    return ( ( GetElementSize(*array) <= 8 ) && ( ( array->GetSize() * GetElementSize(*array) ) >= ( tile + 1 ) * 8 ) );
 }
 
 bool DMO64_get( CScriptArray* array, uint tile, uint16& hs, uint16& val, uint16& hexX, uint16& hexY, uint8& layer )
@@ -17,7 +18,7 @@ bool DMO64_get( CScriptArray* array, uint tile, uint16& hs, uint16& val, uint16&
     // uint8* data = &(array->GetBuffer());
     // uint p = (uint)(data+tile*8);
 
-    uint8* p = ( array->GetBuffer() + tile * 8 );
+    uint8* p = ( (uint8*)array->GetBuffer() + tile * 8 );
 
     hs = *( (uint16*) ( p ) );
 
@@ -89,13 +90,13 @@ bool DMO64_insertLast( CScriptArray* array, uint16 hs, uint16 val, uint hex )
 {
     // if(!checkTileData(hs_1, hs_2, hexX, hexY)) return false;
 
-    uint len = array->GetSize() * array->GetElementSize();
+    uint len = array->GetSize() * GetElementSize(*array);
     if( len % 8 != 0 )
         return false;
 
-    array->Resize( ( len + 8 ) / array->GetElementSize() );
+    array->Resize( ( len + 8 ) / GetElementSize(*array) );
 
-    uint8* p = array->GetBuffer() + len;
+    uint8* p = (uint8*)array->GetBuffer() + len;
 
     *( (uint16*) p ) = hs;
     *( (uint16*) ( p + 2 ) ) = val;
@@ -112,15 +113,15 @@ bool DMO64_insertLast( CScriptArray* array, uint16 hs, uint16 val, uint hex )
 
 bool DMO64_insertLast( CScriptArray* array, CScriptArray* from_array )
 {
-    uint len = array->GetSize() * array->GetElementSize();
-    uint len2 = from_array->GetSize() * from_array->GetElementSize();
+    uint len = array->GetSize() * GetElementSize(*array);
+    uint len2 = from_array->GetSize() * GetElementSize(*from_array);
 
     if( len % 8 != 0 || len2 == 0 || len2 % 8 != 0 )
         return false;
 
-    array->Resize( ( len + len2 ) / array->GetElementSize() );
+    array->Resize( ( len + len2 ) / GetElementSize(*array) );
 
-    memcpy( array->GetBuffer() + len, from_array->GetBuffer(), len2 );
+    memcpy( (char*)array->GetBuffer() + len, from_array->GetBuffer(), len2 );
 
     return true;
 }
@@ -179,9 +180,9 @@ uint DMO64_makeHex( uint16 hexX, uint16 hexY, uint8 layer )
 
 int DMO64_search( CScriptArray* array, uint hex )
 {
-    uint* p = (uint*) ( array->GetBuffer() + 4 );
+    uint* p = (uint*)( (uint8*)array->GetBuffer() + 4 );
 
-    for( uint i = 0, len = ( array->GetSize() * array->GetElementSize() ) / 8; i < len; i++ )
+    for( uint i = 0, len = ( array->GetSize() * GetElementSize(*array) ) / 8; i < len; i++ )
     {
         if( ( *p ) == hex )
             return i;
@@ -192,7 +193,7 @@ int DMO64_search( CScriptArray* array, uint hex )
 
 int DMO64_search( CScriptArray* array, uint hex, uint begin, uint end )
 {
-    uint* p = (uint*) ( array->GetBuffer() + begin * 8 + 4 );
+    uint* p = (uint*) ( (uint8*)array->GetBuffer() + begin * 8 + 4 );
 
     for( uint i = begin; i < end; i++ )
     {
@@ -205,7 +206,7 @@ int DMO64_search( CScriptArray* array, uint hex, uint begin, uint end )
 
 bool DMO64_set( CScriptArray* array, uint16 hs, uint16 val, uint hex, bool rewrite )
 {
-    if( array->GetElementSize() > 8 ||
+    if( GetElementSize(*array) > 8 ||
         hex == 0 )
         return false;                      // если гекс невалидный - выходим
 
@@ -218,12 +219,12 @@ bool DMO64_set( CScriptArray* array, uint16 hs, uint16 val, uint hex, bool rewri
 
         if( hs == 0 )                      // если номер хэша нулевой, то удаляем тайл
         {
-            int nofe = 8 / array->GetElementSize();
+            int nofe = 8 / GetElementSize(*array);
             array->ResizeAt( -nofe, nofe * tile );
         }
 
         else
-            *( (uint*) ( array->GetBuffer() + 8 * tile ) ) = hs;  // иначе изменяем номер хэша для тайла
+            *( (uint*) ( (uint8*)array->GetBuffer() + 8 * tile ) ) = hs;  // иначе изменяем номер хэша для тайла
     }
     else                                                          // иначе пишем новый тайл
     {
@@ -237,14 +238,14 @@ bool DMO64_set( CScriptArray* array, uint16 hs, uint16 val, uint hex, bool rewri
 
 bool DMO64_add( CScriptArray* array, CScriptArray* from_array, bool rewrite )
 {
-    if( array->GetElementSize() > 8 || from_array->GetElementSize() > 8 )
+    if( GetElementSize(*array) > 8 || GetElementSize(*from_array) > 8 )
         return false;
 
-    int  nofe = 8 / array->GetElementSize();
+    int  nofe = 8 / GetElementSize(*array);
 
-    uint len = array->GetSize() * array->GetElementSize(),
+    uint len = array->GetSize() * GetElementSize(*array),
          num = len >> 3, // len/8
-         len2 = from_array->GetSize() * from_array->GetElementSize(),
+         len2 = from_array->GetSize() * GetElementSize(*from_array),
          num2 = len2 >> 3;
 
     if( len % 8 != 0 || num2 == 0 || len2 % 8 != 0 )
@@ -256,9 +257,9 @@ bool DMO64_add( CScriptArray* array, CScriptArray* from_array, bool rewrite )
     uint   hex = 0;
     uint16 hs = 0;
 
-    uint8* p2 = from_array->GetBuffer(),
-    * p = array->GetBuffer(),
-    * p1 = p + len;
+    uint8* p2 = (uint8*)from_array->GetBuffer(),
+    *p = (uint8*)array->GetBuffer(),
+    *p1 = p + len;
 
     for( uint i = 0; i < num2; i++ )
     {
@@ -293,7 +294,7 @@ bool DMO64_add( CScriptArray* array, CScriptArray* from_array, bool rewrite )
         p2 += 8;
     }
 
-    array->Resize( ( p1 - p ) / array->GetElementSize() );
+    array->Resize( ( p1 - p ) / GetElementSize(*array) );
 
     return true;
 }
@@ -303,7 +304,7 @@ uint DMO64_getHashNum( CScriptArray* array, uint hex )
     int tile = DMO64_search( array, hex );
     if( tile == -1 )
         return 0;
-    return *( (uint16*) ( ( array->GetBuffer() ) + tile * 8 ) );
+    return *( (uint16*) ( ( (uint8*)array->GetBuffer() ) + tile * 8 ) );
 }
 
 void RegisterQmapTools( asIScriptEngine* engine, bool compiler )

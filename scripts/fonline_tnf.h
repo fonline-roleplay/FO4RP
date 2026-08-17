@@ -1,7 +1,6 @@
 #ifndef __FONLINE_TNF__
 #define __FONLINE_TNF__
 
-#define __PIZDEC // oy vey !
 // Script constants
 #define SKIP_PRAGMAS
 #include "_defines.fos"
@@ -26,27 +25,6 @@ struct _GlobalVars
 	uint* __AllowRealDayTime;
 } extern GlobalVars;
 
-// #ifdef __CLIENT
-// struct _ClientGlobals
-// {
-	// uint8* __CurrentAim;
-	////pad +3 bytes
-// } ClientGlobals;
-// #endif
-
-#ifdef __PIZDEC
-
-#ifdef MAIN
-
-	#include "qmap_tools.h"
-	
-	#ifdef __CLIENT
-		#pragma comment(lib, "User32.lib")
-		#include "q_sprites.h"
-	#endif
-	
-#endif
-
-#endif
+uint GetElementSize( CScriptArray& data );
 
 #endif // __FONLINE_TNF__

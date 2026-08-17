@@ -14,6 +14,7 @@
 // https://fmod.com/resources/documentation-api?version=2.02&page=core-api.html
 
 #define FOFMOD_CHANNEL_COUNT ( 64 ) // 32 is okay, Range: [0, 4095]
+#define LOUD_SOUND_OCCLUSION_SCALE ( 0.2f )
 
 //Translate hex coordinates into more human coordinates: X is right and Y is down
 void CoordinatesHexToGrid(int x, int y, float &out ox, float &out oy)
@@ -24,6 +25,18 @@ void CoordinatesHexToGrid(int x, int y, float &out ox, float &out oy)
 
 	ox = sqrt3 * (x - y / 2.0);
 	oy = y * 3.0 / 2.0;
+}
+
+// Convert FOnline offset-column hex coordinates to a regular Cartesian grid
+// used by FMOD. Adjacent hex centers are exactly one distance unit apart, so
+// FMOD min/max distances can be specified directly in hexes.
+void CoordinatesHexToAudio(int hexX, int hexY, float &out x, float &out y)
+{
+	const float sqrt3Over2 = 0.866025404f;
+	// Keep FOnline's offset columns aligned with the Cartesian axes. This is
+	// equivalent to an odd-column axial projection rotated by +30 degrees.
+	x = float(hexX) * sqrt3Over2;
+	y = float(hexY) - float(hexX & 1) * 0.5f;
 }
 
 #ifdef __CLIENT
@@ -141,6 +154,17 @@ void FMOD_Set3DListenerUp(const float, const float, const float)
 
 }
 
+bool FMOD_ReplaceGeometry(double[]@, int[]@, double[]@)
+{
+	return true;
+}
+
+void FMOD_GetGeometryOcclusion(float, float, float, float&out direct, float&out reverb)
+{
+	direct = 0.0f;
+	reverb = 0.0f;
+}
+
 void FMOD_Set3DListenerForward(const float, const float, const float)
 {
 
@@ -218,28 +242,14 @@ FMODSound@ FMOD_GetSound(string@&, const int)
 
 #endif
 
-void SetConfigSoundVolume()
+void SyncSoundsVolume()
 {
-	string valStr = GetConfigValue ( CFG_FILENAME, "Game Options", "SoundVolume", "0" );
-	int val = 0;
-	if( StrToInt( valStr, val ) )
-	{
-		val = CLAMP( val, 0, 100 );
-		float fval = ( float(val) ) / 100;
-		FMOD_SetSoundsVolume( fval );
-	}
+	FMOD_SetSoundsVolume( float( __SoundVolume ) / 100.0f );
 }
 
-void SetConfigMusicVolume()
+void SyncMusicVolume()
 {
-	string valStr = GetConfigValue ( CFG_FILENAME, "Game Options", "MusicVolume", "0" );
-	int val = 0;
-	if( StrToInt ( valStr, val ) )
-	{
-		val = CLAMP( val, 0, 100 );
-		float fval =  ( float(val) ) / 100;
-		FMOD_SetMusicVolume( fval );
-	}
+	FMOD_SetMusicVolume( float( __MusicVolume ) / 100.0f );
 }
 
 void InitEchoDefault()
@@ -266,6 +276,11 @@ void Init3DListenerDefault()
 	FMOD_Set3DListenerForward( 0.0f, -1.0f, 0.0f ); // Negative Y is forward
 }
 
+bool FOFMOD_ReplaceGeometry(double[]@ vertices, int[]@ polygons, double[]@ occlusions)
+{
+	return FMOD_ReplaceGeometry(vertices, polygons, occlusions);
+}
+
 void TouchArchive()
 {
 	FMOD_TouchArchive("./data/NNM_music.zip");
@@ -280,8 +295,8 @@ bool FOFMOD_Initialize()
 	if( result )
 	{
 		Helper.Init(realdeals);
-		SetConfigSoundVolume();
-		SetConfigMusicVolume();
+		SyncSoundsVolume();
+		SyncMusicVolume();
 		InitEchoDefault();
 		InitDistortionDefault();
 		InitMuffledDefault();		
@@ -305,20 +320,12 @@ void FOFMOD_Finish()
 
 void IncrementSoundsVolume( int step )
 {
-	float curVol = FMOD_GetSoundsVolume();
-	float volDelta = step * 0.02f;
-	float resVol = curVol + volDelta;
-	resVol = CLAMP( resVol, 0.00f, 1.00f );
-	FMOD_SetSoundsVolume ( resVol );
+	SyncSoundsVolume();
 }
 
 void IncrementMusicVolume( int step )
 {
-	float curVol = FMOD_GetMusicVolume();
-	float volDelta = step * 0.02f;
-	float resVol = curVol + volDelta;
-	resVol = CLAMP( resVol, 0.00f, 1.00f );
-	FMOD_SetMusicVolume ( resVol );
+	SyncMusicVolume();
 }	
 
 
@@ -332,7 +339,7 @@ void FOFMOD_Update()
 			// position changed
 			Hx = chosen.HexX;
 			Hy = chosen.HexY;
-			CoordinatesHexToGrid( Hx, Hy, FHx, FHy );
+			CoordinatesHexToAudio( Hx, Hy, FHx, FHy );
 			FMOD_Set3DListenerPosition( FHx, FHy, 0.0f );
 			//Message(" Position update " + FHx + ":"  + FHy );
 		}
@@ -524,14 +531,33 @@ FMODChannel@ FOFMOD_PlaySound( string& filename, uint16 hexX, uint16 hexY, uint 
 	if( valid(result ) )
 	{
 		float x = 0.0f, y = 0.0f;
-		CoordinatesHexToGrid( hexX, hexY, x, y );
+		CoordinatesHexToAudio( hexX, hexY, x, y );
 		result.Set3DPosition( x, y, 0.0f );
-		CoordinatesHexToGrid( minDistance, maxDistance, x, y );
-		result.Set3DMinMaxDistance( x, y ); 
+		result.Set3DMinMaxDistance( float(minDistance), float(maxDistance) );
 		result.SetPaused(false);
 	}
 	
 	return result;
+}
+
+void ApplyLoudGeometryOcclusion(FMODChannel@ sound, float x, float y)
+{
+	if(!valid(sound)) return;
+	float direct = 0.0f;
+	float reverb = 0.0f;
+	FMOD_GetGeometryOcclusion(x, y, 0.0f, direct, reverb);
+	sound.Set3DIgnoreGeometry(true);
+	// Scale attenuation strength rather than the final combined value. This
+	// keeps a single wall mild while allowing many underground walls to stack.
+	if(direct < 0.0f) direct = 0.0f;
+	if(direct > 1.0f) direct = 1.0f;
+	if(reverb < 0.0f) reverb = 0.0f;
+	if(reverb > 1.0f) reverb = 1.0f;
+	direct = 1.0f - pow(1.0f - direct, LOUD_SOUND_OCCLUSION_SCALE);
+	reverb = 1.0f - pow(1.0f - reverb, LOUD_SOUND_OCCLUSION_SCALE);
+	sound.Set3DOcclusion(
+		direct,
+		reverb);
 }
 
 //For using weapons
@@ -582,12 +608,15 @@ void __PlayWeaponSound( int soundId, int hexX, int hexY, string@ path, int[]@ pa
 	}
 	
 	float ox = 0.0f, oy = 0.0f;
-	CoordinatesHexToGrid( hexX, hexY, ox, oy );
+	CoordinatesHexToAudio( hexX, hexY, ox, oy );
 	float maxDist = param4[2];
-	float minDist = maxDist / 2; 
+	bool isLoudShot = param4.length() > 3 && param4[3] != 0;
+	if(isLoudShot && maxDist < 30.0f) maxDist = 30.0f;
+	float minDist = maxDist / 2;
 	sound.Set3DPosition( ox, oy, 0.0f );
 	sound.Set3DLevel( 0.9f );
 	sound.Set3DMinMaxDistance( minDist, maxDist );
+	if(isLoudShot) ApplyLoudGeometryOcclusion(sound, ox, oy);
 	float mod = Random( -99, 99 ) / 1000.0f;
 	float val = 1.0f - mod;
 	sound.SetPitch( val );
@@ -638,7 +667,7 @@ void __PlayDoorSound( int soundId, int hexX, int hexY, string@ path, int[]@ para
 	}
 	
 	float ox = 0.0f, oy = 0.0f;
-	CoordinatesHexToGrid( hexX, hexY, ox, oy );
+	CoordinatesHexToAudio( hexX, hexY, ox, oy );
 	float maxDist = param4[2];
 	float minDist = maxDist / 2; 
 	sound.Set3DPosition( ox, oy, 0.0f );
@@ -768,12 +797,14 @@ void __PlaySound( int soundId, int hexX, int hexY, string@ path, int[]@ param4 )
 	}
 	
 	float ox = 0.0f, oy = 0.0f;
-	CoordinatesHexToGrid( hexX, hexY, ox, oy );
+	CoordinatesHexToAudio( hexX, hexY, ox, oy );
 	float maxDist = param4[0];
-	float minDist = maxDist / 2; 
+	bool isLoud = param4.length() > 1 && param4[1] != 0;
+	float minDist = maxDist / 2;
 	sound.Set3DPosition( ox, oy, 0.0f );
 	sound.Set3DLevel( 0.7f );
 	sound.Set3DMinMaxDistance( minDist, maxDist );
+	if(isLoud) ApplyLoudGeometryOcclusion(sound, ox, oy);
 	float mod = Random( -99, 99 ) / 1000.0f;
 	float val = 1.0f - mod;
 	sound.SetPaused ( false );
@@ -790,7 +821,7 @@ void __PlayJukeboxTune( int soundId, int hexX, int hexY, string@ path, int[]@ pa
 		return;
 	}
 	float ox = 0.0f, oy = 0.0f;
-	CoordinatesHexToGrid( hexX, hexY, ox, oy );
+	CoordinatesHexToAudio( hexX, hexY, ox, oy );
 	float maxDist = param4[0];
 	float minDist = maxDist / 3; 
 	sound.Set3DPosition( ox, oy, 0.0f );
