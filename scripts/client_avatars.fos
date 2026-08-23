@@ -9,9 +9,8 @@ enum EAvatarPlaceholder
 	AvatarStateNone,
 	AvatarStateNoFound,
 	AvatarStateDownload,
-	AvatarStateGood,
 	AvatarPlayer,
-	AvatarStateUpload
+	AvatarStateGood
 }
 
 enum EAvatarRenderMode
@@ -26,79 +25,92 @@ enum EAvatarRenderMode
 AvatarRenderer@[] AvatarRenderers = 
 {
 	AvatarRendererAll(),
-	AvatarRendererOnlyMouse(),
-	AvatarRenderer()
+	AvatarRendererOnlyMouse()
 };
 
 dictionary AvatarLib;
-const array<Sprite@>@ AvatarPlaceholders = null;
-uint AvatarSizeCurrent = 1;
-uint[] AvatarSize = { 32, 64, 128 };
+const Sprite@[]@ AvatarPlaceholders = null;
+const uint AvatarSize = 64;
 
 class Avatar : Sprite
 {
 	EAvatarPlaceholder State;
+	string ManagedName;
+	bool SyncPending;
 	
-	Avatar( uint hash )
+	Avatar( string& name )
 	{
-		State = Load( hash, 0 ) ? EAvatarPlaceholder::AvatarStateGood : EAvatarPlaceholder::AvatarStateNoFound;
-	}	
-}
-
-Avatar@ LoadAvatar( uint hash )
-{
-	Avatar@ result = Avatar( hash );
-	AvatarLib.set( "" + hash, @result );
-	return result;
-}
-
-Sprite@ GetAvatar( uint hash, bool isPlayer )
-{
-	if( hash == 0 )
-	{
-		if( isPlayer )
-		{
-			return AvatarPlaceholders[EAvatarPlaceholder::AvatarPlayer];
-		}
+		ManagedName = name;
+		bool localLoaded = Load("ManagedFiles/" + ManagedName, PT_DATA);
+		SyncPending = RequestManagedFile(ManagedName);
+		if (localLoaded)
+			State = EAvatarPlaceholder::AvatarStateGood;
 		else
-		{		
-			return AvatarPlaceholders[EAvatarPlaceholder::AvatarStateNone];
-		}
-	}
-	
-	Avatar@ result = null;
-	if( !AvatarLib.get( "" + hash, @result ) )
+			State = SyncPending ? EAvatarPlaceholder::AvatarStateDownload : EAvatarPlaceholder::AvatarStateNoFound;
+	}	
+
+	void RefreshManaged()
 	{
-		@result = LoadAvatar( hash );
-	}
-	
-	if( !valid(result) )
-	{
-		return AvatarPlaceholders[EAvatarPlaceholder::AvatarStateNone];
-	}
-	
-	if( result.State != EAvatarPlaceholder::AvatarStateGood )
-	{	
-		if( result.State == EAvatarPlaceholder::AvatarStateNoFound )
+		if (!SyncPending)
+			return;
+		int state = GetManagedFileState(ManagedName);
+		if (state == 2)
 		{
-			Control.AddReqest( AvatarDownloadReqest( hash, result ) );
-			return AvatarPlaceholders[EAvatarPlaceholder::AvatarStateNoFound];
+			SyncPending = false;
+			State = Load("ManagedFiles/" + ManagedName, PT_DATA) ? EAvatarPlaceholder::AvatarStateGood : EAvatarPlaceholder::AvatarStateNoFound;
 		}
-		
-		if( result.State == EAvatarPlaceholder::AvatarStateDownload )
+		else if (state < 0)
 		{
-			return AvatarPlaceholders[result.State];
+			SyncPending = false;
+			if (State != EAvatarPlaceholder::AvatarStateGood)
+				State = EAvatarPlaceholder::AvatarStateNoFound;
 		}
-	
-		return AvatarPlaceholders[result.State];
 	}
-	
+}
+
+string GetManagedAvatarName(uint critterId, uint index, int avatarKey)
+{
+	uint key = uint(avatarKey);
+	uint extension = key >> 30;
+	if (extension > 1)
+		return "";
+	string ext = extension == 1 ? "jpg" : "png";
+	return "avatar-" + critterId + "-" + index + "-" + (key & 0x3FFFFFFF) + "." + ext;
+}
+
+Avatar@ LoadAvatar( string& name )
+{
+	Avatar@ result = Avatar( name );
+	AvatarLib.set( name, @result );
 	return result;
 }
 
 Sprite@ GetAvatar( CritterCl& critter )
-{	
-	return GetAvatar( uint( critter.Avatar[ AVATAR_BEGIN + critter.Param[ST_AVATAR_INDEX]] ), critter.IsPlayer( ) );
+{
+	return GetAvatar(critter, uint(critter.Param[ST_AVATAR_INDEX]));
+}
+
+Sprite@ GetAvatar(CritterCl& critter, uint index)
+{
+	int avatarKey = critter.Avatar[AVATAR_BEGIN + index];
+	if (avatarKey == 0)
+		return AvatarPlaceholders[critter.IsPlayer() ? EAvatarPlaceholder::AvatarPlayer : EAvatarPlaceholder::AvatarStateNone];
+	
+	string name = GetManagedAvatarName(critter.Id, index, avatarKey);
+	if (name.length() == 0)
+		return AvatarPlaceholders[EAvatarPlaceholder::AvatarStateNoFound];
+	
+	Avatar@ result = null;
+	if (!AvatarLib.get(name, @result))
+		@result = LoadAvatar(name);
+	
+	if (!valid(result))
+		return AvatarPlaceholders[EAvatarPlaceholder::AvatarStateNone];
+	
+	result.RefreshManaged();
+	if (result.State == EAvatarPlaceholder::AvatarStateGood)
+		return result;
+	return AvatarPlaceholders[result.State];
 }
 
 class AvatarRenderer
@@ -120,7 +132,7 @@ class AvatarRendererAll : AvatarRenderer
 	{
 		y = h;		
 		x += int( ( w - x ) * 0.5 );
-		int size = int( AvatarSize[AvatarSizeCurrent]/*/__SpritesZoom */);
+		int size = int(AvatarSize);
 		x -= int(size/2);
 		y -= size + 20;
 		if( !IsCollision( __MouseX, __MouseY, x, y, size, size) )
@@ -135,38 +147,10 @@ class AvatarRendererOnlyMouse : AvatarRenderer
 {
 	void Render( Sprite@ avatar, CritterCl& critter, int x, int y, int w, int h, uint alpha ) override
 	{
-		if( MouseCritter is critter )
-		{				
-			int size = int( AvatarSize[AvatarSizeCurrent]/*/__SpritesZoom */);
-			DrawSprite( avatar.Id, 0, __ScreenWidth - size, 0, size, size, true, false, 0 );
-			DrawRectangle( __ScreenWidth - size, 0, __ScreenWidth, size, int( COLOR_BLACK ) );
-		}
+		int size = int(AvatarSize);
+		DrawSprite( avatar.Id, 0, __ScreenWidth - size, 0, size, size, true, false, 0 );
+		DrawRectangle( __ScreenWidth - size, 0, __ScreenWidth, size, int( COLOR_BLACK ) );
 	}
-}
-
-void AvatarSizeUp()
-{
-	AvatarSizeCurrent++;
-	if( AvatarSizeCurrent == AvatarSize.length() )
-	{
-		AvatarSizeCurrent = 0;
-	}
-	
-	Message( "Avatar size: |0xFFFF00 " + AvatarSize[AvatarSizeCurrent] );
-}
-
-void AvatarSizeDown()
-{
-	if( AvatarSizeCurrent == 0 )
-	{
-		AvatarSizeCurrent = AvatarSize.length() - 1;
-	}
-	else
-	{
-		AvatarSizeCurrent--;
-	}
-			
-	Message( "Avatar size: |0xFFFF00 " + AvatarSize[AvatarSizeCurrent] );
 }
 
 void AvatarRender( CritterCl& critter, int x, int y, int w, int h, uint alpha )
@@ -191,12 +175,64 @@ void AvatarRender( CritterCl& critter, int x, int y, int w, int h, uint alpha )
 	AvatarRenderers[avatarMode].Render( avatar, critter, x, y, w, h, alpha );
 }
 
+void AvatarRenderCritter(CritterCl& critter)
+{
+	bool nameVisible = false;
+	int x = 0;
+	int y = 0;
+	int width = 0;
+	int height = 0;
+	int lines = 0;
+	critter.GetNameTextInfo(nameVisible, x, y, width, height, lines);
+	if (width > 0 && height > 0)
+		AvatarRender(critter, x, y, x + width, y + height, 0xFF);
+	else
+		AvatarRender(critter, x - 100, y - 70, x + 100, y, 0xFF);
+}
+
+void AvatarRenderIface()
+{
+	if (__GmapActive)
+		return;
+	CritterCl@ chosen = GetChosen();
+	if (!valid(chosen))
+		return;
+	int avatarMode = chosen.Param[CR_AVATAR_RENDER_MODE];
+	if (avatarMode == EAvatarRenderMode::AvatarRenderModeNo)
+		return;
+	if (avatarMode == EAvatarRenderMode::AvatarRenderModeOnlyMouse)
+	{
+		CritterCl@ hovered = MouseCritter;
+		if (valid(hovered))
+			AvatarRenderCritter(hovered);
+		return;
+	}
+	if (avatarMode != EAvatarRenderMode::AvatarRenderModeAll)
+		return;
+
+	CritterCl@[] critters;
+	GetCritters(0, FIND_ALL, critters);
+	bool chosenFound = false;
+	for (uint i = 0; i < critters.length(); i++)
+		if (valid(chosen) && valid(critters[i]) && critters[i].Id == chosen.Id)
+			chosenFound = true;
+	if (valid(chosen) && !chosenFound)
+		critters.insertLast(chosen);
+
+	for (uint i = 0; i < critters.length(); i++)
+	{
+		CritterCl@ critter = critters[i];
+		if (!valid(critter))
+			continue;
+		AvatarRenderCritter(critter);
+	}
+}
+
 void SetAvatarPlaceholders( const array<Sprite@>@ placeholders )
 {
 	@AvatarPlaceholders = placeholders;
 }
 
-//import void DrawRectangle( int x, int y, int w, int h, int color ) from "client_avatars";
 void DrawRectangle( int x, int y, int w, int h, int color )
 {
 	int[] data = {
@@ -208,88 +244,6 @@ void DrawRectangle( int x, int y, int w, int h, int color )
 	};
 	
 	DrawPrimitive( DRAW_PRIMITIVE_LINESTRIP, data );
-}
-
-class DownloadControl 
-{
-	DownloadControl()
-	{
-		isFree = true;
-	}
-	
-	uint global_loop()
-	{
-		if( isFree && !HashDownloadReqest.isEmpty() )
-		{
-			isFree = false;
-			RunServerScriptUnsafe( "avatars@unsafe_AvatarReqest", ActiveReqest.hash );
-		}
-		return 50;
-	}
-
-	void AddReqest( AvatarDownloadReqest@ reqest )
-	{
-		if( valid( reqest ) )
-		{
-			HashDownloadReqest.insertLast( reqest );
-			reqest.avatar.State = EAvatarPlaceholder::AvatarStateDownload;
-		}
-	}
-	
-	AvatarDownloadReqest@ get_ActiveReqest()
-	{
-		if( isFree || HashDownloadReqest.isEmpty() )
-			return null;
-		return HashDownloadReqest.first();
-	}
-	
-	void ReqestExecuted()
-	{
-		HashDownloadReqest.removeFirst();
-		isFree = true;
-	}
-	
-	AvatarDownloadReqest@[] HashDownloadReqest;
-	bool isFree;
-}
-
-class AvatarDownloadReqest
-{
-	uint hash;
-	Avatar@ avatar;
-	
-	AvatarDownloadReqest( uint _hash, Avatar@ _avatar )
-	{
-		hash = _hash;
-		@avatar = _avatar;
-	}
-}
-
-DownloadControl Control;
-
-uint LoopNextTick = 0;
-
-void AvatarLoop()
-{
-	Control.global_loop();
-}
-
-void AvatarDownload( uint hash )
-{
-	// Message( "check" );
-	auto reqest = Control.ActiveReqest;
-	if( !valid( reqest ) )
-	{
-		Message( "Error, avatar reqest free." );
-		Log( "Error, avatar reqest free." );
-		return;
-	}
-	
-	reqest.avatar.Load( hash, 0 );
-	if( reqest.avatar.Id != 0 )
-		reqest.avatar.State = EAvatarPlaceholder::AvatarStateGood;
-	
-	Control.ReqestExecuted();
 }
 
 # endif // CLIENT_AVATARS

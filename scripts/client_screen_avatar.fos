@@ -5,21 +5,12 @@
 #include "client_gui_h.fos"
 #include "sprite.fos"
 
-import Sprite@ GetAvatar( uint hash, bool isPlayer ) from "client_avatars";
-import Sprite@ GetAvatar( CritterCl& critter ) from "client_avatars";
+import Sprite@ GetAvatar( CritterCl& critter, uint index ) from "client_avatars";
+import string GetManagedAvatarName(uint critterId, uint index, int avatarKey) from "client_avatars";
 
 const uint AvatarCount = 3;
-const uint AvatarFileCollectionType = 1;
-
-enum FileCollectionReason
-{
-	Fail = -1,
-	Success = 1
-}
-
 class LoadingAnimation : Sprite
 {
-	
     void Draw( int x, int y ) override
     {
         Draw( x, y, false, false, 0 );
@@ -32,7 +23,7 @@ class LoadingAnimation : Sprite
             DrawSprite( Id, DrawFrame, x, y, Width, Height, scratch, center, color );
 		}
 		
-		DrawText( "" + __CurrentFileSendPercent + "%", x, y, Width, Height, COLOR_RED, FONT_FALLOUT, FT_BORDERED | FT_CENTERXY);
+		DrawText( "...", x, y, Width, Height, COLOR_RED, FONT_FALLOUT, FT_BORDERED | FT_CENTERXY);
     }
 }
 
@@ -60,7 +51,7 @@ class AvaScreen : IGUIScreenCallbackShow
 			DropButtons();
 			
 			for( uint i = 0; i < AvatarCount; i++ )
-				Ava[i].SetPic( critter.Avatar[AVATAR_BEGIN + i] );
+				Ava[i].SetPic( critter );
 			
 			Activate[critter.Stat[ST_AVATAR_INDEX]].ElementOption.JammingState = true;
 		}
@@ -74,19 +65,6 @@ class AvaScreen : IGUIScreenCallbackShow
 		}
 	}
 		
-	bool IsChosen()
-	{
-		CritterCl@ critter = Critter;
-		return valid( critter ) ? critter.IsChosen() : false;
-	}
-	
-	void SetAva( uint index, uint filehash, uint critterId )
-	{
-		if( critterId == CritterId )
-			Ava[index].SetPic( filehash );
-		RunServerScriptUnsafe( "avatars@unsafe_SetAvatar", critterId, index, filehash );
-	}
-	
 	uint CritterId;
 	array<AvaActivate@> Activate;
 	array<AvaUpload@> Upload;
@@ -111,7 +89,6 @@ mixin class MutualAva
 	{
 		@ElementOption = element;
 	}
-	
 }
 
 mixin class MutualAvaButton
@@ -132,9 +109,9 @@ class AvaPic : MutualAva
 		construct( index, screen );
 	}
 	
-	void SetPic( uint hash )
-	{	
-		SetPic( GetAvatar( hash, true ) );
+	void SetPic(CritterCl& critter)
+	{
+		SetPic(GetAvatar(critter, Index));
 	}
 	
 	void SetPic( Sprite@ sprite )
@@ -173,38 +150,43 @@ class AvaUpload : IGUIElementCallbackMouseClick, MutualAva, MutualAvaButton
 	
 	void Button( )
 	{
-		AvatarUpload( WindowsExplorer_OpenFile( "Avatar Files (*.png, *.jpg, *.bmp)\0*.png;*.bmp;*.jpg" ) );
+		string@ filePath = OpenFileDialog("PNG Images (*.png)\0*.png\0\0");
+		if (valid(filePath))
+			AvatarUpload(filePath);
 	}
 	
-	void AvatarUpload( string& file )
+	void AvatarUpload( string& filePath )
 	{
-		if( ValidationImage( file, 0 ) )
+		string@[]@ parts = split(filePath, ".");
+		string ext = parts.length() > 1 ? strlwr(parts[parts.length() - 1]) : "";
+		if (ext != "png")
 		{
-			LoadingAnimation spr;
-			spr.Load("Loading.png", PT_ART_INTRFACE );
-			Screen.Ava[Index].SetPic( spr );
-			AddFileToServerCollection( file, AvatarFileCollectionType, Screen.CritterId, Index, func: FileCollectionUploadFuncdef( @this.FileCollectionUpload ) );
+			Message("|0xFFFF00 Unable to upload avatar! Unsupported extension.");
+			return;
 		}
+
+		LoadingAnimation spr;
+		spr.Load("Loading.png", PT_ART_INTRFACE );
+		Screen.Ava[Index].SetPic(spr);
+		uint token = GetTick() & 0x3FFFFFFF;
+		if (token == 0)
+			token = 1;
+		int avatarKey = int(token);
+		string managedName = GetManagedAvatarName(Screen.CritterId, Index, avatarKey);
+		if (!UploadManagedFile(managedName, filePath))
+		{
+			Message("|0xFFFF00 Unable to upload avatar file.");
+			Screen.Ava[Index].SetPic(Screen.Critter);
+			return;
+		}
+		Sprite preview;
+		if (preview.Load("ManagedFiles/" + managedName, PT_DATA))
+			Screen.Ava[Index].SetPic(preview);
 		else
-		{
-			Message( "|0xFFFF00 Unable to upload avatar! Image invalidation!" );
-		}
+			Message("|0xFFFF00 Avatar file was uploaded, but the PNG decoder rejected it.");
+		Message("|0xFFFF00 Avatar upload started.");
 	}
-	
-	void FileCollectionUpload( int8 result, uint filehash, int type, int critterId, int index, int )
-	{
-	
-		if( result < 0 )
-		{
-			Message( "|0xFFFF00 Unable to upload avatar! <" + result + ">" );
-			Screen.Ava[index].SetPic( Screen.Critter.Avatar[AVATAR_BEGIN + index] );
-		}
-		else
-		{
-			Message( "|0xFFFF00 Avatar upload success! <" + result + ">" );
-			Screen.SetAva( index, filehash, critterId );
-		}
-	}
+
 }
 
 class AvaExit : IGUIElementCallbackMouseClick

@@ -1,0 +1,125 @@
+#include "_utils.fos"
+
+const uint AvatarManagedMaxSize = 512 * 1024;
+
+enum ManagedFileMode
+{
+    ManagedFileModeUnknown = 0,
+    ManagedFileModeAvatar
+}
+
+ManagedFileMode GetManagedFileMode(const string&in fileName)
+{
+    return fileName.length() >= 7 && fileName.substring(0, 7) == "avatar-" ? ManagedFileModeAvatar : ManagedFileModeUnknown;
+}
+
+bool ParseAvatarName(const string&in fileName, uint& critterId, uint& index, int& avatarKey)
+{
+    string@[]@ parts = split(fileName, "-");
+    if (@parts == null || parts.length() != 4 || parts[0] != "avatar")
+        return false;
+    string@[]@ tail = split(parts[3], ".");
+    if (@tail == null || tail.length() != 2)
+        return false;
+
+    int parsedCritterId = 0;
+    int parsedIndex = 0;
+    int parsedToken = 0;
+    if (!StrToInt(parts[1], parsedCritterId) || !StrToInt(parts[2], parsedIndex) ||
+        !StrToInt(tail[0], parsedToken) || parsedCritterId <= 0 || parsedIndex < 0 ||
+        parsedIndex >= int(AVATAR_COUNT) || parsedToken <= 0)
+        return false;
+
+    string ext = strlwr(tail[1]);
+    if (ext != "png")
+        return false;
+
+    critterId = uint(parsedCritterId);
+    index = uint(parsedIndex);
+    avatarKey = int(uint(parsedToken) & 0x3FFFFFFF);
+    return true;
+}
+
+string ManagedAvatarName(uint critterId, uint index, int avatarKey)
+{
+    uint key = uint(avatarKey);
+    uint extension = key >> 30;
+    if (extension > 1)
+        return "";
+    string ext = extension == 1 ? "jpg" : "png";
+    return "avatar-" + critterId + "-" + index + "-" + (key & 0x3FFFFFFF) + "." + ext;
+}
+
+bool CanUploadAvatar(Critter& client, Critter& target)
+{
+    if (isGM(client))
+        return true;
+    if (target.Id == client.Id)
+        return true;
+    return target.IsNpc() && target.Param[PET_OWNER_ID] == int(client.Id);
+}
+
+bool AvatarUpload(Critter& client, const string&in fileName, uint fileSize)
+{
+    uint critterId = 0;
+    uint index = 0;
+    int avatarKey = 0;
+    if (fileSize > AvatarManagedMaxSize || !ParseAvatarName(fileName, critterId, index, avatarKey))
+        return false;
+    Critter@ target = GetCritter(critterId);
+    return valid(target) && CanUploadAvatar(client, target);
+}
+
+bool AvatarDownload(Critter& client, const string&in fileName)
+{
+    uint critterId = 0;
+    uint index = 0;
+    int avatarKey = 0;
+    return ParseAvatarName(fileName, critterId, index, avatarKey);
+}
+
+void AvatarUploadFinished(Critter& client, const string&in fileName)
+{
+    uint critterId = 0;
+    uint index = 0;
+    int avatarKey = 0;
+    if (!ParseAvatarName(fileName, critterId, index, avatarKey))
+        return;
+    Critter@ target = GetCritter(critterId);
+    if (!valid(target) || !CanUploadAvatar(client, target))
+        return;
+
+    int oldKey = target.AvatarBase[AVATAR_BEGIN + index];
+    if (oldKey != 0 && oldKey != avatarKey)
+    {
+        string oldName = ManagedAvatarName(critterId, index, oldKey);
+        if (oldName.length() != 0)
+            DeleteManagedFile(oldName);
+    }
+    target.AvatarBase[AVATAR_BEGIN + index] = avatarKey;
+}
+
+bool managed_file_upload(Critter& client, string& fileName, uint fileSize)
+{
+    ManagedFileMode mode = GetManagedFileMode(fileName);
+    if (mode == ManagedFileModeAvatar)
+        return AvatarUpload(client, fileName, fileSize);
+    return false;
+}
+
+bool managed_file_download(Critter& client, string& fileName)
+{
+    ManagedFileMode mode = GetManagedFileMode(fileName);
+    if (mode == ManagedFileModeAvatar)
+        return AvatarDownload(client, fileName);
+    return false;
+}
+
+// Called after the uploaded file has been validated and committed.
+// fileHash is the lowercase, 64-character hexadecimal SHA-256 digest.
+void managed_file_upload_finished(Critter& client, string& fileName, string& fileHash)
+{
+    ManagedFileMode mode = GetManagedFileMode(fileName);
+    if (mode == ManagedFileModeAvatar)
+        AvatarUploadFinished(client, fileName);
+}
