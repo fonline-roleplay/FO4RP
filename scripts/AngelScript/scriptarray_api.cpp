@@ -57,3 +57,10 @@ void* CScriptArray::GetBuffer()
 	static Function function = reinterpret_cast<Function>(ResolveScriptArrayFunction("ScriptArray_GetBuffer"));
 	return function(this);
 }
+
+void* CScriptArray::At(asUINT index)
+{
+	using Function = void* (*)(CScriptArray*, asUINT);
+	static Function function = reinterpret_cast<Function>(ResolveScriptArrayFunction("ScriptArray_At"));
+	return function(this, index);
+}

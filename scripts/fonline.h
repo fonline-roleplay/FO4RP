@@ -816,9 +816,6 @@ struct ProtoItem
     const uint8  Blast_Radius;
     const uint	 FlyEffect_Speed;
 
-    // Preserve the complete 512-byte ProtoItem user-data area.
-    const uint8 Padding12[12];
-
     // Type specific data
     const bool   Weapon_IsUnarmed;
     const int    Weapon_UnarmedTree;
@@ -2020,7 +2017,7 @@ inline void static_asserts()
     STATIC_ASSERT( sizeof( uint ) == 4 );
     STATIC_ASSERT( sizeof( uint64 ) == 8 );
     STATIC_ASSERT( sizeof( bool ) == 1 );
-    STATIC_ASSERT( sizeof( ProtoItem ) == 920 );
+    STATIC_ASSERT( sizeof( ProtoItem ) == 908 );
     #if defined ( FO_X86 )
     STATIC_ASSERT( sizeof( size_t ) == 4 );
     STATIC_ASSERT( sizeof( void* ) == 4 );
