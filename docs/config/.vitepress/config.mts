@@ -8,7 +8,7 @@ export default defineConfig({
   title: "FO4RP", //Название в шапке
   description: "Официальная страница проекта FO4RP\nhttps://github.com/fonline-roleplay/FO4RP",
 
-  base: '/fo4rp/',
+  base: '/FO4RP/',
   srcDir: "../docs",
   outDir: '../public',
   lastUpdated: true,
