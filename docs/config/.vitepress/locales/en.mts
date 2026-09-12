@@ -3,7 +3,6 @@ import { mainSidebar } from './en/main_sidebar.mts'
 
 const nav: DefaultTheme.NavItem[] = [
   { text: 'Home', link: '/en/' },
-  { text: 'Download', link: '/en/download' },
   { text: 'Documentation', link: '/en/main/getting-started' },
 ]
 
@@ -43,6 +42,7 @@ export const enLocale = {
     returnToTopLabel: 'Back to top',
     langMenuLabel: 'Change language',
     skipToContentLabel: 'Skip to content',
+	nav: nav,
     sidebar: {
       '/en/': mainSidebar,
     },

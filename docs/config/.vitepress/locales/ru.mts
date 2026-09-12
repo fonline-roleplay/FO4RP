@@ -3,7 +3,6 @@ import { mainSidebar } from './ru/main_sidebar.mts'
 
 const nav: DefaultTheme.NavItem[] = [
   { text: 'Главная', link: '/' },
-  { text: 'Загрузка', link: '/download' },
   { text: 'Документация', link: '/main/getting-started' },
 ]
 
@@ -68,6 +67,7 @@ export const ruLocale = {
         },
       },
     },
+	nav: nav,
     sidebar: {
       '/': sidebar,
     },
