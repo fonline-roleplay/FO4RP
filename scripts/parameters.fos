@@ -140,12 +140,9 @@
 				return;
 			}
 			
-			int trait_nerf = cr.Trait[ TRAIT_SKILLED ] == 0 ? 1 : 2;
-			
 			if( cr.Param[ CR_EXP_LOCK ] == 0 )
 			{
-				exp /= trait_nerf;
-				testInfo( cr, "Gained exp: " + exp + " ( trait_nerf: " + trait_nerf + " )" );
+				testInfo( cr, "Gained exp: " + exp );
 			}
 			else
 			{
@@ -168,7 +165,7 @@
 					
 					cr.StatBase[ ST_LEVEL ]++;
 
-					cr.StatBase[ ST_UNSPENT_SKILL_POINTS ] += 5 + cr.StatBase[ ST_LEVEL ] * cr.StatBase[ ST_INTELLECT ] + ( cr.Trait[ TRAIT_SKILLED ] > 0 ? cr.StatBase[ ST_LEVEL ] * cr.StatBase[ ST_INTELLECT ] / 2 : 0 ); // Skill points
+					cr.StatBase[ ST_UNSPENT_SKILL_POINTS ] += cr.StatBase[ ST_INTELLECT ] * 8 + ( cr.Trait[ TRAIT_SKILLED ] != 0 ? 24 : 0 );
 				}
 				else
 				{
@@ -606,6 +603,161 @@ void changedParam_Invis( Critter& cr, uint param, int oldValue )
 
 #ifndef __CLIENT
 # define _param_    cr.ParamBase
+
+	bool IsBleedSkill( uint skill )
+	{
+		return skill >= __SkillBegin && skill <= SK_BARTER;
+	}
+
+	uint SPDirectSpentParam( uint skill )
+	{
+		return CR_SKILL_DIRECT_BEGIN + skill - __SkillBegin;
+	}
+
+	int SkillBaseValue( Critter& cr, uint skill )
+	{
+		switch( skill )
+		{
+		case SK_SMALL_GUNS:
+		case SK_MEDIUM_GUNS: 
+			return cr.StatBase[ ST_PERCEPTION ] * cr.StatBase[ ST_AGILITY ];
+		case SK_BIG_GUNS:
+			return cr.StatBase[ ST_PERCEPTION ] * cr.StatBase[ ST_STRENGTH ];
+		case SK_UNARMED:
+			return cr.StatBase[ ST_STRENGTH ] * cr.StatBase[ ST_ENDURANCE ];
+		case SK_MELEE_WEAPONS:
+		case SK_THROWING:
+			return cr.StatBase[ ST_STRENGTH ] * cr.StatBase[ ST_AGILITY ];
+		case SK_FIRST_AID:
+			return cr.StatBase[ ST_STRENGTH ] * cr.StatBase[ ST_CHARISMA ];
+		case SK_DOCTOR:
+			return cr.StatBase[ ST_PERCEPTION ] * cr.StatBase[ ST_CHARISMA ];
+		case SK_SNEAK:
+		case SK_STEAL:
+			return cr.StatBase[ ST_AGILITY ] * cr.StatBase[ ST_LUCK ];
+		case SK_LOCKPICK:
+			return cr.StatBase[ ST_PERCEPTION ] * cr.StatBase[ ST_AGILITY ];
+		case SK_TRAPS:
+		case SK_SCIENCE:
+			return cr.StatBase[ ST_PERCEPTION ] * cr.StatBase[ ST_LUCK ];
+		case SK_REPAIR:
+			return cr.StatBase[ ST_AGILITY ] * cr.StatBase[ ST_LUCK ];
+		case SK_CRAFT:
+			return cr.StatBase[ ST_CHARISMA ] * cr.StatBase[ ST_LUCK ];
+		case SK_BARTER:
+			return cr.StatBase[ ST_CHARISMA ] * cr.StatBase[ ST_CHARISMA ] * 2;
+		}
+		
+		return 0;
+	}
+
+	uint SkillBleedMultiplier( uint source, uint target )
+	{
+		switch( source )
+		{
+		case SK_SMALL_GUNS:
+			return target == SK_MEDIUM_GUNS ? 1 : 0;
+		case SK_MEDIUM_GUNS:
+			return target == SK_SMALL_GUNS || target == SK_BIG_GUNS ? 1 : 0;
+		case SK_BIG_GUNS:
+			return target == SK_MEDIUM_GUNS || target == SK_THROWING ? 1 : 0;
+		case SK_UNARMED:
+			return target == SK_MELEE_WEAPONS || target == SK_SNEAK ? 1 : 0;
+		case SK_MELEE_WEAPONS:
+			return target == SK_THROWING || target == SK_UNARMED ? 1 : 0;
+		case SK_THROWING:
+			return target == SK_BIG_GUNS || target == SK_MELEE_WEAPONS ? 1 : 0;
+		case SK_FIRST_AID:
+			return target == SK_DOCTOR ? 2 : 0;
+		case SK_DOCTOR:
+			return target == SK_SCIENCE || target == SK_FIRST_AID ? 1 : 0;
+		case SK_SNEAK:
+			return target == SK_UNARMED || target == SK_STEAL ? 1 : 0;
+		case SK_LOCKPICK:
+			return target == SK_STEAL || target == SK_TRAPS ? 1 : 0;
+		case SK_STEAL:
+			return target == SK_SNEAK || target == SK_LOCKPICK ? 1 : 0;
+		case SK_TRAPS:
+			return target == SK_LOCKPICK || target == SK_REPAIR ? 1 : 0;
+		case SK_SCIENCE:
+			return target == SK_CRAFT || target == SK_DOCTOR ? 1 : 0;
+		case SK_REPAIR:
+			return target == SK_TRAPS || target == SK_CRAFT ? 1 : 0;
+		case SK_CRAFT:
+			return target == SK_REPAIR || target == SK_SCIENCE ? 1 : 0;
+		}
+
+		return 0;
+	}
+
+	uint SkillPointCost( float value )
+	{
+		if( value >= 290.0f ) return 10;
+		if( value >= 280.0f ) return 8;
+		if( value >= 225.0f ) return 6;
+		if( value >= 150.0f ) return 3;
+		if( value >= 100.0f ) return 2;
+		return 1;
+	}
+
+	int CalcSkillValue( int start, float totalSp, bool tagged )
+	{
+		float value = float( start );
+		float remaining = MAX( 0.0f, totalSp );
+		float gain = tagged ? 2.0f : 1.0f;
+		while( value < 300.0f && remaining > 0.0001f )
+		{
+			float cost = float( SkillPointCost( value ) );
+			if( remaining + 0.0001f >= cost )
+			{
+				remaining -= cost;
+				value = MIN( 300.0f, value + gain );
+			}
+			else
+			{
+				value = MIN( 300.0f, value + remaining / cost * gain );
+				remaining = 0.0f;
+			}
+		}
+		return int( floor( value + 0.5f ) );
+	}
+
+	void RecalculateBleedingSkills( Critter& cr )
+	{
+		for( uint target = SK_SMALL_GUNS; target <= SK_BARTER; target++ )
+		{
+			float totalSp = float( cr.ParamBase[ SPDirectSpentParam( target ) ] );
+			for( uint source = SK_SMALL_GUNS; source <= SK_BARTER; source++ )
+			{
+				uint multiplicity = SkillBleedMultiplier( source, target );
+				if( multiplicity != 0 )
+					totalSp += float( cr.ParamBase[ SPDirectSpentParam( source ) ] * multiplicity ) * 0.25f;
+			}
+
+			int start = SkillBaseValue( cr, target );
+			bool tagged = _CritIsTagSkill( cr, target );
+			if( tagged ) start += 30;
+			cr.SkillBase[ target ] = CalcSkillValue( start, totalSp, tagged );
+		}
+	}
+
+	uint SpendDirectSkillPoints( Critter& cr, uint skill, uint amount )
+	{
+		if( !IsBleedSkill( skill ) ) return 0;
+
+		uint spent = 0;
+		while( spent < amount && cr.StatBase[ ST_UNSPENT_SKILL_POINTS ] > 0 )
+		{
+			RecalculateBleedingSkills( cr );
+			if( cr.SkillBase[ skill ] >= MAX_SKILL_VAL ) break;
+			cr.ParamBase[ SPDirectSpentParam( skill ) ]++;
+			cr.StatBase[ ST_UNSPENT_SKILL_POINTS ]--;
+			spent++;
+		}
+		RecalculateBleedingSkills( cr );
+		return spent;
+	}
+
 	void CritterGenerate( Critter& cr )
 #endif // !__CLIENT
 
@@ -645,22 +797,22 @@ void changedParam_Invis( Critter& cr, uint param, int oldValue )
 	
 		_param_[ ST_ARMOR_CLASS ] += ARMOR_CLASS_BASE + _param_[ ST_AGILITY ] * ARMORCLASS_PER_AGI;
 		
-		_param_[ SK_SMALL_GUNS ]	+= 3 * _param_[ ST_PERCEPTION ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_STRENGTH ]	;
-		_param_[ SK_MEDIUM_GUNS ]	+= 3 * _param_[ ST_STRENGTH ]	+ 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_AGILITY ]		;
-		_param_[ SK_BIG_GUNS ]		+= 3 * _param_[ ST_PERCEPTION ] + 2 * _param_[ ST_INTELLECT ]	+ 1 * _param_[ ST_AGILITY ]		;
-		_param_[ SK_UNARMED ]		+= 3 * _param_[ ST_STRENGTH ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_ENDURANCE ]	;
-		_param_[ SK_MELEE_WEAPONS ]	+= 3 * _param_[ ST_AGILITY ]	+ 2 * _param_[ ST_STRENGTH ]	+ 1 * _param_[ ST_ENDURANCE ]	;
-		_param_[ SK_THROWING ]		+= 3 * _param_[ ST_AGILITY ]	+ 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_STRENGTH ]	;
-		_param_[ SK_FIRST_AID ]		+= 3 * _param_[ ST_AGILITY ]	+ 2 * _param_[ ST_INTELLECT ]	+ 1 * _param_[ ST_PERCEPTION ]	;
-		_param_[ SK_DOCTOR ]		+= 3 * _param_[ ST_INTELLECT ]	+ 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_AGILITY ]		;
-		_param_[ SK_SNEAK ]			+= 3 * _param_[ ST_INTELLECT ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_PERCEPTION ]	;
-		_param_[ SK_LOCKPICK ]		+= 3 * _param_[ ST_AGILITY ]	+ 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_INTELLECT ]	;
-		_param_[ SK_STEAL ]			+= 3 * _param_[ ST_PERCEPTION ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_INTELLECT ]	;
-		_param_[ SK_TRAPS ]			+= 3 * _param_[ ST_PERCEPTION ] + 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_INTELLECT ]	;
-		_param_[ SK_SCIENCE ]		+= 3 * _param_[ ST_INTELLECT ]  + 2 * _param_[ ST_PERCEPTION ]	+ 1 * _param_[ ST_LUCK ]		;
-		_param_[ SK_REPAIR ]		+= 3 * _param_[ ST_INTELLECT ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_STRENGTH ]	;
-		_param_[ SK_CRAFT ]			+= 3 * _param_[ ST_INTELLECT ]	+ 2 * _param_[ ST_AGILITY ]		+ 1 * _param_[ ST_PERCEPTION ]	;
-		_param_[ SK_BARTER ]		+= 3 * _param_[ ST_CHARISMA ]	+ 2 * _param_[ ST_INTELLECT ]	+ 1 * _param_[ ST_PERCEPTION ]	;
+		_param_[ SK_SMALL_GUNS ] = _param_[ ST_PERCEPTION ] * _param_[ ST_AGILITY ];
+		_param_[ SK_MEDIUM_GUNS ] = _param_[ ST_PERCEPTION ] * _param_[ ST_AGILITY ];
+		_param_[ SK_BIG_GUNS ] = _param_[ ST_PERCEPTION ] * _param_[ ST_STRENGTH ];
+		_param_[ SK_UNARMED ] = _param_[ ST_STRENGTH ] * _param_[ ST_ENDURANCE ];
+		_param_[ SK_MELEE_WEAPONS ] = _param_[ ST_STRENGTH ] * _param_[ ST_AGILITY ];
+		_param_[ SK_THROWING ] = _param_[ ST_STRENGTH ] * _param_[ ST_AGILITY ];
+		_param_[ SK_FIRST_AID ] = _param_[ ST_STRENGTH ] * _param_[ ST_CHARISMA ];
+		_param_[ SK_DOCTOR ] = _param_[ ST_PERCEPTION ] * _param_[ ST_CHARISMA ];
+		_param_[ SK_SNEAK ] = _param_[ ST_AGILITY ] * _param_[ ST_LUCK ];
+		_param_[ SK_LOCKPICK ] = _param_[ ST_PERCEPTION ] * _param_[ ST_AGILITY ];
+		_param_[ SK_STEAL ] = _param_[ ST_AGILITY ] * _param_[ ST_LUCK ];
+		_param_[ SK_TRAPS ] = _param_[ ST_PERCEPTION ] * _param_[ ST_LUCK ];
+		_param_[ SK_SCIENCE ] = _param_[ ST_PERCEPTION ] * _param_[ ST_LUCK ];
+		_param_[ SK_REPAIR ] = _param_[ ST_AGILITY ] * _param_[ ST_LUCK ];
+		_param_[ SK_CRAFT ] = _param_[ ST_CHARISMA ] * _param_[ ST_LUCK ];
+		_param_[ SK_BARTER ] = _param_[ ST_CHARISMA ] * _param_[ ST_CHARISMA ] * 2;
 		_param_[ SK_GAMBLING ]		=  0																							;
 		_param_[ SK_OUTDOORSMAN ]	=  0																							;
 		_param_[ SK_MINING ]		+= 5 * _param_[ ST_STRENGTH ] 	+ 3 * _param_[ ST_AGILITY ]		+ 2 * _param_[ ST_PERCEPTION ]	;
@@ -674,12 +826,12 @@ void changedParam_Invis( Critter& cr, uint param, int oldValue )
 		
 		if( _param_[ TAG_SKILL1 ] != 0 && ( !isDisabledSkill( _param_[ TAG_SKILL1 ] ) && !isFarmingSkill( _param_[ TAG_SKILL1 ] ) ) )
 		{
-			_param_[ _param_[ TAG_SKILL1 ] ] += 50;
+			_param_[ _param_[ TAG_SKILL1 ] ] += 30;
 		}
 		
 		if( _param_[ TAG_SKILL2 ] != 0 && ( !isDisabledSkill( _param_[ TAG_SKILL2 ] ) && !isFarmingSkill( _param_[ TAG_SKILL2 ] ) ) )
 		{
-			_param_[ _param_[ TAG_SKILL2 ] ] += 40;
+			_param_[ _param_[ TAG_SKILL2 ] ] += 30;
 		}
 		
 		if( _param_[ TAG_SKILL3 ] != 0 && ( !isDisabledSkill( _param_[ TAG_SKILL3 ] ) && !isFarmingSkill( _param_[ TAG_SKILL3 ] ) ) )
@@ -788,13 +940,27 @@ void changedParam_Invis( Critter& cr, uint param, int oldValue )
 			Message( GetMsgStr( TEXTMSG_GAME, STR_REG_SEX_APPEAL_SUM ) );
 			return false;
 		}
-		
+
 		// Check choosed tag skills
-		if( ( data[ TAG_SKILL1 ] < int(SKILL_BEGIN) || data[ TAG_SKILL1 ] > int(SKILL_END) ) ||
-			( data[ TAG_SKILL2 ] < int(SKILL_BEGIN) || data[ TAG_SKILL2 ] > int(SKILL_END) ) ||
-			( data[ TAG_SKILL3 ] < int(SKILL_BEGIN) || data[ TAG_SKILL3 ] > int(SKILL_END) ) ||
-			isDisabledSkill( data[ TAG_SKILL1 ] ) || isDisabledSkill( data[ TAG_SKILL2 ] ) || isDisabledSkill( data[ TAG_SKILL3 ] ) ||
-			isFarmingSkill( data[ TAG_SKILL1 ] ) || isFarmingSkill( data[ TAG_SKILL2 ] ) || isFarmingSkill( data[ TAG_SKILL3 ] ) )
+		uint tagCount = data[ TRAIT_SKILLED ] != 0 ? 1 : 3;
+		for( uint tag = 0; tag < 3; tag++ )
+		{
+			int skill = data[ TAG_SKILL1 + tag ];
+			if( tag < tagCount )
+			{
+				if( skill < int(SKILL_BEGIN) || skill > int(SKILL_END) || isDisabledSkill( skill ) || isFarmingSkill( skill ) )
+				{
+					Message( GetMsgStr( TEXTMSG_GAME, STR_NET_WRONG_TAGSKILL ) );
+					return false;
+				}
+			}
+			else if( skill != 0 )
+			{
+				Message( GetMsgStr( TEXTMSG_GAME, STR_NET_WRONG_TAGSKILL ) );
+				return false;
+			}
+		}
+		if( tagCount == 3 && ( data[ TAG_SKILL1 ] == data[ TAG_SKILL2 ] || data[ TAG_SKILL2 ] == data[ TAG_SKILL3 ] || data[ TAG_SKILL3 ] == data[ TAG_SKILL1 ] ) )
 		{
 			Message( GetMsgStr( TEXTMSG_GAME, STR_NET_WRONG_TAGSKILL ) );
 			return false;
