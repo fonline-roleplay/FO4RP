@@ -24,6 +24,67 @@
 #include "linetracer_h.fos"
 #include "hitchance_h.fos"
 
+class FullAutoDrainMeasurement
+{
+	uint AttackerId;
+	uint TriggerTick;
+	uint FirstRoundTick;
+	uint InitialAmmo;
+	uint WaitTime;
+	uint WindupTime;
+
+	FullAutoDrainMeasurement( Critter& attacker, Item& weapon, uint waitTime, uint windupTime )
+	{
+		AttackerId = attacker.Id;
+		TriggerTick = GetTick();
+		FirstRoundTick = 0;
+		InitialAmmo = weapon.AmmoCount;
+		WaitTime = waitTime;
+		WindupTime = windupTime;
+	}
+}
+
+dictionary FullAutoDrainMeasurements;
+
+void FullAutoDrainBegin( Critter& attacker, Item& weapon, uint waitTime, uint windupTime )
+{
+	if( weapon.AmmoCount == 0 )
+		return;
+
+	FullAutoDrainMeasurements.set( "" + weapon.Id, FullAutoDrainMeasurement( attacker, weapon, waitTime, windupTime ) );
+}
+
+void FullAutoDrainCancel( Item& weapon )
+{
+	FullAutoDrainMeasurements.delete( "" + weapon.Id );
+}
+
+void FullAutoDrainRound( Critter& attacker, Item& weapon, uint ammoBefore )
+{
+	string key = "" + weapon.Id;
+	FullAutoDrainMeasurement@ measurement = null;
+	if( !FullAutoDrainMeasurements.get( key, @measurement ) || !valid( measurement ) || measurement.AttackerId != attacker.Id )
+		return;
+
+	uint tick = GetTick();
+	if( measurement.FirstRoundTick == 0 && weapon.AmmoCount < ammoBefore )
+		measurement.FirstRoundTick = tick;
+
+	if( weapon.AmmoCount != 0 )
+		return;
+
+	uint triggerToEmpty = tick - measurement.TriggerTick;
+	uint firstRoundToEmpty = measurement.FirstRoundTick != 0 ? tick - measurement.FirstRoundTick : 0;
+	uint expectedShotSpan = measurement.InitialAmmo > 0 ? ( measurement.InitialAmmo - 1 ) * measurement.WaitTime : 0;
+	uint expectedConfiguredDrain = measurement.InitialAmmo * measurement.WaitTime;
+	Log( "Full-auto drain: attacker=" + attacker.Id + ", weapon=" + weapon.Id + ":" + weapon.GetProtoId() +
+		", rounds=" + measurement.InitialAmmo + ", Wait_Time=" + measurement.WaitTime + " ms, Windup_Time=" + measurement.WindupTime +
+		" ms, trigger-to-empty=" + triggerToEmpty + " ms, first-round-to-empty=" + firstRoundToEmpty +
+		" ms, expected shot span=" + expectedShotSpan + " ms, configured drain=" + expectedConfiguredDrain + " ms." );
+
+	FullAutoDrainMeasurements.delete( key );
+}
+
 class AttackStruct
 {
     Critter@	Attacker;
@@ -717,6 +778,7 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		}
 	}
 
+	uint ammoBefore = validWeapon ? realWeapon.AmmoCount : 0;
     if( ammoRound > 0 && validWeapon && !recursive )
 	{
 		if( validAmmo )
@@ -778,6 +840,8 @@ void CombatAttack( Critter& attacker, Critter@ target, ProtoItem& weapon, uint8 
 		}
 		
 		realWeapon.Update();
+		if( isAuto )
+			FullAutoDrainRound( attacker, realWeapon, ammoBefore );
 	}
 
     if( validWeapon )
@@ -1387,7 +1451,7 @@ void ApplyDamage( AttackStruct& attack, Critter& target, uint rounds, bool isCri
         eff = 0;
 	}
 	// Dazed
-	if( FLAG( eff, HF_DAZED ) )
+	if( true )
 	{
 		target.ParamBase[ CR_DAZED ] += DAZED_DURATION;
 		
