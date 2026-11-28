@@ -89,50 +89,55 @@ shared class ChatExpression
         return this;
     }
 
-    string getColorTag()
+    uint GetColor()
     {
         if( this.IsRadio || this.SayType.IsRadio() )
 		{
             if( this.SayType.IsEmote() )
 			{
-                return "|" + 0xFFAAAAAA + " ";
+                return 0xFFAAAAAA;
             } 
-            float position = sqrt( float( this.Volume - VOLUME_WHISPER ) / ( VOLUME_SHOUT - VOLUME_WHISPER ) );
-            return "|" + COLOR_CHAT_RADIO + " ";
+            return COLOR_CHAT_RADIO;
         }
         else if( this.SayType.IsSpeech() )
 		{
             // whisper
             if( this.Volume <= VOLUME_WHISPER )
 			{
-                return "|" + COLOR_CHAT_WHISPER + " ";
+                return COLOR_CHAT_WHISPER;
             }
             // whisper to normal
             else if( this.Volume <= VOLUME_NORMAL )
 			{
                 float position = sqrt( float( this.Volume - VOLUME_WHISPER ) / ( VOLUME_NORMAL - VOLUME_WHISPER ) );
-                return "|" + this.getGradientColor( position, COLOR_CHAT_WHISPER, COLOR_CHAT_NORMAL ) + " ";
+                return this.getGradientColor( position, COLOR_CHAT_WHISPER, COLOR_CHAT_NORMAL );
             }
             // normal to loud
             else if( this.Volume <= VOLUME_LOUD )
 			{
                 float position = float( this.Volume - VOLUME_NORMAL) / (VOLUME_LOUD - VOLUME_NORMAL );
-                return "|" + this.getGradientColor( position, COLOR_CHAT_NORMAL, COLOR_CHAT_LOUD ) + " ";
+                return this.getGradientColor( position, COLOR_CHAT_NORMAL, COLOR_CHAT_LOUD );
             }
             // loud to shout
             else if( this.Volume <= VOLUME_SHOUT )
 			{
                 float position = float(this.Volume - VOLUME_LOUD) / (VOLUME_SHOUT - VOLUME_LOUD);
-                return "|" + this.getGradientColor(position, COLOR_CHAT_LOUD, COLOR_CHAT_SHOUT) + " ";
+                return this.getGradientColor( position, COLOR_CHAT_LOUD, COLOR_CHAT_SHOUT );
             }
             // shout
-            return "|" + COLOR_CHAT_SHOUT + " ";
+            return COLOR_CHAT_SHOUT;
         } 
         else if( this.SayType.IsEmote() )
 		{
-            return "|" + COLOR_CHAT_EMOTE + " ";
+            return COLOR_CHAT_EMOTE;
         }
-        return "";
+        return 0;
+    }
+
+    string getColorTag()
+    {
+        uint color = GetColor();
+        return color != 0 ? "|" + color + " " : "";
     }
 
     // cant use colors.fos __GetGradient since it is not a shared function
@@ -370,23 +375,6 @@ shared class ChatSayType
         return false;
     }
 
-    string Tag()
-    {        
-        switch( this.SayType )
-		{
-            case( SAY_EMOTE_ON_HEAD ):
-            case( SAY_EMOTE ):
-                return "*";
-            case( SAY_WHISP_ON_HEAD ):
-            case( SAY_WHISP ):
-                return "--";
-            case( SAY_SHOUT_ON_HEAD ):
-            case( SAY_SHOUT ):
-                return "++";
-        }
-        return "";
-    }
-
     bool IsSystem()
     {
         switch( this.SayType )
@@ -426,9 +414,9 @@ shared class ChatMessage
     private array<MessageHandler@> InMessageHandlers;
     private array<MessageHandler@> OutMessageHandlers;
 
-    ChatMessage(string message, int sayType, int senderCritterID)
+    ChatMessage(string message, int sayType, int senderCritterID, uint[]@ preview = null)
     {
-        this.Load(message, sayType, senderCritterID);
+        this.Load(message, sayType, senderCritterID, preview);
     }
 
     ChatMessage@ OnInMessage(MessageHandler@ handler)
@@ -493,7 +481,7 @@ shared class ChatMessage
         return text.length();
     }
 
-    void Load( string message, int sayType, int senderCritterID )
+    void Load( string message, int sayType, int senderCritterID, uint[]@ preview = null )
     {
         if( "" == message )
 		{
@@ -516,10 +504,13 @@ shared class ChatMessage
         int normalizedSayType = this.SayType.Normalized();
 
         array<string> messageContext = {""};
-        array<string> tagContext = {this.SayType.Tag()};
+        // A modifier key sets the base speech style, not an open inline tag.
+        array<string> tagContext = {""};
+        array<uint> parentContext;
         array<int> typeContext = {normalizedSayType};
         array<uint8> volumeContext = {defaultVolume};
-        uint i = 0, length = message.length(), position = 0;
+        const uint originalLength = message.length();
+        uint length = originalLength, position = 0;
 
         if( length >= 2 && ( message[0] == "/" || message[0] == "." ) )
 		{
@@ -573,8 +564,10 @@ shared class ChatMessage
         }
 
         bool volumeChanged = false;
+        bool previewStyleChanged = true;
+        const uint prefixLength = originalLength - length;
 
-        do
+        for( uint i = 0; i < length; i++ )
 		{
             bool isClosingTag = false;
 
@@ -594,12 +587,14 @@ shared class ChatMessage
                 else
 				{ 
                     // record emote
+                    parentContext.insertLast( position );
                     tagContext.insertLast( "*" );
                     messageContext.insertLast("");
                     typeContext.insertLast( SAY_EMOTE );
                     volumeContext.insertLast( 0 );
                     position += 1;
                     volumeChanged = true;
+                    previewStyleChanged = true;
                     continue;
                 }
             }
@@ -617,12 +612,14 @@ shared class ChatMessage
                 else
 				{
                     // record whisper
+                    parentContext.insertLast( position );
                     tagContext.insertLast("--");
                     messageContext.insertLast("");
                     typeContext.insertLast(SAY_WHISP);
                     volumeContext.insertLast(VOLUME_WHISPER);
                     position += 1;
                     volumeChanged = true;
+                    previewStyleChanged = true;
                     continue;
                 }
             }
@@ -640,12 +637,14 @@ shared class ChatMessage
                 else
 				{
                     // record shout
+                    parentContext.insertLast( position );
                     tagContext.insertLast("++");
                     messageContext.insertLast("");
                     typeContext.insertLast(SAY_NORM);
                     volumeContext.insertLast(VOLUME_LOUD);
                     position += 1;
                     volumeChanged = true;
+                    previewStyleChanged = true;
                     continue;
                 }
             }
@@ -654,30 +653,16 @@ shared class ChatMessage
             if( isClosingTag )
 			{
                 messageContext.insertLast( "" );
-                // recover previous context parameters if present
-                if( position > 0 )
-				{
-                    typeContext.insertLast(typeContext[position - 1]);
-                    volumeContext.insertLast(volumeContext[position - 1]);
-                    tagContext.insertLast(tagContext[position - 1]);
-                } 
-                // otherwise generate a new context
-                else
-				{
-                    if( this.SayType.IsEmote() )
-					{
-                        typeContext.insertLast(this.SayType.Raw());
-                        tagContext.insertLast("*");
-                    }
-					else 
-					{
-                        typeContext.insertLast(this.SayType.Raw());
-                        tagContext.insertLast("");
-                    }
-                    volumeContext.insertLast(defaultVolume);
-                }
+                // Prior expressions may be siblings or volume changes inside
+                // this tag. Restore the context from its matching opener.
+                uint parent = parentContext[parentContext.length() - 1];
+                parentContext.removeLast();
+                typeContext.insertLast( typeContext[parent] );
+                volumeContext.insertLast( volumeContext[parent] );
+                tagContext.insertLast( tagContext[parent] );
                 position += 1;
                 volumeChanged = false;
+                previewStyleChanged = true;
                 continue;
             }
 
@@ -720,6 +705,7 @@ shared class ChatMessage
                 }
                 volumeContext[position] = CLAMP(volume, VOLUME_WHISPER, VOLUME_SHOUT);
                 volumeChanged = true;
+                previewStyleChanged = true;
                 continue;
             }
 
@@ -742,9 +728,15 @@ shared class ChatMessage
                 // continue;
             // }
 
+            if( preview !is null && previewStyleChanged )
+            {
+                ChatExpression@ expression = ChatExpression( "", volumeContext[position], ChatSayType( typeContext[position] ) ).SetRadio( isRadio );
+                preview.insertLast( prefixLength + i );
+                preview.insertLast( expression.GetColor() );
+                previewStyleChanged = false;
+            }
             messageContext[position] += message[i];
         }
-		while( ++i < length );
 
         for( uint j = 0, length2 = messageContext.length(); j < length2; j++ )
 		{
